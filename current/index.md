@@ -6,8 +6,10 @@ title: Grove
 A TUI for managing git worktrees, one per coding agent. Each workspace
 pairs a worktree with a tmux session running the agent of your choice.
 The TUI lists every workspace in the current repository and exposes
-create, attach, pause, resume, and kill as one-key actions. There is
-no daemon and no shared state.
+create, attach, pause, resume, and kill as one-key actions. An optional
+daemon serves the same view to a read-only web dashboard, so you can
+glance at your workspaces from a phone or another machine while the
+daemon stays loopback-only behind a paired session.
 </p>
 
 <div class="ms-cta-row">
@@ -93,7 +95,7 @@ The reconciler that promotes intents into views lives at one site,
 |---|---|
 | [Get Started](getting-started.md) | install, first run, verify |
 | [Configure](configure-project.md) | [project setup](configure-project.md), [agents](configure-agents.md), [init scripts](configure-init-scripts.md), [reference](configure-reference.md), [cascade](features-cascade.md) |
-| [Use](use-tui.md) | [TUI tour](use-tui.md), [CLI](use-cli.md), [daily workflow](use-workflow.md) |
+| [Use](use-tui.md) | [TUI tour](use-tui.md), [CLI](use-cli.md), [web dashboard](use-webapp.md), [authentication](use-auth.md), [daily workflow](use-workflow.md) |
 | [Capabilities](features-workspace-lifecycle.md) | [lifecycle](features-workspace-lifecycle.md), [branch provenance](features-branch-provenance.md), [peek](features-peek.md), [status](features-status.md) |
 | [Troubleshooting](troubleshooting.md) | symptom, cause, fix |
 

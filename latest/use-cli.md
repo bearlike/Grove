@@ -1,9 +1,11 @@
 # CLI
 
 The TUI is the primary surface. The CLI exposes a small set of read-only
-views and one scaffold subcommand. Use them to script around Grove, debug
-configuration, or generate JSON for another tool to consume. Every
-subcommand uses the same six-layer cascade as the TUI.
+views, a config scaffold, and the host-level commands that run the daemon and
+manage pairing. Use them to script around Grove, debug configuration, or
+generate JSON for another tool to consume. The repo-scoped subcommands use
+the same six-layer cascade as the TUI; the `daemon` and `auth` groups operate
+at the host level, not against a single repo.
 
 ## `grove`
 
@@ -78,6 +80,56 @@ grove config schema --stdout  # print to stdout, used by the docs build
 The `--stdout` form feeds `make docs-schema` and the CI workflow into the
 docs hook, so the [configuration reference](configure-reference.md) always
 matches the live model.
+
+## `grove daemon serve`
+
+Run the HTTP daemon that backs the [web dashboard](use-webapp.md) and any
+remote client. It binds loopback by default and serves every repo Grove
+knows about from one process.
+
+```bash
+grove daemon serve                 # 127.0.0.1:7421
+grove daemon serve --port 7777     # a different port
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--host` | `127.0.0.1` | Interface to bind. Loopback is deliberate — see [the security model](use-auth.md#the-security-model). |
+| `--port` | `7421` | Port to listen on. `0` picks a free one. |
+| `--print-port` | off | Print the bound port to stdout once listening — handy when `--port 0` auto-picks. |
+
+Every endpoint except the health probe (`/healthz`) and the pairing handshake
+requires a paired session. [Authentication & pairing](use-auth.md) covers how
+a device gets one.
+
+## `grove auth`
+
+Approve or deny pairing requests and manage active sessions. These act on the
+host's session store (`${user_config_dir}/grove/auth.json`), so they work
+from any directory — they are not scoped to a repo. The full pairing story is
+on the [authentication](use-auth.md) page; the commands are:
+
+`grove auth pending` lists requests waiting for approval, one per line with
+the challenge id, the matching code, the device label, and the expiry.
+
+```bash
+grove auth pending
+# 7b3f2c1a-…  code=BFCD-GH23  label='Pixel 8'  state=pending  expires_at=2026-06-01T18:30:00+00:00
+```
+
+`grove auth approve <challenge-id>` approves a request; the device picks up
+its token on its next poll, so this command never prints a token.
+`grove auth deny <challenge-id>` rejects one. Both take an id from
+`grove auth pending`.
+
+`grove auth sessions` lists active (non-revoked) sessions; `grove auth revoke
+<session-id>` cuts one off until that device pairs again.
+
+```bash
+grove auth approve 7b3f2c1a-…      # id from `grove auth pending`
+grove auth sessions
+grove auth revoke 9d21f0e4-…       # id from `grove auth sessions`
+```
 
 ## `grove version`
 

@@ -61,11 +61,19 @@
          <lastmod>2026-06-01</lastmod>
     </url>
     <url>
+         <loc>https://bearlike.github.io/Grove/current/use-auth/</loc>
+         <lastmod>2026-06-01</lastmod>
+    </url>
+    <url>
          <loc>https://bearlike.github.io/Grove/current/use-cli/</loc>
          <lastmod>2026-06-01</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/current/use-tui/</loc>
+         <lastmod>2026-06-01</lastmod>
+    </url>
+    <url>
+         <loc>https://bearlike.github.io/Grove/current/use-webapp/</loc>
          <lastmod>2026-06-01</lastmod>
     </url>
     <url>

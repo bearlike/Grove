@@ -148,6 +148,49 @@ any remaining tmux session. If the branch still exists in your repo,
 create a fresh workspace against it via the create modal's *Existing
 local* path.
 
+## Web dashboard shows "unreachable"
+
+**Symptom.** The dashboard loads but the status bar reads "unreachable",
+or no workspaces ever appear.
+
+**Causes.**
+
+- The daemon is not running, or is bound to a different host or port than
+  the web app expects.
+- A systemd-hosted web app points at a daemon that has stopped, or at a
+  stale `GROVE_DAEMON_URL`.
+
+**Fix.**
+
+- Start the daemon with `grove daemon serve` and confirm the port (default
+  `7421`).
+- Probe the daemon directly: `curl http://127.0.0.1:7421/healthz` should
+  return `{"status":"ok",…}`.
+- If the web app talks to a non-default daemon, set `GROVE_DAEMON_URL` in
+  `webapp/.env.local` (or the `DAEMON_PORT` / `DAEMON_URL` Make variables for
+  the systemd unit) and restart it.
+- See the [web dashboard](use-webapp.md) page for the two-process layout.
+
+## Pairing code expired, or a device keeps asking to pair
+
+**Symptom.** The browser shows "code expired", or a previously paired device
+is bounced back to the pairing screen.
+
+**Causes.**
+
+- A pairing code lives for five minutes; approving later than that fails.
+- The session was revoked with `grove auth revoke`, or its thirty-day window
+  lapsed without use.
+
+**Fix.**
+
+- Request a fresh code in the browser and approve it promptly — from the TUI
+  modal, or with `grove auth pending` then `grove auth approve <id>`.
+- Confirm the code shown on the host matches the one on the device before
+  approving.
+- List and tidy sessions with `grove auth sessions` and `grove auth revoke`.
+- See [authentication & pairing](use-auth.md) for the full flow.
+
 ## Windows-native limitations
 
 **Symptom.** `grove` runs on Windows but the TUI does not show

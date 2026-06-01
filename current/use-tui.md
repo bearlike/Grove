@@ -136,6 +136,14 @@ dismiss.
   <p class="grove-shot__body">Help modal. Pulled from the same <code>DEFAULT_BINDINGS</code> tuple the contextual footer reads.</p>
 </figure>
 
+### Pairing
+
+When the [web dashboard](use-webapp.md) is in use, the TUI also surfaces
+device pairing. A request from a new browser pops a modal on top of whatever
+screen you are on, showing the device label and a code to confirm. Approve
+with `a`, deny with `d`. The full handshake, and the `grove auth` commands
+for headless hosts, are on the [authentication & pairing](use-auth.md) page.
+
 ## Theme
 
 Grove ships three built-in themes: `dark`, `light`, and `auto` (which

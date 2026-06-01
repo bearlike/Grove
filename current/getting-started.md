@@ -99,3 +99,4 @@ Set `GROVE_DEBUG=1` to enable verbose loguru output on stderr.
 - [Project setup](configure-project.md) explains the per-repo `.grove/config.json`.
 - [Custom agents](configure-agents.md) covers wiring Aider, Cursor, or any shell command.
 - [Daily workflow](use-workflow.md) covers create, attach, pause, resume, kill.
+- [Web dashboard](use-webapp.md) opens a read-only view in the browser or on your phone.
