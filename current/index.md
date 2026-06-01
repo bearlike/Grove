@@ -95,11 +95,9 @@ When others need to watch the fleet, point the read-only web dashboard at the da
 status and live output as the TUI, in any browser or on a phone. Lifecycle control stays in the
 terminal, where it belongs.
 
-<figure class="grove-shot" markdown>
-  <span class="grove-shot__frame">
-    ![Grove read-only web dashboard showing a workspace detail page with summary and live agent panels](img/screenshots/webapp-workspace-detail.png)
-  </span>
-  <p class="grove-shot__body">The read-only <a href="use-webapp/">web dashboard</a>. Glance at any workspace's status and live agent output from any device on your network.</p>
+<figure class="grove-device" markdown>
+  ![Grove read-only web dashboard on a phone, showing the mobile workspace grid](img/mockups/webapp-phone-mockup.png)
+  <figcaption>Step away from your desk, and the read-only <a href="use-webapp/">web dashboard</a> keeps every agent in view from your phone.</figcaption>
 </figure>
 
 ## Explore the docs { .ms-h2-icon data-icon="book" }

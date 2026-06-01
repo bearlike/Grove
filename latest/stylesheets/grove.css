@@ -185,3 +185,23 @@ article .tabbed-set > input:nth-child(4):checked ~ .tabbed-content > .tabbed-blo
 article .tabbed-set > input:nth-child(5):checked ~ .tabbed-content > .tabbed-block:nth-child(5) {
   display: block;
 }
+
+/* ── Device mockups (laptop / phone frames with their own backdrop) ─────
+   These images already carry a device frame and background, so they skip
+   the dark .grove-shot frame. Center them and cap the size; a portrait
+   phone must never stretch to the full content-column width. */
+.grove-device { margin: 1.5rem 0; text-align: center; }
+.grove-device img,
+.grove-device svg {
+  width: auto;
+  max-width: 280px;
+  max-height: 580px;
+  height: auto;
+  border-radius: 0.5rem;
+}
+.grove-device figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted-foreground, currentColor);
+}
