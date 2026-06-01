@@ -8,7 +8,8 @@ title: Grove
   <p class="ms-hero__lede">
     Run several coding agents at once. Each gets its own git worktree and tmux session, scoped to one
     repo. They share nothing, so they never collide. Spin a session up, watch the agent work, then tear
-    it down. Every step is a single keypress.
+    it down. Every step is a single keypress. Step away from your desk, and a read-only web dashboard
+    keeps every agent in view from your phone.
   </p>
   <div class="ms-cta-row">
     <a class="ms-btn ms-btn--primary" href="getting-started/">Install &amp; first workspace</a>
