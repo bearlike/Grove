@@ -86,7 +86,7 @@ The branch-source plumbing is documented in
 ### Edit
 
 `e` opens the edit modal to change a workspace's title and description. Both
-are metadata only — the worktree directory and tmux session keep their
+are metadata only. The worktree directory and tmux session keep their
 original names, so attached clients and your muscle memory are never
 disrupted.
 

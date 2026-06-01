@@ -41,7 +41,7 @@
 
 
 
-<title>Web Dashboard - Mewbo docs</title>
+<title>Web Dashboard · Grove</title>
 
 
 
@@ -82,7 +82,7 @@
 
 
 
-    <link rel="icon" href="../img/favicon.ico">
+    <link rel="icon" href="../logos/grove-logo.png">
 
     <link href="../css/base.css" rel="stylesheet">
     <link href="../css/geist.css" rel="stylesheet">
@@ -1109,94 +1109,86 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Grove is a terminal program first, but a read-only web dashboard ships
-alongside it so you can glance at your workspaces — and watch each agent's
-live output — from a phone or any other machine on your network. The
-dashboard never drives a workspace; it mirrors what the TUI already shows,
-and every lifecycle action stays in the terminal.</p>
+    <p>Grove is a terminal program first. A read-only web dashboard ships alongside it. With it you can glance
+at your workspaces and watch each agent work from a phone or another machine on your network. The
+dashboard never drives a workspace. It mirrors what the TUI already shows, and every lifecycle action
+stays in the terminal. Think of it as a window onto the fleet, not a control panel.</p>
 <figure class="grove-shot">
 <p><span class="grove-shot__frame">
     <img alt="Grove read-only web dashboard showing a workspace detail page with summary and live agent panels" src="../img/screenshots/webapp-workspace-detail.png" />
   </span>
   </p>
-<p class="grove-shot__body">The workspace detail view: identity on the left, the git summary in the middle, and the agent's live tmux pane on the right.</p>
+<p class="grove-shot__body">The workspace detail view. Identity on the left, the git summary in the middle, and the agent's live tmux pane on the right.</p>
 </figure>
 <h2 id="what-it-shows">What it shows</h2>
-<p>The home page is a grid of every workspace the daemon knows about, faceted
-by repository, painted with the same status glyphs and polarity-aware stat
-colours as the TUI. Opening a workspace gives you three panels that mirror
-the TUI's three cards: an <em>identity</em> panel (title, branch, base, agent,
-status), a <em>summary</em> panel (ahead, behind, dirty, diff counts, and the
-commits since the branch forked), and an <em>agent</em> panel that mirrors the live
-tmux pane. The list refreshes every few seconds and the agent pane every
-couple of seconds; polling pauses while the browser tab is hidden and
-resumes when you return to it. A persistent status bar reports the daemon's
-health, uptime, and version.</p>
-<p>The dashboard is read-only by design. There is no create, pause, resume,
-kill, respawn, edit, or attach — those actions live in the <a href="../use-tui/">TUI</a>
-and the <a href="../use-cli/">CLI</a>. The browser is for glancing, not driving.</p>
+<p>The home page is a grid of every workspace the daemon knows about, grouped by repository. It uses the
+same status glyphs and colors as the TUI. Open a workspace and you get three panels that mirror the
+TUI's three cards. The identity panel names the workspace, branch, base, agent, and status. The summary
+panel carries ahead, behind, and dirty counts, the diff size, and the commits since the branch forked.
+The agent panel mirrors the live tmux pane.</p>
+<p>The list refreshes every few seconds, and the agent pane every couple of seconds. Polling pauses while
+the browser tab is hidden, then resumes when you return. A status bar along the bottom reports the
+daemon's health, uptime, and version.</p>
+<p>The dashboard is read-only by design. There is no create, pause, resume, kill, respawn, edit, or
+attach. Those actions live in the <a href="../use-tui/">TUI</a> and the <a href="../use-cli/">CLI</a>. The browser is for
+glancing, not for driving.</p>
 <h2 id="running-it">Running it</h2>
-<p>The dashboard is two processes: the <strong>daemon</strong>, which exposes Grove's engine
-over HTTP, and the <strong>web app</strong>, a Next.js server that the browser actually
-talks to. Build the web app once, then run both:</p>
+<p>The dashboard is two processes. The daemon exposes Grove's engine over HTTP. The web app is a Next.js
+server that the browser talks to. Build the web app once, then run both.</p>
 <div class="codehilite"><pre><span></span><code><span class="c1"># Build the web app once (repeat after each upgrade)</span>
 <span class="nb">cd</span><span class="w"> </span>webapp<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>build
 
 <span class="c1"># Run the two processes</span>
-grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">     </span><span class="c1"># terminal 1 — loopback, port 7421</span>
-npm<span class="w"> </span>run<span class="w"> </span>start<span class="w">          </span><span class="c1"># terminal 2 (from webapp/) — serves the build on 0.0.0.0:3000</span>
+grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">     </span><span class="c1"># terminal 1, loopback, port 7421</span>
+npm<span class="w"> </span>run<span class="w"> </span>start<span class="w">          </span><span class="c1"># terminal 2 from webapp/, serves the build on 0.0.0.0:3000</span>
 </code></pre></div>
-<p>Open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> on the same machine. Because the web app binds
-<code>0.0.0.0</code>, any phone or laptop on the same network reaches it at
-<code>http://&lt;machine-ip&gt;:3000</code>. If the daemon runs on a non-default host or port,
-point the web app at it with <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local</code>. The
-first time a new device connects it has to <a href="../use-auth/">pair</a> with the host.</p>
-<p>Editing the dashboard's own code is a separate, contributor workflow — the
-development server, wire-type codegen, and the test suites are documented in
-the <a href="https://github.com/bearlike/Grove/tree/main/webapp"><code>webapp/</code> README</a>,
-not here.</p>
+<p>Open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> on the same machine. The web app binds <code>0.0.0.0</code>, so any phone or laptop
+on the same network reaches it at <code>http://&lt;machine-ip&gt;:3000</code>. If the daemon runs on a different host or
+port, point the web app at it with <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local</code>. The first time a new
+device connects, it has to <a href="../use-auth/">pair</a> with the host.</p>
+<p>Editing the dashboard's own code is a separate, contributor task. The development server, the wire-type
+codegen, and the test suites live in the
+<a href="https://github.com/bearlike/Grove/tree/main/webapp"><code>webapp/</code> README</a>, not here.</p>
 <h2 id="how-it-stays-loopback-only">How it stays loopback-only</h2>
 <div class="codehilite"><pre><span></span><code>Browser (LAN:3000)  ──http──▶  Next.js (0.0.0.0:3000)  ──http──▶  Daemon (127.0.0.1:7421)
                                  │ /api/grove/*  (BFF proxy)
 </code></pre></div>
-<p>The browser only ever calls the web app's own origin (<code>/api/grove/*</code>), so
-there is no CORS to configure. The Next.js server acts as a
-backend-for-frontend: it proxies those calls to the daemon at
-<code>GROVE_DAEMON_URL</code> (default <code>http://127.0.0.1:7421</code>) and attaches the paired
-session's token server-side, so the daemon's token never reaches the
-browser. The daemon itself stays bound to loopback and never needs to be
-exposed on the network — only the web app does. That separation is the whole
-security story; <a href="../use-auth/">authentication &amp; pairing</a> covers the rest.</p>
+<p>The browser only ever calls the web app's own origin at <code>/api/grove/*</code>. That keeps everything
+same-origin, so there is no CORS to configure. The Next.js server works as a backend-for-frontend. It
+proxies those calls to the daemon at <code>GROVE_DAEMON_URL</code>, which defaults to <code>http://127.0.0.1:7421</code>. It
+also attaches the paired session's token on the server side, so the daemon's token never reaches the
+browser.</p>
+<p>Picture the web app as a receptionist at a front desk. Visitors talk to the receptionist. The
+receptionist carries each request to the back office and brings the answer out. The daemon stays in
+that back office, bound to loopback, and never meets the public directly. That separation is the whole
+security story, and <a href="../use-auth/">authentication &amp; pairing</a> covers the rest.</p>
 <h2 id="always-on-with-systemd">Always-on with systemd</h2>
-<p>To keep both processes running across reboots on a Linux host, build the web
-app once and render the user units with the web app opted in:</p>
+<p>To keep both processes running across reboots on a Linux host, build the web app once and render the
+user units with the web app opted in.</p>
 <div class="codehilite"><pre><span></span><code>make<span class="w"> </span>webapp-build<span class="w">                 </span><span class="c1"># npm ci + npm run build</span>
 <span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd<span class="w">        </span><span class="c1"># write grove-daemon + grove-webapp units</span>
 <span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd-enable<span class="w"> </span><span class="c1"># reload, enable, start now</span>
 loginctl<span class="w"> </span>enable-linger<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$USER</span><span class="s2">&quot;</span><span class="w">    </span><span class="c1"># survive logout (remote hosts)</span>
 </code></pre></div>
-<p>The web app unit <code>Wants</code> the daemon rather than <code>Requires</code> it, so a daemon
-hiccup leaves the dashboard up to report "unreachable" instead of being torn
-down with it. The service runs the production build and does not rebuild
-itself — after pulling new source, run
-<code>make webapp-build &amp;&amp; systemctl --user restart grove-webapp</code>. Ports are
-overridable: <code>DAEMON_PORT=7777 WEBAPP_PORT=3030 WITH_WEBAPP=1 make systemd</code>.</p>
+<p>The web app unit <code>Wants</code> the daemon rather than <code>Requires</code> it. So a daemon hiccup leaves the dashboard
+up to report "unreachable", instead of taking it down too. The service runs the production build and
+does not rebuild itself. After you pull new source, run
+<code>make webapp-build &amp;&amp; systemctl --user restart grove-webapp</code>. You can override the ports with
+<code>DAEMON_PORT=7777 WEBAPP_PORT=3030 WITH_WEBAPP=1 make systemd</code>.</p>
 <h2 id="reaching-it-from-outside-the-network">Reaching it from outside the network</h2>
-<p>The daemon's loopback bind is deliberate, so there is no blessed way to
-expose it directly. To reach a remote host's dashboard, forward the web
-app's port over SSH —</p>
+<p>The daemon's loopback bind is deliberate, so there is no blessed way to expose it directly. To reach a
+remote host's dashboard, forward the web app's port over SSH.</p>
 <div class="codehilite"><pre><span></span><code>ssh<span class="w"> </span>-N<span class="w"> </span>-L<span class="w"> </span><span class="m">3000</span>:127.0.0.1:3000<span class="w"> </span>you@remote-host
 </code></pre></div>
-<p>— and open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> locally, or put a real tunnel (Tailscale,
-WireGuard, an authenticated reverse proxy) in front of the web app. Widening
-the daemon's bind is the wrong lever; pairing assumes loopback. See the
-<a href="../use-auth/#the-security-model">security model</a>.</p>
+<p>Then open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> on your own machine. You can also put a real tunnel in front of the
+web app, such as Tailscale, WireGuard, or an authenticated reverse proxy. Widening the daemon's bind is
+the wrong lever, because pairing assumes loopback. See the <a href="../use-auth/#the-security-model">security model</a>.</p>
 <h2 id="see-also">See also</h2>
 <ul>
 <li><a href="../use-auth/">Authentication &amp; pairing</a>: how a new device gets access.</li>
-<li><a href="../use-cli/">CLI</a>: <code>grove daemon serve</code> options and the <code>grove auth</code> group.</li>
-<li><a href="../features-status/">Status semantics</a>: what each glyph and colour means.</li>
-<li>Building or hacking on the dashboard? That's the <a href="https://github.com/bearlike/Grove/tree/main/webapp"><code>webapp/</code> README</a> — the contributor surface, kept separate from this product guide.</li>
+<li><a href="../use-cli/">CLI</a>: the <code>grove daemon serve</code> options and the <code>grove auth</code> group.</li>
+<li><a href="../features-status/">Status semantics</a>: what each glyph and color means.</li>
+<li>Building or hacking on the dashboard? That is the <a href="https://github.com/bearlike/Grove/tree/main/webapp"><code>webapp/</code> README</a>, the contributor surface, kept separate from this product guide.</li>
 </ul>
   </div>
   

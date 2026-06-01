@@ -134,3 +134,54 @@
 .grove-status-chip[data-status="offline"]  { --grove-chip-accent: #96938c; }
 .grove-status-chip[data-status="orphaned"] { --grove-chip-accent: #b8860b; }
 .grove-status-chip[data-status="error"]    { --grove-chip-accent: #e64c4c; }
+
+/* ── Content tabs (pymdownx.tabbed, alternate_style) ────────────────────
+   The shipped theme styles only the LEGACY tab markup (input+label+content
+   adjacency). We emit the alternate_style structure (all inputs first, then
+   one .tabbed-labels, then one .tabbed-content holding one .tabbed-block per
+   tab), which that selector never matches, so the panel stays hidden and the
+   tabs look dead. These rules drive the alternate structure: show the Nth
+   block when the Nth radio is checked. grove.css loads after the theme CSS,
+   so equal-specificity rules here win. Supports up to five tabs per set. */
+article .tabbed-set {
+  display: flex;
+  flex-wrap: wrap;
+  position: relative;
+  margin: 1.25rem 0;
+}
+article .tabbed-set > input { position: absolute; opacity: 0; }
+article .tabbed-set > .tabbed-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  width: 100%;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+}
+article .tabbed-set > .tabbed-labels > label {
+  cursor: pointer;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--muted-foreground, currentColor);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+article .tabbed-set > .tabbed-labels > label:hover { color: var(--foreground, currentColor); }
+article .tabbed-set > div.tabbed-content { display: block; width: 100%; padding-top: 0.85rem; }
+article .tabbed-set > .tabbed-content > .tabbed-block { display: none; }
+
+article .tabbed-set > input:nth-child(1):checked ~ .tabbed-labels > label:nth-child(1),
+article .tabbed-set > input:nth-child(2):checked ~ .tabbed-labels > label:nth-child(2),
+article .tabbed-set > input:nth-child(3):checked ~ .tabbed-labels > label:nth-child(3),
+article .tabbed-set > input:nth-child(4):checked ~ .tabbed-labels > label:nth-child(4),
+article .tabbed-set > input:nth-child(5):checked ~ .tabbed-labels > label:nth-child(5) {
+  color: var(--primary, #c46b48);
+  border-bottom-color: var(--primary, #c46b48);
+}
+article .tabbed-set > input:nth-child(1):checked ~ .tabbed-content > .tabbed-block:nth-child(1),
+article .tabbed-set > input:nth-child(2):checked ~ .tabbed-content > .tabbed-block:nth-child(2),
+article .tabbed-set > input:nth-child(3):checked ~ .tabbed-content > .tabbed-block:nth-child(3),
+article .tabbed-set > input:nth-child(4):checked ~ .tabbed-content > .tabbed-block:nth-child(4),
+article .tabbed-set > input:nth-child(5):checked ~ .tabbed-content > .tabbed-block:nth-child(5) {
+  display: block;
+}

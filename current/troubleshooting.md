@@ -184,8 +184,8 @@ is bounced back to the pairing screen.
 
 **Fix.**
 
-- Request a fresh code in the browser and approve it promptly — from the TUI
-  modal, or with `grove auth pending` then `grove auth approve <id>`.
+- Request a fresh code in the browser and approve it promptly, either from the
+  TUI modal or with `grove auth pending` then `grove auth approve <id>`.
 - Confirm the code shown on the host matches the one on the device before
   approving.
 - List and tidy sessions with `grove auth sessions` and `grove auth revoke`.

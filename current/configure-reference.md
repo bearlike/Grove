@@ -20,7 +20,7 @@ One selectable agent in the new-workspace picker.
 Daemon HTTP authentication knobs.
 
 The handshake-based pairing flow gates every HTTP entry point on a valid
-bearer token (no loopback bypass — see CLAUDE.md). ``enabled = false`` is
+bearer token (no loopback bypass; see CLAUDE.md). ``enabled = false`` is
 a test-only escape hatch; production daemons leave it ``true``.
 
 

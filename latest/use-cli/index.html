@@ -41,7 +41,7 @@
 
 
 
-<title>CLI - Mewbo docs</title>
+<title>CLI · Grove</title>
 
 
 
@@ -82,7 +82,7 @@
 
 
 
-    <link rel="icon" href="../img/favicon.ico">
+    <link rel="icon" href="../logos/grove-logo.png">
 
     <link href="../css/base.css" rel="stylesheet">
     <link href="../css/geist.css" rel="stylesheet">
@@ -1182,7 +1182,7 @@ grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">
 <tr>
 <td><code>--host</code></td>
 <td><code>127.0.0.1</code></td>
-<td>Interface to bind. Loopback is deliberate — see <a href="../use-auth/#the-security-model">the security model</a>.</td>
+<td>Interface to bind. Loopback is deliberate. See <a href="../use-auth/#the-security-model">the security model</a>.</td>
 </tr>
 <tr>
 <td><code>--port</code></td>
@@ -1192,7 +1192,7 @@ grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">
 <tr>
 <td><code>--print-port</code></td>
 <td>off</td>
-<td>Print the bound port to stdout once listening — handy when <code>--port 0</code> auto-picks.</td>
+<td>Print the bound port to stdout once listening. Handy when <code>--port 0</code> auto-picks.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1202,7 +1202,7 @@ a device gets one.</p>
 <h2 id="grove-auth"><code>grove auth</code></h2>
 <p>Approve or deny pairing requests and manage active sessions. These act on the
 host's session store (<code>${user_config_dir}/grove/auth.json</code>), so they work
-from any directory — they are not scoped to a repo. The full pairing story is
+from any directory, and they are not scoped to a repo. The full pairing story is
 on the <a href="../use-auth/">authentication</a> page; the commands are:</p>
 <p><code>grove auth pending</code> lists requests waiting for approval, one per line with
 the challenge id, the matching code, the device label, and the expiry.</p>

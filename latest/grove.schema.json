@@ -34,7 +34,7 @@
     },
     "AuthConfig": {
       "additionalProperties": false,
-      "description": "Daemon HTTP authentication knobs.\n\nThe handshake-based pairing flow gates every HTTP entry point on a valid\nbearer token (no loopback bypass \u2014 see CLAUDE.md). ``enabled = false`` is\na test-only escape hatch; production daemons leave it ``true``.",
+      "description": "Daemon HTTP authentication knobs.\n\nThe handshake-based pairing flow gates every HTTP entry point on a valid\nbearer token (no loopback bypass; see CLAUDE.md). ``enabled = false`` is\na test-only escape hatch; production daemons leave it ``true``.",
       "properties": {
         "enabled": {
           "default": true,

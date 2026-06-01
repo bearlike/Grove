@@ -94,9 +94,9 @@ grove daemon serve --port 7777     # a different port
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--host` | `127.0.0.1` | Interface to bind. Loopback is deliberate — see [the security model](use-auth.md#the-security-model). |
+| `--host` | `127.0.0.1` | Interface to bind. Loopback is deliberate. See [the security model](use-auth.md#the-security-model). |
 | `--port` | `7421` | Port to listen on. `0` picks a free one. |
-| `--print-port` | off | Print the bound port to stdout once listening — handy when `--port 0` auto-picks. |
+| `--print-port` | off | Print the bound port to stdout once listening. Handy when `--port 0` auto-picks. |
 
 Every endpoint except the health probe (`/healthz`) and the pairing handshake
 requires a paired session. [Authentication & pairing](use-auth.md) covers how
@@ -106,7 +106,7 @@ a device gets one.
 
 Approve or deny pairing requests and manage active sessions. These act on the
 host's session store (`${user_config_dir}/grove/auth.json`), so they work
-from any directory — they are not scoped to a repo. The full pairing story is
+from any directory, and they are not scoped to a repo. The full pairing story is
 on the [authentication](use-auth.md) page; the commands are:
 
 `grove auth pending` lists requests waiting for approval, one per line with
