@@ -1,0 +1,136 @@
+/* Grove-specific bespoke components.
+   Layered on top of mkdocs-shadcn-mewbo's .ms-* primitives. Intentionally
+   small surface area: only the lede paragraph, hero shot, status chip
+   gallery, and inline screenshots. Anything more elaborate has been cut.
+
+   Brand palette anchors (mirrors src/grove/tui/theme.py):
+     primary clay         var(--primary)   (#c46b48)
+     active lime          #84cc16
+     idle blue            #4a90d9
+     paused/offline gray  #96938c
+     orphaned amber       #b8860b
+     error red            #e64c4c
+*/
+
+/* ── Lede paragraph (replaces the hero H1 on the landing page) ─────── */
+
+.grove-lede {
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--muted-foreground, currentColor);
+  max-width: 65ch;
+  margin: 0.25rem 0 1.25rem;
+}
+
+/* ── Hero shot (single landing-page TUI capture) ───────────────────── */
+
+.grove-hero-shot {
+  margin: 1.5rem 0;
+  padding: 0;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-radius: 0.6rem;
+  background: var(--card, transparent);
+  overflow: hidden;
+}
+.grove-hero-shot__frame {
+  display: block;
+  background: #1f1d1a;
+}
+.grove-hero-shot img,
+.grove-hero-shot svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.grove-hero-shot__caption {
+  margin: 0;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.82rem;
+  color: var(--muted-foreground, currentColor);
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.06));
+}
+
+/* ── Inline screenshot tile (used on sub-pages) ────────────────────── */
+
+.grove-shot {
+  margin: 1.5rem 0;
+  padding: 0;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-radius: 0.6rem;
+  background: var(--card, transparent);
+  overflow: hidden;
+}
+.grove-shot__frame {
+  display: block;
+  background: #1f1d1a;
+}
+.grove-shot img,
+.grove-shot svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.grove-shot__body,
+.grove-shot p {
+  margin: 0;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted-foreground, currentColor);
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.06));
+}
+
+/* ── Status chip gallery ───────────────────────────────────────────── */
+
+.grove-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.6rem;
+  margin: 1.5rem 0;
+}
+.grove-status-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-left: 3px solid var(--grove-chip-accent, var(--primary, #c46b48));
+  border-radius: 0.5rem;
+  background: var(--card, transparent);
+}
+.grove-status-chip__glyph {
+  font-family: "Fira Code", ui-monospace, "SF Mono", monospace;
+  font-size: 1.1rem;
+  line-height: 1.2;
+  color: var(--grove-chip-accent, var(--primary, #c46b48));
+  flex: 0 0 auto;
+}
+.grove-status-chip__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.grove-status-chip__text p,
+.grove-status-chip__label,
+.grove-status-chip__body {
+  margin: 0;
+}
+.grove-status-chip__label {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--grove-chip-accent, var(--primary, #c46b48));
+}
+.grove-status-chip__body {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--muted-foreground, currentColor);
+}
+
+/* Per-status accent overrides; glyph and label inherit from --grove-chip-accent. */
+.grove-status-chip[data-status="active"]   { --grove-chip-accent: #84cc16; }
+.grove-status-chip[data-status="idle"]     { --grove-chip-accent: #4a90d9; }
+.grove-status-chip[data-status="paused"]   { --grove-chip-accent: #96938c; }
+.grove-status-chip[data-status="offline"]  { --grove-chip-accent: #96938c; }
+.grove-status-chip[data-status="orphaned"] { --grove-chip-accent: #b8860b; }
+.grove-status-chip[data-status="error"]    { --grove-chip-accent: #e64c4c; }

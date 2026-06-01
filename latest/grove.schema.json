@@ -1,0 +1,255 @@
+{
+  "$defs": {
+    "AgentSpec": {
+      "additionalProperties": false,
+      "description": "One selectable agent in the new-workspace picker.",
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Env",
+          "type": "object"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ],
+      "title": "AgentSpec",
+      "type": "object"
+    },
+    "AuthConfig": {
+      "additionalProperties": false,
+      "description": "Daemon HTTP authentication knobs.\n\nThe handshake-based pairing flow gates every HTTP entry point on a valid\nbearer token (no loopback bypass \u2014 see CLAUDE.md). ``enabled = false`` is\na test-only escape hatch; production daemons leave it ``true``.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "pair_init_per_minute": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Pair Init Per Minute",
+          "type": "integer"
+        },
+        "pair_poll_per_minute": {
+          "default": 60,
+          "minimum": 1,
+          "title": "Pair Poll Per Minute",
+          "type": "integer"
+        },
+        "pairing_ttl_seconds": {
+          "default": 300,
+          "minimum": 30,
+          "title": "Pairing Ttl Seconds",
+          "type": "integer"
+        },
+        "session_ttl_seconds": {
+          "default": 2592000,
+          "minimum": 60,
+          "title": "Session Ttl Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "AuthConfig",
+      "type": "object"
+    },
+    "InitScriptConfig": {
+      "additionalProperties": false,
+      "description": "Optional setup script run in its own tmux window before the agent starts.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "fail_fast": {
+          "default": true,
+          "title": "Fail Fast",
+          "type": "boolean"
+        },
+        "inline": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inline"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "run_on_resume": {
+          "default": false,
+          "title": "Run On Resume",
+          "type": "boolean"
+        },
+        "shell": {
+          "default": "bash",
+          "enum": [
+            "bash",
+            "sh",
+            "zsh"
+          ],
+          "title": "Shell",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 300,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "InitScriptConfig",
+      "type": "object"
+    },
+    "TmuxConfig": {
+      "additionalProperties": false,
+      "description": "tmux session/window naming and behavior.",
+      "properties": {
+        "activity_threshold_seconds": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Activity Threshold Seconds",
+          "type": "integer"
+        },
+        "agent_window_name": {
+          "default": "agent",
+          "title": "Agent Window Name",
+          "type": "string"
+        },
+        "history_limit": {
+          "default": 50000,
+          "title": "History Limit",
+          "type": "integer"
+        },
+        "init_window_name": {
+          "default": "init",
+          "title": "Init Window Name",
+          "type": "string"
+        },
+        "peek_pane_refresh_seconds": {
+          "default": 0.25,
+          "title": "Peek Pane Refresh Seconds",
+          "type": "number"
+        },
+        "peek_stats_refresh_seconds": {
+          "default": 3.0,
+          "title": "Peek Stats Refresh Seconds",
+          "type": "number"
+        },
+        "session_prefix": {
+          "default": "grove-",
+          "title": "Session Prefix",
+          "type": "string"
+        },
+        "shell_window_name": {
+          "default": "shell",
+          "title": "Shell Window Name",
+          "type": "string"
+        }
+      },
+      "title": "TmuxConfig",
+      "type": "object"
+    },
+    "UIConfig": {
+      "additionalProperties": false,
+      "description": "Client-facing UI knobs. The TUI consumes these; core ignores them.",
+      "properties": {
+        "keybindings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Keybindings",
+          "type": "object"
+        },
+        "theme": {
+          "default": "auto",
+          "title": "Theme",
+          "type": "string"
+        }
+      },
+      "title": "UIConfig",
+      "type": "object"
+    },
+    "WorktreeConfig": {
+      "additionalProperties": false,
+      "description": "Where worktrees live and how branches are named.",
+      "properties": {
+        "branch_prefix": {
+          "default": "grove/",
+          "title": "Branch Prefix",
+          "type": "string"
+        },
+        "root_template": {
+          "default": "${repo}/.worktrees",
+          "title": "Root Template",
+          "type": "string"
+        }
+      },
+      "title": "WorktreeConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Merged, validated configuration. Built once per `load_config` call.",
+  "properties": {
+    "$schema": {
+      "default": "",
+      "title": "$Schema",
+      "type": "string"
+    },
+    "agents": {
+      "items": {
+        "$ref": "#/$defs/AgentSpec"
+      },
+      "title": "Agents",
+      "type": "array"
+    },
+    "auth": {
+      "$ref": "#/$defs/AuthConfig"
+    },
+    "init_script": {
+      "$ref": "#/$defs/InitScriptConfig"
+    },
+    "tmux": {
+      "$ref": "#/$defs/TmuxConfig"
+    },
+    "ui": {
+      "$ref": "#/$defs/UIConfig"
+    },
+    "worktree": {
+      "$ref": "#/$defs/WorktreeConfig"
+    }
+  },
+  "title": "GroveConfig",
+  "type": "object"
+}
