@@ -1,0 +1,171 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Tailwind v4 theme bridge: maps the shadcn-style HSL CSS vars below into
+ * Tailwind utility classes (bg-background, text-foreground, border-border,
+ * ring-ring, bg-card, etc.). Without this block the color utilities
+ * compile to nothing and every "bg-card" / "border-border" silently
+ * no-ops. The variables themselves are still consumed directly via
+ * `hsl(var(--…))` in @layer base so legacy callers keep working.
+ */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --animate-grove-pulse: grove-pulse 1s steps(2, end) infinite;
+
+  @keyframes grove-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.55; transform: scale(1.18); }
+  }
+}
+
+/*
+ * Tailwind v4 reverted the v3 default that gave every element a
+ * border-color of currentColor. We want shadcn's behavior — bare
+ * `border` utilities pick up the theme border — so put it back.
+ */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: hsl(var(--border));
+  }
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 14 64% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 14 64% 60%;
+    --radius: 0.5rem;
+
+    /* Status — light mode (mirrors STATUS_HEX_LIGHT in lib/grove/status-tokens.ts). */
+    --status-active: #4d7c0f;
+    --status-active-tint: #84cc16;
+    --status-running: #4d7c0f;
+    --status-idle: #1d4ed8;
+    --status-offline: #52525b;
+    --status-paused: #52525b;
+    --status-orphaned: #92400e;
+    --status-error: #991b1b;
+
+    /* Refs */
+    --ref-branch: #0f766e;
+    --ref-add: #15803d;
+    --ref-remove: #b91c1c;
+    --ref-info: #1d4ed8;
+  }
+
+  .dark {
+    --background: 60 4% 17%;
+    --foreground: 40 30% 98%;
+    --card: 60 4% 9%;
+    --card-foreground: 40 30% 98%;
+    --popover: 60 4% 9%;
+    --popover-foreground: 40 30% 98%;
+    --primary: 14 64% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 60 3% 22%;
+    --secondary-foreground: 40 30% 98%;
+    --muted: 60 3% 22%;
+    --muted-foreground: 40 5% 70%;
+    --accent: 60 3% 22%;
+    --accent-foreground: 40 30% 98%;
+    --destructive: 0 75% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 60 3% 28%;
+    --input: 60 3% 28%;
+    --ring: 14 64% 60%;
+
+    /* Status — dark mode (canonical from grove/core/contracts/status_palette.py). */
+    --status-active: #84cc16;
+    --status-active-tint: #bef264;
+    --status-running: #84cc16;
+    --status-idle: #c2dcf7;
+    --status-offline: #96938c;
+    --status-paused: #96938c;
+    --status-orphaned: #b8860b;
+    --status-error: #e64c4c;
+
+    /* Refs */
+    --ref-branch: #26a69a;
+    --ref-add: #99d199;
+    --ref-remove: #e66666;
+    --ref-info: #c2dcf7;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-feature-settings: "rlig" 1, "calt" 1;
+    overflow-x: hidden;
+  }
+
+  /* Make selection contrast loud regardless of theme. */
+  ::selection {
+    background-color: hsl(var(--primary) / 0.25);
+    color: hsl(var(--foreground));
+  }
+}
+
+/*
+ * Visually-hidden helper for screen-reader-only content (labels, skip
+ * targets). Mirrors the WCAG-recommended technique.
+ */
+@utility sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

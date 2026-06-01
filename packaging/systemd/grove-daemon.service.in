@@ -1,0 +1,19 @@
+[Unit]
+Description=Grove daemon (HTTP + tmux orchestration)
+Documentation=https://github.com/bearlike/Grove
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=@GROVE_BIN@ daemon serve --host @DAEMON_HOST@ --port @DAEMON_PORT@
+Restart=on-failure
+RestartSec=2
+# stdout/stderr -> journalctl --user -u grove-daemon
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Present so `systemctl --user enable grove-daemon` works when the user
+# wants auto-start on login. Not enabled by `make systemd` alone — opt
+# in with `make systemd-enable`.
+WantedBy=default.target

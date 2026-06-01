@@ -1,0 +1,197 @@
+[project]
+name = "grove"
+version = "0.0.1"
+description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Krishnakanth Alagiri" }]
+requires-python = ">=3.12"
+keywords = ["git", "worktree", "tmux", "tui", "textual", "ai", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: Terminals",
+]
+dependencies = [
+    "pydantic>=2.7",
+    "platformdirs>=4.0",
+    "libtmux>=0.55,<0.56",
+    "textual>=0.80",
+    "typer>=0.12",
+    "humanize>=4.9",
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+daemon = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+client = [
+    "httpx>=0.27",
+    "asyncssh>=2.14",
+]
+all = [
+    "grove[daemon]",
+    "grove[client]",
+]
+
+[project.scripts]
+grove = "grove.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/krishnakanth-alagiri/grove"
+Repository = "https://github.com/krishnakanth-alagiri/grove"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grove"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.11,<2.0",
+    "import-linter>=2.0",
+    "textual-dev>=1.5",
+    # Out-of-process surfaces — pinned in dev so the test matrix runs
+    # without manually installing extras. Production users opt in via
+    # `pip install grove[daemon|client|all]`.
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "asyncssh>=2.14",
+]
+docs = [
+    "mike",
+    "mkdocs",
+    "mkdocs-callouts>=1.16.0",
+    # Brand-fork of mkdocs-shadcn — same `theme: shadcn` entrypoint plus the
+    # brand chrome (Ask AI, sidebar nav-icons, prefetch, ToC rail, search
+    # modal, full SEO).  The `latest-master` wheel is auto-republished on
+    # every push to the fork; uv.lock pins the exact content hash.  Refresh
+    # via:
+    #     uv lock --upgrade-package mkdocs-shadcn-mewbo
+    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.0.0-py3-none-any.whl",
+    "mkdocstrings[python]",
+    "pymdown-extensions>=10.20.1",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tooling
+# ─────────────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",       # pycodestyle
+    "F",            # pyflakes
+    "I",            # isort
+    "B",            # bugbear
+    "C4",           # comprehensions
+    "UP",           # pyupgrade
+    "ARG",          # unused arguments
+    "SIM",          # simplify
+    "TID",          # tidy imports
+    "PL",           # pylint subset
+    "RUF",          # ruff-specific
+]
+ignore = [
+    "PLR0913",      # too many arguments — Textual + manager APIs need them
+    "PLR2004",      # magic numbers in tests are fine
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG", "PLR2004", "S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+files = ["src/grove"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["libtmux.*", "textual.*", "humanize.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: real tmux + git subprocesses; opt-in via -m integration",
+    "requires_tmux: skipped on platforms without tmux (Windows-native CI)",
+]
+asyncio_mode = "auto"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Architectural boundary: grove.core must not import UI layers, and (when
+# we add a second client) sibling clients must not import each other.
+# Enforced by import-linter; CI fails on violation.
+#
+# Why import-linter, not just ruff TID251: ruff's banned-api covers a
+# single-forbidden-list contract today, but the multi-client architecture
+# we've explicitly committed to wants `independence` and `layers` contracts,
+# which import-linter expresses cleanly and ruff does not.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[tool.importlinter]
+root_packages = ["grove"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core has no UI dependencies"
+type = "forbidden"
+source_modules = ["grove.core"]
+forbidden_modules = [
+    "textual",
+    "rich",
+    "typer",
+    "click",
+    "grove.tui",
+]
+
+# Daemon is the in-process HTTP wrapper around grove.core. It MUST NOT
+# import any client-facing module — the dependency direction is
+# clients → daemon → core, never the reverse. Catches accidental
+# UI/SDK leakage into the server process at CI time.
+[[tool.importlinter.contracts]]
+name = "Daemon depends only on grove.core"
+type = "forbidden"
+source_modules = ["grove.daemon"]
+forbidden_modules = [
+    "grove.client",
+    "grove.tui",
+]
+
+# The client SDK is the public boundary every other client speaks. It
+# talks to grove.core.contracts (wire shapes) and to the daemon over
+# HTTP — it must not reach into the daemon's process internals nor
+# pull in any presentation layer.
+[[tool.importlinter.contracts]]
+name = "Client SDK does not import daemon or tui"
+type = "forbidden"
+source_modules = ["grove.client"]
+forbidden_modules = [
+    "grove.daemon",
+    "grove.tui",
+]

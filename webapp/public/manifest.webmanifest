@@ -1,0 +1,14 @@
+{
+  "name": "Grove",
+  "short_name": "Grove",
+  "description": "Read-only dashboard for Grove workspaces.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#d97757",
+  "background_color": "#2d2d2b",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

@@ -1,0 +1,25 @@
+[Unit]
+Description=Grove webapp (read-only Next.js dashboard)
+Documentation=https://github.com/bearlike/Grove
+# Daemon should come up first; webapp polls it on render. `Wants=` (not
+# `Requires=`) means a daemon failure doesn't tear the webapp down — the
+# webapp's status bar already surfaces "daemon unreachable" cleanly.
+Wants=grove-daemon.service
+After=grove-daemon.service network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WEBAPP_DIR@
+# Production mode: requires `npm run build` to have happened. The Makefile
+# target `make webapp-build` does this; CI does it too.
+ExecStart=@NPM_BIN@ run start -- --hostname @WEBAPP_HOST@ --port @WEBAPP_PORT@
+Environment=NODE_ENV=production
+Environment=GROVE_DAEMON_URL=@DAEMON_URL@
+Environment=PATH=@NODE_BIN_DIR@:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

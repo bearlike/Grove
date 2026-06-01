@@ -1,0 +1,142 @@
+site_name: Grove
+site_description: The terminal workspace manager for AI coding agents. Run a forest of them in parallel, and watch from your phone when you step away.
+repo_url: https://github.com/bearlike/Grove
+repo_name: bearlike/Grove
+site_url: https://bearlike.github.io/Grove/
+
+theme:
+  name: shadcn
+  custom_dir: overrides
+  icon: logos/grove-logo.png
+  favicon: logos/grove-logo.png
+  pygments_style:
+    light: shadcn-light
+    dark: github-dark
+
+  # Ask AI panel, backed by DeepWiki on this repo. DeepWiki indexes the repo
+  # automatically once it is public. The Ask AI greeting/avatar are
+  # Grove-branded in overrides/templates/search.html, because the upstream
+  # theme hardcodes its own vendor name in that template.
+  ai:
+    deepwiki_repo: bearlike/Grove
+    question_prefix: |
+      I'm a new user; give product-first, well-grounded answers.
+    examples:
+      - "How do I install Grove?"
+      - "How does the configuration cascade work?"
+      - "What's the difference between pause and kill?"
+      - "How do I add a custom agent?"
+
+  versions_root: Grove
+  show_version_switcher: true
+  show_build_info: true
+
+  nav_icons:
+    Home: lucide:house
+    "Get Started": lucide:rocket
+    Troubleshooting: lucide:life-buoy
+
+    Configure: lucide:sliders-horizontal
+    "Project Setup": lucide:folder-cog
+    Agents: lucide:bot
+    "Init Scripts": lucide:play
+    "Configuration Reference": lucide:file-json
+
+    Use: lucide:monitor-play
+    "TUI Tour": lucide:layout-dashboard
+    CLI: lucide:terminal
+    "Web Dashboard": lucide:monitor-smartphone
+    "Authentication & Pairing": lucide:key-round
+    "Daily Workflow": lucide:workflow
+
+    Capabilities: lucide:sparkles
+    "Workspace Lifecycle": lucide:git-branch
+    "Branch Provenance": lucide:shield-check
+    "Live Activity & Peek": lucide:activity
+    "Status Semantics": lucide:circle-dot
+    "Configuration Cascade": lucide:layers
+
+    Develop: lucide:code
+    Architecture: lucide:blocks
+    "Public API": lucide:book-open-text
+    "Engineering Principles": lucide:compass
+    Contributing: lucide:git-pull-request
+    "Design System": lucide:palette
+
+hooks:
+  - docs/hooks/schema_to_md.py
+
+markdown_extensions:
+  - pymdownx.highlight:
+      use_pygments: true
+      linenums: false
+      css_class: codehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.inlinehilite
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+
+exclude_docs: |
+  superpowers/
+  hooks/
+  design-system.md
+
+plugins:
+  - search
+  - callouts:
+      aliases: false
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true
+            show_root_heading: true
+            show_root_toc_entry: false
+
+extra:
+  version:
+    provider: mike
+
+extra_css:
+  - stylesheets/grove.css?v=2
+
+nav:
+  - Home: index.md
+  - User Guide:
+      - Get Started: getting-started.md
+      - Configure:
+          - Project Setup: configure-project.md
+          - Agents: configure-agents.md
+          - Init Scripts: configure-init-scripts.md
+          - Configuration Reference: configure-reference.md
+      - Use:
+          - TUI Tour: use-tui.md
+          - CLI: use-cli.md
+          - Web Dashboard: use-webapp.md
+          - Authentication & Pairing: use-auth.md
+          - Daily Workflow: use-workflow.md
+      - Capabilities:
+          - Workspace Lifecycle: features-workspace-lifecycle.md
+          - Branch Provenance: features-branch-provenance.md
+          - Live Activity & Peek: features-peek.md
+          - Status Semantics: features-status.md
+          - Configuration Cascade: features-cascade.md
+      - Troubleshooting: troubleshooting.md
+  - Developer Reference:
+      - Architecture: develop-architecture.md
+      - Public API: develop-public-api.md
+      - Engineering Principles: develop-principles.md
+      - Contributing: develop-contributing.md
