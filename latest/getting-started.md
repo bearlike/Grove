@@ -13,35 +13,46 @@ repository it is launched from. This page covers install and first run.
 
 ## Install
 
-=== "uvx (no install)"
+Grove installs to your user bin (`~/.local/bin`) as `grove`, straight from the
+repo, so you can invoke it by name from anywhere. Each tab below needs one
+fewer dependency than the last, so reach for whichever tool you already have.
+The `[daemon]` extra pulls in the web dashboard backend; drop it for a
+TUI-only install.
 
-    `uvx` runs Grove straight from the repo. Nothing is installed and nothing
-    is cloned.
+=== "uv (recommended)"
 
-    ```bash
-    uvx --from git+https://github.com/bearlike/Grove grove
-    ```
-
-=== "uv tool install"
-
-    Install `grove` on your `$PATH` from the repo, then upgrade or remove it on
-    demand. The `[daemon]` extra adds the web dashboard backend.
+    Fewest steps. [uv](https://docs.astral.sh/uv/) installs Grove in its own
+    isolated environment and links `grove` onto your `$PATH`.
 
     ```bash
     uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
-    uv tool upgrade grove
-    uv tool uninstall grove
+    uv tool upgrade grove      # update on demand
+    uv tool uninstall grove    # remove
     ```
 
-=== "Bootstrap (no `uv` yet)"
+    No uv yet? Install it first: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 
-    Install `uv` with Astral's official installer, then install Grove from the
-    repo.
+=== "pipx"
+
+    No uv required. pipx also installs Grove in an isolated environment on your
+    `$PATH`.
 
     ```bash
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
+    pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"
+    pipx upgrade grove
     ```
+
+=== "pip"
+
+    Only Python and pip required. Installs the `grove` script into your user
+    bin.
+
+    ```bash
+    pip install --user "grove[daemon] @ git+https://github.com/bearlike/Grove"
+    ```
+
+    Re-run with `--upgrade` to update. On a system with an externally managed
+    Python, add `--break-system-packages`, or use pipx instead.
 
 ---
 

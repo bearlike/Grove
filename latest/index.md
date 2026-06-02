@@ -64,22 +64,18 @@ pushes, and never touches a remote branch.
 
 ## Install { .ms-h2-icon data-icon="plug" }
 
-Grove needs `git` and `tmux`, and installs straight from the repo with `uv`, no clone required.
+Grove needs `git` and `tmux`, and installs to your PATH as `grove` straight from the repo. With `uv`:
 
 ```bash
-# Run it once, no install:
-uvx --from git+https://github.com/bearlike/Grove grove
-
-# Or install it on your PATH, then upgrade on demand:
 uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
-uv tool upgrade grove
+uv tool upgrade grove        # update on demand
 
 cd path/to/your/repo
 grove config init            # scaffold .grove/config.json
 grove                        # launch the TUI
 ```
 
-See [Get Started](getting-started.md) for prerequisites and other install paths.
+No uv? Install with `pipx` or `pip` instead. See [Get Started](getting-started.md) for every install path.
 
 ## Built for teams { .ms-h2-icon data-icon="flow" }
 
