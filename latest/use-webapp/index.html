@@ -1149,7 +1149,7 @@ port, point the web app at it with <code>GROVE_DAEMON_URL</code> in <code>webapp
 device connects, it has to <a href="../use-auth/">pair</a> with the host.</p>
 <p>Editing the dashboard's own code is a separate, contributor task. The development server, the wire-type
 codegen, and the test suites live in the
-<a href="https://github.com/bearlike/Grove/tree/main/webapp"><code>webapp/</code> README</a>, not here.</p>
+<a href="https://github.com/bearlike/Grove/tree/current/webapp"><code>webapp/</code> README</a>, not here.</p>
 <h2 id="how-it-stays-loopback-only">How it stays loopback-only</h2>
 <div class="codehilite"><pre><span></span><code>Browser (LAN:3000)  ──http──▶  Next.js (0.0.0.0:3000)  ──http──▶  Daemon (127.0.0.1:7421)
                                  │ /api/grove/*  (BFF proxy)
@@ -1189,7 +1189,7 @@ the wrong lever, because pairing assumes loopback. See the <a href="../use-auth/
 <li><a href="../use-auth/">Authentication &amp; pairing</a>: how a new device gets access.</li>
 <li><a href="../use-cli/">CLI</a>: the <code>grove daemon serve</code> options and the <code>grove auth</code> group.</li>
 <li><a href="../features-status/">Status semantics</a>: what each glyph and color means.</li>
-<li>Building or hacking on the dashboard? That is the <a href="https://github.com/bearlike/Grove/tree/main/webapp"><code>webapp/</code> README</a>, the contributor surface, kept separate from this product guide.</li>
+<li>Building or hacking on the dashboard? That is the <a href="https://github.com/bearlike/Grove/tree/current/webapp"><code>webapp/</code> README</a>, the contributor surface, kept separate from this product guide.</li>
 </ul>
   </div>
   

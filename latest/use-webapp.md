@@ -49,7 +49,7 @@ device connects, it has to [pair](use-auth.md) with the host.
 
 Editing the dashboard's own code is a separate, contributor task. The development server, the wire-type
 codegen, and the test suites live in the
-[`webapp/` README](https://github.com/bearlike/Grove/tree/main/webapp), not here.
+[`webapp/` README](https://github.com/bearlike/Grove/tree/current/webapp), not here.
 
 ## How it stays loopback-only
 
@@ -105,4 +105,4 @@ the wrong lever, because pairing assumes loopback. See the [security model](use-
 - [Authentication & pairing](use-auth.md): how a new device gets access.
 - [CLI](use-cli.md): the `grove daemon serve` options and the `grove auth` group.
 - [Status semantics](features-status.md): what each glyph and color means.
-- Building or hacking on the dashboard? That is the [`webapp/` README](https://github.com/bearlike/Grove/tree/main/webapp), the contributor surface, kept separate from this product guide.
+- Building or hacking on the dashboard? That is the [`webapp/` README](https://github.com/bearlike/Grove/tree/current/webapp), the contributor surface, kept separate from this product guide.
