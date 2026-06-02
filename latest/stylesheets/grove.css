@@ -12,44 +12,6 @@
      error red            #e64c4c
 */
 
-/* ── Lede paragraph (replaces the hero H1 on the landing page) ─────── */
-
-.grove-lede {
-  font-size: 1.05rem;
-  line-height: 1.55;
-  color: var(--muted-foreground, currentColor);
-  max-width: 65ch;
-  margin: 0.25rem 0 1.25rem;
-}
-
-/* ── Hero shot (single landing-page TUI capture) ───────────────────── */
-
-.grove-hero-shot {
-  margin: 1.5rem 0;
-  padding: 0;
-  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
-  border-radius: 0.6rem;
-  background: var(--card, transparent);
-  overflow: hidden;
-}
-.grove-hero-shot__frame {
-  display: block;
-  background: #1f1d1a;
-}
-.grove-hero-shot img,
-.grove-hero-shot svg {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-.grove-hero-shot__caption {
-  margin: 0;
-  padding: 0.5rem 0.85rem;
-  font-size: 0.82rem;
-  color: var(--muted-foreground, currentColor);
-  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.06));
-}
-
 /* ── Inline screenshot tile (used on sub-pages) ────────────────────── */
 
 .grove-shot {
@@ -186,22 +148,31 @@ article .tabbed-set > input:nth-child(5):checked ~ .tabbed-content > .tabbed-blo
   display: block;
 }
 
-/* ── Device mockups (laptop / phone frames with their own backdrop) ─────
-   These images already carry a device frame and background, so they skip
-   the dark .grove-shot frame. Center them and cap the size; a portrait
-   phone must never stretch to the full content-column width. */
-.grove-device { margin: 1.5rem 0; text-align: center; }
-.grove-device img,
-.grove-device svg {
-  width: auto;
-  max-width: 280px;
-  max-height: 580px;
-  height: auto;
-  border-radius: 0.5rem;
+/* ── Device mockup pair (laptop + phone, matched height) ────────────────
+   Landing-hero counterpart of the README's side-by-side shot, so the docs
+   site and README present the same MacBook + iPhone image. Height scales
+   with the viewport, so the two stay matched and never overflow on a phone;
+   they wrap only if they truly must. */
+.grove-devices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(0.5rem, 3vw, 2rem);
+  margin: 1.5rem 0 0.4rem;
 }
-.grove-device figcaption {
-  margin-top: 0.5rem;
-  font-size: 0.82rem;
+.grove-devices img {
+  height: 270px;
+  width: auto;
+  max-width: none;
+}
+@media (max-width: 680px) {
+  .grove-devices img { height: 175px; }
+}
+.grove-devices__caption {
+  margin: 0 0 1.5rem;
+  text-align: center;
+  font-size: 0.85rem;
   line-height: 1.5;
   color: var(--muted-foreground, currentColor);
 }

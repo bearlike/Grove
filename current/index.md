@@ -18,14 +18,11 @@ title: Grove
   </div>
 </div>
 
-<figure class="grove-hero-shot" markdown>
-  <span class="grove-hero-shot__frame">
-    ![Grove TUI showing four workspaces in mixed states with a live peek rail](img/screenshots/tui-list.png)
-  </span>
-  <figcaption class="grove-hero-shot__caption">
-    Project-scoped workspaces on the left. On the right, a live rail mirrors the selected agent's terminal and its git position.
-  </figcaption>
-</figure>
+<div class="grove-devices">
+  <img class="no-border" src="img/mockups/tui-laptop-mockup.png" alt="Grove TUI on a MacBook: project-scoped workspaces with a live agent peek rail" />
+  <img class="no-border" src="img/mockups/webapp-phone-mockup.png" alt="Grove read-only web dashboard on a phone, showing the mobile workspace grid" />
+</div>
+<p class="grove-devices__caption">Grove in your terminal, and on your phone. Run agents in parallel from your desk, then watch them from anywhere.</p>
 
 ## What is Grove? { .ms-h2-icon data-icon="target" }
 
@@ -94,11 +91,6 @@ Aider on the same task and compare the results. They pause a long refactor and p
 When others need to watch the fleet, point the read-only web dashboard at the daemon. It shows the same
 status and live output as the TUI, in any browser or on a phone. Lifecycle control stays in the
 terminal, where it belongs.
-
-<figure class="grove-device" markdown>
-  ![Grove read-only web dashboard on a phone, showing the mobile workspace grid](img/mockups/webapp-phone-mockup.png)
-  <figcaption>Step away from your desk, and the read-only <a href="use-webapp/">web dashboard</a> keeps every agent in view from your phone.</figcaption>
-</figure>
 
 ## Explore the docs { .ms-h2-icon data-icon="book" }
 
