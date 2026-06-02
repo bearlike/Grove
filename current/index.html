@@ -103,7 +103,7 @@
 
     
     <link href="assets/_mkdocstrings.css" rel="stylesheet">
-    <link href="stylesheets/grove.css" rel="stylesheet">
+    <link href="stylesheets/grove.css?v=2" rel="stylesheet">
 
     
 
@@ -1152,15 +1152,19 @@ pushes, and never touches a remote branch.</p>
 </div>
 
 <h2 class="ms-h2-icon" data-icon="plug" id="install">Install</h2>
-<p>Grove needs <code>git</code> and <code>tmux</code>.</p>
-<div class="codehilite"><pre><span></span><code>uvx<span class="w"> </span>grove<span class="w">                    </span><span class="c1"># run without installing</span>
-uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span>grove<span class="w">        </span><span class="c1"># or install on your $PATH</span>
+<p>Grove needs <code>git</code> and <code>tmux</code>, and installs straight from the repo with <code>uv</code>, no clone required.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Run it once, no install:</span>
+uvx<span class="w"> </span>--from<span class="w"> </span>git+https://github.com/bearlike/Grove<span class="w"> </span>grove
+
+<span class="c1"># Or install it on your PATH, then upgrade on demand:</span>
+uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;grove[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
+uv<span class="w"> </span>tool<span class="w"> </span>upgrade<span class="w"> </span>grove
 
 <span class="nb">cd</span><span class="w"> </span>path/to/your/repo
 grove<span class="w"> </span>config<span class="w"> </span>init<span class="w">            </span><span class="c1"># scaffold .grove/config.json</span>
 grove<span class="w">                        </span><span class="c1"># launch the TUI</span>
 </code></pre></div>
-<p>See <a href="getting-started/">Get Started</a> for prerequisites and the bootstrap installer.</p>
+<p>See <a href="getting-started/">Get Started</a> for prerequisites and other install paths.</p>
 <h2 class="ms-h2-icon" data-icon="flow" id="built-for-teams">Built for teams</h2>
 <p>Grove gives you the mechanism and leaves the policy to you. Commit a <code>.grove/config.json</code> to the repo
 and you set the shared baseline. It pins the agent registry, the worktree layout, and the init script

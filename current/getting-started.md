@@ -13,40 +13,37 @@ repository it is launched from. This page covers install and first run.
 
 ## Install
 
-=== "uvx (recommended)"
+=== "uvx (no install)"
 
-    `uvx` runs Grove in an isolated, disposable environment.
+    `uvx` runs Grove straight from the repo. Nothing is installed and nothing
+    is cloned.
 
     ```bash
-    uvx grove                                              # latest stable
-    uvx --from git+https://github.com/bearlike/Grove grove # canary (current branch)
-    uvx --refresh grove                                    # force a fresh fetch
+    uvx --from git+https://github.com/bearlike/Grove grove
     ```
 
 === "uv tool install"
 
-    Persistent install with `grove` on `$PATH`:
+    Install `grove` on your `$PATH` from the repo, then upgrade or remove it on
+    demand. The `[daemon]` extra adds the web dashboard backend.
 
     ```bash
-    uv tool install grove
+    uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
     uv tool upgrade grove
+    uv tool uninstall grove
     ```
 
 === "Bootstrap (no `uv` yet)"
 
-    Installs `uv` via Astral's official installer, then `uv tool install grove`:
+    Install `uv` with Astral's official installer, then install Grove from the
+    repo.
 
     ```bash
-    # Linux / macOS
-    curl -fsSL https://raw.githubusercontent.com/bearlike/Grove/current/install.sh | bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
     ```
 
-    ```powershell
-    # Windows (PowerShell)
-    iwr -useb https://raw.githubusercontent.com/bearlike/Grove/current/install.ps1 | iex
-    ```
-
-    Add `--canary` (Linux/macOS) for the build off `current`.
+---
 
 ## First run
 

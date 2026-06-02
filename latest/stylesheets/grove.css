@@ -129,8 +129,13 @@ article .tabbed-set > .tabbed-labels > label {
   margin-bottom: -1px;
 }
 article .tabbed-set > .tabbed-labels > label:hover { color: var(--foreground, currentColor); }
-article .tabbed-set > div.tabbed-content { display: block; width: 100%; padding-top: 0.85rem; }
+article .tabbed-set > div.tabbed-content { display: block; width: 100%; padding: 1.1rem 0.1rem 0.4rem; }
 article .tabbed-set > .tabbed-content > .tabbed-block { display: none; }
+/* Breathing room inside the active tab panel. The theme collapses margins on
+   the panel's children, which crams the prose hard against the code blocks. */
+article .tabbed-set > .tabbed-content > .tabbed-block > * { margin: 0.9rem 0; }
+article .tabbed-set > .tabbed-content > .tabbed-block > :first-child { margin-top: 0; }
+article .tabbed-set > .tabbed-content > .tabbed-block > :last-child { margin-bottom: 0; }
 
 article .tabbed-set > input:nth-child(1):checked ~ .tabbed-labels > label:nth-child(1),
 article .tabbed-set > input:nth-child(2):checked ~ .tabbed-labels > label:nth-child(2),
