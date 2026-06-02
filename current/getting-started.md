@@ -65,16 +65,25 @@ at `${user_config_dir}/grove/config.json` (for example
 `~/.config/grove/config.json` on Linux) holds your personal defaults across
 every repo. Where both set the same option, the project layer wins.
 
-!!! tip "Writing your config"
+Configuration has a few layers and many knobs, so you do not have to write it by
+hand.
+
+!!! tip "Let an agent configure it for you"
+    Hand this prompt to Claude Code, Codex, or any coding agent. It reads Grove's
+    config skill and sets things up with you, verifying every field against your
+    installed version.
+
+    ```text
+    Read https://raw.githubusercontent.com/bearlike/Grove/main/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
+    ```
+
+!!! note "Or write it yourself"
     [Project setup](configure-project.md) walks through `.grove/config.json`,
     [Agents](configure-agents.md) covers wiring Claude Code, Aider, or any
     command, and [Init scripts](configure-init-scripts.md) prepare each new
-    workspace.
-
-!!! note "Every option"
-    The [Configuration reference](configure-reference.md) lists every field,
-    and the [Configuration cascade](features-cascade.md) shows how the six
-    layers (defaults, user, project, project-local, env, CLI) merge.
+    workspace. Every field is in the
+    [Configuration reference](configure-reference.md), and the
+    [Configuration cascade](features-cascade.md) shows how the six layers merge.
 
 ---
 
