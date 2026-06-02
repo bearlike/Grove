@@ -1169,6 +1169,28 @@ Python, add <code>--break-system-packages</code>, or use pipx instead.</p>
 </div>
 </div>
 </div>
+<h2 id="configure-it">Configure it</h2>
+<p>Grove runs on sensible defaults, so you can launch it now and tune it later.
+Two files shape its behavior, and they layer on top of each other. The
+<strong>project config</strong> at <code>&lt;repo&gt;/.grove/config.json</code> is committed and shared by
+the repo; <code>grove config init</code> scaffolds it, and it pins the agent roster, the
+worktree layout, and the init script every workspace runs. The <strong>user config</strong>
+at <code>${user_config_dir}/grove/config.json</code> (for example
+<code>~/.config/grove/config.json</code> on Linux) holds your personal defaults across
+every repo. Where both set the same option, the project layer wins.</p>
+<div class="admonition tip">
+<p class="admonition-title">Writing your config</p>
+<p><a href="../configure-project/">Project setup</a> walks through <code>.grove/config.json</code>,
+<a href="../configure-agents/">Agents</a> covers wiring Claude Code, Aider, or any
+command, and <a href="../configure-init-scripts/">Init scripts</a> prepare each new
+workspace.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Every option</p>
+<p>The <a href="../configure-reference/">Configuration reference</a> lists every field,
+and the <a href="../features-cascade/">Configuration cascade</a> shows how the six
+layers (defaults, user, project, project-local, env, CLI) merge.</p>
+</div>
 <hr />
 <h2 id="first-run">First run</h2>
 <div class="codehilite"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>path/to/your/git/repo
@@ -1945,6 +1967,14 @@ grove<span class="w"> </span>ls<span class="w">               </span><span class
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#install');">
                 Install
+            </a>
+            
+            
+            <a href="#configure-it"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#configure-it');">
+                Configure it
             </a>
             
             

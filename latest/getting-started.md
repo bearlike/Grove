@@ -54,6 +54,28 @@ TUI-only install.
     Re-run with `--upgrade` to update. On a system with an externally managed
     Python, add `--break-system-packages`, or use pipx instead.
 
+## Configure it
+
+Grove runs on sensible defaults, so you can launch it now and tune it later.
+Two files shape its behavior, and they layer on top of each other. The
+**project config** at `<repo>/.grove/config.json` is committed and shared by
+the repo; `grove config init` scaffolds it, and it pins the agent roster, the
+worktree layout, and the init script every workspace runs. The **user config**
+at `${user_config_dir}/grove/config.json` (for example
+`~/.config/grove/config.json` on Linux) holds your personal defaults across
+every repo. Where both set the same option, the project layer wins.
+
+!!! tip "Writing your config"
+    [Project setup](configure-project.md) walks through `.grove/config.json`,
+    [Agents](configure-agents.md) covers wiring Claude Code, Aider, or any
+    command, and [Init scripts](configure-init-scripts.md) prepare each new
+    workspace.
+
+!!! note "Every option"
+    The [Configuration reference](configure-reference.md) lists every field,
+    and the [Configuration cascade](features-cascade.md) shows how the six
+    layers (defaults, user, project, project-local, env, CLI) merge.
+
 ---
 
 ## First run
