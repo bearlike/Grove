@@ -155,20 +155,21 @@ article .tabbed-set > input:nth-child(5):checked ~ .tabbed-content > .tabbed-blo
    they wrap only if they truly must. */
 .grove-devices {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
-  gap: clamp(0.5rem, 3vw, 2rem);
-  margin: 1.5rem 0 0.4rem;
+  gap: 5%;
+  max-width: 600px;
+  margin: 1.5rem auto 0.4rem;
 }
-.grove-devices img {
-  height: 270px;
-  width: auto;
-  max-width: none;
-}
-@media (max-width: 680px) {
-  .grove-devices img { height: 175px; }
-}
+/* Width-based (not height-based) so the pair can never wrap: the two widths
+   plus the gap always sum to < 100% of the container, at any viewport. The
+   71 : 20 ratio matches the laptop and phone aspect ratios, so both render at
+   the same height. `.no-border` (set on the imgs) keeps the theme's content
+   image rule from resizing them. */
+.grove-devices img { height: auto; max-height: 300px; }
+.grove-devices img:first-child { width: 71%; }
+.grove-devices img:last-child { width: 20%; }
 .grove-devices__caption {
   margin: 0 0 1.5rem;
   text-align: center;
