@@ -161,6 +161,231 @@ def test_create_inherits_grove_modal_chrome() -> None:
     assert issubclass(CreateWorkspaceScreen, GroveModal)
 
 
+# ─── Create: root placement + skip-init ──────────────────────────────────────
+
+
+async def _open_create_modal(pilot: object, app: GroveApp) -> CreateWorkspaceScreen:
+    """Press 'n', wait, and return the freshly-pushed create screen."""
+    await pilot.press("n")  # type: ignore[attr-defined]
+    await pilot.pause()  # type: ignore[attr-defined]
+    modal = app.screen
+    assert isinstance(modal, CreateWorkspaceScreen)
+    return modal
+
+
+@pytest.mark.asyncio
+async def test_root_mode_active_block_reads_root_branch(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Selecting the Root radio makes `_active_block().read()` a RootBranch."""
+    from textual.widgets import RadioButton  # noqa: PLC0415
+
+    from grove.core.contracts.branch_plan import RootBranch  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        # Press the Root radio button — fires RadioSet.Changed → on_radio_set_changed.
+        modal.query_one("#mode-root", RadioButton).value = True
+        await pilot.pause()
+        plan = modal._active_block().read()
+        assert isinstance(plan, RootBranch)
+        await pilot.press("escape")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_root_mode_auto_checks_skip_init(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Picking Root flips the skip-init checkbox on (init is risky in the root)."""
+    from textual.widgets import Checkbox, RadioButton  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        # Default: unchecked before any mode change.
+        assert modal.query_one("#skip-init", Checkbox).value is False
+        modal.query_one("#mode-root", RadioButton).value = True
+        await pilot.pause()
+        assert modal.query_one("#skip-init", Checkbox).value is True
+        await pilot.press("escape")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_root_mode_submit_builds_root_request_with_skip_init(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """End-to-end: root submit yields a CreateWorkspaceRequest carrying a
+    RootBranch branch_plan and skip_init=True (auto-checked by root)."""
+    from textual.widgets import RadioButton  # noqa: PLC0415
+
+    from grove.core.contracts.branch_plan import RootBranch  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    captured: dict[str, CreateWorkspaceRequest] = {}
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        # Intercept the dismiss payload so we read the request directly without
+        # exercising the manager's root-create side effects.
+        modal.dismiss = lambda result=None: captured.__setitem__("req", result)  # type: ignore[assignment,method-assign]
+        for ch in "rooty":
+            await pilot.press(ch)
+        modal.query_one("#mode-root", RadioButton).value = True
+        await pilot.pause()
+        modal._submit()
+        await pilot.pause()
+
+    req = captured["req"]
+    assert isinstance(req, CreateWorkspaceRequest)
+    assert isinstance(req.branch_plan, RootBranch)
+    assert req.skip_init is True
+    assert req.title == "rooty"
+
+
+@pytest.mark.asyncio
+async def test_skip_init_default_unchecked_flows_into_request(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """In a non-root mode the skip-init checkbox defaults unchecked, and that
+    False flows through to the request's skip_init."""
+    from grove.core.contracts.branch_plan import AutoBranch  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    captured: dict[str, CreateWorkspaceRequest] = {}
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        modal.dismiss = lambda result=None: captured.__setitem__("req", result)  # type: ignore[assignment,method-assign]
+        for ch in "plain":
+            await pilot.press(ch)
+        await pilot.pause()
+        modal._submit()
+        await pilot.pause()
+
+    req = captured["req"]
+    assert isinstance(req, CreateWorkspaceRequest)
+    assert isinstance(req.branch_plan, AutoBranch)  # default mode is Auto
+    assert req.skip_init is False
+
+
+@pytest.mark.asyncio
+async def test_skip_init_checked_flows_into_request_in_non_root_mode(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A user can opt into skip-init in any mode; the checked value reaches
+    the request even when placement is a normal worktree (Auto)."""
+    from textual.widgets import Checkbox  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    captured: dict[str, CreateWorkspaceRequest] = {}
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        modal.dismiss = lambda result=None: captured.__setitem__("req", result)  # type: ignore[assignment,method-assign]
+        for ch in "plain":
+            await pilot.press(ch)
+        modal.query_one("#skip-init", Checkbox).value = True
+        await pilot.pause()
+        modal._submit()
+        await pilot.pause()
+
+    req = captured["req"]
+    assert isinstance(req, CreateWorkspaceRequest)
+    assert req.skip_init is True
+
+
+@pytest.mark.asyncio
+async def test_skip_init_checkbox_states_are_visually_distinct(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Checked vs unchecked must read as filled-box vs empty-box, not a
+    subtle color shift of an always-present mark.
+
+    Textual's stock ToggleButton renders its inner glyph (`X`) in EVERY
+    state and conveys on/off only by the glyph's color. On Grove's warm-dark
+    palette the off mark was a near-black `X` on a dark pill — still an `X`,
+    which reads as 'ticked' — so both states looked checked and the box
+    appeared stuck on (the bug this pins). `GroveModal` overrides the
+    `toggle--button` colors so OFF hides the mark (fg == bg → empty box) and
+    ON fills the whole pill with a distinct background (filled box).
+    """
+    from textual.widgets import Checkbox, RadioButton  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        cb = modal.query_one("#skip-init", Checkbox)
+
+        assert cb.value is False
+        off = cb.get_visual_style("toggle--button")
+        # Unchecked: the mark is painted the pill's own bg → invisible → an
+        # empty box. Stock Textual would leave fg != bg (a visible dark X).
+        assert off.foreground == off.background, (
+            "unchecked checkbox renders a visible mark — it reads as 'ticked'"
+        )
+
+        modal.query_one("#mode-root", RadioButton).value = True
+        await pilot.pause()
+        assert cb.value is True
+        on = cb.get_visual_style("toggle--button")
+        # Checked: the pill fills with a distinct background → filled box.
+        # Stock Textual keeps the same pill bg in both states (color-only
+        # shift of the mark), which is exactly the indistinguishable case.
+        assert on.background != off.background, (
+            "checked and unchecked share a pill background — the two states "
+            "are visually indistinguishable"
+        )
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_root_mode_preview_shows_in_place(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Root preview names the current branch with `(in place)` and the repo
+    root path with `(in place — no worktree)`."""
+    from textual.widgets import RadioButton  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        modal.query_one("#mode-root", RadioButton).value = True
+        await pilot.pause()
+        preview = str(modal.query_one("#preview", Static).content)
+        assert "(in place)" in preview
+        assert "no worktree" in preview
+        # The tmp_repo fixture starts on `main`.
+        assert "main" in preview
+        await pilot.press("escape")
+        await pilot.pause()
+
+
 # ─── Edit ────────────────────────────────────────────────────────────────────
 
 

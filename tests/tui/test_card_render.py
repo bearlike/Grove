@@ -17,9 +17,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from grove.core import InitStatus, WorkspaceState, WorkspaceStatus
+from grove.core.agents import AgentActivityState
 from grove.tui._status import (
     ACTIVE_PULSE_FRAMES,
     active_pulse,
+    agent_state_color,
+    agent_state_glyph,
+    agent_state_label,
     chrome_color,
     ref_color,
     status_color,
@@ -332,6 +336,95 @@ def test_render_card_non_active_ignores_pulse_frame() -> None:
         body_0 = _render_card(_state(status=status), dark=True, now=_NOW, pulse_frame=0).plain
         body_1 = _render_card(_state(status=status), dark=True, now=_NOW, pulse_frame=1).plain
         assert body_0 == body_1, f"{status} body must not depend on pulse_frame"
+
+
+# ─── root placement indicator ───────────────────────────────────────────────
+
+
+def test_render_card_root_placement_shows_root_tag() -> None:
+    """A root workspace (placement ROOT) renders a muted `root` tag on line 2
+    so the user can tell it apart from a worktree workspace at a glance."""
+    from grove.core.workspace import Placement  # noqa: PLC0415
+
+    body = _render_card(_state(placement=Placement.ROOT), dark=True, now=_NOW).plain
+    assert "root" in body
+
+
+def test_render_card_worktree_placement_has_no_root_tag() -> None:
+    """A normal worktree workspace renders no `root` tag — the absence is the
+    default, so the indicator only appears for the root case."""
+    from grove.core.workspace import Placement  # noqa: PLC0415
+
+    # Default placement is WORKTREE; branch text deliberately avoids "root".
+    body = _render_card(
+        _state(placement=Placement.WORKTREE, branch="feat/x", title="task"),
+        dark=True,
+        now=_NOW,
+    ).plain
+    assert "root" not in body
+
+
+def test_render_card_root_tag_uses_muted_hex() -> None:
+    """The root tag rides the same muted chrome hex as the card's separators —
+    a quiet qualifier, not a loud status token (never an inline literal hex)."""
+    from grove.core.workspace import Placement  # noqa: PLC0415
+
+    text = _render_card(_state(placement=Placement.ROOT), dark=True, now=_NOW)
+    muted = chrome_color("muted", dark=True).lower()
+    found = False
+    for start, end, style in text.spans:
+        if text.plain[start:end] == "root" and muted in str(style).lower():
+            found = True
+            break
+    assert found, (
+        f"'root' tag span should carry muted hex {muted}; spans seen: "
+        f"{[(text.plain[s:e], str(st)) for s, e, st in text.spans]}"
+    )
+
+
+def test_render_card_agent_state_working_shows_glyph_and_label() -> None:
+    """An agent state pushed by the screen's activity tick renders as
+    `<glyph> <label>` on line 2, after the agent-name segment — bold +
+    agent-state color, the same typography tier as the status label."""
+    state = AgentActivityState.WORKING
+    text = _render_card(_state(), dark=True, now=_NOW, agent_state=state)
+    segment = f"{agent_state_glyph(state)} {agent_state_label(state)}"
+    assert segment in text.plain  # "▶ working"
+    # The segment sits on line 2, between the agent name and the status label.
+    line2 = text.plain.splitlines()[1]
+    assert line2.index("claude") < line2.index(segment) < line2.rindex("active")
+    state_hex = agent_state_color(state, dark=True).lower()
+    found = False
+    for start, end, style in text.spans:
+        if text.plain[start:end] == segment:
+            style_str = str(style).lower()
+            if "bold" in style_str and state_hex in style_str:
+                found = True
+                break
+    assert found, (
+        f"agent-state span should be 'bold {state_hex}'; spans seen: "
+        f"{[(text.plain[s:e], str(st)) for s, e, st in text.spans]}"
+    )
+
+
+def test_render_card_agent_state_none_is_byte_identical_to_legacy_render() -> None:
+    """Regression pin: ``agent_state=None`` (and the omitted-param default)
+    must render the exact same bytes AND spans as the pre-agent-axis card —
+    absence is the default, same convention as the `root` tag."""
+    for status in (
+        WorkspaceStatus.ACTIVE,
+        WorkspaceStatus.IDLE,
+        WorkspaceStatus.PAUSED,
+        WorkspaceStatus.OFFLINE,
+        WorkspaceStatus.ERROR,
+    ):
+        legacy = _render_card(_state(status=status), dark=True, now=_NOW)
+        explicit = _render_card(_state(status=status), dark=True, now=_NOW, agent_state=None)
+        assert legacy.plain == explicit.plain
+        assert legacy.spans == explicit.spans
+        # And no agent-state token leaks into the agent-less render.
+        for label in ("working", "waiting", "blocked", "starting"):
+            assert label not in legacy.plain
 
 
 def test_render_card_init_failed_badge_styled_bold_error() -> None:

@@ -28,6 +28,13 @@ or rolls back entirely (with `fail_fast` on). Either way the manager
 records the outcome once and exposes it through the `WorkspaceEvent`
 stream.
 
+Two choices on the modal change the pipeline. The *Skip init script*
+checkbox skips step 3 for this one create, useful when a worktree does
+not need its bootstrap. Picking *Root* as the branch source skips steps
+1 and 2 entirely: the workspace runs in the repo root on your current
+branch, and Grove manages only the tmux session. See
+[root workspaces](features-workspace-lifecycle.md#root-workspaces).
+
 ## Attach and work
 
 `Enter` (or `a`) attaches. Inside outer tmux, Grove uses
@@ -102,6 +109,11 @@ forward.
 - **Two-agent split.** Run Claude on `feat/big-thing` while Aider works
   on `chore/lint-pass` in another workspace. The activity rail shows
   which one needs attention.
+- **Watch the wall.** Past three or four workspaces, stop cycling
+  through them. Press `d` for the
+  [Activity Dashboard](features-activity.md) and let the waiting and
+  blocked agents come to you. The same wall is at `/activity` in the
+  [web dashboard](use-webapp.md) when you step away from the desk.
 - **One agent, one shell.** Spawn an agent workspace and a `shell`
   workspace pointed at the same branch (use *Existing local* in the
   create modal). The agent makes changes; the shell side runs `make

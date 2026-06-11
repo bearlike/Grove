@@ -17,6 +17,7 @@ export const FIXTURE_WORKSPACES = [
     init_status: "ok",
     init_duration_ms: 350,
     branch_provenance: "grove",
+    placement: "worktree",
   },
   {
     id: "w-grove-2",
@@ -36,6 +37,7 @@ export const FIXTURE_WORKSPACES = [
     init_status: "ok",
     init_duration_ms: 220,
     branch_provenance: "grove",
+    placement: "worktree",
   },
   {
     id: "w-other-1",
@@ -55,6 +57,7 @@ export const FIXTURE_WORKSPACES = [
     init_status: "skipped",
     init_duration_ms: 0,
     branch_provenance: "user",
+    placement: "root",
   },
 ];
 

@@ -102,11 +102,17 @@ Each entry is one selectable agent in the create-workspace picker:
 - `name` (string, required). Identifier, and the **merge key** across layers.
 - `command` (string, required). Shell command sent into the agent's tmux window,
   for example `"claude"`, `"aider"`, `"codex"`, or `"$SHELL"`.
+- `kind` (`"claude_code" | "generic"`, default `"generic"`). Which adapter
+  introspects this agent's session for the **Activity Dashboard**. `claude_code`
+  reads Claude Code transcripts (live status, human-turn / reply counts, the
+  session's self-generated title) and lets Grove mint a deterministic
+  `--session-id` at launch; `generic` launches the command but tracks nothing.
 - `env` (object of string to string, default `{}`). Extra env vars exported in
   that window.
 - `description` (string, default `""`).
 
-Built-in defaults: `claude` (command `claude`) and `shell` (command `$SHELL`).
+Built-in defaults: `claude` (command `claude`, `kind` `claude_code`) and `shell`
+(command `$SHELL`, `kind` `generic`).
 
 ### `init_script`
 Optional setup run in its own tmux window before the agent starts:
@@ -119,6 +125,17 @@ Optional setup run in its own tmux window before the agent starts:
 - `fail_fast` (bool, default `true`). A non-zero exit rolls back the worktree,
   session, and branch.
 - `run_on_resume` (bool, default `false`)
+
+### `hooks`
+Opt-in Grove-managed Claude Code **status hooks** for the Activity Dashboard:
+- `enabled` (bool, default `false`). When `true`, Grove launches `claude_code`
+  agents with `--settings <grove-managed-file>` so a lightweight hook pushes exact
+  lifecycle status (`WORKING` / `WAITING` / `BLOCKED` / `IDLE`) into a per-session
+  sidecar the dashboard prefers over polled status — giving precise
+  *blocked-on-a-permission-prompt* that polling can't see, plus it surfaces
+  sessions you started by hand in a Grove worktree. Grove writes only its own
+  settings file and never touches your `.claude/settings.json`, so turning this
+  back to `false` fully uninstalls. Off by default (mechanism, not policy).
 
 ### `tmux`
 - `session_prefix` (default `"grove-"`), `init_window_name` (`"init"`),
@@ -162,10 +179,11 @@ dashboard. Leave the defaults unless there is a clear reason:
 ## 5. Merge rules to respect
 
 - Deep merge, last layer wins per key.
-- **`agents` merges by `name`.** An entry whose `name` matches an existing one
-  **replaces** it; a new `name` is **appended**. So a project can override the
-  shared `claude` agent's command without redefining the others. Every other list
-  replaces wholesale.
+- **`agents` merges by `name`, field by field.** An entry whose `name` matches an
+  existing one **refines it** (your fields win, the base entry's other fields are
+  kept); a new `name` is **appended**. So overriding just the `claude` agent's
+  `command` keeps its `kind: "claude_code"` — you do not have to restate it, and
+  the dashboard keeps tracking. Every other list replaces wholesale.
 - Unknown keys raise. Validate before you tell the user it is done.
 
 ## 6. Examples

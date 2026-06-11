@@ -14,8 +14,10 @@ from loguru import logger
 
 from grove import __version__
 from grove.core import GroveError, build, load_config, paths
+from grove.core.agents.hook import run_hook_from_stdin
 from grove.core.config import dump_config_json, dump_schema_json, write_schema
 from grove.core.git import detect_root
+from grove.tui.cli_sessions import sessions_app
 
 app = typer.Typer(
     name="grove",
@@ -36,6 +38,7 @@ auth_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(auth_app, name="auth")
+app.add_typer(sessions_app, name="sessions")
 
 
 # ─── default command (TUI) ──────────────────────────────────────────────────
@@ -172,6 +175,17 @@ def config_schema(
 def show_version() -> None:
     """Print the installed Grove version."""
     typer.echo(f"grove {__version__}")
+
+
+@app.command("agent-hook", hidden=True)
+def agent_hook() -> None:
+    """Internal: Claude Code status hook (#18).
+
+    Reads one hook event as JSON on stdin and writes a per-session status sidecar
+    the Activity Dashboard reads for push status (precise BLOCKED). Installed via
+    ``claude --settings`` when ``hooks.enabled`` — not meant to be run by hand.
+    """
+    raise typer.Exit(run_hook_from_stdin())
 
 
 @app.command("debug")

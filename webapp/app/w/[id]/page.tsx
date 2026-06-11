@@ -10,11 +10,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/workspace/status-badge";
+import { PlacementBadge } from "@/components/workspace/placement-badge";
 import { StatTrio } from "@/components/workspace/stat-trio";
 import { CommitList } from "@/components/workspace/commit-list";
 import { PeekSnapshot } from "@/components/workspace/peek-snapshot";
+import { SessionsPanel } from "@/components/workspace/sessions-panel";
 import { RelativeTime } from "@/components/shared/relative-time";
-import { useWorkspaceCommits, useWorkspacePeek } from "@/lib/grove/hooks";
+import {
+  useWorkspaceCommits,
+  useWorkspacePeek,
+  useWorkspaceSessions,
+} from "@/lib/grove/hooks";
 
 const PANEL_TITLE_CLS =
   "text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground";
@@ -23,6 +29,7 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   const { id } = use(params);
   const { data, isLoading, isError, error, dataUpdatedAt } = useWorkspacePeek(id);
   const { data: commits, isLoading: commitsLoading } = useWorkspaceCommits(id);
+  const { data: sessions, isLoading: sessionsLoading } = useWorkspaceSessions(id);
 
   // Layout intent: the agent terminal is the page's primary artifact, so on
   // lg+ the page is a viewport-fill flex column and the side-by-side row
@@ -77,8 +84,16 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
                       {data.state.description}
                     </p>
                   )}
+                  {data.state.init_duration_ms != null && (
+                    <p className="font-mono text-xs text-muted-foreground">
+                      init {(data.state.init_duration_ms / 1000).toFixed(1)}s
+                    </p>
+                  )}
                 </div>
-                <StatusBadge status={data.state.status} className="shrink-0" />
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <PlacementBadge placement={data.state.placement} />
+                  <StatusBadge status={data.state.status} />
+                </div>
               </CardHeader>
             </Card>
 
@@ -132,6 +147,19 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
                 </CardContent>
               </Card>
             </div>
+
+            <Card data-testid="sessions-card">
+              <CardHeader>
+                <CardTitle className={PANEL_TITLE_CLS}>Sessions</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <SessionsPanel
+                  workspaceId={id}
+                  sessions={sessions}
+                  isLoading={sessionsLoading}
+                />
+              </CardContent>
+            </Card>
           </>
         )}
 

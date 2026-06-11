@@ -20,6 +20,7 @@ from grove.core.workspace import (
     BranchProvenance,
     CommitSummary,
     InitStatus,
+    Placement,
     WorkspacePeek,
     WorkspaceState,
     WorkspaceStatus,
@@ -65,6 +66,20 @@ def test_workspace_state_view_preserves_branch_provenance_default() -> None:
     state = _fake_state()
     view = WorkspaceStateView.from_state(state)
     assert view.branch_provenance == BranchProvenance.GROVE_CREATED
+
+
+def test_workspace_state_view_placement_defaults_worktree() -> None:
+    view = WorkspaceStateView.from_state(_fake_state())
+    assert view.placement is Placement.WORKTREE
+
+
+def test_workspace_state_view_carries_root_placement() -> None:
+    state = _fake_state()
+    state.placement = Placement.ROOT
+    view = WorkspaceStateView.from_state(state)
+    assert view.placement is Placement.ROOT
+    reloaded = WorkspaceStateView.model_validate_json(view.model_dump_json())
+    assert reloaded.placement is Placement.ROOT
 
 
 def test_workspace_state_view_description_default_none() -> None:

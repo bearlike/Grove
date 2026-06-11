@@ -1,66 +1,108 @@
-name: Docs Build
+# Docs build + deploy for both mirrors of this repo. The target is chosen at
+# runtime from github.server_url:
+#   * github.com -> versioned GitHub Pages (mike, gh-pages branch)
+#   * otherwise  -> the internal docs host (static tar upload)
+# Internal host details come from repo variables (DOCS_HOST / DOCS_RESOLVE_IP),
+# which are empty on github.com, so that path is skipped and nothing
+# environment-specific is committed.
+name: Docs
 
 on:
   push:
-    branches:
-      - current
+    branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # mike pushes the gh-pages branch
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOCS_HOST: ${{ vars.DOCS_HOST }}
+  DOCS_RESOLVE_IP: ${{ vars.DOCS_RESOLVE_IP }}
 
 jobs:
-  build-deploy:
+  deploy:
+    if: >-
+      github.event.action != 'closed' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install docs dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip uv
           uv sync --group docs
 
-      - name: Generate build info
+      - name: Prepare docs inputs
         run: |
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          printf '{"commit":"%s"}\n' "$SHORT_SHA" > docs/build-info.json
-
-      - name: Generate config schema into docs/
-        # Best-effort: if the engine ever fails to import in this env the
-        # docs build still succeeds (the hook degrades to a stub page).
-        run: |
+          printf '{"commit":"%s"}\n' "$(git rev-parse --short HEAD)" > docs/build-info.json
+          # Schema feeds the generated configuration reference; best-effort so
+          # a broken engine import degrades to the stub page, not a dead site.
           .venv/bin/grove config schema --stdout > docs/grove.schema.json || true
 
       - name: Verify mkdocstrings imports
         run: .venv/bin/python -c "import grove.core; print(grove.core.__name__)"
 
-      - name: Configure git for mike
+      # --- github.com: versioned GitHub Pages via mike ---
+      - name: Configure git (mike)
+        if: github.server_url == 'https://github.com'
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Deploy docs (push to current)
-        if: github.ref == 'refs/heads/current'
+      - name: Publish to GitHub Pages
+        if: github.server_url == 'https://github.com' && github.ref == 'refs/heads/main'
         run: |
-          PATH=".venv/bin:$PATH" .venv/bin/mike deploy --push --update-aliases current latest --alias-type copy
-          PATH=".venv/bin:$PATH" .venv/bin/mike set-default --push latest
+          uv run mike deploy --push --update-aliases main latest --alias-type copy
+          uv run mike set-default --push latest
 
-      - name: Deploy PR docs
-        if: |
+      - name: Publish PR preview to GitHub Pages
+        if: >-
+          github.server_url == 'https://github.com' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
           !contains(github.actor, '[bot]')
+        run: uv run mike deploy --push "pr-${{ github.event.pull_request.number }}"
+
+      # --- internal docs host: single version, static upload ---
+      - name: Publish to internal docs host
+        if: github.server_url != 'https://github.com'
         run: |
-          VERSION="pr-${{ github.event.pull_request.number }}"
-          PATH=".venv/bin:$PATH" .venv/bin/mike deploy --push "$VERSION"
+          slug="grove"
+          [ "${{ github.event_name }}" = "pull_request" ] && slug="grove-pr-${{ github.event.pull_request.number }}"
+          sed -i "s|^site_url:.*|site_url: https://${DOCS_HOST}/${slug}/|" mkdocs.yml
+          uv run mkdocs build --strict -d site
+          tar -C site -cf site.tar .
+          curl -fsS -k --retry 5 --retry-all-errors --retry-delay 4 --max-time 180 \
+            --resolve "${DOCS_HOST}:443:${DOCS_RESOLVE_IP}" \
+            -X PUT -H 'Content-Type: application/x-tar' --data-binary @site.tar \
+            "https://${DOCS_HOST}/${slug}/"
+
+  cleanup:
+    # Remove a PR preview from the internal docs host when the PR closes.
+    # (GitHub Pages / mike PR cleanup lives in docs-cleanup.yml.)
+    if: >-
+      github.server_url != 'https://github.com' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove PR preview
+        run: |
+          curl -fsS -k --retry 3 --retry-all-errors --retry-delay 4 \
+            --resolve "${DOCS_HOST}:443:${DOCS_RESOLVE_IP}" \
+            -X DELETE "https://${DOCS_HOST}/grove-pr-${{ github.event.pull_request.number }}/" || true

@@ -7,32 +7,40 @@ the daemon listens on loopback only; remote access is via SSH tunnel.
 
 from __future__ import annotations
 
+import asyncio
 import getpass
 import platform
 import socket
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+from loguru import logger
 from pydantic import BaseModel
 
 from grove import __version__ as _GROVE_VERSION
+from grove.core.activity import ActivityService
 from grove.core.auth import SessionStore
 from grove.core.config import GroveConfig
+from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
+from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView
 from grove.core.contracts.views import (
     AttachInstructionView,
     CommitSummaryView,
     HealthView,
     WhoamiView,
+    WorkspacePaneView,
     WorkspacePeekView,
     WorkspaceStateView,
 )
 from grove.core.errors import (
+    AgentSessionNotFound,
     BranchAlreadyCheckedOut,
     BranchConflict,
     BranchError,
@@ -42,9 +50,17 @@ from grove.core.errors import (
     WorkspaceStateError,
 )
 from grove.core.manager import WorkspaceManager
+from grove.core.sessions import SessionExplorer, SessionListing
 from grove.core.store import JsonWorkspaceStore
+from grove.daemon._sse import _SseHub
 from grove.daemon.auth import build_auth_router, make_require_session
 from grove.daemon.repos import RepoRegistry
+
+# How often the lifespan task recomputes activity and emits ``session_activity``
+# deltas. Transcript/pane changes aren't lifecycle events, so this poll is what
+# streams them; lifecycle changes (create/kill) arrive promptly via the bus. A
+# couple seconds matches the dashboard's slow-tick feel without hammering git/tmux.
+_POLL_INTERVAL_SECONDS = 2.0
 
 
 def _build_whoami(started_at: datetime) -> WhoamiView:
@@ -91,6 +107,48 @@ class _KillBody(BaseModel):
     delete_branch: bool | None = None
 
 
+def _sse_frame(event: DashboardEvent) -> str:
+    """Format one ``DashboardEvent`` as an SSE wire frame.
+
+    ``id:`` is the monotonic seq the client echoes back as ``Last-Event-ID``;
+    ``event:`` is the kind a browser ``EventSource`` listener dispatches on;
+    ``data:`` is the JSON body. The blank line terminates the frame.
+    """
+    return f"id: {event.seq}\nevent: {event.kind}\ndata: {event.model_dump_json()}\n\n"
+
+
+def _parse_last_event_id(raw: str | None) -> int | None:
+    """Parse the ``Last-Event-ID`` header to an int seq, tolerating junk → ``None``."""
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+async def _poll_loop(
+    service: ActivityService,
+    interval: float,
+    stop_event: asyncio.Event,
+) -> None:
+    """Drive ``ActivityService.poll_once`` on a slow interval until shutdown.
+
+    ``poll_once`` does blocking git/tmux I/O, so it runs in the default executor
+    to keep the event loop responsive. Failures are logged and swallowed — one bad
+    tick must not kill the stream (best-effort, like peek). The wait races the
+    ``stop_event`` so shutdown is prompt rather than blocking out the interval.
+    """
+    loop = asyncio.get_running_loop()
+    while not stop_event.is_set():
+        try:
+            await loop.run_in_executor(None, service.poll_once)
+        except Exception as exc:  # a bad tick must never tear down the lifespan task
+            logger.warning("activity poll_once failed: {}", exc)
+        with suppress(TimeoutError):
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+
+
 def build_app(  # noqa: PLR0915
     *,
     cfg: GroveConfig,
@@ -108,6 +166,8 @@ def build_app(  # noqa: PLR0915
     so PLR0915 doesn't flag a real concern here.
     """
     registry = RepoRegistry(cfg=cfg, store=store)
+    activity_service = ActivityService(registry=registry)
+    sse_hub = _SseHub(activity_service)
     if auth_store is None:
         auth_store = SessionStore(
             session_ttl=timedelta(seconds=cfg.auth.session_ttl_seconds),
@@ -122,18 +182,34 @@ def build_app(  # noqa: PLR0915
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.registry = registry
         app.state.auth_store = auth_store
+        app.state.activity = activity_service
+        app.state.sse_hub = sse_hub
         # Captured once at lifespan-entry — every ``/whoami`` request
         # diffs against this to compute uptime. UTC throughout so the
         # subtraction is timezone-correct regardless of the host's
         # local clock.
         app.state.started_at = datetime.now(UTC)
-        yield
-        # No explicit shutdown work in V1: Managers hold no async resources;
-        # the store flushes on each save; tmux/git subprocesses are short-lived.
+        # Bridge the sync activity bus to the loop and start the slow activity
+        # poll. The hub must bind the *running* loop so its cross-thread
+        # ``call_soon_threadsafe`` targets the right one.
+        sse_hub.start(asyncio.get_running_loop())
+        stop_event = asyncio.Event()
+        poll_task = asyncio.create_task(
+            _poll_loop(activity_service, _POLL_INTERVAL_SECONDS, stop_event)
+        )
+        try:
+            yield
+        finally:
+            stop_event.set()
+            poll_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await poll_task
+            sse_hub.stop()
+            activity_service.close()
 
     app = FastAPI(
         title="Grove daemon",
-        version="0.0.1",
+        version="0.1.0",
         lifespan=lifespan,
     )
 
@@ -158,6 +234,9 @@ def build_app(  # noqa: PLR0915
             BranchError: (409, "branch_error"),
             WorkspaceNotFound: (404, "workspace_not_found"),
             WorkspaceStateError: (409, "workspace_state_error"),
+            # Agent-transcript sessions; the auth domain's `session_not_found`
+            # (revoked bearer sessions) lives in the auth router.
+            AgentSessionNotFound: (404, "agent_session_not_found"),
         }
         for cls, (status, code) in code_map.items():
             if isinstance(exc, cls):
@@ -207,6 +286,84 @@ def build_app(  # noqa: PLR0915
         endpoint describes the daemon process itself.
         """
         return _build_whoami(app.state.started_at)
+
+    @app.get("/activity", response_model=DashboardSnapshotView, dependencies=auth_dep)
+    async def activity() -> DashboardSnapshotView:
+        """One-shot cross-project dashboard snapshot.
+
+        ``snapshot()`` does blocking git/tmux I/O, so it runs in the executor to
+        keep the loop responsive under concurrent requests.
+        """
+        loop = asyncio.get_running_loop()
+        snap = await loop.run_in_executor(None, activity_service.snapshot)
+        return DashboardSnapshotView.from_snapshot(snap)
+
+    @app.get(
+        "/events",
+        dependencies=auth_dep,
+        responses={
+            200: {
+                "model": DashboardEvent,
+                "description": (
+                    "text/event-stream of DashboardEvent JSON objects. The first "
+                    "frame is a `snapshot` (or a `Last-Event-ID` replay); subsequent "
+                    "frames are `session_activity` / `workspace_changed` deltas."
+                ),
+            }
+        },
+    )
+    async def events(request: Request) -> StreamingResponse:
+        """SSE activity stream: a snapshot on connect, then live deltas.
+
+        Bridges the per-connection bounded queue (via ``_SseHub``) to the wire.
+        Reconnects carrying ``Last-Event-ID`` replay missed deltas from the ring
+        buffer when the gap is small enough; otherwise they get a fresh snapshot.
+        A wedged client only ever loses its own buffered events (drop-oldest),
+        never back-pressures the engine.
+
+        Auth is the normal bearer dependency: a browser ``EventSource`` can't set
+        headers, so the webapp's BFF calls this server-side with the token and the
+        browser authenticates to the BFF by cookie — the token never reaches the
+        browser.
+        """
+        loop = asyncio.get_running_loop()
+        last_event_id = _parse_last_event_id(request.headers.get("last-event-id"))
+
+        async def stream() -> AsyncIterator[str]:
+            # Starlette's StreamingResponse runs a disconnect watcher that cancels
+            # this generator when the client goes away — so there is no manual
+            # is_disconnected() poll; the `finally` (unregister) runs on that
+            # cancellation. The keepalive comment fires when no event arrives
+            # within the window, so proxies and the browser see a live connection.
+            queue = sse_hub.register()
+            try:
+                if last_event_id is not None and sse_hub.can_replay(last_event_id):
+                    for missed in sse_hub.replay_since(last_event_id):
+                        yield _sse_frame(missed)
+                else:
+                    snap = await loop.run_in_executor(None, activity_service.snapshot)
+                    yield _sse_frame(
+                        DashboardEvent.snapshot_event(snap, seq=activity_service.next_seq())
+                    )
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield _sse_frame(event)
+            finally:
+                sse_hub.unregister(queue)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.get("/workspaces", response_model=list[WorkspaceStateView], dependencies=auth_dep)
     async def list_workspaces() -> list[WorkspaceStateView]:
@@ -344,6 +501,23 @@ def build_app(  # noqa: PLR0915
         return WorkspacePeekView.from_peek(peek)
 
     @app.get(
+        "/workspaces/{ws_id}/pane",
+        response_model=WorkspacePaneView,
+        dependencies=auth_dep,
+    )
+    async def workspace_pane(ws_id: str) -> WorkspacePaneView:
+        """One-shot agent-pane ANSI snapshot for the dashboard's focused live pane (#19).
+
+        The web dashboard polls this for the single expanded card (status-gated to
+        WORKING) instead of mounting N live terminals — the peer-validated "summary
+        wall + one live focus" shape. Best-effort like peek; never raises (returns
+        ``ansi: null`` when the session isn't live).
+        """
+        mgr = _manager_for(ws_id)
+        snapshot, taken_at = mgr.peek_pane(ws_id)
+        return WorkspacePaneView.from_capture(ws_id, snapshot, taken_at)
+
+    @app.get(
         "/workspaces/{ws_id}/commits",
         response_model=list[CommitSummaryView],
         dependencies=auth_dep,
@@ -360,6 +534,70 @@ def build_app(  # noqa: PLR0915
         mgr = _manager_for(ws_id)
         commits = mgr.commits(ws_id)
         return [CommitSummaryView.from_summary(c) for c in commits]
+
+    @app.get(
+        "/workspaces/{ws_id}/sessions",
+        response_model=list[SessionSummaryView],
+        dependencies=auth_dep,
+    )
+    async def workspace_sessions(
+        ws_id: str,
+        limit: Annotated[int, Query(ge=1, le=200)] = 20,
+    ) -> list[SessionSummaryView]:
+        """Every agent session recorded for the workspace's directory, newest-first.
+
+        Fetch-on-demand by design — session history never rides the SSE stream.
+        The scan full-parses each transcript in one cwd (the documented
+        ``list_sessions`` cost model), so it runs in the executor like
+        ``/activity``.
+        """
+        mgr = _manager_for(ws_id)
+        explorer = SessionExplorer(mgr)
+        loop = asyncio.get_running_loop()
+        try:
+            listings = await loop.run_in_executor(None, explorer.for_workspace, ws_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return [SessionSummaryView.from_listing(ls) for ls in listings[:limit]]
+
+    @app.get(
+        "/workspaces/{ws_id}/sessions/{session_id}/turns",
+        response_model=SessionDetailView,
+        dependencies=auth_dep,
+    )
+    async def workspace_session_turns(
+        ws_id: str,
+        session_id: str,
+        last: Annotated[int | None, Query(ge=1)] = None,
+    ) -> SessionDetailView:
+        """The session's conversation, oldest-first; ``last`` keeps only the tail.
+
+        ``session_id`` must be the full id (clients hold it from the sessions
+        listing) — prefix resolution stays a CLI affordance. 404
+        ``agent_session_not_found`` when the id isn't recorded for this
+        workspace.
+        """
+        mgr = _manager_for(ws_id)
+        explorer = SessionExplorer(mgr)
+
+        def _read() -> SessionDetailView:
+            listings = explorer.for_workspace(ws_id)
+            listing: SessionListing | None = next(
+                (ls for ls in listings if ls.summary.session_id == session_id), None
+            )
+            if listing is None:
+                raise AgentSessionNotFound(
+                    f"no session {session_id!r} recorded for workspace {ws_id!r}"
+                )
+            return SessionDetailView.from_listing_turns(
+                listing, explorer.turns_for(listing, last=last)
+            )
+
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, _read)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
 
     @app.get(
         "/branches",

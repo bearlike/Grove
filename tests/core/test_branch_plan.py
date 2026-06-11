@@ -19,11 +19,12 @@ from grove.core import (
     CreateWorkspaceRequest,
     ExistingLocalBranch,
     NewNamedBranch,
+    RootBranch,
     TrackRemoteBranch,
 )
 from grove.core.config import GroveConfig
 from grove.core.contracts.branch_plan import BranchMode
-from grove.core.workspace import BranchProvenance
+from grove.core.workspace import BranchProvenance, Placement
 
 
 @pytest.fixture
@@ -87,6 +88,30 @@ def test_track_remote_local_name_override(cfg: GroveConfig) -> None:
     assert resolved.tracks == "origin/long/path/to/feat"
 
 
+def test_root_branch_resolves_to_root_placement(cfg: GroveConfig) -> None:
+    """Root carries no branch fields: it adopts the live checkout in place.
+    `name` is the empty sentinel the manager fills from HEAD; provenance is
+    USER_ATTACHED so kill never deletes the user's branch."""
+    resolved = RootBranch().resolve(cfg, "ignored", "20260507-103014")
+    assert resolved.placement is Placement.ROOT
+    assert resolved.name == ""
+    assert resolved.base_ref is None
+    assert resolved.mode == BranchMode.CHECKOUT
+    assert resolved.provenance == BranchProvenance.USER_ATTACHED
+
+
+def test_worktree_variants_default_to_worktree_placement(cfg: GroveConfig) -> None:
+    """The four worktree variants are untouched — placement defaults to WORKTREE."""
+    plans = (
+        AutoBranch(),
+        NewNamedBranch(name="feature/x"),
+        ExistingLocalBranch(name="feature/y"),
+        TrackRemoteBranch(remote_ref="origin/z"),
+    )
+    for plan in plans:
+        assert plan.resolve(cfg, "t", "20260507-103014").placement is Placement.WORKTREE
+
+
 # ─── pydantic validation (boundary) ──────────────────────────────────────────
 
 
@@ -111,6 +136,12 @@ def test_branch_plan_extra_fields_rejected() -> None:
         AutoBranch.model_validate({"base_ref": "main", "extra_field": "nope"})
 
 
+def test_root_branch_rejects_extra_fields() -> None:
+    """RootBranch takes no user fields; a stray field is a client bug."""
+    with pytest.raises(ValidationError):
+        RootBranch.model_validate({"kind": "root", "name": "nope"})
+
+
 # ─── discriminator dispatch ──────────────────────────────────────────────────
 
 
@@ -124,6 +155,15 @@ def test_request_dispatches_to_right_variant_by_kind() -> None:
     req = CreateWorkspaceRequest.model_validate(payload)
     assert isinstance(req.branch_plan, TrackRemoteBranch)
     assert req.branch_plan.remote_ref == "origin/feature/x"
+
+
+def test_request_dispatches_to_root_variant_by_kind() -> None:
+    """The fifth variant joins the same discriminated union; ``kind='root'``
+    dispatches to RootBranch with no other fields."""
+    req = CreateWorkspaceRequest.model_validate(
+        {"agent_name": "claude", "title": "t", "branch_plan": {"kind": "root"}}
+    )
+    assert isinstance(req.branch_plan, RootBranch)
 
 
 def test_request_default_branch_plan_is_auto_branch() -> None:

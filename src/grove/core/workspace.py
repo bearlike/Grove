@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from grove.core.config import GroveConfig, expand_template
+from grove.core.config import AgentKind, GroveConfig, expand_template
 from grove.core.errors import WorkspaceStateError
 
 
@@ -80,8 +80,32 @@ class BranchProvenance(StrEnum):
     tracking side of the latter is fresh too). Default-delete on kill."""
 
     USER_ATTACHED = "attached"
-    """User pointed Grove at a pre-existing local branch (ExistingLocal).
-    Default-keep on kill so a real feature branch is never lost to a tear-down."""
+    """User pointed Grove at a pre-existing local branch (ExistingLocal),
+    or a root workspace adopting the live checkout. Default-keep on kill so a
+    real feature branch is never lost to a tear-down."""
+
+
+class Placement(StrEnum):
+    """Where a workspace's tmux session is rooted, and what Grove manages for it.
+
+    The dimension orthogonal to status: it never changes after create() and
+    decides which side effects each lifecycle method may fire. Lives here
+    (not in `contracts/branch_plan.py`) because `branch_plan` imports *from*
+    this module; the enum has to sit on the depended-upon side to avoid a
+    cycle. `RootBranch.resolve()` is the only producer of `ROOT`.
+    """
+
+    WORKTREE = "worktree"
+    """The default and historical shape: a dedicated git worktree under
+    `${repo}/.worktrees`, removable/recreatable, with its own branch. Every
+    worktree git side effect (add on create/resume, remove on pause/kill) runs."""
+
+    ROOT = "root"
+    """The session runs in the repo root itself — no dedicated worktree, no
+    Grove-created branch; it adopts whatever HEAD is checked out. Grove manages
+    only the tmux session, so worktree add/remove and branch delete are all
+    skipped, and pause/resume are refused (there is no worktree to free or
+    rebuild). Recover a vanished session with respawn; stop it with kill."""
 
 
 @dataclass(slots=True)
@@ -118,6 +142,27 @@ class WorkspaceState:
     # written before this field existed load without migration — historical
     # behavior was "Grove always created the branch", which is exactly that.
     branch_provenance: BranchProvenance = BranchProvenance.GROVE_CREATED
+    # Worktree vs. root. Defaults to WORKTREE so legacy records (written before
+    # this field existed) load as the only shape Grove used to support — exactly
+    # the branch_provenance precedent, no migration. Read by every lifecycle
+    # method to gate the worktree side effects; never mutated after create().
+    placement: Placement = Placement.WORKTREE
+    # The agent session id Grove minted at launch (Claude Code's --session-id),
+    # or None for a generic/shell agent it doesn't introspect. This is the
+    # deterministic correlation key: Grove launched the agent with it, so it
+    # knows the transcript path by construction (epic #11 §2). Minimal persisted
+    # identity — the full live session set + activity is computed at read time by
+    # the ActivityService, never stored. Defaults to None so legacy records load
+    # without migration (the branch_provenance/placement precedent).
+    agent_session_id: str | None = None
+    # The agent's adapter kind, captured at create from the (per-repo) resolved
+    # AgentSpec. Persisted so the cross-project dashboard can pick the adapter
+    # straight from the record instead of re-resolving `agent_name` against a
+    # config that may scope the agent to specific repos (e.g. a "Simplify"
+    # profile defined only in mifflin/dunder, absent from the daemon's global
+    # config). Defaults to None so legacy records load without migration — the
+    # ActivityService falls back to a config lookup when it's None.
+    agent_kind: AgentKind | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -194,6 +239,17 @@ class WorkspaceIdentity:
         return uuid.uuid4().hex
 
     @staticmethod
+    def new_session_id() -> str:
+        """A canonical (dashed) UUID for an agent session — distinct from `new_id`.
+
+        Agent tools like Claude Code require an RFC-4122 UUID for `--session-id`,
+        so this returns the dashed form rather than the workspace's bare hex id.
+        Grove mints it, launches the agent with it, and thereby knows the
+        transcript path by construction (deterministic correlation, #11 §2).
+        """
+        return str(uuid.uuid4())
+
+    @staticmethod
     def timestamp() -> str:
         """``YYYYMMDD-HHMMSS`` UTC timestamp, the suffix shared by the
         worktree path and tmux session name (and the auto-generated
@@ -216,6 +272,15 @@ class WorkspaceIdentity:
 
 
 def ensure_can_pause(state: WorkspaceState) -> None:
+    # Root workspaces have no worktree to free, so pause is meaningless: there
+    # is nothing to reclaim and the session is the only managed resource. Refuse
+    # loudly and point at kill (stop) / respawn (restart) instead of silently
+    # tearing down the user's real checkout.
+    if state.placement is Placement.ROOT:
+        raise WorkspaceStateError(
+            f"cannot pause workspace {state.id}: root workspaces have no worktree to free; "
+            "use kill to stop it (respawn brings the session back)"
+        )
     # `state.status` here is the *computed* status the caller observed. ACTIVE
     # and IDLE both mean "session is up"; either is fine. RUNNING (the raw
     # persisted intent) is also accepted so callers that bypass the manager's
@@ -227,6 +292,14 @@ def ensure_can_pause(state: WorkspaceState) -> None:
 
 
 def ensure_can_resume(state: WorkspaceState) -> None:
+    # A root workspace can never reach PAUSED (pause is refused above), so the
+    # status check below already covers it; the explicit guard makes the error
+    # legible if some caller hand-builds a PAUSED root record.
+    if state.placement is Placement.ROOT:
+        raise WorkspaceStateError(
+            f"cannot resume workspace {state.id}: root workspaces are never paused; "
+            "use respawn to restart the session"
+        )
     if state.status != WorkspaceStatus.PAUSED:
         raise WorkspaceStateError(
             f"cannot resume workspace {state.id}: status is {state.status}, expected paused"

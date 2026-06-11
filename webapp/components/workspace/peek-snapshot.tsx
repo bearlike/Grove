@@ -1,8 +1,7 @@
 "use client";
-import { useEffect, useMemo, useRef } from "react";
+
 import { cn } from "@/lib/utils";
-import { stripAnsi } from "@/lib/grove/ansi";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { TerminalView } from "@/components/terminal/terminal-view";
 
 interface Props {
   snapshot: string | null;
@@ -10,24 +9,14 @@ interface Props {
   className?: string;
 }
 
+/**
+ * The detail page's agent terminal preview. The daemon emits `tmux capture-pane
+ * -e` (SGR intact); `TerminalView` renders it as a real colored terminal with an
+ * accessible `<pre>` fallback (the unit/e2e text seam + screen-reader output).
+ * Same engine the dashboard's `FocusedPane` uses — web and TUI stay siblings.
+ */
 export function PeekSnapshot({ snapshot, takenAt, className }: Props) {
-  const ref = useRef<HTMLPreElement | null>(null);
-  // The daemon emits `tmux capture-pane -e` output (SGR escapes intact).
-  // The TUI renders them via Rich; the webapp strips them — color isn't
-  // load-bearing for a glance dashboard, structure is.
-  const text = useMemo(() => (snapshot ? stripAnsi(snapshot) : null), [snapshot]);
-  // Auto-scroll to bottom only when user is already near the bottom (≤ 40px)
-  // — never fight a deliberate scroll-up.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
-    if (distance < 40) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [text]);
-
-  if (!text) {
+  if (!snapshot) {
     return (
       <div
         data-testid="peek-snapshot-empty"
@@ -40,19 +29,16 @@ export function PeekSnapshot({ snapshot, takenAt, className }: Props) {
       </div>
     );
   }
-  // Default: fill the parent, with a generous minimum for short viewports
-  // and mobile (where the panel stacks). The detail page wraps us in a
-  // flex-fill column so on lg+ we grow into the remaining viewport.
+  // Default: fill the parent, generous minimum for short viewports / mobile.
+  // The detail page wraps us in a flex-fill column so on lg+ we grow into the
+  // remaining viewport.
   return (
-    <ScrollArea className={cn("h-full min-h-[28rem] rounded-md border border-border bg-card", className)}>
-      <pre
-        ref={ref}
-        data-testid="peek-snapshot"
-        data-taken-at={takenAt ?? ""}
-        className="min-h-40 p-3 text-[12px] leading-[1.45] md:text-[13px] font-mono whitespace-pre"
-      >
-        {text}
-      </pre>
-    </ScrollArea>
+    <TerminalView
+      ansi={snapshot}
+      takenAt={takenAt}
+      textTestId="peek-snapshot"
+      ariaLabel="Agent terminal output"
+      className={cn("h-full min-h-[28rem] rounded-md border border-border bg-card", className)}
+    />
   );
 }

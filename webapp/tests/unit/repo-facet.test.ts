@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { RepoFacet } from "@/lib/grove/repo-facet";
+import { workspace } from "@/tests/_helpers/activity-fixtures";
 import type { WorkspaceStateView } from "@/lib/grove/types";
 
 function ws(over: Partial<WorkspaceStateView>): WorkspaceStateView {
@@ -21,6 +22,7 @@ function ws(over: Partial<WorkspaceStateView>): WorkspaceStateView {
     init_status: null,
     init_duration_ms: null,
     branch_provenance: "grove",
+    placement: "worktree",
     ...over,
   } as WorkspaceStateView;
 }
@@ -77,5 +79,21 @@ describe("RepoFacet.groupByRepo", () => {
     expect(facet.idleCount).toBe(1);
     expect(facet.offlineCount).toBe(1);
     expect(facet.attentionCount).toBe(2);
+  });
+});
+
+describe("RepoFacet.groupActivityByRepo", () => {
+  it("groups activity views by the embedded state's repo_root", () => {
+    const a = workspace("g1", "working");
+    const b = {
+      ...workspace("o1", "idle"),
+      state: { ...workspace("o1", "idle").state, repo_root: "/repos/other" },
+    };
+    const facets = RepoFacet.groupActivityByRepo([a, b]);
+    expect(facets).toHaveLength(2);
+    // Members are the embedded WorkspaceStateView, so counts/sorting reuse
+    // the same single grouping implementation.
+    const other = facets.find((f) => f.repoName === "other")!;
+    expect(other.workspaces.map((w) => w.id)).toEqual(["o1"]);
   });
 });

@@ -14,6 +14,7 @@ Two boundary rules govern what shows up in this list:
 
 from __future__ import annotations
 
+from grove.core.activity import ActivityService, DashboardSnapshot
 from grove.core.config import AgentSpec, GroveConfig, load_config
 from grove.core.contracts import (
     AttachInstructionView,
@@ -24,6 +25,7 @@ from grove.core.contracts import (
     CreateWorkspaceRequest,
     ExistingLocalBranch,
     NewNamedBranch,
+    RootBranch,
     TrackRemoteBranch,
     UpdateWorkspaceRequest,
     WorkspacePeekView,
@@ -37,17 +39,21 @@ from grove.core.errors import (
     GroveError,
 )
 from grove.core.manager import WorkspaceEvent, WorkspaceManager, build
+from grove.core.registry import RepoRegistry
+from grove.core.sessions import SessionExplorer, SessionListing
 from grove.core.tmux import AttachInstruction
 from grove.core.workspace import (
     BranchProvenance,
     CommitSummary,
     InitStatus,
+    Placement,
     WorkspacePeek,
     WorkspaceState,
     WorkspaceStatus,
 )
 
 __all__ = [
+    "ActivityService",
     "AgentSpec",
     "AttachInstruction",
     "AttachInstructionView",
@@ -62,11 +68,17 @@ __all__ = [
     "CommitSummary",
     "CommitSummaryView",
     "CreateWorkspaceRequest",
+    "DashboardSnapshot",
     "ExistingLocalBranch",
     "GroveConfig",
     "GroveError",
     "InitStatus",
     "NewNamedBranch",
+    "Placement",
+    "RepoRegistry",
+    "RootBranch",
+    "SessionExplorer",
+    "SessionListing",
     "TrackRemoteBranch",
     "UpdateWorkspaceRequest",
     "WorkspaceEvent",

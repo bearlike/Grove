@@ -52,6 +52,10 @@ never pushes, and never touches a remote branch.
 - **Live activity peek.** A right-hand rail mirrors each agent's tmux pane four times per second and surfaces git position alongside it. It is best-effort and never blocks the TUI.
 - **Side-effects at the edges.** A clean engine (`grove.core`) with zero UI dependencies, plus a thin Textual TUI (`grove.tui`) and a read-only web dashboard (`webapp/`). The boundary is enforced by `import-linter` so every client reuses the engine unchanged.
 
+<p align="center">
+  <img src="docs/img/screenshots/webapp-activity-wall.png" alt="Grove activity wall: a dense dashboard of every agent session with live terminal previews" height="360" />
+</p>
+
 ## Get started
 
 Grove needs `git` and `tmux`, and installs to your PATH as `grove` straight
@@ -91,7 +95,7 @@ both set the same option, the project layer wins.
 > and the [six-layer cascade](https://bearlike.github.io/Grove/latest/features-cascade/).
 
 <details>
-<summary><b> 🤖 Let an AI agent configure Grove for you</b></summary>
+<summary><b>Let an AI agent configure Grove for you</b></summary>
 
 <br>
 
@@ -101,17 +105,13 @@ Grove's config skill and sets things up with you, verifying every field against
 your installed version.
 
 ```text
-Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md.
-It is the skill for configuring Grove, a terminal workspace manager for AI coding agents.
-Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
+Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
 ```
 
 The skill teaches the agent the six-layer cascade, the exact file locations, the
 full schema, common setups (dependency installs, secrets routing, test and
 deploy directories, MCP server configs), and how to verify against your
 installed Grove.
-
----
 
 </details>
 

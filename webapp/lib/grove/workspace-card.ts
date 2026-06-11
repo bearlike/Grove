@@ -1,28 +1,42 @@
 import type {
+  WorkspaceActivityView,
   WorkspaceStateView,
-  WorkspacePeekView,
   WorkspaceStatus,
 } from "./types";
 
+/** The card footer's stat trio, normalized from whichever wire shape supplied it. */
+export interface CardStats {
+  readonly ahead: number;
+  readonly behind: number;
+  readonly dirty: number;
+}
+
 /**
- * Atomic state-and-behavior wrapper for one workspace card. Immutable;
- * `withPeek` returns a new instance to keep React renders trivial.
+ * Atomic state-and-behavior wrapper for one workspace card. Immutable; the
+ * static factories normalize each wire shape into one model so the card
+ * component renders a single type, never a union of payloads.
  */
 export class WorkspaceCardModel {
   readonly state: WorkspaceStateView;
-  readonly peek: WorkspacePeekView | null;
+  readonly stats: CardStats | null;
 
-  private constructor(state: WorkspaceStateView, peek: WorkspacePeekView | null) {
+  private constructor(state: WorkspaceStateView, stats: CardStats | null) {
     this.state = state;
-    this.peek = peek;
+    this.stats = stats;
   }
 
+  /** Bare workspace state (no git stats yet) — the footer renders placeholders. */
   static fromState(s: WorkspaceStateView): WorkspaceCardModel {
     return new WorkspaceCardModel(s, null);
   }
 
-  withPeek(p: WorkspacePeekView): WorkspaceCardModel {
-    return new WorkspaceCardModel(this.state, p);
+  /** The activity-stream shape: workspace state + git stats arrive in one view. */
+  static fromActivity(w: WorkspaceActivityView): WorkspaceCardModel {
+    return new WorkspaceCardModel(w.state, {
+      ahead: w.base_ahead,
+      behind: w.base_behind,
+      dirty: w.dirty_files,
+    });
   }
 
   get displayStatus(): WorkspaceStatus {
@@ -38,8 +52,8 @@ export class WorkspaceCardModel {
   }
 
   get summaryLine(): string {
-    if (!this.peek) return "—";
-    const { base_ahead, base_behind, dirty_files } = this.peek;
-    return `ahead ${base_ahead} · behind ${base_behind} · ${dirty_files} dirty`;
+    if (!this.stats) return "—";
+    const { ahead, behind, dirty } = this.stats;
+    return `ahead ${ahead} · behind ${behind} · ${dirty} dirty`;
   }
 }

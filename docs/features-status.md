@@ -124,10 +124,10 @@ Status?
 └── ERROR         → review the init log, then kill (k). Init won't re-run from this state.
 ```
 
-The contextual footer enforces this mapping. Only the keys that apply to
-the current row's status appear. The mapping is data, not branches: one
-dict in `screens/list.py`, so the footer cannot drift from what is
-runnable.
+The contextual footer enforces this mapping. Keys that do not apply to
+the current row's status render dimmed. The availability rule is data,
+not branches: one function in `screens/list.py`, so the footer cannot
+drift from what is runnable.
 
 ## Legacy values
 
@@ -140,5 +140,6 @@ these values; legacy reads do.
 ## See also
 
 - [Workspace lifecycle](features-workspace-lifecycle.md): what each lifecycle op writes.
-- [Live activity and peek](features-peek.md): how the activity signal feeds ACTIVE and IDLE.
+- [The peek rail](features-peek.md): how the activity signal feeds ACTIVE and IDLE.
+- [Agent activity and sessions](features-activity.md): agent state, the other dimension. A workspace can be ACTIVE while its agent is WAITING.
 - [Daily workflow](use-workflow.md): recovering from a vanished session.

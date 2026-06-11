@@ -1,12 +1,13 @@
 "use client";
 import Link from "next/link";
-import { Bot, GitBranch } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "./status-badge";
+import { PlacementBadge } from "./placement-badge";
 import { StatTrio } from "./stat-trio";
 import { RelativeTime } from "@/components/shared/relative-time";
+import { AgentGlyph } from "@/lib/grove/agent-icon";
 import type { WorkspaceCardModel } from "@/lib/grove/workspace-card";
-import type { WorkspacePeekView } from "@/lib/grove/types";
 import { cn } from "@/lib/utils";
 
 const STATUS_VAR: Record<string, string> = {
@@ -26,14 +27,8 @@ const STATUS_VAR: Record<string, string> = {
  * length. Top accent border is the status-color cue you can scan in a
  * grid view (lazygit-style focus assertion adapted to per-card chrome).
  */
-export function WorkspaceCard({
-  model,
-  peek,
-}: {
-  model: WorkspaceCardModel;
-  peek: WorkspacePeekView | undefined;
-}) {
-  const { state } = model;
+export function WorkspaceCard({ model }: { model: WorkspaceCardModel }) {
+  const { state, stats } = model;
   const accent = STATUS_VAR[state.status] ?? "var(--status-offline)";
 
   return (
@@ -58,7 +53,10 @@ export function WorkspaceCard({
           >
             {state.title}
           </h3>
-          <StatusBadge status={state.status} size="sm" className="shrink-0" />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <PlacementBadge placement={state.placement} size="sm" />
+            <StatusBadge status={state.status} size="sm" />
+          </div>
         </div>
 
         {/* Identity: branch + agent. Always two lines so cards are uniform. */}
@@ -77,7 +75,10 @@ export function WorkspaceCard({
             </span>
           </div>
           <div className="flex min-w-0 items-center gap-1.5">
-            <Bot aria-hidden className="h-3 w-3 shrink-0 text-[var(--ref-info)]" />
+            <AgentGlyph
+              agentName={state.agent_name}
+              className="size-3 shrink-0 text-[var(--ref-info)]"
+            />
             <span title={state.agent_name} className="truncate font-mono text-[var(--ref-info)]">
               {state.agent_name}
             </span>
@@ -86,8 +87,8 @@ export function WorkspaceCard({
 
         {/* Footer pinned to bottom: stats + relative time. */}
         <div className="mt-auto flex items-center justify-between gap-2 border-t border-border bg-muted/40 px-4 py-2.5 text-xs">
-          {peek ? (
-            <StatTrio ahead={peek.base_ahead} behind={peek.base_behind} dirty={peek.dirty_files} />
+          {stats ? (
+            <StatTrio ahead={stats.ahead} behind={stats.behind} dirty={stats.dirty} />
           ) : (
             <StatTrioPlaceholder />
           )}

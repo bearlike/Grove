@@ -55,9 +55,14 @@ If your project layer adds:
 ```
 
 The merged result is all three: the defaults `claude` and `shell` plus
-the project's `aider`. Same key (`name`) replaces. New key appends in
-overlay order. This is what makes the team-vs-individual story work
-without forking lists.
+the project's `aider`. New names append in overlay order. Matching names
+merge field by field: the overlay's fields win, and the base entry fills
+the gaps. Override only the `claude` agent's `command` and its
+`kind: "claude_code"` survives, so the [Activity
+Dashboard](features-activity.md) keeps tracking it. This is the cascade
+principle applied one level deeper, value by value instead of list by
+list, and it is what makes the team-vs-individual story work without
+forking lists.
 
 When you need to *replace* the defaults, give every entry a custom name.
 The merge cannot insert a `claude` you did not ask for.

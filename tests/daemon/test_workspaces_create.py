@@ -46,3 +46,23 @@ def test_create_dispatches_to_repo_manager(daemon: TestClient, tmp_repo: Path) -
     assert body["title"] == "Add login flow"
     assert body["repo_root"] == str(tmp_repo)
     assert body["agent_name"] == "claude"
+    # Worktree placement is the default and surfaces on the wire.
+    assert body["placement"] == "worktree"
+
+
+def test_create_root_workspace_over_http(daemon: TestClient, tmp_repo: Path) -> None:
+    """The root variant + skip_init flow through the wire unchanged: the daemon
+    passes the request to the manager and surfaces `placement` on the view."""
+    payload = {
+        "agent_name": "claude",
+        "title": "root over http",
+        "repo_root": str(tmp_repo),
+        "branch_plan": {"kind": "root"},
+        "skip_init": True,
+    }
+    resp = daemon.post("/workspaces", json=payload)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["placement"] == "root"
+    assert Path(body["worktree_path"]).resolve() == tmp_repo.resolve()
+    assert body["branch"] == "main"  # adopts the live checkout

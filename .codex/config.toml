@@ -1,0 +1,14 @@
+# Grove — project-scoped Codex config (committed; merges over ~/.codex/config.toml).
+# Only project-relevant MCP servers live here so they travel with the repo and
+# reach any worktree / teammate / fresh machine that lacks them globally.
+# Keep personal preferences (model, personality, theme) in your global config.
+# No secrets: both servers are local `npx` stdio processes. Reference any future
+# token via env vars, never literals, since this file is shared.
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["@playwright/mcp@latest"]
+
+[mcp_servers.tmux]
+command = "npx"
+args = ["-y", "tmux-mcp"]

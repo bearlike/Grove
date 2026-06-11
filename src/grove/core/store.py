@@ -26,6 +26,7 @@ from grove.core.workspace import (
     PERSISTED_STATUSES,
     BranchProvenance,
     InitStatus,
+    Placement,
     WorkspaceState,
     WorkspaceStatus,
 )
@@ -144,6 +145,7 @@ class JsonWorkspaceStore:
         data["paused_at"] = state.paused_at.isoformat() if state.paused_at else None
         data["init_status"] = state.init_status.value if state.init_status else None
         data["branch_provenance"] = state.branch_provenance.value
+        data["placement"] = state.placement.value
         return data
 
     @staticmethod
@@ -178,6 +180,14 @@ class JsonWorkspaceStore:
             branch_provenance=BranchProvenance(
                 data.get("branch_provenance", BranchProvenance.GROVE_CREATED.value)
             ),
+            placement=Placement(data.get("placement", Placement.WORKTREE.value)),
+            # `.get()` — absent on records written before agent-session tracking
+            # existed; legacy workspaces simply track no session.
+            agent_session_id=data.get("agent_session_id"),
+            # `.get()` — absent on records written before agent-kind was
+            # persisted; None makes the ActivityService fall back to a config
+            # lookup for those legacy records.
+            agent_kind=data.get("agent_kind"),
         )
 
 

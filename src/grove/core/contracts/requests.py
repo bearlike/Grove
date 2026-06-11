@@ -42,8 +42,17 @@ class CreateWorkspaceRequest(BaseModel):
     state on the wire."""
 
     branch_plan: BranchPlan = Field(default_factory=AutoBranch)
-    """How the worktree's branch should be sourced. See
-    ``grove.core.contracts.branch_plan`` for the four variants."""
+    """How the workspace's branch and placement are sourced. See
+    ``grove.core.contracts.branch_plan`` for the five variants — four produce a
+    worktree, ``RootBranch`` runs in the repo root."""
+
+    skip_init: bool = False
+    """Skip the init script for this create only, regardless of
+    ``init_script.enabled``. A per-create override of a config default
+    (mechanism, not policy): the init script is built for a fresh worktree, so
+    it can be unwanted or unsafe in the repo root, and some worktrees simply
+    don't need it. Records ``InitStatus.SKIPPED``. Does not persist — it is a
+    create-time decision, never re-applied on resume/respawn."""
 
     repo_root: Path | None = None
     """Repository root for the workspace. ``None`` for in-process callers

@@ -148,6 +148,30 @@ any remaining tmux session. If the branch still exists in your repo,
 create a fresh workspace against it via the create modal's *Existing
 local* path.
 
+## No agent state on the dashboard
+
+**Symptom.** A workspace shows up on the [Activity
+Dashboard](features-activity.md) but carries no agent state, no turn or
+token counts, and no session history. Only the basic active/idle signal
+moves.
+
+**Causes.**
+
+- The agent's spec has no `kind`, or `kind: "generic"`. Generic agents
+  are launched but never introspected; that is the contract.
+- The agent genuinely is not Claude Code, and no adapter exists for it
+  yet. Terminal-output activity is all Grove can offer.
+
+**Fix.**
+
+- Add `"kind": "claude_code"` to the agent's spec if it is Claude Code
+  or speaks its session format. See [Agents](configure-agents.md#telling-grove-what-kind-of-agent-it-is).
+- Confirm the merged result with `grove config show` and check the
+  agent's `kind` in the output.
+- Session history is broader than live state: `grove sessions list`
+  discovers recorded sessions in the project's worktrees regardless of
+  any workspace's `kind`.
+
 ## Web dashboard shows "unreachable"
 
 **Symptom.** The dashboard loads but the status bar reads "unreachable",

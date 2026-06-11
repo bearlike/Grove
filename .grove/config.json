@@ -1,0 +1,11 @@
+{
+  "$schema": "https://bearlike.github.io/Grove/latest/grove.schema.json",
+  "init_script": {
+    "enabled": true,
+    "shell": "bash",
+    "inline": "set -euo pipefail\nuv sync --frozen\n[ -f webapp/.env.local ] || cp webapp/.env.example webapp/.env.local\nmake webapp-install",
+    "timeout_seconds": 600,
+    "fail_fast": true,
+    "run_on_resume": true
+  }
+}

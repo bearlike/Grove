@@ -24,6 +24,7 @@ from grove.core.workspace import (
     BranchProvenance,
     CommitSummary,
     InitStatus,
+    Placement,
     WorkspacePeek,
     WorkspaceState,
     WorkspaceStatus,
@@ -52,6 +53,7 @@ class WorkspaceStateView(BaseModel):
     init_status: InitStatus | None = None
     init_duration_ms: int | None = None
     branch_provenance: BranchProvenance = BranchProvenance.GROVE_CREATED
+    placement: Placement = Placement.WORKTREE
 
     @classmethod
     def from_state(cls, s: WorkspaceState) -> WorkspaceStateView:
@@ -73,6 +75,7 @@ class WorkspaceStateView(BaseModel):
             init_status=s.init_status,
             init_duration_ms=s.init_duration_ms,
             branch_provenance=s.branch_provenance,
+            placement=s.placement,
         )
 
 
@@ -118,6 +121,29 @@ class WorkspacePeekView(BaseModel):
             agent_snapshot=p.agent_snapshot,
             snapshot_taken_at=p.snapshot_taken_at,
         )
+
+
+class WorkspacePaneView(BaseModel):
+    """One-shot ANSI snapshot of a workspace's agent tmux pane (#19).
+
+    The focused-pane source for the dashboard's "one live focus": a client polls
+    this for the single expanded card (status-gated to WORKING) rather than
+    mounting N live terminals. ``ansi`` is ``tmux capture-pane -e`` output (SGR
+    only — safe to render as colored text or to strip); ``None`` when the session
+    isn't live or has no pane. Best-effort like peek — the route never raises.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    workspace_id: str
+    ansi: str | None
+    taken_at: datetime | None
+
+    @classmethod
+    def from_capture(
+        cls, workspace_id: str, snapshot: str | None, taken_at: datetime | None
+    ) -> WorkspacePaneView:
+        return cls(workspace_id=workspace_id, ansi=snapshot, taken_at=taken_at)
 
 
 class AttachInstructionView(BaseModel):
@@ -183,6 +209,7 @@ __all__ = [
     "CommitSummaryView",
     "HealthView",
     "WhoamiView",
+    "WorkspacePaneView",
     "WorkspacePeekView",
     "WorkspaceStateView",
 ]

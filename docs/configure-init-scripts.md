@@ -15,6 +15,20 @@ The script runs in its own tmux window named `init`. You can attach to the
 workspace and watch it scroll, or check the window after the fact. Output
 stays in the tmux scrollback (`history_limit: 50000` by default).
 
+## Skip it for one create
+
+`enabled` is the config-level switch for every workspace. The create modal
+adds a per-create override: a "Skip init script" checkbox that turns the
+script off for that one workspace, no config edit required. The outcome
+records as SKIPPED, the same as if init were disabled.
+
+Reach for it when a given task does not need the setup, or when the script
+would be unsafe in the target. A root workspace runs in your real repo
+root, where a script written for a fresh worktree can do the wrong thing,
+so the modal checks the box for you whenever you pick Root. The choice
+applies to that create only. It is never stored and never re-applied on
+resume or respawn.
+
 ## Fields
 
 | Field | Type | Default | Purpose |
@@ -79,7 +93,8 @@ report different things for the same situation. The display reads one of:
   rolls back the worktree, branch, and tmux session. With `fail_fast: false`
   the workspace stays alive in `ERROR` state and the contextual footer
   offers `kill` only.
-- **SKIPPED**: `enabled: false`, or `run_on_resume: false` on a resume.
+- **SKIPPED**: `enabled: false`, the "Skip init script" box was checked
+  for this create, or `run_on_resume: false` on a resume.
 - **TIMEOUT**: wall-clock exceeded `timeout_seconds`. Treated like FAILED.
 
 The init outcome is also exposed on the `WorkspaceEvent` stream so future

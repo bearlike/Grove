@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Github } from "lucide-react";
+import { Github, LayoutGrid } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -34,6 +34,12 @@ export function Header() {
           </span>
         </Link>
         <nav className="flex items-center gap-1.5" aria-label="Site actions">
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/activity" aria-label="Activity dashboard">
+              <LayoutGrid />
+              <span className="hidden sm:inline">Activity</span>
+            </Link>
+          </Button>
           <Button asChild variant="ghost" size="icon-sm" aria-label="Open Grove on GitHub">
             <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
               <Github />

@@ -1,7 +1,11 @@
 import type {
   CommitSummaryView,
+  DashboardSnapshotView,
   HealthView,
+  SessionDetailView,
+  SessionSummaryView,
   WhoamiView,
+  WorkspacePaneView,
   WorkspaceStateView,
   WorkspacePeekView,
 } from "./types";
@@ -59,6 +63,36 @@ export class GroveClient {
 
   async getCommits(id: string): Promise<CommitSummaryView[]> {
     return this._get<CommitSummaryView[]>(`/workspaces/${encodeURIComponent(id)}/commits`);
+  }
+
+  /** Recorded agent sessions for one workspace, newest-first. */
+  async getSessions(id: string, limit?: number): Promise<SessionSummaryView[]> {
+    const qs = limit != null ? `?limit=${limit}` : "";
+    return this._get<SessionSummaryView[]>(
+      `/workspaces/${encodeURIComponent(id)}/sessions${qs}`,
+    );
+  }
+
+  /** One session's conversation digest — the last `last` turns, oldest-first. */
+  async getSessionTurns(
+    id: string,
+    sessionId: string,
+    last?: number,
+  ): Promise<SessionDetailView> {
+    const qs = last != null ? `?last=${last}` : "";
+    return this._get<SessionDetailView>(
+      `/workspaces/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/turns${qs}`,
+    );
+  }
+
+  /** One-shot cross-project activity snapshot — the SSE-stream fallback. */
+  async getActivity(): Promise<DashboardSnapshotView> {
+    return this._get<DashboardSnapshotView>("/activity");
+  }
+
+  /** One-shot agent-pane ANSI snapshot for the dashboard's focused live pane. */
+  async getPane(id: string): Promise<WorkspacePaneView> {
+    return this._get<WorkspacePaneView>(`/workspaces/${encodeURIComponent(id)}/pane`);
   }
 
   private async _get<T>(path: string): Promise<T> {

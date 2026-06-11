@@ -1,15 +1,15 @@
-# Live activity and peek
+# The peek rail
 
 Grove's right-hand rail mirrors the agent's tmux pane in near-real time
-and surfaces git position alongside it. The whole rail is best-effort by
-contract. Helpers that fail return zeros instead of blocking the render
-loop.
+and surfaces git position alongside it. It is the per-workspace
+companion of the fleet-wide
+[Activity Dashboard](features-activity.md). The whole rail is
+best-effort by contract. Helpers that fail return zeros instead of
+blocking the render loop.
 
-<figure class="grove-shot" markdown>
-  <span class="grove-shot__frame">
-    ![Peek rail with the live workspace preview pane mirroring the agent's tmux output](img/screenshots/tui-peek-preview.png)
-  </span>
-  <p class="grove-shot__body">The right-hand rail: <em>summary</em> with branch, git stats, and recent commits; the <em>live workspace preview</em> mirroring the agent's tmux pane.</p>
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-peek-preview.png" alt="Peek rail with the live workspace preview pane mirroring the agent's tmux output" /></div>
+  <figcaption class="ms-shot__body">The right-hand rail: <em>summary</em> with branch, git stats, and recent commits; the <em>live workspace preview</em> mirroring the agent's tmux pane.</figcaption>
 </figure>
 
 ## What the rail shows
@@ -19,7 +19,10 @@ The peek rail is two cards stacked vertically.
 The **summary card** carries one row per workspace property: branch,
 ahead, behind, dirty count, age. Counts are colour-coded by polarity.
 Green when there is work to push, amber when there is work to pull or
-clean, muted when zero.
+clean, muted when zero. When Grove can read the agent's session, an
+agent metrics line joins the card: the model, turn and reply and
+tool-call counts, token usage, and the agent's state. Git facts and
+session facts read as one status block.
 
 The **agent card** mirrors the tmux pane attached to the workspace's
 agent window. Output, ANSI colours, cursor position, refreshed at four
@@ -91,5 +94,7 @@ has the pane tick painting behind it.
 
 ## See also
 
+- [Agent activity and sessions](features-activity.md): the fleet-wide view. The peek
+  rail watches one workspace; the Activity Dashboard watches them all.
 - [Status semantics](features-status.md): how the activity age feeds ACTIVE and IDLE.
 - [Workspace lifecycle](features-workspace-lifecycle.md): what RUNNING, PAUSED, and ERROR mean.

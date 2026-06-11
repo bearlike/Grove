@@ -16,8 +16,10 @@ from __future__ import annotations
 from typing import Final
 
 from grove.core import InitStatus, WorkspaceStatus
+from grove.core.agents import AgentActivityState
 from grove.tui.theme import (
     ACTIVE_PULSE_TINT_HEX,
+    AGENT_STATE_HEX,
     CHROME_HEX,
     INIT_STATUS_HEX,
     REF_HEX,
@@ -91,6 +93,48 @@ def status_label(status: WorkspaceStatus) -> str:
 def status_color(status: WorkspaceStatus, *, dark: bool = True) -> str:
     """Return the theme hex for `status`. Unknown → fg fallback."""
     return STATUS_HEX[dark].get(status, "#ffffff" if dark else "#000000")
+
+
+# Agent-activity-state glyph + label. The companion of STATUS_GLYPH/LABEL for
+# the agent dimension (what the session is *doing*), consumed by the Activity
+# Dashboard's tiles. Glyphs are picked from the same terminal-safe Unicode
+# blocks as the workspace-status glyphs and stay visually distinct from them so
+# a glance separates "the workspace is live" (●) from "the agent is working"
+# (▶). One char each — no Nerd Font dependency.
+AGENT_STATE_GLYPH: dict[AgentActivityState, str] = {
+    AgentActivityState.STARTING: "◌",  # dotted circle — spinning up
+    AgentActivityState.WORKING: "▶",  # play triangle — in the loop
+    AgentActivityState.WAITING: "◑",  # right-half circle — turn ended, wants the human
+    AgentActivityState.BLOCKED: "⚠",  # warning — explicit prompt
+    AgentActivityState.IDLE: "○",  # empty circle — alive but quiet
+    AgentActivityState.ERROR: "✗",  # cross — failed run
+    AgentActivityState.UNKNOWN: "·",  # mid-dot — no signal
+}
+
+AGENT_STATE_LABEL: dict[AgentActivityState, str] = {
+    AgentActivityState.STARTING: "starting",
+    AgentActivityState.WORKING: "working",
+    AgentActivityState.WAITING: "waiting",
+    AgentActivityState.BLOCKED: "blocked",
+    AgentActivityState.IDLE: "idle",
+    AgentActivityState.ERROR: "error",
+    AgentActivityState.UNKNOWN: "unknown",
+}
+
+
+def agent_state_glyph(state: AgentActivityState) -> str:
+    """Return the one-char glyph for an `AgentActivityState`. Unknown → '·'."""
+    return AGENT_STATE_GLYPH.get(state, "·")
+
+
+def agent_state_label(state: AgentActivityState) -> str:
+    """Return the user-facing label for an `AgentActivityState`."""
+    return AGENT_STATE_LABEL.get(state, state.value)
+
+
+def agent_state_color(state: AgentActivityState, *, dark: bool = True) -> str:
+    """Return the theme hex for an `AgentActivityState`. Unknown → fg fallback."""
+    return AGENT_STATE_HEX[dark].get(state, "#ffffff" if dark else "#000000")
 
 
 def init_status_color(status: InitStatus, *, dark: bool = True) -> str:

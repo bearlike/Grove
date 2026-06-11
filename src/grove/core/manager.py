@@ -14,6 +14,7 @@ then re-raised as GroveError so callers can render a toast.
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
@@ -24,7 +25,9 @@ from typing import Literal
 from loguru import logger
 
 from grove.core import paths, tmux
-from grove.core.config import GroveConfig, load_config
+from grove.core.agents import get_adapter
+from grove.core.agents.hook import ClaudeHook
+from grove.core.config import AgentSpec, GroveConfig, load_config
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import BranchMode, ResolvedBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
@@ -43,6 +46,7 @@ from grove.core.workspace import (
     BranchProvenance,
     CommitSummary,
     InitStatus,
+    Placement,
     WorkspaceIdentity,
     WorkspacePeek,
     WorkspaceState,
@@ -54,6 +58,11 @@ from grove.core.workspace import (
     ensure_can_resume,
     ensure_can_update,
 )
+
+# Module-scope alias so method return annotations don't resolve `list` to the
+# `WorkspaceManager.list` method (the class-scope shadowing mypy trap — see also
+# `primary_transcript`'s tuple return).
+_Argv = list[str]
 
 EventKindStr = Literal[
     "created",
@@ -181,16 +190,36 @@ class WorkspaceManager:
         if agent is None:
             raise GroveError(f"unknown agent: {request.agent_name}")
 
+        # Deterministic session correlation (#11 §2): mint a session id and let
+        # the agent's adapter decide whether it owns one. Claude Code returns a
+        # `--session-id` decoration; a generic/shell agent returns nothing and we
+        # persist no id, so the dashboard tracks no transcript for it.
+        adapter = get_adapter(agent.kind)
+        session_id = WorkspaceIdentity.new_session_id()
+        agent_session_id = session_id if adapter.launch_decoration(session_id) else None
+        launch_decoration = self._compose_launch(agent, agent_session_id)
+
         ts = WorkspaceIdentity.timestamp()
         resolved = request.branch_plan.resolve(self._cfg, request.title, ts)
         self._validate_branch_plan(resolved)
 
         session = WorkspaceIdentity.session_name(self._cfg, request.title, ts)
-        worktree = WorkspaceIdentity.worktree_path(self._cfg, self._repo_root, request.title, ts)
+        is_root = resolved.placement is Placement.ROOT
+        # Root placement runs in the repo root on the live checkout: the worktree
+        # IS repo_root and the branch is whatever HEAD points to (a detached HEAD
+        # records "HEAD"). Worktree placement keeps the historical derivation.
+        if is_root:
+            worktree = self._repo_root
+            branch = self._git.current_branch() or "HEAD"
+        else:
+            worktree = WorkspaceIdentity.worktree_path(
+                self._cfg, self._repo_root, request.title, ts
+            )
+            branch = resolved.name
         now = _utcnow()
         # `base_branch` on the persisted record drives the peek's
         # ahead/behind/diff math. For NEW plans it's the explicit base;
-        # for TrackRemote it's the upstream we'll set; for CHECKOUT
+        # for TrackRemote it's the upstream we'll set; for CHECKOUT and root
         # there is no base, so we fall back to "HEAD" — peek tolerates
         # a missing-base (returns zeros) when the branch and base agree.
         base_for_peek = resolved.base_ref or resolved.tracks or "HEAD"
@@ -201,7 +230,7 @@ class WorkspaceManager:
             id=WorkspaceIdentity.new_id(),
             title=request.title,
             repo_root=str(self._repo_root),
-            branch=resolved.name,
+            branch=branch,
             base_branch=base_for_peek,
             worktree_path=str(worktree),
             tmux_session=session,
@@ -211,55 +240,56 @@ class WorkspaceManager:
             updated_at=now,
             description=description,
             branch_provenance=resolved.provenance,
+            placement=resolved.placement,
+            agent_session_id=agent_session_id,
+            agent_kind=agent.kind,
         )
         # Persist before side effects so a crash leaves a recoverable record.
         self._store.save(state)
 
-        try:
-            if resolved.mode == BranchMode.NEW:
-                self._git.worktree_add(
-                    worktree,
-                    new_branch=resolved.name,
-                    base=resolved.base_ref or "HEAD",
-                )
-                if resolved.tracks:
-                    # Setting upstream after `-b` mirrors the most
-                    # widely-deployed git's `track` semantics — we don't
-                    # rely on `--track` (varies across git versions and
-                    # config defaults). Best-effort: a stale remote ref
-                    # would already have failed validation upstream.
-                    self._git.branch_set_upstream(resolved.name, resolved.tracks)
-            else:
-                self._git.worktree_add(worktree, existing_branch=resolved.name)
-        except Exception as exc:
-            self._record_error(state, f"worktree_add failed: {exc}")
-            self._emit("error", state.id, {"phase": "worktree_add", "error": str(exc)})
-            self._store.delete(state.id)
-            raise GroveError(f"failed to create worktree: {exc}") from exc
+        # Root placement creates no worktree and no branch — it adopts the live
+        # checkout. Only worktree placement issues `git worktree add`.
+        if not is_root:
+            try:
+                self._add_worktree(resolved, worktree)
+            except Exception as exc:
+                self._record_error(state, f"worktree_add failed: {exc}")
+                self._emit("error", state.id, {"phase": "worktree_add", "error": str(exc)})
+                self._store.delete(state.id)
+                raise GroveError(f"failed to create worktree: {exc}") from exc
 
+        # `skip_init` is a per-create override of `init_script.enabled`; either
+        # one being off means the script never runs and the outcome is SKIPPED.
+        # Gating the call here (rather than relying on run_init_script's internal
+        # enabled-check) is what lets a single create opt out without touching
+        # config — and keeps the risky "init in the real repo root" path off by
+        # default for root workspaces, which auto-check skip in the UI.
+        init_enabled = self._cfg.init_script.enabled and not request.skip_init
         init_log = paths.init_log_path(state.id)
         init_started = _utcnow()
-        try:
-            init_rc = tmux.run_init_script(
-                self._cfg.init_script,
-                worktree=worktree,
-                repo_root=self._repo_root,
-                extra_env={
-                    "GROVE_REPO": str(self._repo_root),
-                    "GROVE_WORKTREE": str(worktree),
-                    "GROVE_BRANCH": resolved.name,
-                    "GROVE_AGENT": request.agent_name,
-                },
-                log_path=init_log if self._cfg.init_script.enabled else None,
-            )
-        except Exception as exc:
-            self._rollback_create(state)
-            self._emit("error", state.id, {"phase": "init_script", "error": str(exc)})
-            raise GroveError(f"init script raised: {exc}") from exc
+        init_rc = 0
+        if init_enabled:
+            try:
+                init_rc = tmux.run_init_script(
+                    self._cfg.init_script,
+                    worktree=worktree,
+                    repo_root=self._repo_root,
+                    extra_env={
+                        "GROVE_REPO": str(self._repo_root),
+                        "GROVE_WORKTREE": str(worktree),
+                        "GROVE_BRANCH": branch,
+                        "GROVE_AGENT": request.agent_name,
+                    },
+                    log_path=init_log,
+                )
+            except Exception as exc:
+                self._rollback_create(state)
+                self._emit("error", state.id, {"phase": "init_script", "error": str(exc)})
+                raise GroveError(f"init script raised: {exc}") from exc
 
         state = _replace(
             state,
-            **_init_outcome(self._cfg.init_script.enabled, init_rc, init_started, init_log),
+            **_init_outcome(init_enabled, init_rc, init_started, init_log),
         )
 
         if init_rc != 0:
@@ -281,7 +311,13 @@ class WorkspaceManager:
                 cwd=worktree,
                 history_limit=self._cfg.tmux.history_limit,
             )
-            tmux.build_workspace_layout(session, cfg=self._cfg, worktree=worktree, agent=agent)
+            tmux.build_workspace_layout(
+                session,
+                cfg=self._cfg,
+                worktree=worktree,
+                agent=agent,
+                launch_decoration=launch_decoration,
+            )
         except Exception as exc:
             self._rollback_create(state)
             self._emit("error", state.id, {"phase": "tmux", "error": str(exc)})
@@ -291,6 +327,28 @@ class WorkspaceManager:
         self._store.save(state)
         self._emit("created", state.id, {"title": request.title, "agent": request.agent_name})
         return state
+
+    def _add_worktree(self, resolved: ResolvedBranch, worktree: Path) -> None:
+        """Issue the `git worktree add` for a worktree-placement create.
+
+        NEW mode creates the branch with `-b` off its base (and sets the
+        upstream afterward for a tracking plan); CHECKOUT mode attaches an
+        existing branch. Root placement never reaches here — `create()` gates
+        the call on placement. Setting upstream after `-b` (rather than
+        `--track`) mirrors the most widely-deployed git's behavior, which
+        varies across versions and config defaults; a stale remote ref would
+        already have failed validation upstream.
+        """
+        if resolved.mode == BranchMode.NEW:
+            self._git.worktree_add(
+                worktree,
+                new_branch=resolved.name,
+                base=resolved.base_ref or "HEAD",
+            )
+            if resolved.tracks:
+                self._git.branch_set_upstream(resolved.name, resolved.tracks)
+        else:
+            self._git.worktree_add(worktree, existing_branch=resolved.name)
 
     def _validate_branch_plan(self, resolved: ResolvedBranch) -> None:
         """Reconcile a resolved plan against live git state.
@@ -309,7 +367,13 @@ class WorkspaceManager:
           currently be checked out at another worktree (git itself
           would refuse the worktree add, but the typed error gives
           clients a structured way to surface the conflict).
+        - **ROOT** — nothing to validate: Grove creates no branch and no
+          worktree, it adopts whatever HEAD already points to. (resolved.name
+          is the empty sentinel here, which the per-mode rules below would
+          wrongly reject — so root short-circuits.)
         """
+        if resolved.placement is Placement.ROOT:
+            return
         if resolved.mode == BranchMode.NEW:
             if self._git.find_branch(resolved.name) is not None:
                 raise BranchConflict(
@@ -388,6 +452,12 @@ class WorkspaceManager:
                 "edit your config or kill this workspace"
             )
 
+        # Resume *continues* the same agent session, so reuse the persisted id —
+        # Claude Code re-opens that transcript. respawn() takes the other branch
+        # (a fresh id for a brand-new session); this is the one place that choice
+        # is made, so the two verbs can't drift.
+        launch_decoration = self._compose_launch(agent, state.agent_session_id)
+
         worktree = Path(state.worktree_path)
         try:
             self._git.worktree_add(worktree, existing_branch=state.branch)
@@ -422,7 +492,11 @@ class WorkspaceManager:
                 history_limit=self._cfg.tmux.history_limit,
             )
             tmux.build_workspace_layout(
-                state.tmux_session, cfg=self._cfg, worktree=worktree, agent=agent
+                state.tmux_session,
+                cfg=self._cfg,
+                worktree=worktree,
+                agent=agent,
+                launch_decoration=launch_decoration,
             )
         except Exception as exc:
             self._git.worktree_remove(worktree, force=True)
@@ -442,12 +516,18 @@ class WorkspaceManager:
         return new_state
 
     def kill(self, workspace_id: str, *, delete_branch: bool | None = None) -> None:
-        """Tear down the workspace's worktree (always) and tmux session (always).
+        """Tear down the workspace's tmux session (always) and worktree.
 
-        The local branch is deleted only when ``delete_branch`` is True.
-        Default (``None``) resolves from ``state.branch_provenance``:
+        For worktree placement the worktree is always removed; the local
+        branch is deleted only when ``delete_branch`` is True. Default
+        (``None``) resolves from ``state.branch_provenance``:
         ``GROVE_CREATED`` → True (Grove made the branch; safe to drop),
         ``USER_ATTACHED`` → False (the user's pre-existing branch stays).
+
+        For **root** placement the worktree IS the repo root and the branch is
+        the live checkout, so kill never removes the directory and never deletes
+        the branch — even if the caller passes ``delete_branch=True``. It only
+        stops the session and forgets the record.
 
         **Remote branches are never touched.** Period — there is no flag
         to opt into remote deletion. That's ``git push --delete``
@@ -457,26 +537,33 @@ class WorkspaceManager:
         """
         state = self._store.get(workspace_id)
         ensure_can_kill(state)
+        is_root = state.placement is Placement.ROOT
         if delete_branch is None:
             delete_branch = state.branch_provenance == BranchProvenance.GROVE_CREATED
+        if is_root:
+            # Hard override: the repo root is never Grove's to remove and the
+            # live branch is never Grove's to delete, whatever the caller asks.
+            delete_branch = False
 
         try:
             tmux.kill_session(state.tmux_session)
         except Exception as exc:
             logger.warning("kill_session during kill failed: {}", exc)
-        try:
-            self._git.worktree_remove(Path(state.worktree_path), force=True)
-        except Exception as exc:
-            logger.warning("worktree_remove during kill failed: {}", exc)
+        if not is_root:
+            try:
+                self._git.worktree_remove(Path(state.worktree_path), force=True)
+            except Exception as exc:
+                logger.warning("worktree_remove during kill failed: {}", exc)
         if delete_branch:
             try:
                 self._git.branch_delete(state.branch, force=True)
             except Exception as exc:
                 logger.warning("branch_delete during kill failed: {}", exc)
-        try:
-            self._git.worktree_prune()
-        except Exception as exc:
-            logger.warning("worktree_prune during kill failed: {}", exc)
+        if not is_root:
+            try:
+                self._git.worktree_prune()
+            except Exception as exc:
+                logger.warning("worktree_prune during kill failed: {}", exc)
         _drop_init_log(state.id)
         self._store.delete(state.id)
         self._last_reconciled_status.pop(state.id, None)
@@ -580,7 +667,10 @@ class WorkspaceManager:
         we only spin up a fresh session in the existing worktree and restart
         the agent. Init script is NOT re-run by default (the worktree was
         already initialized at create time); set `init_script.run_on_resume`
-        to opt in for parity with `resume`.
+        to opt in for parity with `resume`. Root placement never re-runs init
+        on respawn even with `run_on_resume` — init for a root workspace is a
+        deliberate create-time choice and must not fire unattended in the user's
+        real repo root.
         """
         state = self._reconcile_status(self._store.get(workspace_id))
         ensure_can_respawn(state)
@@ -599,8 +689,15 @@ class WorkspaceManager:
                 "use kill to clean up the stranded record"
             )
 
+        # Respawn starts a *new* agent session (the old process vanished), so mint
+        # a fresh id — a new transcript, not a continuation. resume() keeps the id;
+        # this is the deliberate other branch. Generic agents (no persisted id)
+        # stay untracked.
+        respawn_session_id = WorkspaceIdentity.new_session_id() if state.agent_session_id else None
+        launch_decoration = self._compose_launch(agent, respawn_session_id)
+
         init_changes: dict[str, object] = {}
-        if self._cfg.init_script.run_on_resume:
+        if state.placement is Placement.WORKTREE and self._cfg.init_script.run_on_resume:
             init_log = paths.init_log_path(state.id)
             init_started = _utcnow()
             try:
@@ -626,20 +723,25 @@ class WorkspaceManager:
                 history_limit=self._cfg.tmux.history_limit,
             )
             tmux.build_workspace_layout(
-                state.tmux_session, cfg=self._cfg, worktree=worktree, agent=agent
+                state.tmux_session,
+                cfg=self._cfg,
+                worktree=worktree,
+                agent=agent,
+                launch_decoration=launch_decoration,
             )
         except Exception as exc:
             self._emit("error", state.id, {"phase": "respawn.tmux", "error": str(exc)})
             raise GroveError(f"could not start tmux session: {exc}") from exc
 
-        # Persisted intent is already RUNNING; just refresh the timestamp +
-        # any init changes. Status field stays the persisted RUNNING; next
+        # Persisted intent is already RUNNING; refresh the timestamp, the freshly
+        # minted session id, and any init changes. Status stays RUNNING; the next
         # list()/peek() promotes it to ACTIVE.
         new_state = _replace(
             self._store.get(workspace_id),
             status=WorkspaceStatus.RUNNING,
             updated_at=_utcnow(),
             error_detail=None,
+            agent_session_id=respawn_session_id,
             **init_changes,
         )
         self._store.save(new_state)
@@ -718,6 +820,65 @@ class WorkspaceManager:
         """
         state = self._reconcile_status(self._store.get(workspace_id))
         return self._capture_pane(state)
+
+    def primary_transcript(self, workspace_id: str) -> tuple[Path, ...]:
+        """Transcript file(s) for the workspace's agent session, or ``()`` if untracked.
+
+        Resolves the adapter from the agent's ``kind`` and the persisted session
+        id, then asks it to locate the file(s) under the worktree cwd. Read-only
+        and best-effort — the adapter never raises. Empty for a generic/shell
+        agent (no session id), a legacy record, or before the transcript is first
+        written (the STARTING window). The ``ActivityService`` (#14) builds on
+        this to parse activity.
+
+        A tuple (point-in-time snapshot), matching ``list_local_branches`` — the
+        files on disk may change after the call, so an immutable return can't
+        mislead the caller about live state.
+        """
+        state = self._store.get(workspace_id)
+        if not state.agent_session_id:
+            return ()
+        agent = self._cfg.find_agent(state.agent_name)
+        kind = agent.kind if agent is not None else "generic"
+        return tuple(
+            get_adapter(kind).locate_transcripts(Path(state.worktree_path), state.agent_session_id)
+        )
+
+    def _compose_launch(self, agent: AgentSpec, session_id: str | None) -> _Argv:
+        """Full argv appended to the agent command at launch, for a known session id.
+
+        Composes the adapter's base decoration (`--session-id <uuid>` for Claude
+        Code) with the opt-in status hook: when `cfg.hooks.enabled` and the agent
+        is `claude_code`, append `--settings <grove-hooks-settings>` so the hook
+        pushes precise lifecycle status into a sidecar (#18) — additive, never
+        touching the user's own `.claude/settings.json`. Empty for a generic/shell
+        agent or a legacy record with no session id. Centralizes the composition so
+        create/resume/respawn can't drift.
+        """
+        if session_id is None:
+            return []
+        decoration = get_adapter(agent.kind).launch_decoration(session_id)
+        if decoration and agent.kind == "claude_code" and self._cfg.hooks.enabled:
+            settings = self._ensure_hook_settings()
+            if settings is not None:
+                decoration = [*decoration, "--settings", str(settings)]
+        return decoration
+
+    def _ensure_hook_settings(self) -> Path | None:
+        """Write Grove's hook-only Claude Code settings file; return its path.
+
+        Best-effort: a write failure logs and returns `None` so the agent still
+        launches (just without push status — graceful degradation). Rewritten each
+        launch so a Grove upgrade that changes the hook set self-heals.
+        """
+        path = paths.agent_hooks_settings_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(ClaudeHook.settings(), indent=2), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("could not write hook settings; launching without push status: {}", exc)
+            return None
+        return path
 
     def pane_target(self, workspace_id: str) -> str | None:
         """Resolve the tmux target the rail should capture / resize for `workspace_id`.
@@ -870,19 +1031,28 @@ class WorkspaceManager:
             self._emit("orphaned_detected", before.id)
 
     def _rollback_create(self, state: WorkspaceState) -> None:
-        """Best-effort cleanup when create fails partway through."""
+        """Best-effort cleanup when create fails partway through.
+
+        Mirrors the placement gating of the create path it unwinds: for root
+        placement the worktree is the repo root and the branch is the live
+        checkout, so rollback must never remove the directory or delete the
+        branch — it only kills any session and forgets the record. Reusing the
+        same gate here is what keeps a failed root create from destroying the
+        user's repo.
+        """
         try:
             tmux.kill_session(state.tmux_session)
         except Exception as exc:
             logger.warning("rollback: kill_session failed: {}", exc)
-        try:
-            self._git.worktree_remove(Path(state.worktree_path), force=True)
-        except Exception as exc:
-            logger.warning("rollback: worktree_remove failed: {}", exc)
-        try:
-            self._git.branch_delete(state.branch, force=True)
-        except Exception as exc:
-            logger.warning("rollback: branch_delete failed: {}", exc)
+        if state.placement is not Placement.ROOT:
+            try:
+                self._git.worktree_remove(Path(state.worktree_path), force=True)
+            except Exception as exc:
+                logger.warning("rollback: worktree_remove failed: {}", exc)
+            try:
+                self._git.branch_delete(state.branch, force=True)
+            except Exception as exc:
+                logger.warning("rollback: branch_delete failed: {}", exc)
         _drop_init_log(state.id)
         try:
             self._store.delete(state.id)
