@@ -116,6 +116,29 @@ class GitRepo:
         """Drop administrative entries for worktrees that no longer exist on disk."""
         self._run(["git", "worktree", "prune"], cwd=self._root, check=False)
 
+    def worktree_paths(self) -> list[Path]:
+        """Every worktree of this repo, **main worktree first** (git's order).
+
+        Read-only `git worktree list --porcelain` parse. Works when bound to a
+        *linked* worktree too — git reports the whole family either way — which
+        is what lets the session explorer find sibling worktrees from inside
+        any of them. Returns ``[root]`` on failure so callers always have at
+        least the bound root to scan.
+        """
+        result = self._run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=self._root,
+            check=False,
+        )
+        if result.returncode != 0:
+            return [self._root]
+        paths = [
+            Path(line[len("worktree ") :].strip())
+            for line in result.stdout.splitlines()
+            if line.startswith("worktree ")
+        ]
+        return paths or [self._root]
+
     def branch_delete(self, branch: str, *, force: bool = True) -> bool:
         """Delete a branch. Returns False (no raise) if it was already gone."""
         flag = "-D" if force else "-d"

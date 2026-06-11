@@ -622,6 +622,43 @@ widgets that render via `Widget.render()` rather than CSS rules.
 pure rendering helper. The widget's `render()` reads `dark` once and
 forwards. This keeps render helpers testable without a Pilot.
 
+### 4.8 Agent-state tokens
+
+A **separate axis** from workspace-status tokens (§4.3): status colors
+what the *workspace* is (ACTIVE / IDLE / PAUSED), agent-state colors what
+the *agent session inside it* is doing (WORKING / WAITING / …). The
+Activity Dashboard shows both at once — a workspace can be ACTIVE while
+its agent is WAITING — so they are deliberately distinct maps over
+distinct enums. The canonical dark hex map is the cross-client contract
+`grove.core.contracts.agent_palette.DARK_AGENT_STATE_HEX` (the web client
+reads the same file); `grove.tui.theme.AGENT_STATE_HEX` sources its dark
+half straight from it (`dict(DARK_AGENT_STATE_HEX)`), so the two cannot
+drift by construction.
+
+```python
+from grove.tui._status import agent_state_color, agent_state_glyph, agent_state_label
+from grove.core.agents import AgentActivityState
+
+agent_state_color(AgentActivityState.WORKING, dark=dark)  # lime (matches ACTIVE)
+agent_state_glyph(AgentActivityState.WORKING)             # "▶"
+agent_state_label(AgentActivityState.WORKING)             # "working"
+```
+
+| State | Glyph | Hue | Meaning |
+|---|---|---|---|
+| STARTING | `◌` | info cyan | session launched, transcript not yet on disk |
+| WORKING | `▶` | lime (= ACTIVE) | in the tool loop / mid-response (pulses) |
+| WAITING | `◑` | warning amber | turn ended, wants the human (attention) |
+| BLOCKED | `⚠` | warning amber | explicit permission prompt (attention; hook-sourced) |
+| IDLE | `○` | muted gray | alive but quiet |
+| ERROR | `✗` | destructive red | failed run / unreadable transcript |
+| UNKNOWN | `·` | muted gray | suppressed / no signal |
+
+Glyphs are picked from the same terminal-safe blocks as the status
+glyphs (§3.7) and stay visually distinct from them — a glance separates
+"the workspace is live" (`●`) from "the agent is working" (`▶`). No Nerd
+Font dependency.
+
 ---
 
 ## 5. Layout
@@ -835,9 +872,15 @@ The selection rule out-specifies hover, so hovering the keyboard-selected card k
 | Branch | bold | `ref_color('branch')` (teal) |
 | `·` separator | (none) | `chrome_color('muted')` |
 | Agent name | bold | `ref_color('info')` (cyan) |
+| `· ▶ working` agent-state glyph + label | bold | `agent_state_color(state)` (only when the screen's activity tick has resolved a session) |
 | `·` separator | (none) | `chrome_color('muted')` |
 | Status label (`active`/`idle`/`offline`/`paused`/`orphaned`/`error`) | bold | `status_color(state.status)` |
+| `· root` | (none) | `chrome_color('muted')` (only if `placement == ROOT`) |
 | `· ! init failed` | bold | `init_status_color(FAILED)` (only if `init_status == FAILED`) |
+
+The agent-state segment is the *agent axis* (what the session is doing: `starting`/`working`/`waiting`/`blocked`/`idle`/`error` — see [§4.8](#48-agent-state-tokens)), a separate dimension from the workspace lifecycle status that follows it. It sits right after the agent name so "who · what they're doing" reads as one chunk, in the same bold-plus-semantic-color tier as the status label. Absence is the default (same convention as the `root` tag): a sessionless workspace — or one the slow activity tick hasn't covered yet — renders a byte-identical line 2 to the pre-agent card.
+
+The `root` tag is a quiet qualifier, not a status token: muted and lowercase, it tells the user this workspace runs in the repo root with no isolated worktree. Worktree workspaces render nothing here, so the absence is the default. It sits after the status label and before any init-failed badge, so the badge stays the rightmost (most urgent) element on the row.
 
 **Renderer purity.** `_render_card` is identical for highlighted and
 unhighlighted cards. Adding a `focused: bool` parameter would
@@ -877,7 +920,17 @@ All three are frozen on modal (`if self.app.screen is not self: return`).
 
 1. **Stats line** — `+N / -M  ·  ahead K  ·  behind L  ·  dirty P`.
    Polarity-aware (zero = muted, nonzero = semantic, see [§3.4](#34-typography)).
-2. **Description** — only if the workspace has one. Plain default-fg
+2. **Agent metrics line** — `model  ·  12t/34r/87⚒  ·  412.0k↑ 38.0k↓  ·  working`.
+   Only when the list screen's activity tick has a primary session for the
+   selected row (`set_peek(peek, agent=...)`); skipped entirely otherwise.
+   Sits directly under the stats line so the pair reads as one status
+   block: git facts, then session facts. Model takes the agent hue
+   (`ref_color('info')`, the same cyan as the row card's agent name);
+   turns/replies/tools are bold default-fg counters; tokens are humanized
+   (the dashboard's `_human_tokens` formatter — one formatter, two
+   surfaces) and muted; the state label takes `agent_state_color`
+   ([§4.8](#48-agent-state-tokens)), mirroring the row card's segment.
+3. **Description** — only if the workspace has one. Plain default-fg
    text, trimmed at 200 chars with an ellipsis. Skipped entirely when
    empty (no `(no description)` placeholder — visual noise on every
    workspace). Lives on the rail (not the row card) because the row
@@ -885,14 +938,14 @@ All three are frozen on modal (`if self.app.screen is not self: return`).
    is the read-deeply affordance — and a free-form note belongs in the
    read-deeply zone. Markup characters in user input are rendered as
    literals (we use `Text.append`, not `Text.from_markup`).
-3. **Init failure** — only if `init_status == FAILED`. Two lines:
+4. **Init failure** — only if `init_status == FAILED`. Two lines:
    `✗ init failed` (bold red) and `log: <path>` (muted).
-4. **Affordance line** — exactly one of:
+5. **Affordance line** — exactly one of:
    - `‖ paused  press R to resume` (paused color = gray, bold key).
    - `○ offline  press o to respawn` (offline color = gray, bold key).
    - `⊘ worktree missing on disk  press k to clean up` (orphaned amber).
    - `error: <error_detail>` (when ERROR + has detail).
-5. **Recent commits** — `recent` heading (teal, bold) and a list of
+6. **Recent commits** — `recent` heading (teal, bold) and a list of
    `  <SHA[:8]>  <subject>  <age>`. Subject is trimmed at 56 chars.
    SHA + heading share the branch hue (teal) so the eye groups them as
    one column. Subject = default fg; age = muted.
@@ -993,11 +1046,21 @@ the set of keys that apply (e.g. `{ACTIVE → {enter,a, p, k}, PAUSED →
 {R, k}, OFFLINE → {o, k}, ORPHANED → {k}, ERROR → {k}}`). One dict
 lookup per render; adding a new status = one line.
 
+**The key set varies by placement, too.** `_key_available(key, status,
+placement)` first consults `_KEYS_REMOVED_BY_PLACEMENT` (`{ROOT → {p,
+R}}`) and drops any key that placement strips, then falls through to
+the status table. A root workspace reconciles to ACTIVE/IDLE/OFFLINE
+like any other, but the engine refuses pause and resume for it (no
+worktree to free or rebuild), so the footer dims `p` and `R` for a root
+selection no matter its status. Still data, not branches: a new
+placement constraint is one more `_KEYS_REMOVED_BY_PLACEMENT` entry, and
+the empty-set default leaves WORKTREE workspaces untouched.
+
 **On the list screen, the footer carries two groups:**
 
 - Globals: `q · n · r · / · ?` — always available.
 - Selection: `enter/a · p · R · o · k` — dimmed individually based on
-  the selected row's status.
+  the selected row's status and placement (root drops `p` / `R`).
 
 ### 6.8 Modals — Confirm, Create, Edit, Help
 
@@ -1014,8 +1077,38 @@ variant).
 | `y` / `enter` | Confirm |
 | `n` / `escape` | Cancel |
 
-**CreateWorkspaceScreen** — agent + title + optional base branch with
-**live preview** of the derived branch and tmux session names (re-renders on every `Input.Changed` event). Preview uses `ref_color('branch')` so the user sees the slug colored as a branch name.
+**CreateWorkspaceScreen** — agent + title + a `RadioSet` branch picker
+with **live preview** of the derived branch and tmux session names
+(re-renders on every `Input.Changed` event). Preview uses
+`ref_color('branch')` so the user sees the slug colored as a branch
+name.
+
+The `RadioSet` has five options, one per branch-source variant: Auto,
+New, Existing, Remote, and **Root** (`work in the repo root (no
+worktree, current branch)`). Each option mounts a hidden `_BranchBlock`
+in `#branch-blocks`; selecting a radio reveals its block. The Root block
+is read-only: a muted explanation plus the detected current branch. Its
+preview names the current branch with an `(in place)` suffix and points
+the worktree line at the repo root path, flagged as having no worktree.
+
+Below the branch blocks sits a `Checkbox` (`#skip-init`, label `Skip
+init script`). Default unchecked. Selecting the Root radio auto-checks
+it (the init script is built for a fresh worktree and is risky in the
+real repo root) as a one-way nudge: the user can still uncheck it, and
+switching to another mode never forces it back off. Its value flows into
+`CreateWorkspaceRequest.skip_init` at submit.
+
+**Checkbox state visual (all modal checkboxes).** Checked vs unchecked
+must read as **filled box vs empty box**, not as a color shift of an
+always-present mark. Textual's stock `ToggleButton` renders its inner
+glyph in every state and conveys on/off only by the glyph's color, which
+on Grove's warm-dark palette left the off mark as a near-black `X` that
+still reads as "ticked." `GroveModal` overrides the toggle button so the
+**unchecked** state hides the mark (painted `$panel`, the pill's own
+background, so the box looks empty) and the **checked** state fills the
+whole pill with `$success` (a clearly filled box). One rule in
+`GroveModal`, so every modal checkbox inherits it: `#skip-init` here and
+`#delete-branch` in the kill-confirm modal.
 
 | Key | Action |
 |---|---|
@@ -1049,6 +1142,70 @@ the caller).
 | Key | Action |
 |---|---|
 | `escape` / `q` / `?` | Close |
+
+### 6.9 Activity Dashboard — DashboardScreen, DashboardGrid, DashboardCard
+
+The cross-project activity wall (`screens/dashboard.py`,
+`widgets/dashboard_grid.py`). Where the list screen shows *one* repo's
+workspaces, this shows *every* workspace across *every* repo as a wall of
+agent-activity tiles grouped by project — "what is every agent doing
+right now" at a glance. Opened from the list screen on `d`; `escape` /
+`d` / `q` pop back. Data is the engine's `ActivityService` consumed
+in-process (the same source the daemon serves over SSE).
+
+**Screen anatomy.** `Header` (no clock) · `VerticalScroll #dashboard-body`
+· `ContextualFooter`. The title is `Grove — Activity`, the subtitle shows
+the active lens. The body holds, per project group: a `.project-header`
+band (`$primary`, bold, `repo-name (N)`) then a `DashboardGrid`. When a
+lens empties the wall, a centered muted `#dashboard-empty` message
+replaces the grid and points at the key to widen.
+
+**Lens (status filter).** Cycled with `l`: **all** (default — the whole
+point is "see everything at once"; never open to an empty wall), **needs
+attention** (sessions in WAITING / BLOCKED / ERROR — `needs_attention`),
+**active** (any live/pending agent state). `g` toggles group-by-project
+off into one flat "all workspaces" grid. A closed tuple drives the cycle.
+
+**DashboardGrid.** A Textual `Grid` built to *fill* the terminal, not float a
+small square wall in empty space. **Column count is width-driven:** one column
+per `_MIN_TILE_WIDTH` (36) cells, capped at `_MAX_COLUMNS` (6) and at N; reflows
+on resize. (This replaced `ceil(sqrt(N))`, which gave a 200-cell screen three
+columns — the "too spaced out" bug.) **Row model:** a row track is
+`_GRID_ROW_UNIT` (5) cells tall and `grid-rows: 5` matches it. A **compact** tile
+spans one track (`is_promoted` False — idle / offline / starting / untracked) and
+renders exactly three rows — an exact fit, no wasted space. A **promoted** tile
+spans two tracks (working / waiting / blocked / error) and **fills the extra rows
+with a live tmux pane tail** instead of leaving them blank — the whole point of
+the redesign. `is_promoted(activity)` is the single promotion rule (grid span +
+card shape + screen capture all read it, so they can't drift). Cards are created
+eagerly in `compose()` (not a post-mount `mount_all`) to dodge the async-mount
+race a caller hits when it mounts the grid and immediately queries it.
+
+**DashboardCard** (one tile, a single `Static` via Rich `Text` — same
+one-widget-per-tile discipline as `WorkspaceCard`; whole body is `no_wrap` so a
+long line crops rather than stealing a row from the pane-fill math). Border:
+`round $surface` (transparent), `round $primary` on `:focus`, `round $warning` on
+`.-attention`. A root-placement workspace carries a quiet muted `root` tag after
+the age (the metadata seam). Two shapes:
+
+- **compact** (3 rows): glyph (state color, §4.8) · **bold-underlined** title · muted age — then branch (teal) · agent (cyan) · agent-state label — then `+X / -Y` numstat · `↑ahead ↓behind` · `Nt Nr N⚒` counts (muted).
+- **promoted** (8 rows): glyph · title · **state label** · age · `root` — then branch · agent · model — then the agent's own one-line summary (`interpreted_status` first once the LLM interpreter (#20) fills it, else ai-title, else current task; the row is omitted, not blank-filled, when absent) — then the stat line plus `↑in ↓out` token usage — then a live, fit-to-cell `Text.from_ansi` pane tail (SGR backgrounds stripped like PeekRail, `no_wrap`) sized to the remaining rows, or a quiet `· · ·` placeholder until the screen captures it.
+
+WORKING pulses the line-1 glyph (`▶` ↔ `▷`) on the screen's ~4 Hz
+heartbeat — same one-screen-clock discipline as the list screen, color
+held constant so the semantic is stable. Focus chrome is TCSS-only; the
+renderer (`_render_card_body`) is pure (identical bytes regardless of
+focus) and diff-guarded, so an idle wall costs ~zero repaints per tick.
+
+**Tick cadence** (reuses the list screen's budget, frozen on modal): slow tick
+(`cfg.peek_stats_refresh_seconds`, 3 s) refreshes **every promoted tile's** live
+pane tail (bounded by `_MAX_LIVE_CAPTURES` per tick, focused tile first) then
+drives `ActivityService.poll_once()` → `session_activity` deltas → re-render; fast
+tick (`cfg.peek_pane_refresh_seconds`, 0.25 s) advances the pulse and re-captures
+**only** the focused tile (the one the user is watching stays the most live).
+Pane snapshots cache by workspace id so a wall rebuild re-applies them without a
+blank flash. Lifecycle changes (create / kill / …) arrive promptly via the
+service's bridged manager bus, no waiting for the next poll.
 
 ---
 

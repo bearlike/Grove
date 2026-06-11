@@ -7,10 +7,29 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import (
     CreateWorkspaceRequest,
     UpdateWorkspaceRequest,
 )
+
+
+def test_create_request_skip_init_defaults_false() -> None:
+    req = CreateWorkspaceRequest(agent_name="claude", title="t")
+    assert req.skip_init is False
+
+
+def test_create_request_accepts_skip_init_and_root_plan() -> None:
+    """skip_init + the root variant both survive a JSON round-trip — the smoke
+    test for the future API server constructing this from form fields."""
+    req = CreateWorkspaceRequest(
+        agent_name="claude", title="t", branch_plan=RootBranch(), skip_init=True
+    )
+    assert req.skip_init is True
+    assert isinstance(req.branch_plan, RootBranch)
+    reloaded = CreateWorkspaceRequest.model_validate_json(req.model_dump_json())
+    assert reloaded.skip_init is True
+    assert isinstance(reloaded.branch_plan, RootBranch)
 
 
 def test_request_default_no_repo_root() -> None:

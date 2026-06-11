@@ -14,6 +14,15 @@ holds the former; the latter live in ``grove.core.workspace``.
 
 from __future__ import annotations
 
+from grove.core.contracts.activity import (
+    AgentActivityView,
+    AgentSessionView,
+    DashboardEvent,
+    DashboardSnapshotView,
+    ProjectGroupView,
+    SessionActivityView,
+    WorkspaceActivityView,
+)
 from grove.core.contracts.auth import (
     AuthErrorEnvelope,
     PairingChallengeView,
@@ -27,17 +36,27 @@ from grove.core.contracts.branch_plan import (
     BranchPlan,
     ExistingLocalBranch,
     NewNamedBranch,
+    RootBranch,
     TrackRemoteBranch,
 )
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
+from grove.core.contracts.sessions import (
+    DigestEntryView,
+    SessionDetailView,
+    SessionSummaryView,
+    SessionTurnView,
+)
 from grove.core.contracts.views import (
     AttachInstructionView,
     CommitSummaryView,
+    WorkspacePaneView,
     WorkspacePeekView,
     WorkspaceStateView,
 )
 
 __all__ = [
+    "AgentActivityView",
+    "AgentSessionView",
     "AttachInstructionView",
     "AuthErrorEnvelope",
     "AutoBranch",
@@ -45,14 +64,25 @@ __all__ = [
     "BranchPlan",
     "CommitSummaryView",
     "CreateWorkspaceRequest",
+    "DashboardEvent",
+    "DashboardSnapshotView",
+    "DigestEntryView",
     "ExistingLocalBranch",
     "NewNamedBranch",
     "PairRequest",
     "PairResultView",
     "PairingChallengeView",
+    "ProjectGroupView",
+    "RootBranch",
+    "SessionActivityView",
+    "SessionDetailView",
+    "SessionSummaryView",
+    "SessionTurnView",
     "SessionView",
     "TrackRemoteBranch",
     "UpdateWorkspaceRequest",
+    "WorkspaceActivityView",
+    "WorkspacePaneView",
     "WorkspacePeekView",
     "WorkspaceStateView",
 ]

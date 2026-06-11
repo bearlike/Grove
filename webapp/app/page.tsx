@@ -4,28 +4,31 @@ import { useMemo } from "react";
 import { Header } from "@/components/layout/header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RepoFacetTabs } from "@/components/workspace/repo-facet-tabs";
-import { useWorkspaces, useWorkspacesPeeks } from "@/lib/grove/hooks";
+import { useActivityStream } from "@/lib/grove/hooks";
 
 export default function HomePage() {
-  const { data, isLoading, isError, error } = useWorkspaces();
-  // Stable id list so `useQueries` keys don't churn on every render.
-  const ids = useMemo(() => (data ?? []).map((w) => w.id), [data]);
-  const peeks = useWorkspacesPeeks(ids);
+  // One stream feeds the whole grid: SSE deltas land in <1 s and a new
+  // workspace appears on the next snapshot — no per-card peek fan-out.
+  const { snapshot, error } = useActivityStream();
+  const activities = useMemo(
+    () => snapshot?.projects.flatMap((p) => p.workspaces) ?? null,
+    [snapshot],
+  );
 
   return (
     <>
       <Header />
       <main className="mx-auto w-full max-w-screen-xl p-4 pb-[env(safe-area-inset-bottom)]">
-        {isLoading && <SkeletonGrid />}
-        {isError && (
+        {!snapshot && !error && <SkeletonGrid />}
+        {error && (
           <div
             role="alert"
             className="rounded-md border border-[var(--status-error)] bg-[var(--status-error)]/10 p-4 text-sm"
           >
-            Could not reach the daemon: {String((error as Error).message)}
+            Could not reach the daemon: {error.message}
           </div>
         )}
-        {data && <RepoFacetTabs workspaces={data} peeks={peeks} />}
+        {activities && <RepoFacetTabs activities={activities} />}
       </main>
     </>
   );

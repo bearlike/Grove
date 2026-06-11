@@ -8,12 +8,15 @@ from pathlib import Path
 
 import pytest
 
+from grove.core.activity import SessionActivity
+from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceStatus
 from grove.tui.app import GroveApp
+from grove.tui.screens.list import WorkspaceListScreen
 from grove.tui.widgets.card import WorkspaceCard
 from grove.tui.widgets.list import WorkspaceList
 from grove.tui.widgets.status import StatusBar
@@ -186,6 +189,100 @@ async def test_tick_pulse_skips_when_no_active_row_visible(
         screen._tick_pulse()
         await pilot.pause()
         assert screen._pulse_frame == before, "pulse must not advance when no visible row is ACTIVE"
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+class _FakeActivityService:
+    """Stands in for ``ActivityService`` — the list screen only calls
+    ``sessions_for``. Returns one WORKING session per workspace so the
+    tick has a deterministic agent axis without touching the filesystem."""
+
+    def sessions_for(self, mgr: object, state: object) -> list[SessionActivity]:
+        del mgr, state
+        session = AgentSession(
+            session_id="s-1",
+            transcript_path=None,
+            adapter_kind="claude_code",
+            provenance="grove_launched",
+            tmux_window="agent",
+        )
+        return [
+            SessionActivity(
+                session=session,
+                activity=AgentActivity(state=AgentActivityState.WORKING),
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_stats_tick_pushes_agent_state_to_cards(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The slow stats tick recomputes the agent axis via the injected
+    service's public ``sessions_for`` and pushes each visible row's primary
+    state onto its WorkspaceCard (screen → list → card chain). Injection
+    mirrors ``tests/tui/test_dashboard.py``; the interval timers are
+    stopped so the manual tick is the only writer (pulse-timer lesson)."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="alpha"))
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = WorkspaceListScreen(manager, service=_FakeActivityService())  # type: ignore[arg-type]
+        app.push_screen(screen)
+        await pilot.pause()
+        for attr in ("_stats_timer", "_pane_timer", "_pulse_timer"):
+            timer = getattr(screen, attr)
+            assert timer is not None, f"{attr} must be wired in on_mount"
+            timer.stop()
+        card = screen.query_one(WorkspaceCard)
+        assert "working" not in card.body_text  # no segment before the tick
+
+        screen._tick_stats()
+        await pilot.pause()
+        assert "working" in card.body_text, "tick must push the agent state to the card"
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_stats_tick_clears_agent_state_for_sessionless_rows(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A row whose workspace has no agent session gets ``None`` pushed —
+    the segment clears and the card returns to its byte-identical
+    agent-less render."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="alpha"))
+
+    class _SessionlessService:
+        def sessions_for(self, mgr: object, state: object) -> list[SessionActivity]:
+            del mgr, state
+            return []
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = WorkspaceListScreen(manager, service=_SessionlessService())  # type: ignore[arg-type]
+        app.push_screen(screen)
+        await pilot.pause()
+        for attr in ("_stats_timer", "_pane_timer", "_pulse_timer"):
+            getattr(screen, attr).stop()
+        card = screen.query_one(WorkspaceCard)
+        # Seed a stale segment, then let the tick clear it.
+        card.set_agent_state(AgentActivityState.WORKING)
+        await pilot.pause()
+        assert "working" in card.body_text
+
+        screen._tick_stats()
+        await pilot.pause()
+        assert "working" not in card.body_text, "sessionless rows must clear the segment"
 
         await pilot.press("q")
         await pilot.pause()

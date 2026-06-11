@@ -20,6 +20,8 @@ _AUTH_FILE = "auth.json"
 _WEBAPP_SESSIONS_FILE = "webapp-sessions.json"
 _LOGS_DIR = "logs"
 _THEMES_DIR = "themes"
+_SIDECAR_DIR = "agent-sidecars"
+_HOOKS_SETTINGS_FILE = "claude-hooks-settings.json"
 
 
 def user_config_path() -> Path:
@@ -44,6 +46,27 @@ def init_log_path(workspace_id: str) -> Path:
     grepping loguru output. Best-effort — write failures don't block create.
     """
     return Path(user_state_dir(_APP_NAME)) / _LOGS_DIR / f"{workspace_id}-init.log"
+
+
+def agent_sidecar_dir() -> Path:
+    """Directory of per-session agent status sidecars (push-status, #18).
+
+    Lives next to the state file. Each `<session_id>.json` is written by the
+    Grove-managed Claude Code hook on a lifecycle event and read by the
+    ActivityService to override the polled status with a push signal. Path-only;
+    the hook creates the directory on first write.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _SIDECAR_DIR
+
+
+def agent_hooks_settings_path() -> Path:
+    """Grove-owned, hook-only Claude Code settings file (#18).
+
+    Passed to `claude --settings <path>` so Grove's status hook is added as an
+    extra settings layer without ever mutating the user's own
+    `.claude/settings.json` — uninstall is just not passing the flag.
+    """
+    return Path(user_config_dir(_APP_NAME)) / _HOOKS_SETTINGS_FILE
 
 
 def project_config_path(repo_root: Path) -> Path:

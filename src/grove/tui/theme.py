@@ -30,6 +30,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from textual.theme import Theme
 
 from grove.core import InitStatus, WorkspaceStatus
+from grove.core.agents import AgentActivityState
+from grove.core.contracts.agent_palette import DARK_AGENT_STATE_HEX
 from grove.core.contracts.status_palette import DARK_STATUS_HEX
 from grove.core.errors import ConfigError
 
@@ -137,6 +139,20 @@ _LIGHT_STATUS_ERROR: Final = "#a83232"
 _DARK_STATUS_ACTIVE_TINT: Final = "#bef264"  # lime-300 — visible swell delta
 _LIGHT_STATUS_ACTIVE_TINT: Final = "#84cc16"  # lime-500 — lighter than rest
 
+# Agent-activity-state palette (light side). The dark side is the canonical
+# cross-client contract in ``grove.core.contracts.agent_palette``; the light
+# side is TUI-only (no other client supports light mode), so it's defined here
+# the same way the light status palette is. Hues mirror the dark intent against
+# the cream canvas: WORKING = readable lime, STARTING = blue, WAITING/BLOCKED =
+# deep amber, IDLE/UNKNOWN = muted, ERROR = deep red.
+_LIGHT_AGENT_WORKING: Final = "#65a30d"  # lime-600 — readable on cream
+_LIGHT_AGENT_STARTING: Final = _LIGHT_INFO
+_LIGHT_AGENT_WAITING: Final = _LIGHT_WARNING
+_LIGHT_AGENT_BLOCKED: Final = _LIGHT_WARNING
+_LIGHT_AGENT_IDLE: Final = _LIGHT_FG_MUTED
+_LIGHT_AGENT_ERROR: Final = "#a83232"
+_LIGHT_AGENT_UNKNOWN: Final = _LIGHT_FG_MUTED
+
 # `_LIGHT_REF_ADD` keeps the older deep-green that previously aliased
 # `_LIGHT_STATUS_ACTIVE` — diff-add semantics ("a value that grew") read
 # better in a deeper, less vivid green than the new "alive" lime.
@@ -238,6 +254,23 @@ STATUS_HEX: Final[dict[bool, dict[WorkspaceStatus, str]]] = {
 ACTIVE_PULSE_TINT_HEX: Final[dict[bool, str]] = {
     True: _DARK_STATUS_ACTIVE_TINT,
     False: _LIGHT_STATUS_ACTIVE_TINT,
+}
+
+# Agent-activity-state hex, keyed by the active theme's `dark` flag. Dark side
+# comes from the canonical wire contract (other clients read the same dict);
+# the light side is TUI-only and defined inline above. Consumed by the Activity
+# Dashboard's tiles through ``_status.agent_state_color``.
+AGENT_STATE_HEX: Final[dict[bool, dict[AgentActivityState, str]]] = {
+    True: dict(DARK_AGENT_STATE_HEX),
+    False: {
+        AgentActivityState.STARTING: _LIGHT_AGENT_STARTING,
+        AgentActivityState.WORKING: _LIGHT_AGENT_WORKING,
+        AgentActivityState.WAITING: _LIGHT_AGENT_WAITING,
+        AgentActivityState.BLOCKED: _LIGHT_AGENT_BLOCKED,
+        AgentActivityState.IDLE: _LIGHT_AGENT_IDLE,
+        AgentActivityState.ERROR: _LIGHT_AGENT_ERROR,
+        AgentActivityState.UNKNOWN: _LIGHT_AGENT_UNKNOWN,
+    },
 }
 
 # `init_status` colors. OK and SKIPPED are not currently rendered (text-only),

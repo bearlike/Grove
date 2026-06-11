@@ -23,7 +23,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from grove.core.config import GroveConfig
-from grove.core.workspace import BranchProvenance, slug
+from grove.core.workspace import BranchProvenance, Placement, slug
 
 _FROZEN = ConfigDict(extra="forbid", frozen=True, validate_default=True)
 
@@ -62,6 +62,12 @@ class ResolvedBranch:
     tracks: str | None = None
     """Remote ref to set as upstream after creating a new tracking branch
     (TrackRemoteBranch only). `None` for every other variant."""
+
+    placement: Placement = Placement.WORKTREE
+    """Worktree vs. root. Defaults to WORKTREE so the four worktree variants
+    stay untouched; only `RootBranch` sets `ROOT`. When `ROOT`, `name` is the
+    empty string — the manager substitutes the live HEAD branch, since this IR
+    has no git access at resolve time."""
 
 
 # ─── variants ────────────────────────────────────────────────────────────────
@@ -172,15 +178,47 @@ class TrackRemoteBranch(BaseModel):
         )
 
 
+class RootBranch(BaseModel):
+    """Run the workspace in the repo root itself — no worktree, current branch.
+
+    The fifth variant is a placement choice, not a branch choice: it carries
+    no user fields because there is nothing to source. The session is rooted at
+    the repo, adopting whatever branch HEAD already points to; Grove creates no
+    worktree and no branch, so kill never deletes anything and pause/resume are
+    refused. This is "work in place on what I've already got out" — the escape
+    hatch for users who don't want an isolated worktree per task.
+
+    `resolve()` returns a sentinel with an empty `name` (the manager fills it
+    from live HEAD) and `provenance=USER_ATTACHED`, so even an explicit
+    `delete_branch=True` on kill is overridden to False: the user's working
+    branch is never Grove's to delete.
+    """
+
+    model_config = _FROZEN
+
+    kind: Literal["root"] = "root"
+
+    def resolve(self, cfg: GroveConfig, title: str, ts: str) -> ResolvedBranch:
+        del cfg, title, ts
+        return ResolvedBranch(
+            name="",  # manager substitutes the live HEAD branch
+            base_ref=None,
+            mode=BranchMode.CHECKOUT,
+            provenance=BranchProvenance.USER_ATTACHED,
+            placement=Placement.ROOT,
+        )
+
+
 # ─── union ───────────────────────────────────────────────────────────────────
 
 
 type BranchPlan = Annotated[
-    AutoBranch | NewNamedBranch | ExistingLocalBranch | TrackRemoteBranch,
+    AutoBranch | NewNamedBranch | ExistingLocalBranch | TrackRemoteBranch | RootBranch,
     Field(discriminator="kind"),
 ]
-"""Wire-level discriminated union. Clients send any of the four variants;
-Pydantic dispatches on ``kind`` with ``extra='forbid'`` rejecting typos."""
+"""Wire-level discriminated union. Clients send any of the five variants;
+Pydantic dispatches on ``kind`` with ``extra='forbid'`` rejecting typos.
+Four variants produce a worktree; ``RootBranch`` runs in the repo root."""
 
 
 __all__ = [
@@ -190,5 +228,6 @@ __all__ = [
     "ExistingLocalBranch",
     "NewNamedBranch",
     "ResolvedBranch",
+    "RootBranch",
     "TrackRemoteBranch",
 ]

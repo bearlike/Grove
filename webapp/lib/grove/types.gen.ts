@@ -175,6 +175,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Activity
+         * @description One-shot cross-project dashboard snapshot.
+         *
+         *     ``snapshot()`` does blocking git/tmux I/O, so it runs in the executor to
+         *     keep the loop responsive under concurrent requests.
+         */
+        get: operations["activity_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Events
+         * @description SSE activity stream: a snapshot on connect, then live deltas.
+         *
+         *     Bridges the per-connection bounded queue (via ``_SseHub``) to the wire.
+         *     Reconnects carrying ``Last-Event-ID`` replay missed deltas from the ring
+         *     buffer when the gap is small enough; otherwise they get a fresh snapshot.
+         *     A wedged client only ever loses its own buffered events (drop-oldest),
+         *     never back-pressures the engine.
+         *
+         *     Auth is the normal bearer dependency: a browser ``EventSource`` can't set
+         *     headers, so the webapp's BFF calls this server-side with the token and the
+         *     browser authenticates to the BFF by cookie — the token never reaches the
+         *     browser.
+         */
+        get: operations["events_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces": {
         parameters: {
             query?: never;
@@ -321,6 +375,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/pane": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Pane
+         * @description One-shot agent-pane ANSI snapshot for the dashboard's focused live pane (#19).
+         *
+         *     The web dashboard polls this for the single expanded card (status-gated to
+         *     WORKING) instead of mounting N live terminals — the peer-validated "summary
+         *     wall + one live focus" shape. Best-effort like peek; never raises (returns
+         *     ``ansi: null`` when the session isn't live).
+         */
+        get: operations["workspace_pane_workspaces__ws_id__pane_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/commits": {
         parameters: {
             query?: never;
@@ -339,6 +418,56 @@ export interface paths {
          *     Best-effort like peek; never raises, returns ``[]`` on failure.
          */
         get: operations["workspace_commits_workspaces__ws_id__commits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Sessions
+         * @description Every agent session recorded for the workspace's directory, newest-first.
+         *
+         *     Fetch-on-demand by design — session history never rides the SSE stream.
+         *     The scan full-parses each transcript in one cwd (the documented
+         *     ``list_sessions`` cost model), so it runs in the executor like
+         *     ``/activity``.
+         */
+        get: operations["workspace_sessions_workspaces__ws_id__sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/sessions/{session_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Session Turns
+         * @description The session's conversation, oldest-first; ``last`` keeps only the tail.
+         *
+         *     ``session_id`` must be the full id (clients hold it from the sessions
+         *     listing) — prefix resolution stays a CLI affordance. 404
+         *     ``agent_session_not_found`` when the id isn't recorded for this
+         *     workspace.
+         */
+        get: operations["workspace_session_turns_workspaces__ws_id__sessions__session_id__turns_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -368,6 +497,69 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AgentActivityState
+         * @description What one agent session is doing right now (epic #11 §6).
+         *
+         *     Computed live from the transcript blended with tmux activity; never
+         *     persisted. The transcript-only adapter emits a subset (WORKING / WAITING /
+         *     ERROR / UNKNOWN); the ``ActivityService`` is the single policy site that
+         *     layers in STARTING (session id known, no file yet), IDLE (alive but tmux
+         *     quiet), and — once #18 lands — BLOCKED (permission prompt from a hook).
+         * @enum {string}
+         */
+        AgentActivityState: "starting" | "working" | "waiting" | "blocked" | "idle" | "error" | "unknown";
+        /**
+         * AgentActivityView
+         * @description Wire mirror of ``grove.core.agents.AgentActivity`` (``needs_attention`` materialized).
+         */
+        AgentActivityView: {
+            state: components["schemas"]["AgentActivityState"];
+            /** Title */
+            title: string | null;
+            /** Current Task */
+            current_task: string | null;
+            /** Human Turns */
+            human_turns: number;
+            /** Assistant Replies */
+            assistant_replies: number;
+            /** Replies Per Turn */
+            replies_per_turn: number[];
+            /** Tool Calls */
+            tool_calls: number;
+            /** Model */
+            model: string | null;
+            /** Tokens In */
+            tokens_in: number;
+            /** Tokens Out */
+            tokens_out: number;
+            /** Last Event At */
+            last_event_at: string | null;
+            /** Needs Attention */
+            needs_attention: boolean;
+            /** Error Detail */
+            error_detail: string | null;
+            /** Interpreted Status */
+            interpreted_status?: string | null;
+        };
+        /**
+         * AgentSessionView
+         * @description Wire mirror of ``grove.core.agents.AgentSession``.
+         *
+         *     ``transcript_path`` is deliberately absent: it is a host-private path
+         *     (views never expose those), and no client ever consumed it — sessions are
+         *     identified by id on the wire.
+         */
+        AgentSessionView: {
+            /** Session Id */
+            session_id: string;
+            /** Adapter Kind */
+            adapter_kind: string;
+            /** Provenance */
+            provenance: string;
+            /** Tmux Window */
+            tmux_window: string | null;
+        };
         /**
          * AttachInstructionView
          * @description Wire mirror of ``grove.core.tmux.AttachInstruction``.
@@ -427,7 +619,7 @@ export interface components {
             /** Checked Out In */
             checked_out_in?: string | null;
         };
-        BranchPlan: components["schemas"]["AutoBranch"] | components["schemas"]["NewNamedBranch"] | components["schemas"]["ExistingLocalBranch"] | components["schemas"]["TrackRemoteBranch"];
+        BranchPlan: components["schemas"]["AutoBranch"] | components["schemas"]["NewNamedBranch"] | components["schemas"]["ExistingLocalBranch"] | components["schemas"]["TrackRemoteBranch"] | components["schemas"]["RootBranch"];
         /**
          * BranchProvenance
          * @description Whether Grove created this workspace's branch or the user attached one.
@@ -480,8 +672,76 @@ export interface components {
             /** Description */
             description?: string | null;
             branch_plan?: components["schemas"]["BranchPlan"];
+            /**
+             * Skip Init
+             * @default false
+             */
+            skip_init: boolean;
             /** Repo Root */
             repo_root?: string | null;
+        };
+        /**
+         * DashboardEvent
+         * @description The SSE streaming envelope (epic #11 §5).
+         *
+         *     One shape carries every server-sent kind. ``snapshot`` (sent on connect)
+         *     embeds the full ``DashboardSnapshotView``; ``session_activity`` embeds the one
+         *     changed ``WorkspaceActivityView`` so the client patches a single card;
+         *     ``workspace_changed`` is a lifecycle wake-up (re-fetch); ``heartbeat`` keeps
+         *     the connection warm; ``pane_snapshot`` is reserved for #19. ``seq`` is the
+         *     monotonic SSE id used for ``Last-Event-ID`` replay.
+         */
+        DashboardEvent: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "snapshot" | "workspace_changed" | "session_activity" | "pane_snapshot" | "heartbeat";
+            /** Seq */
+            seq: number;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Repo Root */
+            repo_root?: string | null;
+            /**
+             * Detail
+             * @default {}
+             */
+            detail: {
+                [key: string]: string;
+            };
+            workspace?: components["schemas"]["WorkspaceActivityView"] | null;
+            snapshot?: components["schemas"]["DashboardSnapshotView"] | null;
+        };
+        /**
+         * DashboardSnapshotView
+         * @description Wire mirror of ``grove.core.activity.DashboardSnapshot`` — one full render.
+         */
+        DashboardSnapshotView: {
+            /** Projects */
+            projects: components["schemas"]["ProjectGroupView"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Total Workspaces */
+            total_workspaces: number;
+            /** Needs Attention */
+            needs_attention: number;
+        };
+        /**
+         * DigestEntryView
+         * @description Wire mirror of ``grove.core.agents.DigestEntry`` (text capped).
+         */
+        DigestEntryView: {
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant" | "tool" | "summary" | "status";
+            /** Text */
+            text: string;
         };
         /**
          * ExistingLocalBranch
@@ -611,6 +871,119 @@ export interface components {
             state: components["schemas"]["ChallengeState"];
         };
         /**
+         * Placement
+         * @description Where a workspace's tmux session is rooted, and what Grove manages for it.
+         *
+         *     The dimension orthogonal to status: it never changes after create() and
+         *     decides which side effects each lifecycle method may fire. Lives here
+         *     (not in `contracts/branch_plan.py`) because `branch_plan` imports *from*
+         *     this module; the enum has to sit on the depended-upon side to avoid a
+         *     cycle. `RootBranch.resolve()` is the only producer of `ROOT`.
+         * @enum {string}
+         */
+        Placement: "worktree" | "root";
+        /**
+         * ProjectGroupView
+         * @description Wire mirror of ``grove.core.activity.ProjectGroup``.
+         */
+        ProjectGroupView: {
+            /** Repo Root */
+            repo_root: string;
+            /** Repo Name */
+            repo_name: string;
+            /** Workspaces */
+            workspaces: components["schemas"]["WorkspaceActivityView"][];
+        };
+        /**
+         * RootBranch
+         * @description Run the workspace in the repo root itself — no worktree, current branch.
+         *
+         *     The fifth variant is a placement choice, not a branch choice: it carries
+         *     no user fields because there is nothing to source. The session is rooted at
+         *     the repo, adopting whatever branch HEAD already points to; Grove creates no
+         *     worktree and no branch, so kill never deletes anything and pause/resume are
+         *     refused. This is "work in place on what I've already got out" — the escape
+         *     hatch for users who don't want an isolated worktree per task.
+         *
+         *     `resolve()` returns a sentinel with an empty `name` (the manager fills it
+         *     from live HEAD) and `provenance=USER_ATTACHED`, so even an explicit
+         *     `delete_branch=True` on kill is overridden to False: the user's working
+         *     branch is never Grove's to delete.
+         */
+        RootBranch: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "root";
+        };
+        /**
+         * SessionActivityView
+         * @description Wire mirror of ``grove.core.activity.SessionActivity``.
+         */
+        SessionActivityView: {
+            session: components["schemas"]["AgentSessionView"];
+            activity: components["schemas"]["AgentActivityView"];
+        };
+        /**
+         * SessionDetailView
+         * @description One session with its conversation — the turns endpoint's response.
+         */
+        SessionDetailView: {
+            session: components["schemas"]["SessionSummaryView"];
+            /** Turns */
+            turns: components["schemas"]["SessionTurnView"][];
+        };
+        /**
+         * SessionSummaryView
+         * @description Wire mirror of ``grove.core.sessions.SessionListing`` — one session row.
+         *
+         *     Flattens the listing's ``SessionSummary`` plus its project annotation.
+         *     ``activity`` reuses the dashboard's ``AgentActivityView`` — the explorer's
+         *     one parse per transcript yields both metadata and metrics, so the wire
+         *     carries them together too.
+         */
+        SessionSummaryView: {
+            /** Session Id */
+            session_id: string;
+            /** Adapter Kind */
+            adapter_kind: string;
+            /** Provenance */
+            provenance: string;
+            /** Workspace Id */
+            workspace_id: string | null;
+            /** Git Branch */
+            git_branch: string | null;
+            /** Created At */
+            created_at: string | null;
+            /** Modified At */
+            modified_at: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Title */
+            title: string | null;
+            /** First Prompt */
+            first_prompt: string | null;
+            /** Last Prompt */
+            last_prompt: string | null;
+            activity: components["schemas"]["AgentActivityView"];
+        };
+        /**
+         * SessionTurnView
+         * @description Wire mirror of ``grove.core.agents.SessionTurn``.
+         *
+         *     ``user_text`` is empty for a leading continuation block (a resumed or
+         *     compacted session's head) — same convention as the engine dataclass.
+         */
+        SessionTurnView: {
+            /** User Text */
+            user_text: string;
+            /** Started At */
+            started_at: string | null;
+            /** Entries */
+            entries: components["schemas"]["DigestEntryView"][];
+        };
+        /**
          * SessionView
          * @description Read-only summary of a session — never exposes ``token_hash``.
          */
@@ -731,6 +1104,59 @@ export interface components {
             python_version: string;
         };
         /**
+         * WorkspaceActivityView
+         * @description Wire mirror of ``grove.core.activity.WorkspaceActivity`` — one dashboard card.
+         *
+         *     ``recent_commits`` is the durable latest-activity signal (newest first;
+         *     ``recent_commits[0]`` is the card's "what was done, when committed" line).
+         *     ``observed_at`` is the per-card "updated Xs ago"; the dashboard-wide refresh
+         *     time stays on ``DashboardSnapshotView.generated_at``.
+         */
+        WorkspaceActivityView: {
+            state: components["schemas"]["WorkspaceStateView"];
+            /** Sessions */
+            sessions: components["schemas"]["SessionActivityView"][];
+            /** Base Ahead */
+            base_ahead: number;
+            /** Base Behind */
+            base_behind: number;
+            /** Diff Added */
+            diff_added: number;
+            /** Diff Removed */
+            diff_removed: number;
+            /** Dirty Files */
+            dirty_files: number;
+            /** Pane Target */
+            pane_target: string | null;
+            /** Needs Attention */
+            needs_attention: boolean;
+            /** Recent Commits */
+            recent_commits: components["schemas"]["CommitSummaryView"][];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+        };
+        /**
+         * WorkspacePaneView
+         * @description One-shot ANSI snapshot of a workspace's agent tmux pane (#19).
+         *
+         *     The focused-pane source for the dashboard's "one live focus": a client polls
+         *     this for the single expanded card (status-gated to WORKING) rather than
+         *     mounting N live terminals. ``ansi`` is ``tmux capture-pane -e`` output (SGR
+         *     only — safe to render as colored text or to strip); ``None`` when the session
+         *     isn't live or has no pane. Best-effort like peek — the route never raises.
+         */
+        WorkspacePaneView: {
+            /** Workspace Id */
+            workspace_id: string;
+            /** Ansi */
+            ansi: string | null;
+            /** Taken At */
+            taken_at: string | null;
+        };
+        /**
          * WorkspacePeekView
          * @description Wire mirror of ``grove.core.workspace.WorkspacePeek``.
          */
@@ -796,6 +1222,8 @@ export interface components {
             init_duration_ms?: number | null;
             /** @default grove */
             branch_provenance: components["schemas"]["BranchProvenance"];
+            /** @default worktree */
+            placement: components["schemas"]["Placement"];
         };
         /**
          * WorkspaceStatus
@@ -1067,6 +1495,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WhoamiView"];
+                };
+            };
+        };
+    };
+    activity_activity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardSnapshotView"];
+                };
+            };
+        };
+    };
+    events_events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description text/event-stream of DashboardEvent JSON objects. The first frame is a `snapshot` (or a `Last-Event-ID` replay); subsequent frames are `session_activity` / `workspace_changed` deltas. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardEvent"];
                 };
             };
         };
@@ -1382,6 +1850,37 @@ export interface operations {
             };
         };
     };
+    workspace_pane_workspaces__ws_id__pane_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePaneView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     workspace_commits_workspaces__ws_id__commits_get: {
         parameters: {
             query?: never;
@@ -1400,6 +1899,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CommitSummaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_sessions_workspaces__ws_id__sessions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSummaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_session_turns_workspaces__ws_id__sessions__session_id__turns_get: {
+        parameters: {
+            query?: {
+                last?: number | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDetailView"];
                 };
             };
             /** @description Validation Error */

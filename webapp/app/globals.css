@@ -91,6 +91,16 @@
     --status-orphaned: #92400e;
     --status-error: #991b1b;
 
+    /* Agent activity — light (mirrors AGENT_STATE_HEX_LIGHT; a separate axis
+       from workspace status: what the agent is doing, not what the workspace is). */
+    --agent-starting: #2563eb;
+    --agent-working: #65a30d;
+    --agent-waiting: #b45309;
+    --agent-blocked: #b45309;
+    --agent-idle: #71717a;
+    --agent-error: #b91c1c;
+    --agent-unknown: #71717a;
+
     /* Refs */
     --ref-branch: #0f766e;
     --ref-add: #15803d;
@@ -128,6 +138,15 @@
     --status-paused: #96938c;
     --status-orphaned: #b8860b;
     --status-error: #e64c4c;
+
+    /* Agent activity — dark (canonical from grove/core/contracts/agent_palette.py). */
+    --agent-starting: #c2dcf7;
+    --agent-working: #84cc16;
+    --agent-waiting: #b8860b;
+    --agent-blocked: #b8860b;
+    --agent-idle: #96938c;
+    --agent-error: #e64c4c;
+    --agent-unknown: #96938c;
 
     /* Refs */
     --ref-branch: #26a69a;

@@ -26,6 +26,7 @@ from __future__ import annotations
 from textual.widgets import ListView
 
 from grove.core import WorkspaceState
+from grove.core.agents import AgentActivityState
 from grove.tui.widgets.card import WorkspaceCard
 
 
@@ -126,6 +127,18 @@ class WorkspaceList(ListView):
         """
         for card in self.query(WorkspaceCard):
             card.pulse_frame = frame
+
+    def set_agent_states(self, states: dict[str, AgentActivityState]) -> None:
+        """Push the agent-activity axis onto every mounted WorkspaceCard.
+
+        Owned by the parent screen's slow stats tick (~3 s) — same
+        ownership split as ``set_pulse_frame``: the list iterates its own
+        cards so the screen stays decoupled from the card population. An
+        id missing from ``states`` maps to ``None`` (no live session),
+        which clears any stale segment on that card.
+        """
+        for card in self.query(WorkspaceCard):
+            card.set_agent_state(states.get(card.workspace_id))
 
     # ─── internal ─────────────────────────────────────────────────────────
 

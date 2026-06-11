@@ -6,8 +6,8 @@ That keeps the test seam at `manager.peek` and lets the same data shape
 serve any future client.
 
 Layout: two stacked `Static` cards. The **workspace card** carries the
-metadata (title, status, branch, stats, init failure, paused affordance,
-recent commits) — its border stays in `$secondary` because metadata
+metadata (stats, agent session metrics, description, init failure,
+lifecycle affordances, recent commits) — its border stays in `$secondary` because metadata
 describes state, it doesn't *carry* attention. The **pane card** mirrors
 the live agent pane; while the workspace is RUNNING it gains the `-live`
 class and its border switches to `$primary` (the brand clay) so the eye
@@ -34,17 +34,26 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
-from grove.core import InitStatus, WorkspacePeek, WorkspaceStatus
+from grove.core import CommitSummary, InitStatus, WorkspacePeek, WorkspaceState, WorkspaceStatus
+from grove.core.agents import AgentActivity
 from grove.core.workspace import LIVE_STATUSES
 from grove.tui._status import (
+    agent_state_color,
+    agent_state_label,
     chrome_color,
     init_status_color,
     ref_color,
     status_color,
 )
+from grove.tui.widgets.dashboard_grid import _human_tokens
 
 _SUBJECT_TRIM = 56
 _PANE_TAIL_LINES = 30
+# Description trim — keep the rail card legible on narrow terminals
+# without truncating so aggressively that a one-sentence note loses
+# its tail. 200 is comfortably more than one line at the rail's
+# default 60% width.
+_DESCRIPTION_TRIM = 200
 
 
 class PeekRail(Vertical):
@@ -105,7 +114,7 @@ class PeekRail(Vertical):
         self.query_one("#card-workspace", Static).border_title = "summary"
         self.query_one("#card-pane", Static).border_title = "Live Workspace Preview"
 
-    def set_peek(self, peek: WorkspacePeek | None) -> None:
+    def set_peek(self, peek: WorkspacePeek | None, *, agent: AgentActivity | None = None) -> None:
         """Render the rail for `peek`, or show the empty placeholder if None.
 
         Each card has its own diff guard: the pane card repaints at 4 Hz
@@ -113,6 +122,12 @@ class PeekRail(Vertical):
         same frame; the workspace card only repaints on selection change
         and short-circuits when `peek` is structurally identical (same
         rendered metadata).
+
+        ``agent`` is the selected row's primary ``AgentActivity`` from the
+        list screen's activity-tick map (no extra transcript parse on this
+        path). Keyword-only with a ``None`` default so callers without the
+        agent axis — and the pre-existing tests — stay untouched; ``None``
+        skips the agent-metrics line entirely.
         """
         ws_card = self.query_one("#card-workspace", Static)
         pane_card = self.query_one("#card-pane", Static)
@@ -124,7 +139,9 @@ class PeekRail(Vertical):
             return
 
         self.remove_class("-empty")
-        self._set_workspace(ws_card, _render_workspace(peek, dark=self.app.current_theme.dark))
+        self._set_workspace(
+            ws_card, _render_workspace(peek, dark=self.app.current_theme.dark, agent=agent)
+        )
         if peek.state.status in LIVE_STATUSES:
             self._show_pane(pane_card, _render_pane_body(peek))
         else:
@@ -172,32 +189,43 @@ class PeekRail(Vertical):
         self._pane_text = ""
 
 
-def _render_peek(peek: WorkspacePeek, *, dark: bool = True) -> Text:
+def _render_peek(
+    peek: WorkspacePeek, *, dark: bool = True, agent: AgentActivity | None = None
+) -> Text:
     """Concatenate workspace + pane into one Text. Test seam preserved.
 
     Keeps existing pure-render tests (`_render_peek(peek).plain`) working
     after the split — we still produce the same rendered content; the
     rail just lays it across two cards instead of one body.
     """
-    text = _render_workspace(peek, dark=dark)
+    text = _render_workspace(peek, dark=dark, agent=agent)
     if peek.state.status in LIVE_STATUSES:
         text.append("\n")
         text.append_text(_render_pane_body(peek))
     return text
 
 
-def _render_workspace(peek: WorkspacePeek, *, dark: bool = True) -> Text:  # noqa: PLR0915
-    """Workspace card body: live stats / init-failure / lifecycle affordances / commits.
+def _render_workspace(
+    peek: WorkspacePeek, *, dark: bool = True, agent: AgentActivity | None = None
+) -> Text:
+    """Workspace card body: stats / agent metrics / description / affordances / commits.
 
     Pure function — easy to unit-test. `dark` selects the active theme's
     hex palette; widgets pass `app.current_theme.dark` so colors track
-    runtime theme switches.
+    runtime theme switches. The body is composed from the module-level
+    block helpers below, in content order — each block is independently
+    testable and returns a (possibly empty) ``Text`` fragment.
+
+    ``agent`` is the selected row's primary ``AgentActivity`` (from the
+    list screen's activity tick). ``None`` skips the agent line entirely
+    and keeps the rendered output byte-identical to the pre-agent card.
 
     The header (title + status + branch + base) lived here in earlier
     revisions; it moved to the card list once each row became its own
     `WorkspaceCard`. The rail now carries only what the card cannot:
-    live git counts, init-failure log path, paused / offline / orphaned
-    affordances with their action keys, and recent commits.
+    live git counts, agent session metrics, init-failure log path,
+    paused / offline / orphaned affordances with their action keys, and
+    recent commits.
 
     Typography here intentionally tiers content into three weights so the
     card reads at a glance:
@@ -210,40 +238,45 @@ def _render_workspace(peek: WorkspacePeek, *, dark: bool = True) -> Text:  # noq
       timestamps, `ahead 0`). Muted comes from ``chrome_color('muted')``
       so it tracks the active theme rather than the terminal's own dim
       interpretation.
-
-    Stats colors are **polarity-aware**: `ahead`, `behind`, `dirty`
-    render in muted hex while their value is zero (no signal) and
-    promote to a semantic color (green for ahead, amber for behind /
-    dirty) the moment the value is nonzero. The label *and* value share
-    the polarity — pairing them as one chunk preserves scan-ability:
-    "is there work to push? something to pull? something to clean up?"
-    becomes a glance check, not a multi-token reading task.
     """
     s = peek.state
+    text = Text()
+    text.append_text(_stats_line(peek, dark=dark))
+    if agent is not None:
+        text.append_text(_agent_line(agent, dark=dark))
+    text.append_text(_description_block(s))
+    text.append_text(_affordance_block(s, dark=dark))
+    text.append_text(_commits_block(peek.recent_commits, dark=dark))
+    return text
+
+
+def _markup(text: Text, line: str) -> None:
+    """Append one Rich-markup line + newline (shared by the block helpers)."""
+    text.append_text(Text.from_markup(line))
+    text.append("\n")
+
+
+def _stats_line(peek: WorkspacePeek, *, dark: bool) -> Text:
+    """Stats row: diff numstat plus polarity-aware ahead / behind / dirty.
+
+    Each group reads as `<label> <value>` in matching polarity color,
+    separated by muted dots so the row scans like a status bar. Colors are
+    **polarity-aware**: `ahead`, `behind`, `dirty` render in muted hex
+    while their value is zero (no signal) and promote to a semantic color
+    (green for ahead, amber for behind / dirty) the moment the value is
+    nonzero. The label *and* value share the polarity — pairing them as
+    one chunk preserves scan-ability: "is there work to push? something
+    to pull? something to clean up?" becomes a glance check, not a
+    multi-token reading task.
+    """
     add_hex = ref_color("diff_add", dark=dark)
     rem_hex = ref_color("diff_remove", dark=dark)
-    branch_hex = ref_color("branch", dark=dark)
     muted_hex = chrome_color("muted", dark=dark)
-    paused_hex = status_color(WorkspaceStatus.PAUSED, dark=dark)
-    offline_hex = status_color(WorkspaceStatus.OFFLINE, dark=dark)
-    orphaned_hex = status_color(WorkspaceStatus.ORPHANED, dark=dark)
     # ORPHANED's amber doubles as the "behind / dirty" warning hue —
     # both surfaces describe "work that needs attention" without rising
     # to the destructive-red tier reserved for ERROR / init-failed.
-    warn_hex = orphaned_hex
-    fail_hex = init_status_color(InitStatus.FAILED, dark=dark)
-
-    text = Text()
+    warn_hex = status_color(WorkspaceStatus.ORPHANED, dark=dark)
     sep = f"  [{muted_hex}]·[/]  "
-    # Description trim — keep the rail card legible on narrow terminals
-    # without truncating so aggressively that a one-sentence note loses
-    # its tail. 200 is comfortably more than one line at the rail's
-    # default 60% width.
-    _DESCRIPTION_TRIM = 200
-
-    def _markup(line: str) -> None:
-        text.append_text(Text.from_markup(line))
-        text.append("\n")
 
     def _stat(label: str, value: int, active_hex: str) -> str:
         """Polarity-aware stat chunk: muted at zero, semantic when nonzero."""
@@ -251,97 +284,175 @@ def _render_workspace(peek: WorkspacePeek, *, dark: bool = True) -> Text:  # noq
         weight = "bold " if value > 0 else ""
         return f"[{color}]{label}[/] [{weight}{color}]{value}[/]"
 
-    # Stats — first line of the rail card now that the workspace card
-    # list carries title / status / branch / base. Each group reads as
-    # `<label> <value>` in matching polarity color, separated by muted
-    # dots so the row scans like a status bar.
     diff = (
         f"[bold {add_hex}]+{peek.diff_added}[/]"
         f" [{muted_hex}]/[/]"
         f" [bold {rem_hex}]-{peek.diff_removed}[/]"
     )
+    text = Text()
     _markup(
+        text,
         f"{diff}"
         f"{sep}{_stat('ahead', peek.base_ahead, add_hex)}"
         f"{sep}{_stat('behind', peek.base_behind, warn_hex)}"
-        f"{sep}{_stat('dirty', peek.dirty_files, warn_hex)}"
+        f"{sep}{_stat('dirty', peek.dirty_files, warn_hex)}",
     )
+    return text
 
-    # User-supplied description (optional). Default fg, no special color
-    # — it's a free-form note, not a status signal. Trimmed at
-    # _DESCRIPTION_TRIM with an ellipsis so a long paste doesn't hijack
-    # the rail's vertical budget. Skipped entirely when empty so we don't
-    # ship a "(no description)" placeholder on every workspace.
-    if s.description:
-        text.append("\n")
-        desc = (
-            s.description
-            if len(s.description) <= _DESCRIPTION_TRIM
-            else s.description[: _DESCRIPTION_TRIM - 1] + "…"
+
+def _agent_line(agent: AgentActivity, *, dark: bool) -> Text:
+    """Compact agent-metrics row: model · turns/replies/tools · tokens · state.
+
+    Sits directly under the stats line so the pair reads as one status
+    block — git facts on row one, session facts on row two. Model takes
+    the agent hue (`ref_color('info')`, the same "who" cyan the row card
+    uses for the agent name); turns/replies/tools are bold default-fg
+    counters (`12t/34r/87⚒` — neutral reference data, same tier as the
+    card's ahead/behind counters); tokens are humanized (`412.0k↑ 38.0k↓`,
+    via the dashboard's `_human_tokens` — one formatter, two surfaces) and
+    muted; the state label takes its agent-state color, mirroring the
+    list card's segment. Absent pieces (no model, zero tokens) are
+    skipped, not blank-filled.
+    """
+    muted_hex = chrome_color("muted", dark=dark)
+    segments: list[Text] = []
+    if agent.model:
+        segments.append(Text(agent.model, style=ref_color("info", dark=dark)))
+    segments.append(
+        Text(
+            f"{agent.human_turns}t/{agent.assistant_replies}r/{agent.tool_calls}⚒",
+            style="bold",
         )
-        # Plain Text.append (not _markup) so any `[...]` in the user's
-        # description is treated as literal characters, not Rich markup.
-        text.append(desc)
-        text.append("\n")
+    )
+    if agent.tokens_in or agent.tokens_out:
+        segments.append(
+            Text(
+                f"{_human_tokens(agent.tokens_in)}↑ {_human_tokens(agent.tokens_out)}↓",
+                style=muted_hex,
+            )
+        )
+    segments.append(
+        Text(
+            agent_state_label(agent.state),
+            style=f"bold {agent_state_color(agent.state, dark=dark)}",
+        )
+    )
+    text = Text()
+    for i, segment in enumerate(segments):
+        if i:
+            text.append("  ")
+            text.append("·", style=muted_hex)
+            text.append("  ")
+        text.append_text(segment)
+    text.append("\n")
+    return text
+
+
+def _description_block(s: WorkspaceState) -> Text:
+    """User-supplied description (optional). Default fg, no special color
+    — it's a free-form note, not a status signal. Trimmed at
+    ``_DESCRIPTION_TRIM`` with an ellipsis so a long paste doesn't hijack
+    the rail's vertical budget. Skipped entirely when empty so we don't
+    ship a "(no description)" placeholder on every workspace.
+    """
+    text = Text()
+    if not s.description:
+        return text
+    text.append("\n")
+    desc = (
+        s.description
+        if len(s.description) <= _DESCRIPTION_TRIM
+        else s.description[: _DESCRIPTION_TRIM - 1] + "…"
+    )
+    # Plain Text.append (not markup) so any `[...]` in the user's
+    # description is treated as literal characters, not Rich markup.
+    text.append(desc)
+    text.append("\n")
+    return text
+
+
+def _affordance_block(s: WorkspaceState, *, dark: bool) -> Text:
+    """Init-failure badge + the lifecycle affordance lines, at most a few.
+
+    Conditional, state-driven blocks: init failure surfaces a log path the
+    user can follow; PAUSED / OFFLINE / ORPHANED each name the one key
+    that recovers them; ERROR surfaces the persisted detail.
+    """
+    muted_hex = chrome_color("muted", dark=dark)
+    text = Text()
 
     # Init failure surfaces a path the user can follow.
     if s.init_status == InitStatus.FAILED:
+        fail_hex = init_status_color(InitStatus.FAILED, dark=dark)
         text.append("\n")
-        _markup(f"[bold {fail_hex}]✗ init failed[/]")
+        _markup(text, f"[bold {fail_hex}]✗ init failed[/]")
         if s.init_log_path:
-            _markup(f"[{muted_hex}]log:[/] {s.init_log_path}")
+            _markup(text, f"[{muted_hex}]log:[/] {s.init_log_path}")
 
     # Paused affordance — the worktree is gone; tell the user how to bring it back.
     # Coloured with the (neutral gray) paused token, not amber: pause is
     # deliberate, not a warning.
     if s.status == WorkspaceStatus.PAUSED:
+        paused_hex = status_color(WorkspaceStatus.PAUSED, dark=dark)
         text.append("\n")
         _markup(
+            text,
             f"[{paused_hex}]‖ paused[/]  [{muted_hex}]press[/]"
-            f" [bold {paused_hex}]R[/] [{muted_hex}]to resume[/]"
+            f" [bold {paused_hex}]R[/] [{muted_hex}]to resume[/]",
         )
 
     # Offline affordance — tmux session vanished but worktree is intact.
     # Different from pause: respawn doesn't recreate the worktree.
     if s.status == WorkspaceStatus.OFFLINE:
+        offline_hex = status_color(WorkspaceStatus.OFFLINE, dark=dark)
         text.append("\n")
         _markup(
+            text,
             f"[{offline_hex}]○ offline[/]  [{muted_hex}]press[/]"
-            f" [bold {offline_hex}]o[/] [{muted_hex}]to respawn[/]"
+            f" [bold {offline_hex}]o[/] [{muted_hex}]to respawn[/]",
         )
 
     # Orphaned: worktree directory is gone (user deleted it externally, or
     # disk failed). Cannot recover automatically; the only safe action is
     # to clean up the stranded record via kill.
     if s.status == WorkspaceStatus.ORPHANED:
+        orphaned_hex = status_color(WorkspaceStatus.ORPHANED, dark=dark)
         text.append("\n")
         _markup(
+            text,
             f"[bold {orphaned_hex}]⊘ worktree missing on disk[/]  "
-            f"[{muted_hex}]press[/] [bold {orphaned_hex}]k[/] [{muted_hex}]to clean up[/]"
+            f"[{muted_hex}]press[/] [bold {orphaned_hex}]k[/] [{muted_hex}]to clean up[/]",
         )
 
     # Error: persisted error_detail tells the user what went wrong.
     if s.status == WorkspaceStatus.ERROR and s.error_detail:
         text.append("\n")
-        _markup(f"[{muted_hex}]error:[/] {s.error_detail}")
+        _markup(text, f"[{muted_hex}]error:[/] {s.error_detail}")
 
-    # Recent commits (newest first). Section heading takes the branch
-    # accent (teal) so the title and the SHA column below share the
-    # same color — the eye groups them as one unit. Subject stays
-    # default fg, age muted.
-    if peek.recent_commits:
-        text.append("\n")
-        _markup(f"[bold {branch_hex}]recent[/]")
-        now = datetime.now(tz=UTC)
-        for c in peek.recent_commits:
-            ago = humanize.naturaltime(now - c.committed_at)
-            subject = (
-                c.subject
-                if len(c.subject) <= _SUBJECT_TRIM
-                else c.subject[: _SUBJECT_TRIM - 1] + "…"
-            )
-            _markup(f"  [bold {branch_hex}]{c.sha[:8]:>8}[/]  {subject}  [{muted_hex}]{ago}[/]")
+    return text
 
+
+def _commits_block(commits: tuple[CommitSummary, ...], *, dark: bool) -> Text:
+    """Recent commits (newest first), or nothing when there are none.
+
+    Section heading takes the branch accent (teal) so the title and the
+    SHA column below share the same color — the eye groups them as one
+    unit. Subject stays default fg, age muted.
+    """
+    text = Text()
+    if not commits:
+        return text
+    branch_hex = ref_color("branch", dark=dark)
+    muted_hex = chrome_color("muted", dark=dark)
+    text.append("\n")
+    _markup(text, f"[bold {branch_hex}]recent[/]")
+    now = datetime.now(tz=UTC)
+    for c in commits:
+        ago = humanize.naturaltime(now - c.committed_at)
+        subject = (
+            c.subject if len(c.subject) <= _SUBJECT_TRIM else c.subject[: _SUBJECT_TRIM - 1] + "…"
+        )
+        _markup(text, f"  [bold {branch_hex}]{c.sha[:8]:>8}[/]  {subject}  [{muted_hex}]{ago}[/]")
     return text
 
 

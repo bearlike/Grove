@@ -42,6 +42,13 @@ class WorktreeConfig(BaseModel):
     """Prefix prepended to every auto-created branch."""
 
 
+# Which AgentAdapter introspects an agent. Module-level alias so the persisted
+# WorkspaceState.agent_kind (workspace.py) shares one source of truth with the
+# config-side AgentSpec.kind — workspace already imports from config, so this
+# direction has no cycle.
+AgentKind = Literal["claude_code", "generic"]
+
+
 class AgentSpec(BaseModel):
     """One selectable agent in the new-workspace picker."""
 
@@ -52,6 +59,15 @@ class AgentSpec(BaseModel):
 
     command: str
     """Shell command sent to the agent tmux window via send-keys."""
+
+    kind: AgentKind = "generic"
+    """Which `AgentAdapter` introspects this agent's session for the Activity
+    Dashboard. `claude_code` enables transcript-based activity tracking — live
+    status, human-turn / reply counts, the session's self-generated title — and
+    lets Grove mint a deterministic `--session-id` at launch. `generic` (the
+    default) launches the command but tracks nothing: a plain shell, or any tool
+    with no known transcript format. Mechanism, not policy — declare it per agent
+    and it cascades like every other field."""
 
     env: dict[str, str] = Field(default_factory=dict)
     """Extra env vars exported in the agent's tmux window."""
@@ -112,6 +128,23 @@ class TmuxConfig(BaseModel):
     """
 
 
+class HooksConfig(BaseModel):
+    """Opt-in Grove-managed Claude Code status hooks (#18).
+
+    When ``enabled``, Grove launches ``claude_code`` agents with
+    ``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact
+    lifecycle status (``WORKING`` / ``WAITING`` / ``BLOCKED`` / ``IDLE``) into a
+    per-session sidecar that the Activity Dashboard prefers over polled status —
+    giving precise *blocked-on-a-permission-prompt* that polling can't see. Off
+    by default (mechanism, not policy); the user's own ``.claude/settings.json``
+    is never touched, so uninstalling is just flipping this back to ``false``.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+
+
 class AuthConfig(BaseModel):
     """Daemon HTTP authentication knobs.
 
@@ -164,7 +197,12 @@ class UIConfig(BaseModel):
 
 def _default_agents() -> list[AgentSpec]:
     return [
-        AgentSpec(name="claude", command="claude", description="Anthropic Claude Code"),
+        AgentSpec(
+            name="claude",
+            command="claude",
+            kind="claude_code",
+            description="Anthropic Claude Code",
+        ),
         AgentSpec(name="shell", command="$SHELL", description="Plain shell"),
     ]
 
@@ -181,6 +219,7 @@ class GroveConfig(BaseModel):
     tmux: TmuxConfig = Field(default_factory=TmuxConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
 
     def find_agent(self, name: str) -> AgentSpec | None:
         for spec in self.agents:
@@ -309,7 +348,16 @@ def _deep_merge(*layers: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_agents(base: list[Any], overlay: list[Any]) -> list[dict[str, Any]]:
-    """Overlay entries with matching `name` replace; new names appended in overlay order."""
+    """Merge agent lists by `name`, **field-level**; new names appended in overlay order.
+
+    An overlay entry whose `name` matches a base entry refines it field-by-field
+    (overlay fields win, base fields fill the gaps) rather than replacing it
+    wholesale. That is what lets a user tweak only the `claude` agent's `command`
+    while keeping its `kind="claude_code"` — without field-merge, omitting `kind`
+    on the override would silently drop the agent back to the `generic` default
+    and disable Activity Dashboard tracking. This is the cascade principle applied
+    at field granularity: each layer overrides the previous, value by value.
+    """
     by_name: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for item in base:
@@ -323,7 +371,9 @@ def _merge_agents(base: list[Any], overlay: list[Any]) -> list[dict[str, Any]]:
             name = item["name"]
             if name not in by_name:
                 order.append(name)
-            by_name[name] = item
+                by_name[name] = item
+            else:
+                by_name[name] = {**by_name[name], **item}
     return [by_name[n] for n in order]
 
 

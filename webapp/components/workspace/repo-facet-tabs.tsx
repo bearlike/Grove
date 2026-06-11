@@ -4,17 +4,20 @@ import { Badge } from "@/components/ui/badge";
 import { WorkspaceCard } from "./card";
 import { WorkspaceCardModel } from "@/lib/grove/workspace-card";
 import { RepoFacet } from "@/lib/grove/repo-facet";
-import type { WorkspaceStateView, WorkspacePeekView } from "@/lib/grove/types";
+import type { WorkspaceActivityView, WorkspaceStateView } from "@/lib/grove/types";
 
-export function RepoFacetTabs({
-  workspaces,
-  peeks,
-}: {
-  workspaces: WorkspaceStateView[];
-  peeks: Map<string, WorkspacePeekView | undefined>;
-}) {
-  const facets = RepoFacet.groupByRepo(workspaces);
-  const all = workspaces;
+export function RepoFacetTabs({ activities }: { activities: WorkspaceActivityView[] }) {
+  const facets = RepoFacet.groupActivityByRepo(activities);
+  // RepoFacet groups/sorts on the embedded state; re-pair each member with its
+  // full activity view by id so the card gets git stats. A miss can't happen by
+  // construction, but degrades to a stats-less card rather than throwing.
+  const byId = new Map(activities.map((a) => [a.state.id, a]));
+  const toModels = (views: ReadonlyArray<WorkspaceStateView>): WorkspaceCardModel[] =>
+    views.map((v) => {
+      const a = byId.get(v.id);
+      return a ? WorkspaceCardModel.fromActivity(a) : WorkspaceCardModel.fromState(v);
+    });
+  const all = activities.map((a) => WorkspaceCardModel.fromActivity(a));
 
   return (
     <Tabs defaultValue="__all__" className="w-full">
@@ -31,25 +34,19 @@ export function RepoFacetTabs({
         ))}
       </TabsList>
       <TabsContent value="__all__">
-        <Grid views={all} peeks={peeks} />
+        <Grid models={all} />
       </TabsContent>
       {facets.map((f) => (
         <TabsContent key={f.repoRoot} value={f.repoRoot}>
-          <Grid views={f.workspaces as WorkspaceStateView[]} peeks={peeks} />
+          <Grid models={toModels(f.workspaces)} />
         </TabsContent>
       ))}
     </Tabs>
   );
 }
 
-function Grid({
-  views,
-  peeks,
-}: {
-  views: WorkspaceStateView[];
-  peeks: Map<string, WorkspacePeekView | undefined>;
-}) {
-  if (views.length === 0) {
+function Grid({ models }: { models: WorkspaceCardModel[] }) {
+  if (models.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
         No workspaces here yet.
@@ -60,12 +57,8 @@ function Grid({
   // long branch name in one card lifts every neighbor to the same height.
   return (
     <div className="grid auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {views.map((v) => (
-        <WorkspaceCard
-          key={v.id}
-          model={WorkspaceCardModel.fromState(v)}
-          peek={peeks.get(v.id)}
-        />
+      {models.map((m) => (
+        <WorkspaceCard key={m.state.id} model={m} />
       ))}
     </div>
   );

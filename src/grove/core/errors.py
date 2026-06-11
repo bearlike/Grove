@@ -29,6 +29,14 @@ class WorkspaceStateError(GroveError):
     """A lifecycle transition was requested from an incompatible status."""
 
 
+class AgentSessionNotFound(GroveError):
+    """No agent session with that id is recorded for the workspace.
+
+    Distinct from the auth-domain :class:`SessionNotFound` below — this is
+    about coding-agent transcripts (``SessionExplorer``), not bearer sessions.
+    """
+
+
 # ─── branch validation errors (raised by WorkspaceManager.create) ───────────
 
 

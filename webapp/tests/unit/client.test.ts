@@ -54,6 +54,50 @@ describe("GroveClient", () => {
     );
   });
 
+  it("getSessions calls /api/grove/workspaces/{id}/sessions (limit optional)", async () => {
+    // A fresh Response per call — a Response body is single-read.
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = GroveClient.default();
+    await client.getSessions("w1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/grove/workspaces/w1/sessions",
+      expect.objectContaining({ method: "GET" }),
+    );
+
+    await client.getSessions("w1", 5);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/grove/workspaces/w1/sessions?limit=5",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("getSessionTurns calls /api/grove/workspaces/{id}/sessions/{sid}/turns?last=N", async () => {
+    const detail = { session: { session_id: "s1" }, turns: [] };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(detail), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = GroveClient.default();
+    const result = await client.getSessionTurns("w1", "s1", 100);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/grove/workspaces/w1/sessions/s1/turns?last=100",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result).toEqual(detail);
+  });
+
   it("non-2xx response becomes a typed GroveProtocolError", async () => {
     const errBody = { detail: { error: "workspace_not_found", message: "no workspace with id 'x'" } };
     vi.stubGlobal(

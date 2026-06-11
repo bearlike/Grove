@@ -6,17 +6,12 @@ site_url: https://bearlike.github.io/Grove/
 
 theme:
   name: shadcn
-  custom_dir: overrides
   icon: logos/grove-logo.png
   favicon: logos/grove-logo.png
-  pygments_style:
-    light: shadcn-light
-    dark: github-dark
 
   # Ask AI panel, backed by DeepWiki on this repo. DeepWiki indexes the repo
-  # automatically once it is public. The Ask AI greeting/avatar are
-  # Grove-branded in overrides/templates/search.html, because the upstream
-  # theme hardcodes its own vendor name in that template.
+  # automatically once it is public. Since theme v1.2 the greeting, avatar,
+  # and WebMCP tool name all derive from site_name; no overrides needed.
   ai:
     deepwiki_repo: bearlike/Grove
     question_prefix: |
@@ -52,7 +47,8 @@ theme:
     Capabilities: lucide:sparkles
     "Workspace Lifecycle": lucide:git-branch
     "Branch Provenance": lucide:shield-check
-    "Live Activity & Peek": lucide:activity
+    "Agent Activity & Sessions": lucide:activity
+    "Peek Rail": lucide:eye
     "Status Semantics": lucide:circle-dot
     "Configuration Cascade": lucide:layers
 
@@ -65,6 +61,7 @@ theme:
 
 hooks:
   - docs/hooks/schema_to_md.py
+  - docs/hooks/og_site_name.py
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -89,6 +86,7 @@ exclude_docs: |
   superpowers/
   hooks/
   design-system.md
+  CLAUDE.md
 
 plugins:
   - search
@@ -131,7 +129,8 @@ nav:
       - Capabilities:
           - Workspace Lifecycle: features-workspace-lifecycle.md
           - Branch Provenance: features-branch-provenance.md
-          - Live Activity & Peek: features-peek.md
+          - Agent Activity & Sessions: features-activity.md
+          - Peek Rail: features-peek.md
           - Status Semantics: features-status.md
           - Configuration Cascade: features-cascade.md
       - Troubleshooting: troubleshooting.md

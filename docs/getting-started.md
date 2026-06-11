@@ -98,11 +98,9 @@ grove                  # launch the TUI
 A fresh repo lands on the empty state with a prompt to create the first
 workspace.
 
-<figure class="grove-shot" markdown>
-  <span class="grove-shot__frame">
-    ![Grove TUI empty state](img/screenshots/tui-empty.svg)
-  </span>
-  <p class="grove-shot__body">Empty state. The contextual footer lists the available keys.</p>
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-empty.svg" alt="Grove TUI empty state" /></div>
+  <figcaption class="ms-shot__body">Empty state. The contextual footer lists the available keys.</figcaption>
 </figure>
 
 Press `n` to open the create modal. Pick an agent, choose a branch source,
@@ -111,11 +109,9 @@ runs the init script if one is configured, spawns a tmux session with
 `agent` and `shell` windows, and sends the agent's command into the agent
 window.
 
-<figure class="grove-shot" markdown>
-  <span class="grove-shot__frame">
-    ![Create workspace modal](img/screenshots/tui-create-modal.png)
-  </span>
-  <p class="grove-shot__body">Create modal. Branch source variants are atomic. Picking one activates only that variant's inputs.</p>
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.png" alt="Create workspace modal" /></div>
+  <figcaption class="ms-shot__body">Create modal. Branch source variants are atomic. Picking one activates only that variant's inputs.</figcaption>
 </figure>
 
 Press `Enter` (or `a`) to attach. Detach with `Ctrl-B d` to return to Grove.
@@ -138,4 +134,5 @@ Set `GROVE_DEBUG=1` to enable verbose loguru output on stderr.
 - [Project setup](configure-project.md) explains the per-repo `.grove/config.json`.
 - [Custom agents](configure-agents.md) covers wiring Aider, Cursor, or any shell command.
 - [Daily workflow](use-workflow.md) covers create, attach, pause, resume, kill.
+- [Agent activity and sessions](features-activity.md) shows the whole fleet on one wall and replays past sessions.
 - [Web dashboard](use-webapp.md) opens a read-only view in the browser or on your phone.

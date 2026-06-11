@@ -23,16 +23,18 @@ from grove.core import (
     WorkspaceState,
     WorkspaceStatus,
 )
+from grove.core.agents import AgentActivity, AgentActivityState
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
-from grove.tui._status import chrome_color, ref_color, status_color
+from grove.tui._status import agent_state_color, chrome_color, ref_color, status_color
 from grove.tui.app import GroveApp
 from grove.tui.widgets.card import WorkspaceCard
 from grove.tui.widgets.list import WorkspaceList
 from grove.tui.widgets.peek_rail import (
     PeekRail,
+    _agent_line,
     _render_pane_body,
     _render_peek,
     _render_workspace,
@@ -284,6 +286,94 @@ def test_render_peek_stats_use_muted_separator_color() -> None:
     )
 
 
+def test_agent_line_renders_model_counters_tokens_and_state() -> None:
+    """The agent-metrics line carries model (agent hue), `12t/34r/87⚒`
+    counters (bold default fg), humanized tokens, and the state label in
+    its agent-state color."""
+    agent = AgentActivity(
+        state=AgentActivityState.WORKING,
+        model="claude-opus-4",
+        human_turns=12,
+        assistant_replies=34,
+        tool_calls=87,
+        tokens_in=412_000,
+        tokens_out=38_000,
+    )
+    text = _agent_line(agent, dark=True)
+    plain = text.plain
+    assert "claude-opus-4" in plain
+    assert "12t/34r/87⚒" in plain
+    assert "412.0k↑ 38.0k↓" in plain  # _human_tokens — same formatter as the dashboard
+    assert "working" in plain
+
+    info_hex = ref_color("info", dark=True).lower()
+    state_hex = agent_state_color(AgentActivityState.WORKING, dark=True).lower()
+    styles = {plain[s:e]: str(st).lower() for s, e, st in text.spans}
+    assert info_hex in styles["claude-opus-4"]
+    assert styles["12t/34r/87⚒"] == "bold"  # neutral counter: bold, no color
+    assert "bold" in styles["working"] and state_hex in styles["working"]
+
+
+def test_agent_line_skips_model_and_tokens_when_absent() -> None:
+    """No model / zero tokens → those segments are skipped, not blank-filled.
+    The counters and the state label always render."""
+    agent = AgentActivity(state=AgentActivityState.WAITING)
+    plain = _agent_line(agent, dark=True).plain
+    assert "0t/0r/0⚒" in plain
+    assert "waiting" in plain
+    assert "↑" not in plain and "↓" not in plain
+
+
+def test_render_workspace_places_agent_line_between_stats_and_description() -> None:
+    """The agent-metrics line sits between the stats line and the
+    description block (summary-card content order, position 2)."""
+    peek = WorkspacePeek(
+        state=_stub_state(description="see ticket #1234"),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    agent = AgentActivity(state=AgentActivityState.WORKING, human_turns=3)
+    lines = _render_workspace(peek, dark=True, agent=agent).plain.splitlines()
+    assert "dirty" in lines[0]  # stats first
+    assert "3t/0r/0⚒" in lines[1]  # agent metrics second
+    assert any("see ticket #1234" in line for line in lines[2:])  # description after
+
+
+def test_render_workspace_without_agent_is_byte_identical() -> None:
+    """Regression pin: ``agent=None`` (and the omitted default) renders the
+    exact same bytes as before the agent axis existed — the decomposition
+    into block helpers is a pure refactor for agent-less callers."""
+    peek = WorkspacePeek(
+        state=_stub_state(description="note", status=WorkspaceStatus.PAUSED),
+        base_ahead=2,
+        base_behind=1,
+        diff_added=10,
+        diff_removed=3,
+        dirty_files=4,
+        recent_commits=(
+            CommitSummary(
+                sha="abcdef12",
+                subject="add widget",
+                committed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    default = _render_workspace(peek, dark=True)
+    explicit = _render_workspace(peek, dark=True, agent=None)
+    assert default.plain == explicit.plain
+    assert default.spans == explicit.spans
+    # No agent-axis token leaks into the agent-less render.
+    assert "⚒" not in default.plain
+
+
 def test_render_peek_paused_workspace_shows_resume_hint() -> None:
     peek = WorkspacePeek(
         state=_stub_state(status=WorkspaceStatus.PAUSED),
@@ -514,6 +604,57 @@ async def test_rail_renders_for_selected_workspace(
         assert state.title in cards[0].body_text
         assert state.branch in cards[0].body_text
 
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_set_peek_with_agent_surfaces_metrics_in_body(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """`set_peek(peek, agent=...)` renders the agent-metrics line into the
+    workspace card; the keyword is optional so agent-less callers (and the
+    pre-existing tests) keep their exact output."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        # Freeze the screen's own peek ticks so the manual set_peek below is
+        # the only writer (same discipline as the pulse-timer lesson).
+        for attr in ("_stats_timer", "_pane_timer", "_pulse_timer"):
+            timer = getattr(screen, attr)
+            assert timer is not None
+            timer.stop()
+        rail = screen.query_one(PeekRail)
+        peek = WorkspacePeek(
+            state=_stub_state(),
+            base_ahead=0,
+            base_behind=0,
+            diff_added=0,
+            diff_removed=0,
+            dirty_files=0,
+            recent_commits=(),
+            agent_snapshot=None,
+            snapshot_taken_at=None,
+        )
+        agent = AgentActivity(
+            state=AgentActivityState.WORKING,
+            model="claude-opus-4",
+            human_turns=12,
+            assistant_replies=34,
+            tool_calls=87,
+        )
+        rail.set_peek(peek, agent=agent)
+        await pilot.pause()
+        assert "12t/34r/87⚒" in rail.body_text
+        assert "claude-opus-4" in rail.body_text
+        assert "working" in rail.body_text
+        # And clearing the agent drops the line again.
+        rail.set_peek(peek)
+        await pilot.pause()
+        assert "12t/34r/87⚒" not in rail.body_text
         await pilot.press("q")
         await pilot.pause()
 

@@ -11,7 +11,8 @@ Two refresh cadences keep the rail live without burning resources:
 * fast tick (`cfg.peek_pane_refresh_seconds`, default 0.25 s) — `peek_pane`
   only, splices the fresh snapshot into the cached full peek;
 * slow tick (`cfg.peek_stats_refresh_seconds`, default 3 s) — full `peek`
-  (git ahead/behind/diff/dirty) and refreshes the cache.
+  (git ahead/behind/diff/dirty), refreshes the cache, and recomputes the
+  agent-activity axis for the visible rows (cards + rail metrics line).
 Both ticks are frozen when a modal is on top of us. Number keys 1-9 jump
 cursor.
 """
@@ -39,6 +40,7 @@ from grove.core import (
     BranchNotFound,
     CreateWorkspaceRequest,
     GroveError,
+    RepoRegistry,
     UpdateWorkspaceRequest,
     WorkspaceEvent,
     WorkspaceManager,
@@ -46,7 +48,9 @@ from grove.core import (
     WorkspaceState,
     WorkspaceStatus,
 )
-from grove.core.workspace import LIVE_STATUSES
+from grove.core.activity import ActivityService
+from grove.core.agents import AgentActivity
+from grove.core.workspace import LIVE_STATUSES, Placement
 from grove.tui._status import ACTIVE_PULSE_FRAMES
 from grove.tui.keys import (
     DEFAULT_BINDINGS,
@@ -55,6 +59,7 @@ from grove.tui.keys import (
 )
 from grove.tui.screens.confirm import ConfirmScreen, KillConfirmScreen, KillDecision
 from grove.tui.screens.create import CreateWorkspaceScreen
+from grove.tui.screens.dashboard import DashboardScreen
 from grove.tui.screens.edit import EditWorkspaceScreen
 from grove.tui.screens.help import HelpScreen
 from grove.tui.widgets.filter_bar import FilterBar
@@ -124,9 +129,30 @@ class WorkspaceListScreen(Screen[None]):
 
     NARROW_THRESHOLD: ClassVar[int] = 100
 
-    def __init__(self, manager: WorkspaceManager) -> None:
+    def __init__(
+        self,
+        manager: WorkspaceManager,
+        *,
+        service: ActivityService | None = None,
+        registry: RepoRegistry | None = None,
+    ) -> None:
         super().__init__()
         self._manager = manager
+        # Agent-activity machinery — same construction pattern as
+        # DashboardScreen: built once here from the manager's config + shared
+        # store unless a test injects pre-built fakes. The list screen only
+        # ever reads its own repo through it (`sessions_for(self._manager, …)`),
+        # but sharing the service keeps the blend + hook-sidecar policy in the
+        # engine's single site instead of re-implementing it TUI-side.
+        if service is None:
+            if registry is None:
+                registry = RepoRegistry(cfg=manager.config, store=manager.store)
+            service = ActivityService(registry=registry)
+        self._service = service
+        # Primary AgentActivity per workspace id, recomputed by the slow
+        # stats tick for the *visible* rows. Cards take the state enum; the
+        # peek rail takes the selected row's full activity (metrics line).
+        self._agent_activity: dict[str, AgentActivity] = {}
         self._unsub: Callable[[], None] | None = None
         self._peek_timer: Timer | None = None
         self._stats_timer: Timer | None = None
@@ -212,6 +238,17 @@ class WorkspaceListScreen(Screen[None]):
             )
         )
 
+    def action_open_dashboard(self) -> None:
+        """Open the cross-project Activity Dashboard.
+
+        The dashboard reads through a ``RepoRegistry`` over every known repo
+        (not just this screen's repo), built from this manager's shared config +
+        store. A fresh ``DashboardScreen`` is pushed each time — it owns its own
+        ticks and tears them down on unmount, so re-opening is cheap and never
+        leaks a timer.
+        """
+        self.app.push_screen(DashboardScreen(self._manager))
+
     def action_focus_filter(self) -> None:
         bar = self.query_one(FilterBar)
         bar.add_class("-active")
@@ -239,6 +276,7 @@ class WorkspaceListScreen(Screen[None]):
         screen = CreateWorkspaceScreen(
             self._manager.config.agents,
             cfg=self._manager.config,
+            repo_root=self._manager.repo_root,
             local_branches=local,
             remote_branches=remote,
             default_base=default_base,
@@ -440,10 +478,36 @@ class WorkspaceListScreen(Screen[None]):
         not this screen. Skipping the recompute keeps the user's typing
         in the create dialog snappy and avoids spurious git/tmux calls
         when the rail is not visible to the user anyway.
+
+        Also recomputes the agent-activity axis (one transcript parse per
+        visible row) *before* the peek refresh so the rail's metrics line
+        renders from this tick's data, not the previous one's.
         """
         if self.app.screen is not self:
             return
+        self._tick_agent_states()
         self._refresh_peek()
+
+    def _tick_agent_states(self) -> None:
+        """Recompute the agent axis for every visible row and push it to cards.
+
+        One ``sessions_for`` call (≈ one transcript parse) per visible
+        workspace per 3 s tick — the same per-tick cost discipline the
+        daemon's ``poll_once`` pays for the same data. Best-effort per row:
+        a row whose parse fails just keeps no agent segment this tick.
+        """
+        ws_list = self.query_one(WorkspaceList)
+        fresh: dict[str, AgentActivity] = {}
+        for state in ws_list.visible_states:
+            try:
+                sessions = self._service.sessions_for(self._manager, state)
+            except Exception as exc:  # best-effort, peek contract
+                logger.debug("agent activity for {} failed: {}", state.id, exc)
+                continue
+            if sessions:
+                fresh[state.id] = sessions[0].activity
+        self._agent_activity = fresh
+        ws_list.set_agent_states({wid: act.state for wid, act in fresh.items()})
 
     def _tick_pane(self) -> None:
         """Fast ticker: tmux-only pane snapshot, spliced into the cached peek.
@@ -476,7 +540,9 @@ class WorkspaceListScreen(Screen[None]):
             agent_snapshot=snap,
             snapshot_taken_at=captured_at,
         )
-        self.query_one(PeekRail).set_peek(spliced)
+        # Pass the cached agent activity too — otherwise the splice would
+        # drop the metrics line and the slow tick would re-add it (flicker).
+        self.query_one(PeekRail).set_peek(spliced, agent=self._agent_activity.get(wid))
 
     def _tick_pulse(self) -> None:
         """Advance the live-signal pulse and push it to cards + status bar.
@@ -512,7 +578,9 @@ class WorkspaceListScreen(Screen[None]):
             rail.set_peek(None)
             return
         self._cached_peek = peek
-        rail.set_peek(peek)
+        # The agent map is fed by the slow tick; a row it hasn't covered yet
+        # (fresh selection, sessionless workspace) simply renders no line.
+        rail.set_peek(peek, agent=self._agent_activity.get(wid))
 
     # ─── filter ───────────────────────────────────────────────────────────
 
@@ -641,6 +709,7 @@ class WorkspaceListScreen(Screen[None]):
         has_sel = wid is not None
         peek = self._safe_peek(wid) if wid is not None else None
         status = peek.state.status if peek is not None else None
+        placement = peek.state.placement if peek is not None else None
         by_key = {key: (action, label) for key, action, label in DEFAULT_BINDINGS}
         globals_group: list[FooterKey] = [
             FooterKey(k, by_key[k][1], available=True)
@@ -651,7 +720,7 @@ class WorkspaceListScreen(Screen[None]):
             FooterKey(
                 k,
                 by_key[k][1],
-                available=has_sel and _key_available(k, status),
+                available=has_sel and _key_available(k, status, placement),
             )
             for k in LIST_SELECTION_FOOTER_KEYS
             if k in by_key
@@ -692,15 +761,32 @@ _AVAILABLE_KEYS_BY_STATUS: dict[WorkspaceStatus, frozenset[str]] = {
     WorkspaceStatus.ERROR: frozenset({"e", "k"}),
 }
 
+# Keys a placement strips out *after* the status gate. ROOT workspaces have no
+# worktree, so the engine refuses pause ('p') and resume ('R') — a root
+# workspace can reconcile to ACTIVE/IDLE/OFFLINE like any other, so the status
+# table would otherwise offer pause/resume the engine will reject. Data, not a
+# branch: a new placement constraint is one more entry here. The default
+# (empty set) leaves WORKTREE's keys untouched.
+_KEYS_REMOVED_BY_PLACEMENT: dict[Placement, frozenset[str]] = {
+    Placement.ROOT: frozenset({"p", "R"}),
+}
 
-def _key_available(key: str, status: WorkspaceStatus | None) -> bool:
-    """Status-aware footer gating.
+
+def _key_available(
+    key: str, status: WorkspaceStatus | None, placement: Placement | None = None
+) -> bool:
+    """Status- and placement-aware footer gating.
 
     Returns True when the binding is meaningful for the currently-selected
-    workspace's status. ``None`` (no peek available — e.g. workspace was
-    killed externally between selection and render) defaults to permissive
-    so the user can still try; the action handler will flash on failure.
+    workspace's status *and* its placement. ``None`` status (no peek
+    available — e.g. workspace was killed externally between selection and
+    render) defaults to permissive so the user can still try; the action
+    handler will flash on failure. Placement removes keys the engine refuses
+    for that shape (root workspaces drop pause/resume).
     """
+    removed = _KEYS_REMOVED_BY_PLACEMENT.get(placement) if placement is not None else None
+    if removed is not None and key in removed:
+        return False
     if status is None:
         return True
     allowed = _AVAILABLE_KEYS_BY_STATUS.get(status)

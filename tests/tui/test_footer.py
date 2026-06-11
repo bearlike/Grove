@@ -192,6 +192,60 @@ async def test_list_screen_footer_brightens_respawn_when_workspace_offline(
         await pilot.pause()
 
 
+def test_key_available_root_placement_removes_pause_and_resume() -> None:
+    """Pure-function gate: ROOT placement strips pause/resume even when the
+    status table would otherwise allow them. Pins the data-driven rule
+    (`_KEYS_REMOVED_BY_PLACEMENT`) without a Pilot."""
+    from grove.core.workspace import Placement, WorkspaceStatus  # noqa: PLC0415
+    from grove.tui.screens.list import _key_available  # noqa: PLC0415
+
+    # ACTIVE worktree allows pause; ACTIVE root does not.
+    assert _key_available("p", WorkspaceStatus.ACTIVE, Placement.WORKTREE) is True
+    assert _key_available("p", WorkspaceStatus.ACTIVE, Placement.ROOT) is False
+    # Resume is removed for root regardless of status.
+    assert _key_available("R", WorkspaceStatus.PAUSED, Placement.ROOT) is False
+    # Kill / attach survive the placement gate for a live root workspace.
+    assert _key_available("k", WorkspaceStatus.ACTIVE, Placement.ROOT) is True
+    assert _key_available("enter,a", WorkspaceStatus.ACTIVE, Placement.ROOT) is True
+    # No placement supplied → status-only behavior (back-compat default).
+    assert _key_available("p", WorkspaceStatus.ACTIVE) is True
+
+
+@pytest.mark.asyncio
+async def test_list_screen_footer_drops_pause_resume_for_root_workspace(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A root workspace reconciles to ACTIVE/IDLE like any other, but pause
+    ('p') and resume ('R') are refused by the engine, so the footer dims them
+    regardless of status. Kill and attach stay applicable. Placement-aware
+    gating, not status-only."""
+    from grove.core.contracts.branch_plan import RootBranch  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="rootspace", branch_plan=RootBranch())
+    )
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        # Sanity: the single workspace is a live root workspace.
+        assert manager.list()[0].placement.value == "root"
+        assert manager.list()[0].status.value in {"active", "idle"}
+        footer = app.screen.query_one(ContextualFooter)
+        rendered = str(footer.render())
+        # Pause + resume dimmed (engine refuses them for root).
+        for inert in ("p Pause", "R Resume"):
+            assert f"[dim]{inert}[/]" in rendered, (
+                f"expected '[dim]{inert}[/]' (root drops it); got: {rendered!r}"
+            )
+        # Kill + attach still apply to a live root workspace.
+        assert "[bold #d97757]k[/] Kill" in rendered, rendered
+        assert "[bold #d97757]enter/a[/] Attach" in rendered, rendered
+        await pilot.press("q")
+        await pilot.pause()
+
+
 # ─── Confirm modal ──────────────────────────────────────────────────────────
 
 

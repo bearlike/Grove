@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { WorkspaceCardModel } from "@/lib/grove/workspace-card";
-import type { WorkspaceStateView, WorkspacePeekView } from "@/lib/grove/types";
+import { workspace } from "@/tests/_helpers/activity-fixtures";
+import type { WorkspaceStateView } from "@/lib/grove/types";
 
 function ws(over: Partial<WorkspaceStateView> = {}): WorkspaceStateView {
   return {
@@ -21,38 +22,33 @@ function ws(over: Partial<WorkspaceStateView> = {}): WorkspaceStateView {
     init_status: null,
     init_duration_ms: null,
     branch_provenance: "grove",
+    placement: "worktree",
     ...over,
   } as WorkspaceStateView;
 }
 
-function peek(over: Partial<WorkspacePeekView> = {}): WorkspacePeekView {
-  return {
-    state: ws(),
-    base_ahead: 0,
-    base_behind: 0,
-    diff_added: 0,
-    diff_removed: 0,
-    dirty_files: 0,
-    recent_commits: [],
-    agent_snapshot: null,
-    snapshot_taken_at: null,
-    ...over,
-  } as WorkspacePeekView;
-}
-
 describe("WorkspaceCardModel", () => {
-  it("fromState constructs without peek", () => {
+  it("fromState constructs without stats", () => {
     const m = WorkspaceCardModel.fromState(ws());
     expect(m.state.id).toBe("w1");
-    expect(m.peek).toBeNull();
+    expect(m.stats).toBeNull();
   });
 
-  it("withPeek returns a NEW instance (immutability)", () => {
-    const m = WorkspaceCardModel.fromState(ws());
-    const m2 = m.withPeek(peek({ base_ahead: 3 }));
-    expect(m).not.toBe(m2);
-    expect(m.peek).toBeNull();
-    expect(m2.peek?.base_ahead).toBe(3);
+  it("fromActivity derives the stat trio (incl. dirty_files) from the activity view", () => {
+    const a = {
+      ...workspace("w1", "working"),
+      base_ahead: 3,
+      base_behind: 1,
+      dirty_files: 2,
+    };
+    const m = WorkspaceCardModel.fromActivity(a);
+    expect(m.state.id).toBe("w1");
+    expect(m.stats).toEqual({ ahead: 3, behind: 1, dirty: 2 });
+  });
+
+  it("fromActivity with all-zero stats still yields stats (not the placeholder)", () => {
+    const m = WorkspaceCardModel.fromActivity(workspace("w1", "idle"));
+    expect(m.stats).toEqual({ ahead: 0, behind: 0, dirty: 0 });
   });
 
   it("displayStatus is the daemon's promoted status", () => {
@@ -79,20 +75,23 @@ describe("WorkspaceCardModel", () => {
     expect(WorkspaceCardModel.fromState(ws({ status: s as never })).hasAttention).toBe(expected);
   });
 
-  it("summaryLine before peek is em dash", () => {
+  it("summaryLine before stats is em dash", () => {
     const m = WorkspaceCardModel.fromState(ws());
     expect(m.summaryLine).toBe("—");
   });
 
-  it("summaryLine formats peek counts", () => {
-    const m = WorkspaceCardModel.fromState(ws()).withPeek(
-      peek({ base_ahead: 3, base_behind: 1, dirty_files: 2 }),
-    );
+  it("summaryLine formats activity counts", () => {
+    const m = WorkspaceCardModel.fromActivity({
+      ...workspace("w1", "working"),
+      base_ahead: 3,
+      base_behind: 1,
+      dirty_files: 2,
+    });
     expect(m.summaryLine).toBe("ahead 3 · behind 1 · 2 dirty");
   });
 
   it("summaryLine all zero", () => {
-    const m = WorkspaceCardModel.fromState(ws()).withPeek(peek());
+    const m = WorkspaceCardModel.fromActivity(workspace("w1", "idle"));
     expect(m.summaryLine).toBe("ahead 0 · behind 0 · 0 dirty");
   });
 });

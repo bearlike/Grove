@@ -70,6 +70,9 @@ class FakeTmux:
     def __init__(self) -> None:
         self.sessions: set[str] = set()
         self.layouts: list[tuple[str, str]] = []  # (session_name, agent_name)
+        # (session_name, launch_decoration) — lets correlation tests assert the
+        # `--session-id <uuid>` argv the manager threaded in from the adapter.
+        self.launch_decorations: list[tuple[str, list[str]]] = []
         self.init_calls: list[tuple[Path, dict[str, str]]] = []
         self.init_exit_code: int = 0  # tests can override
         self.init_stdout: str = ""  # written to log_path on each run
@@ -114,9 +117,11 @@ class FakeTmux:
         cfg: GroveConfig,
         worktree: Path,
         agent: Any,
+        launch_decoration: list[str] | None = None,
     ) -> None:
         del worktree
         self.layouts.append((session_name, agent.name))
+        self.launch_decorations.append((session_name, list(launch_decoration or [])))
         # Mirrors real `build_workspace_layout`: rename window 0 → shell,
         # add an `agent` window. Tests that want a session reorganized
         # externally (no `agent`, weirdly named windows, etc.) overwrite

@@ -54,7 +54,10 @@ export const STATUS_LABEL: Record<WorkspaceStatus, string> = {
 };
 
 export function statusColor(s: WorkspaceStatus, dark: boolean): string {
-  return (dark ? STATUS_HEX_DARK : STATUS_HEX_LIGHT)[s];
+  // Fall back to the neutral `offline` tone for any out-of-contract value —
+  // never return `undefined` (a `.field` read on it crashes the render).
+  const map = dark ? STATUS_HEX_DARK : STATUS_HEX_LIGHT;
+  return map[s] ?? map.offline;
 }
 
 export function statusGlyph(s: WorkspaceStatus): string {

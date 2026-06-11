@@ -19,6 +19,7 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
     ("q", "quit", "Quit"),
     ("r", "refresh", "Refresh"),
     ("n", "new_workspace", "New"),
+    ("d", "open_dashboard", "Dashboard"),
     ("e", "edit_workspace", "Edit"),
     ("p", "pause_workspace", "Pause"),
     ("R", "resume_workspace", "Resume"),
@@ -29,7 +30,7 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
     ("?", "help", "Help"),
 ]
 
-LIST_GLOBAL_FOOTER_KEYS: Final[tuple[str, ...]] = ("q", "n", "r", "/", "?")
+LIST_GLOBAL_FOOTER_KEYS: Final[tuple[str, ...]] = ("q", "n", "d", "r", "/", "?")
 # Order in the footer: attach (most common), edit (metadata), pause/resume
 # (lifecycle pair), respawn (recovery for offline), kill (destructive —
 # last). Each entry is dimmed by the screen when it's not currently

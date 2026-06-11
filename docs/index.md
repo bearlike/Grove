@@ -18,11 +18,11 @@ title: Grove
   </div>
 </div>
 
-<div class="grove-devices">
+<div class="ms-devices">
   <img class="no-border" src="img/mockups/tui-laptop-mockup.png" alt="Grove TUI on a MacBook: project-scoped workspaces with a live agent peek rail" />
   <img class="no-border" src="img/mockups/webapp-phone-mockup.png" alt="Grove read-only web dashboard on a phone, showing the mobile workspace grid" />
+  <p class="ms-devices__caption">Grove in your terminal, and on your phone. Run agents in parallel from your desk, then watch them from anywhere.</p>
 </div>
-<p class="grove-devices__caption">Grove in your terminal, and on your phone. Run agents in parallel from your desk, then watch them from anywhere.</p>
 
 ## What is Grove? { .ms-h2-icon data-icon="target" }
 
@@ -53,8 +53,8 @@ pushes, and never touches a remote branch.
     <p class="ms-card__body">Create, attach, pause, resume, and kill. Each is one keypress. Pause frees the worktree but keeps the branch, so you can return later.</p>
   </div>
   <div class="ms-card">
-    <span class="ms-card__title">Live activity peek</span>
-    <p class="ms-card__body">A side rail mirrors each agent's terminal. It also shows where the branch stands, with ahead, behind, and dirty counts.</p>
+    <span class="ms-card__title">Know who needs you</span>
+    <p class="ms-card__body">A side rail mirrors the selected agent's terminal. One keypress opens the Activity Dashboard: every agent, every project, with the waiting and blocked ones front and center.</p>
   </div>
   <div class="ms-card">
     <span class="ms-card__title">Bring your own agent</span>
@@ -109,7 +109,7 @@ terminal, where it belongs.
   </a>
   <a class="ms-card" href="features-workspace-lifecycle/">
     <span class="ms-card__title">Capabilities</span>
-    <span class="ms-card__body">Lifecycle, branch provenance, peek, status.</span>
+    <span class="ms-card__body">Lifecycle, branch provenance, agent activity, peek, status.</span>
   </a>
   <a class="ms-card" href="develop-architecture/">
     <span class="ms-card__title">Developer reference</span>

@@ -5,10 +5,10 @@ attached. The distinction shapes one decision: when you kill a workspace,
 should the branch go too? The default answer is yes if Grove made the
 branch, no if it was already yours.
 
-## Four branch sources
+## Five branch sources
 
 The create modal asks where the workspace's branch comes from. The
-choice is a Pydantic discriminated union with four variants:
+choice is a Pydantic discriminated union with five variants:
 
 | Variant | What it means | Provenance |
 |---|---|---|
@@ -16,13 +16,21 @@ choice is a Pydantic discriminated union with four variants:
 | **New named** | You type the branch name. Grove creates it from `HEAD`. | `GROVE_CREATED` |
 | **Existing local** | Pick from the repo's existing local branches. | `USER_ATTACHED` |
 | **Track remote** | Pick a remote-only branch. Grove creates a tracking local branch. | `USER_ATTACHED` |
+| **Root** | No worktree and no new branch. The workspace runs in the repo root on the branch already checked out. | `USER_ATTACHED` |
 
 The variant lives in `grove.core.contracts.branch_plan` as a tagged
-union (`kind: Literal["auto" | "new_named" | "existing_local" | "track_remote"]`).
+union (`kind: Literal["auto" | "new_named" | "existing_local" | "track_remote" | "root"]`).
 Every variant carries its own fields. The JSON Schema generated for the
 union has a typed shape per variant. The create modal mounts one form per
 variant in the DOM with the inactive ones hidden, so values persist as
 you switch.
+
+Root is really a placement choice, not a branch choice. It adopts your
+live checkout, so its provenance is `USER_ATTACHED` by definition, and
+kill goes one step further: it never deletes the branch, even when you
+ask explicitly. Your working branch is not Grove's to delete. The full
+behavior is on the
+[workspace lifecycle](features-workspace-lifecycle.md#root-workspaces) page.
 
 ## `GROVE_CREATED` vs `USER_ATTACHED`
 
@@ -31,9 +39,9 @@ of two values:
 
 - **`GROVE_CREATED`**: Grove ran `git branch <name>` (Auto, New named).
 - **`USER_ATTACHED`**: Grove ran `git worktree add` against a branch that
-  already existed locally (Existing local), or created a tracking local
-  branch from a remote ref (Track remote). Either way the branch
-  pre-existed Grove's involvement.
+  already existed locally (Existing local), created a tracking local
+  branch from a remote ref (Track remote), or adopted your live checkout
+  in place (Root). Either way the branch pre-existed Grove's involvement.
 
 Provenance persists in the workspace state file. Pause and resume cycles
 preserve it. Only `kill` consults it.
@@ -46,7 +54,7 @@ operation that ever deletes a branch. The flag has three meanings:
 | `delete_branch` | Behavior |
 |---|---|
 | `None` (default) | Resolve from `branch_provenance`: `GROVE_CREATED → True`, `USER_ATTACHED → False`. |
-| `True`  | Force-delete the local branch regardless of provenance. |
+| `True`  | Force-delete the local branch regardless of provenance. Root workspaces are the one exception: the flag is overridden to `False`. |
 | `False` | Keep the local branch regardless of provenance. |
 
 The TUI's kill modal flips this with a checkbox. The checkbox default is

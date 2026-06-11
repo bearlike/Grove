@@ -11,6 +11,7 @@ layers (manager.py) compose these into the lifecycle.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -100,12 +101,19 @@ def build_workspace_layout(
     cfg: GroveConfig,
     worktree: Path,
     agent: AgentSpec,
+    launch_decoration: list[str] | None = None,
 ) -> None:
     """Set up windows inside an existing session: shell + agent.
 
     Window 0 is renamed to the configured shell name; a new window is added
     for the agent, the agent's command is sent into it, and that window is
     selected so it's frontmost on attach.
+
+    `launch_decoration` is extra argv the manager threads in from the agent's
+    adapter — Claude Code's `["--session-id", uuid]`, which is what makes
+    transcript correlation deterministic. It is shell-quoted and appended to the
+    command. The decoration is never hard-coded here: tmux.py is the side-effect
+    surface, the adapter owns *what* the tokens are.
     """
     server = _server()
     sessions = server.sessions.filter(session_name=session_name)
@@ -139,7 +147,10 @@ def build_workspace_layout(
     for key, value in agent.env.items():
         pane.send_keys(f"export {key}={_shell_quote(value)}", enter=True, suppress_history=True)
 
-    pane.send_keys(agent.command, enter=True)
+    command = agent.command
+    if launch_decoration:
+        command = " ".join([command, *(shlex.quote(token) for token in launch_decoration)])
+    pane.send_keys(command, enter=True)
 
     try:
         agent_window.select_window()

@@ -4,11 +4,9 @@ Every Grove workspace passes through the same small set of operations.
 This page covers what each one touches and what each one deliberately
 does not.
 
-<figure class="grove-shot" markdown>
-  <span class="grove-shot__frame">
-    ![Grove TUI showing four workspaces in mixed lifecycle states](img/screenshots/tui-list.png)
-  </span>
-  <p class="grove-shot__body">Four workspaces, four lifecycle moments. Active and idle on top. The offline row offers <code>o</code> (respawn) and <code>k</code> (kill).</p>
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.png" alt="Grove TUI showing four workspaces in mixed lifecycle states" /></div>
+  <figcaption class="ms-shot__body">Four workspaces, four lifecycle moments. Active and idle on top. The offline row offers <code>o</code> (respawn) and <code>k</code> (kill).</figcaption>
 </figure>
 
 ## Four operations and a recovery path
@@ -47,6 +45,10 @@ operator drives directly. `respawn` is a recovery path for the specific
 case where the tmux session vanished externally but the worktree is
 intact.
 
+The table above describes the default shape, where each workspace gets
+its own worktree. A workspace can also run in the repo root instead. See
+[root workspaces](#root-workspaces) for how that changes the picture.
+
 ## Why pause refuses dirty worktrees
 
 `pause` removes the worktree, which would silently lose any uncommitted
@@ -70,6 +72,38 @@ sits below.
 
 The provenance details that decide which local branch gets deleted by
 default live in [branch provenance](features-branch-provenance.md).
+
+## Root workspaces
+
+Most workspaces get a private worktree under `.worktrees`, like a clean
+bench cloned from your repo. A root workspace skips that. It runs the
+agent and the tmux session in the repo root itself, on whatever branch
+you already have checked out.
+
+Pick "Root" in the create modal when you want an agent working in place
+rather than in an isolated copy. There is no worktree to set up and no
+branch to create. Grove manages only the tmux session.
+
+Because the working directory is your real repo and the branch is your
+live checkout, Grove never removes either. `kill` stops the session and
+forgets the record. It does not delete the directory, and it does not
+delete the branch, even if you ask it to. Your git stays yours.
+
+Root workspaces support a smaller set of verbs: create, kill, and
+respawn. Pause and resume do not apply, because there is no worktree to
+free or rebuild. If the session vanishes, `respawn` brings it back. A
+root workspace is never orphaned, because the repo root is always there.
+
+The init script is built to bootstrap a fresh worktree, so it can be
+unwanted in your real repo root. The create modal checks "Skip init
+script" for you when you pick Root. Uncheck it if you do want the script
+to run this time. The checkbox is also available in every other mode,
+for the times a worktree simply does not need its init step.
+
+Two agents in two root workspaces share one directory and one branch.
+Grove allows it, and the call is yours. Two agents editing the same
+files at once can step on each other, so reach for root when you want
+one agent in place, and reach for worktrees when you want isolation.
 
 ## Recovery from a vanished session
 

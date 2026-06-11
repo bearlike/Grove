@@ -1,4 +1,4 @@
-import type { WorkspaceStateView } from "./types";
+import type { WorkspaceActivityView, WorkspaceStateView } from "./types";
 
 /**
  * Atomic class: one facet groups all workspaces under a single repo_root.
@@ -30,6 +30,15 @@ export class RepoFacet {
     }
     facets.sort((a, b) => a.repoName.localeCompare(b.repoName));
     return facets;
+  }
+
+  /**
+   * Adapter for activity-stream consumers: group on the embedded workspace
+   * state so grouping/sorting/counting stay defined once. Callers keep the
+   * full activity views and re-pair members by id.
+   */
+  static groupActivityByRepo(views: WorkspaceActivityView[]): RepoFacet[] {
+    return RepoFacet.groupByRepo(views.map((v) => v.state));
   }
 
   static _basename(p: string): string {

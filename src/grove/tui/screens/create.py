@@ -17,12 +17,22 @@ is visible before submit.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Select, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Input,
+    Label,
+    RadioButton,
+    RadioSet,
+    Select,
+    Static,
+)
 
 from grove.core import AgentSpec, GroveConfig
 from grove.core.contracts.branch_info import BranchInfo
@@ -31,6 +41,7 @@ from grove.core.contracts.branch_plan import (
     BranchPlan,
     ExistingLocalBranch,
     NewNamedBranch,
+    RootBranch,
     TrackRemoteBranch,
 )
 from grove.core.contracts.requests import CreateWorkspaceRequest
@@ -43,8 +54,9 @@ _MODE_AUTO = "auto"
 _MODE_NEW = "new"
 _MODE_EXISTING = "existing"
 _MODE_REMOTE = "remote"
+_MODE_ROOT = "root"
 
-_MODES = (_MODE_AUTO, _MODE_NEW, _MODE_EXISTING, _MODE_REMOTE)
+_MODES = (_MODE_AUTO, _MODE_NEW, _MODE_EXISTING, _MODE_REMOTE, _MODE_ROOT)
 
 
 # ─── variant blocks (atomic widgets, each owns its inputs + read()) ─────────
@@ -228,6 +240,33 @@ class _TrackRemoteBlock(_BranchBlock):
         return without_remote.rsplit("/", 1)[-1]
 
 
+class _RootBlock(_BranchBlock):
+    """Run in the repo root itself — no worktree, adopts the current branch.
+
+    Placement choice, not a branch choice: there is nothing to source, so
+    the block is read-only. It explains what root mode does and names the
+    branch HEAD currently points to (read from ``local_branches`` at
+    construction). ``read()`` always returns ``RootBranch()`` — the variant
+    carries no user fields.
+    """
+
+    def __init__(self, current_branch: str) -> None:
+        super().__init__()
+        self._current_branch = current_branch
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "Runs in the repo root on the current branch. No worktree is "
+            "created; pause and resume do not apply (use kill to stop, "
+            "respawn to restart).",
+            id="root-explain",
+        )
+        yield Static(f"current branch: {self._current_branch}", id="root-branch")
+
+    def read(self) -> RootBranch:
+        return RootBranch()
+
+
 # ─── screen ─────────────────────────────────────────────────────────────────
 
 
@@ -250,6 +289,15 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         margin-top: 1;
         color: $text-muted;
     }
+    CreateWorkspaceScreen #skip-init {
+        margin-bottom: 1;
+    }
+    CreateWorkspaceScreen #root-explain {
+        color: $text-muted;
+    }
+    CreateWorkspaceScreen #root-branch {
+        margin-top: 1;
+    }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -266,6 +314,7 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         agents: Sequence[AgentSpec],
         *,
         cfg: GroveConfig,
+        repo_root: Path,
         local_branches: Sequence[BranchInfo] | None = None,
         remote_branches: Sequence[BranchInfo] | None = None,
         default_base: str = "HEAD",
@@ -275,6 +324,7 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             raise ValueError("at least one agent must be configured")
         self._agents = list(agents)
         self._cfg = cfg
+        self._repo_root = repo_root
         self._local_branches: list[BranchInfo] = list(local_branches or ())
         self._remote_branches: list[BranchInfo] = list(remote_branches or ())
         self._mode: str = _MODE_AUTO
@@ -294,6 +344,19 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         self._new_block = _NewNamedBlock(base_opts, default_base_value)
         self._existing_block = _ExistingLocalBlock(local_opts)
         self._remote_block = _TrackRemoteBlock(remote_opts)
+        self._root_block = _RootBlock(self._current_branch_name())
+
+    def _current_branch_name(self) -> str:
+        """Branch HEAD points to, read from ``local_branches``.
+
+        Root mode adopts whatever is checked out, so the modal shows the
+        branch the engine will record. Falls back to ``(detached)`` when no
+        local branch is marked current (detached HEAD).
+        """
+        for b in self._local_branches:
+            if b.is_current:
+                return b.name
+        return "(detached)"
 
     def _build_base_options(self) -> list[tuple[str, str]]:
         """Base-ref selector options: HEAD plus every local branch."""
@@ -348,6 +411,10 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                     id="mode-existing",
                 )
                 yield RadioButton("Remote — track a remote branch", id="mode-remote")
+                yield RadioButton(
+                    "Root — work in the repo root (no worktree, current branch)",
+                    id="mode-root",
+                )
             with Vertical(id="branch-blocks"):
                 yield self._auto_block
                 self._new_block.add_class("-hidden")
@@ -356,6 +423,9 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 yield self._existing_block
                 self._remote_block.add_class("-hidden")
                 yield self._remote_block
+                self._root_block.add_class("-hidden")
+                yield self._root_block
+            yield Checkbox("Skip init script", id="skip-init")
             yield Static(self._render_preview(""), id="preview")
             with Horizontal(classes="grove-dialog-buttons"):
                 yield Button("Cancel", id="cancel", variant="default")
@@ -392,30 +462,34 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             return
         self._mode = _MODES[idx]
         self._sync_block_visibility()
+        if self._mode == _MODE_ROOT:
+            # The init script is built for a fresh worktree; running it in the
+            # real repo root is risky, so default skip-init on when the user
+            # picks root. They can still uncheck it. Other modes never flip it
+            # back off — that's a one-way nudge, not a coupling.
+            self.query_one("#skip-init", Checkbox).value = True
         if not self._title_user_edited:
             self._maybe_seed_title()
         self._refresh_preview()
 
     def _sync_block_visibility(self) -> None:
-        blocks: dict[str, _BranchBlock] = {
-            _MODE_AUTO: self._auto_block,
-            _MODE_NEW: self._new_block,
-            _MODE_EXISTING: self._existing_block,
-            _MODE_REMOTE: self._remote_block,
-        }
-        for mode, block in blocks.items():
+        for mode, block in self._blocks().items():
             if mode == self._mode:
                 block.remove_class("-hidden")
             else:
                 block.add_class("-hidden")
 
     def _active_block(self) -> _BranchBlock:
+        return self._blocks()[self._mode]
+
+    def _blocks(self) -> dict[str, _BranchBlock]:
         return {
             _MODE_AUTO: self._auto_block,
             _MODE_NEW: self._new_block,
             _MODE_EXISTING: self._existing_block,
             _MODE_REMOTE: self._remote_block,
-        }[self._mode]
+            _MODE_ROOT: self._root_block,
+        }
 
     def _maybe_seed_title(self) -> None:
         seed = self._active_block().seed_title()
@@ -435,6 +509,15 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         cfg = self._cfg
         ref = ref_color("branch", dark=self.app.current_theme.dark)
         branch_line = self._render_branch_line(slug_text, ref)
+        if self._mode == _MODE_ROOT:
+            # Root runs in place: the worktree line names the real repo root,
+            # the session still gets the slug-derived name (Grove owns the
+            # tmux session even when it doesn't own a worktree).
+            return (
+                f"branch:   {branch_line}\n"
+                f"worktree: {self._repo_root}  (in place — no worktree)\n"
+                f"session:  [{ref}]{cfg.tmux.session_prefix}{slug_text}[/]-<ts>"
+            )
         return (
             f"branch:   {branch_line}\n"
             f"worktree: {cfg.worktree.root_template}/{slug_text}-<ts>\n"
@@ -443,6 +526,8 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
 
     def _render_branch_line(self, slug_text: str, ref_hex: str) -> str:
         cfg = self._cfg
+        if self._mode == _MODE_ROOT:
+            return f"[{ref_hex}]{self._current_branch_name()}[/]  (in place)"
         if self._mode == _MODE_AUTO:
             base = self._read_select_value("#auto-base", self._auto_block) or "HEAD"
             return f"[{ref_hex}]{cfg.worktree.branch_prefix}{slug_text}[/]-<ts>  (new → {base})"
@@ -514,11 +599,13 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         except Exception:
             self.app.bell()
             return
+        skip_init = self.query_one("#skip-init", Checkbox).value
         try:
             request = CreateWorkspaceRequest(
                 agent_name=str(self.query_one("#agent", Select).value),
                 title=title,
                 branch_plan=plan,
+                skip_init=skip_init,
             )
         except Exception:
             self.app.bell()
