@@ -2,6 +2,15 @@
 @import "tw-animate-css";
 
 /*
+ * Streamdown (the chat panel's markdown renderer) emits Tailwind utility
+ * classes from inside its dist bundle — never from our TSX — so v4's
+ * import-graph scan can't see them. Without this @source, chat markdown
+ * (headings, tables, code blocks) silently renders unstyled. The JS stays
+ * lazy (next/dynamic chunk); only the utility CSS lands in the global sheet.
+ */
+@source "../node_modules/streamdown/dist/index.js";
+
+/*
  * Tailwind v4 theme bridge: maps the shadcn-style HSL CSS vars below into
  * Tailwind utility classes (bg-background, text-foreground, border-border,
  * ring-ring, bg-card, etc.). Without this block the color utilities

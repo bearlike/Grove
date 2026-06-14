@@ -46,7 +46,7 @@ class WorktreeConfig(BaseModel):
 # WorkspaceState.agent_kind (workspace.py) shares one source of truth with the
 # config-side AgentSpec.kind — workspace already imports from config, so this
 # direction has no cycle.
-AgentKind = Literal["claude_code", "generic"]
+AgentKind = Literal["claude_code", "codex", "generic", "mewbo"]
 
 
 class AgentSpec(BaseModel):
@@ -64,10 +64,13 @@ class AgentSpec(BaseModel):
     """Which `AgentAdapter` introspects this agent's session for the Activity
     Dashboard. `claude_code` enables transcript-based activity tracking — live
     status, human-turn / reply counts, the session's self-generated title — and
-    lets Grove mint a deterministic `--session-id` at launch. `generic` (the
-    default) launches the command but tracks nothing: a plain shell, or any tool
-    with no known transcript format. Mechanism, not policy — declare it per agent
-    and it cascades like every other field."""
+    lets Grove mint a deterministic `--session-id` at launch. `codex` reads the
+    same transcript signals from Codex CLI rollout files, but the id is
+    server-internal (no launch flag) so its session is adopted via discovery,
+    not minted. `mewbo` introspects a remote orchestrator over REST. `generic`
+    (the default) launches the command but tracks nothing: a plain shell, or any
+    tool with no known transcript format. Mechanism, not policy — declare it per
+    agent and it cascades like every other field."""
 
     env: dict[str, str] = Field(default_factory=dict)
     """Extra env vars exported in the agent's tmux window."""
@@ -120,11 +123,24 @@ class TmuxConfig(BaseModel):
     pane tick would burn IO without any user-visible benefit.
     """
 
-    activity_threshold_seconds: int = Field(default=5, ge=1)
+    peek_history_lines: int = Field(default=500, ge=1)
+    """How many lines of tmux scrollback the pane snapshot captures (`-S -N`).
+
+    The live viewport is only ~40 rows, so without scrollback a long agent
+    session previews as just its current screen — earlier output is never
+    read. This is the captured/over-the-wire bound, not a viewport: each
+    client (TUI rail, dashboard tile, webapp `<pre>`) tails or scrolls within
+    it. Generous by default; raise to scroll further back, lower on slow links.
+    """
+
+    activity_threshold_seconds: int = Field(default=30, ge=1)
     """Age (seconds) of the last tmux pane_activity before a workspace flips
     Active → Idle. Used by `WorkspaceManager._reconcile_status`. Tighter
     values track real-time work but flicker for agents that pause to think;
-    looser values smooth flicker but lag the badge.
+    looser values smooth flicker but lag the badge. The original 5s default
+    read every thinking/long-tool agent (no pane output for >5s is routine)
+    as Idle — and the status blend demotes a WORKING transcript to IDLE on
+    that signal, so the flicker surfaced on every dashboard card.
     """
 
 
@@ -176,6 +192,28 @@ class AuthConfig(BaseModel):
     browser polls every 2 s during the approval wait."""
 
 
+class MewboConfig(BaseModel):
+    """Connection settings for the Mewbo orchestrator (``kind: "mewbo"`` agents).
+
+    #35 registers the kind with a stub adapter; the REST-backed implementation
+    (#36) reads these to reach the Mewbo API.
+    """
+
+    model_config = _FROZEN
+
+    base_url: str = "http://127.0.0.1:5125"
+    """Base URL of the Mewbo REST API."""
+
+    api_key_env: str = "MEWBO_API_KEY"
+    """NAME of the environment variable holding the API key — never the key
+    itself. Committed project config must stay secret-free (the repo and its
+    config examples are published); the key lives only in the consuming
+    process's environment."""
+
+    timeout_seconds: float = 10.0
+    """Per-request HTTP timeout for Mewbo API calls."""
+
+
 class UIConfig(BaseModel):
     """Client-facing UI knobs. The TUI consumes these; core ignores them."""
 
@@ -203,6 +241,12 @@ def _default_agents() -> list[AgentSpec]:
             kind="claude_code",
             description="Anthropic Claude Code",
         ),
+        AgentSpec(
+            name="codex",
+            command="codex",
+            kind="codex",
+            description="OpenAI Codex CLI",
+        ),
         AgentSpec(name="shell", command="$SHELL", description="Plain shell"),
     ]
 
@@ -220,6 +264,7 @@ class GroveConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
+    mewbo: MewboConfig = Field(default_factory=MewboConfig)
 
     def find_agent(self, name: str) -> AgentSpec | None:
         for spec in self.agents:

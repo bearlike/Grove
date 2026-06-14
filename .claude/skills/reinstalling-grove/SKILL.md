@@ -1,12 +1,13 @@
 ---
 name: reinstalling-grove
-description: Use when a user wants to reinstall, update, or upgrade Grove after pulling new code, or when they report seeing the OLD UI / stale behavior after an update ("I still see the old dashboard", "the redesign isn't showing", "I reinstalled but nothing changed"). Covers the editable uv-tool install model, the three independently-updated surfaces (package/CLI/TUI, daemon, webapp), the reinstall-vs-restart decision, a required verification pass, and a troubleshooting decision tree for stale processes, stale webapp builds, and browser/proxy caching. Reach for this skill whenever an update "didn't take" even if the user doesn't say the word "reinstall".
+description: Use when a user wants to reinstall, update, or upgrade Grove after pulling new code, or when they report seeing the OLD UI / stale behavior after an update ("I still see the old dashboard", "the redesign isn't showing", "I reinstalled but nothing changed"). Covers the editable uv-tool install model, the independently-updated surfaces (package/CLI/TUI, daemon, webapp, plus the opt-in grove-mcp stdio server), the reinstall-vs-restart decision, a required verification pass, and a troubleshooting decision tree for stale processes, stale webapp builds, and browser/proxy caching. Reach for this skill whenever an update "didn't take" even if the user doesn't say the word "reinstall".
 ---
 
 # Reinstalling & updating Grove
 
-[Grove](https://github.com/bearlike/Grove) ships as one Python package with three
-surfaces that update through **three different mechanisms**. Most "I updated but
+[Grove](https://github.com/bearlike/Grove) ships as one Python package whose
+surfaces update through **different mechanisms** — three core ones (CLI/TUI,
+daemon, webapp) plus the opt-in `grove-mcp` stdio server. Most "I updated but
 still see the old version" reports come from updating one surface and forgetting
 another, or from a process/browser still holding the old code. This skill makes
 the update deterministic and gives you a decision tree for the stale-UI case.
@@ -17,13 +18,21 @@ startup; a long-lived service keeps running the old build until restarted; a
 browser serves a cached page. Updating Grove is therefore never "just pull" — it
 is pull, then refresh each surface that needs it.
 
-## 1. The three surfaces and how each updates
+## 1. The surfaces and how each updates
 
 | Surface | What it is | How it picks up new code |
 |---|---|---|
 | **Package — CLI + TUI** | the `grove` command and its Textual UI | a fresh `grove` invocation (editable install) OR a `uv tool install --reinstall` when deps changed |
 | **Daemon** | `grove daemon serve`, the loopback HTTP + tmux service (default `127.0.0.1:7421`) | **service restart** (it is long-lived) |
 | **Webapp** | the read-only Next.js dashboard (default `:3000`) | **rebuild `.next` THEN restart** the webapp service |
+| **MCP server** (opt-in) | `grove-mcp`, a stdio adapter (MCP client → `grove-mcp` → daemon REST → core); the client spawns it per connection | **nothing to restart** — a fresh pull is live the next time the MCP client launches `grove-mcp`; reinstall only when extras change (e.g. adding `[mcp]`) |
+
+The MCP server is the odd one out: it is **not** a long-lived process you own.
+The MCP client spawns a fresh `grove-mcp` over stdio per connection, so an
+editable install's new code is live on its next launch — there is nothing to
+restart. It attaches to the running daemon (default `127.0.0.1:7421`), auto-
+minting auth from `auth.json` when co-located, so the *daemon* still must be
+restarted for engine changes to reach it.
 
 Two architecture facts decide where staleness comes from, so internalize them
 before troubleshooting:
@@ -81,13 +90,23 @@ git diff --stat <previously-installed-commit>..HEAD -- pyproject.toml uv.lock
 
 ```bash
 cd <repo>
-uv tool install --reinstall --force --editable '.[daemon]'
+uv tool install --reinstall --force --editable '.[all]'
 ```
 
-The `[daemon]` extra (fastapi + uvicorn) is **load-bearing** — without it
-`grove daemon` fails with "No such command" because the Typer mount is gated by
-an optional import. The shim path (`~/.local/bin/grove`) is unchanged by a
-reinstall, so the systemd unit and any PATH drop-in keep working untouched.
+Prefer `'.[all]'` (daemon + client + mcp) as the default — it's the only one
+that leaves **every** console script working, including `grove-mcp`. The extras
+are load-bearing in different ways:
+
+- `[daemon]` (fastapi + uvicorn) — without it `grove daemon` fails with "No such
+  command" because the Typer mount is gated by an optional import.
+- `[mcp]` (the `mcp` SDK, riding on `[client]`) — what `grove-mcp` needs.
+  `grove-mcp` is **always installed** as a script regardless of extras, so
+  installing `.[daemon]` alone leaves it present but **broken**: it crashes at
+  import with `ModuleNotFoundError: No module named 'mcp'`. If you want only the
+  daemon plus a working MCP server, the narrower `'.[daemon,mcp]'` also does it.
+
+The shim path (`~/.local/bin/grove`) is unchanged by a reinstall, so the systemd
+unit and any PATH drop-in keep working untouched.
 
 > Run `uv` from the user's real toolchain (e.g. pyenv/cargo), not a stale system
 > `uv` — an ancient `uv` may lack `tool install` semantics. `which uv` to check.
@@ -126,6 +145,10 @@ curl -s http://127.0.0.1:7421/openapi.json | python3 -c \
 # CLI + config sanity:
 grove debug            # expect config_loaded: true
 grove config show      # must parse (a ConfigError here = bad config, not a stale install)
+
+# MCP server importable? (only if you installed an MCP-capable extra)
+# A ModuleNotFoundError for 'mcp' here means the `[mcp]` extra is missing — reinstall with '.[all]':
+grove-mcp --help       # prints usage = the `mcp` SDK resolved
 
 # Webapp build freshness — BUILD_ID mtime should be AFTER your rebuild,
 # and the service start AFTER that:

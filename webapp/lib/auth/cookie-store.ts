@@ -14,6 +14,19 @@
  *
  * Single class, methods on the state. Atomic write pattern (write
  * tmp + rename) so a crash mid-save can't corrupt the file.
+ *
+ * **The file is the source of truth; memory is just a cache.** Each
+ * mutation is a single-entry delta applied to a freshly-read disk set,
+ * NOT a dump of this process's in-memory map. This is the fix for the
+ * repeated-re-pairing bug: ``next start`` runs multiple worker
+ * processes, each with its own ``inMem``; a stale full-memory dump from
+ * worker B would silently delete the cookie worker A just minted (and a
+ * naive merge-on-flush would resurrect revoked/expired entries instead).
+ * A targeted delta against fresh disk does neither. ``lookup`` re-reads
+ * on a miss to self-heal a mint from a sibling worker. Residual: two
+ * *simultaneous* ``issue()``s from different processes inside one
+ * read→write window can still lose one — acceptable (pairing is rare and
+ * user-driven), and far better than the unconditional stale-memory dump.
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -32,6 +45,15 @@ function defaultPath(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
   const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".config");
   return join(base, "grove", "webapp-sessions.json");
+}
+
+/** Whether the request reached us over HTTPS, honoring a TLS-terminating
+ *  reverse proxy. Behind such a proxy the inbound request is plain HTTP, so
+ *  `nextUrl.protocol` is `http:` even though the browser is on HTTPS — trust
+ *  `x-forwarded-proto` (first value if comma-listed) when present. */
+export function isSecureRequest(forwardedProto: string | null, urlProtocol: string): boolean {
+  const proto = (forwardedProto?.split(",")[0] ?? urlProtocol).trim().replace(/:$/, "").toLowerCase();
+  return proto === "https";
 }
 
 export interface CookieEntry {
@@ -60,9 +82,12 @@ export class CookieStore {
     this.path = path ?? defaultPath();
   }
 
-  /** Lazily load on first access. */
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
+  /** Read + parse the file, dropping expired entries. The file is the source
+   *  of truth, so every mutation reads through here for a fresh set rather
+   *  than trusting cached memory that a sibling worker may have moved past.
+   *  Missing file (ENOENT) → empty map; any other error → empty map + warn. */
+  private async readDisk(): Promise<Map<string, CookieEntry>> {
+    const entries = new Map<string, CookieEntry>();
     try {
       const raw = await readFile(this.path, "utf-8");
       const parsed = JSON.parse(raw) as FileShape;
@@ -72,7 +97,7 @@ export class CookieStore {
         const now = new Date();
         for (const entry of parsed.entries) {
           if (new Date(entry.expiresAt) > now) {
-            this.inMem.set(entry.cookieId, entry);
+            entries.set(entry.cookieId, entry);
           }
         }
       }
@@ -85,6 +110,44 @@ export class CookieStore {
         console.warn(`[grove auth] cookie store at ${this.path} unreadable:`, e.message);
       }
     }
+    return entries;
+  }
+
+  /** Serialize + atomic-write (tmp + rename) so a crash mid-save can't
+   *  corrupt the file. */
+  private async write(entries: Map<string, CookieEntry>): Promise<void> {
+    const payload: FileShape = {
+      version: FILE_VERSION,
+      entries: Array.from(entries.values()),
+    };
+    const text = JSON.stringify(payload, null, 2) + "\n";
+    const tmp = `${this.path}.tmp`;
+    await mkdir(dirname(this.path), { recursive: true });
+    await writeFile(tmp, text, { encoding: "utf-8", mode: 0o600 });
+    await rename(tmp, this.path);
+  }
+
+  /** Apply a single-entry delta to fresh disk, atomically. Chained on
+   *  ``writeQueue`` so same-process mutations don't interleave their
+   *  read/write windows; ``apply`` mutates the just-read set (NOT cached
+   *  memory) so a sibling worker's freshly-minted cookies survive and
+   *  revoked/expired entries are never resurrected. */
+  private async mutate(apply: (entries: Map<string, CookieEntry>) => void): Promise<void> {
+    this.writeQueue = this.writeQueue.then(async () => {
+      const entries = await this.readDisk();
+      apply(entries);
+      // Cache now matches what we're about to write.
+      this.inMem = entries;
+      this.loaded = true;
+      await this.write(entries);
+    });
+    return this.writeQueue;
+  }
+
+  /** Lazily load on first access. */
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
+    this.inMem = await this.readDisk();
     this.loaded = true;
   }
 
@@ -96,7 +159,6 @@ export class CookieStore {
     label: string;
     expiresAt: string;
   }): Promise<string> {
-    await this.ensureLoaded();
     const cookieId = randomBytes(COOKIE_ID_BYTES).toString("base64url");
     const entry: CookieEntry = {
       cookieId,
@@ -106,19 +168,25 @@ export class CookieStore {
       expiresAt: args.expiresAt,
       createdAt: new Date().toISOString(),
     };
-    this.inMem.set(cookieId, entry);
-    await this.flush();
+    await this.mutate((e) => e.set(cookieId, entry));
     return cookieId;
   }
 
-  /** Look up the entry for a cookie id. Returns null for missing / expired. */
+  /** Look up the entry for a cookie id. Returns null for missing / expired.
+   *  On a cache miss, re-reads disk to self-heal a mint from a sibling
+   *  worker process before giving up. */
   async lookup(cookieId: string): Promise<CookieEntry | null> {
     await this.ensureLoaded();
-    const entry = this.inMem.get(cookieId);
-    if (!entry) return null;
+    let entry = this.inMem.get(cookieId);
+    if (!entry) {
+      // Cache miss: a sibling worker may have just minted this cookie. Re-read
+      // disk (the source of truth) and re-check before declaring it unknown.
+      this.inMem = await this.readDisk();
+      entry = this.inMem.get(cookieId);
+      if (!entry) return null;
+    }
     if (new Date(entry.expiresAt) <= new Date()) {
-      this.inMem.delete(cookieId);
-      await this.flush();
+      await this.mutate((e) => e.delete(cookieId));
       return null;
     }
     return entry;
@@ -126,27 +194,7 @@ export class CookieStore {
 
   /** Drop the cookie locally. Caller is responsible for the daemon revoke. */
   async revoke(cookieId: string): Promise<void> {
-    await this.ensureLoaded();
-    if (this.inMem.delete(cookieId)) {
-      await this.flush();
-    }
-  }
-
-  /** Serialize + atomic-write. Serialized through ``writeQueue`` so concurrent
-   *  ``flush()`` calls don't race the rename. */
-  private async flush(): Promise<void> {
-    const payload: FileShape = {
-      version: FILE_VERSION,
-      entries: Array.from(this.inMem.values()),
-    };
-    this.writeQueue = this.writeQueue.then(async () => {
-      const text = JSON.stringify(payload, null, 2) + "\n";
-      const tmp = `${this.path}.tmp`;
-      await mkdir(dirname(this.path), { recursive: true });
-      await writeFile(tmp, text, { encoding: "utf-8", mode: 0o600 });
-      await rename(tmp, this.path);
-    });
-    return this.writeQueue;
+    await this.mutate((e) => e.delete(cookieId));
   }
 }
 

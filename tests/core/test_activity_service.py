@@ -10,13 +10,13 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from grove.core.activity import ActivityService, DashboardDelta
-from grove.core.agents import AgentActivity, AgentActivityState
+from grove.core.activity import ActivityService, DashboardDelta, SessionActivity, WorkspaceActivity
+from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig
@@ -24,7 +24,7 @@ from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
-from grove.core.workspace import WorkspaceStatus
+from grove.core.workspace import WorkspaceState, WorkspaceStatus
 from tests.conftest import FakeTmux
 
 
@@ -56,16 +56,19 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
 
 
 @pytest.mark.parametrize(
-    ("ws_status", "transcript_state", "has_file", "provenance", "expected"),
+    ("ws_status", "transcript_state", "has_transcript", "provenance", "remote", "expected"),
     [
-        # No file: STARTING only for a grove_launched session (awaiting its first
-        # turn). An fs_discovered file that vanished between discover and read →
-        # UNKNOWN, never a false "starting".
+        # Nothing materialized (no file AND nothing parseable — remote adapters
+        # count via parsed state instead of files): STARTING only for a
+        # grove_launched session (awaiting its first turn). An fs_discovered
+        # file that vanished between discover and read → UNKNOWN, never a
+        # false "starting".
         (
             WorkspaceStatus.ACTIVE,
             AgentActivityState.WORKING,
             False,
             "grove_launched",
+            False,
             AgentActivityState.STARTING,
         ),
         (
@@ -73,6 +76,7 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.WAITING,
             False,
             "grove_launched",
+            False,
             AgentActivityState.STARTING,
         ),
         (
@@ -80,6 +84,7 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.WORKING,
             False,
             "fs_discovered",
+            False,
             AgentActivityState.UNKNOWN,
         ),
         # An ended turn stays WAITING even when tmux is fresh.
@@ -88,6 +93,7 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.WAITING,
             True,
             "grove_launched",
+            False,
             AgentActivityState.WAITING,
         ),
         # tool_use tail: ACTIVE tmux confirms WORKING; quiet tmux → IDLE. Provenance
@@ -97,6 +103,7 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.WORKING,
             True,
             "grove_launched",
+            False,
             AgentActivityState.WORKING,
         ),
         (
@@ -104,6 +111,7 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.WORKING,
             True,
             "grove_launched",
+            False,
             AgentActivityState.IDLE,
         ),
         (
@@ -111,6 +119,7 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.WORKING,
             True,
             "fs_discovered",
+            False,
             AgentActivityState.IDLE,
         ),
         # Definitive transcript signals pass through.
@@ -119,6 +128,7 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.UNKNOWN,
             True,
             "grove_launched",
+            False,
             AgentActivityState.UNKNOWN,
         ),
         (
@@ -126,22 +136,74 @@ def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegis
             AgentActivityState.ERROR,
             True,
             "fs_discovered",
+            False,
             AgentActivityState.ERROR,
+        ),
+        # BLOCKED is definitive too — erasing a needs-input prompt to IDLE on a
+        # quiet pane was exactly the wrong signal to drop.
+        (
+            WorkspaceStatus.IDLE,
+            AgentActivityState.BLOCKED,
+            True,
+            "grove_launched",
+            False,
+            AgentActivityState.BLOCKED,
+        ),
+        # Remote adapter: the backend's WORKING is authoritative — the local pane
+        # runs a bare shell, so tmux-quiet must not demote it to IDLE.
+        (
+            WorkspaceStatus.IDLE,
+            AgentActivityState.WORKING,
+            True,
+            "grove_launched",
+            True,
+            AgentActivityState.WORKING,
         ),
     ],
 )
 def test_blend_truth_table(
     ws_status: WorkspaceStatus,
     transcript_state: AgentActivityState,
-    has_file: bool,
+    has_transcript: bool,
     provenance: str,
+    remote: bool,
     expected: AgentActivityState,
 ) -> None:
     transcript = AgentActivity(state=transcript_state)
     assert (
-        ActivityService._blend(ws_status, transcript, has_file=has_file, provenance=provenance)
+        ActivityService._blend(
+            ws_status,
+            transcript,
+            has_transcript=has_transcript,
+            provenance=provenance,
+            remote=remote,
+            now=datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC),
+        )
         is expected
     )
+
+
+def test_blend_fresh_transcript_outranks_quiet_pane() -> None:
+    """The adapter's abstraction wins over the tmux heuristic: a WORKING
+    transcript that advanced recently stays WORKING through a quiet pane (a
+    thinking/long-tool agent emits no output — demoting on the pane alone was
+    the flaky WORKING→IDLE flapping). Only when the transcript itself has gone
+    stale does the quiet pane demote to IDLE (the killed-mid-tool case)."""
+    now = datetime(2026, 6, 1, 10, 10, 0, tzinfo=UTC)
+
+    def blend(last_event_at: datetime | None) -> AgentActivityState:
+        return ActivityService._blend(
+            WorkspaceStatus.IDLE,
+            AgentActivity(state=AgentActivityState.WORKING, last_event_at=last_event_at),
+            has_transcript=True,
+            provenance="grove_launched",
+            remote=False,
+            now=now,
+        )
+
+    assert blend(now - timedelta(seconds=30)) is AgentActivityState.WORKING
+    assert blend(now - timedelta(seconds=3600)) is AgentActivityState.IDLE
+    assert blend(None) is AgentActivityState.IDLE
 
 
 # ─── snapshot ───────────────────────────────────────────────────────────────
@@ -201,7 +263,7 @@ def test_snapshot_parses_real_transcript(
     assert primary is not None
     assert primary.human_turns == 1
     assert primary.current_task == "do the thing"
-    # has_file True + transcript WAITING (end_turn) → WAITING.
+    # has_transcript True + transcript WAITING (end_turn) → WAITING.
     assert primary.state is AgentActivityState.WAITING
 
 
@@ -354,6 +416,170 @@ def test_sidecar_overrides_polled_state(
     assert primary.state is AgentActivityState.BLOCKED
 
 
+def test_sidecar_superseded_by_newer_transcript(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A Stop sidecar (WAITING) written BEFORE the transcript's last record is
+    stale — the steered agent's polled state must win, not pin WAITING."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="steer"))
+
+    # Push (Stop → WAITING) at 10:00:00; transcript then advances at 10:00:05.
+    ClaudeHook.record_event(
+        {"hook_event_name": "Stop", "session_id": state.agent_session_id},
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC),
+    )
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(Path(state.worktree_path))
+    folder.mkdir(parents=True)
+    (folder / f"{state.agent_session_id}.jsonl").write_text(
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:05.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"follow-up"}}\n',
+        encoding="utf-8",
+    )
+
+    primary = service.snapshot().projects[0].workspaces[0].primary
+    assert primary is not None
+    # Human-turn tail → transcript WORKING; tmux quiet (FakeTmux) → polled IDLE.
+    # The point: NOT the sidecar's WAITING.
+    assert primary.state is not AgentActivityState.WAITING
+
+
+def test_degraded_read_keeps_last_definitive_state(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Hysteresis: once a session has shown a definitive state, a transient
+    collapsed read (vanished/unreadable transcript → would-be STARTING) keeps
+    the last definitive state instead of flashing the card back to starting."""
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="hys"))
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(Path(state.worktree_path))
+    folder.mkdir(parents=True)
+    transcript = folder / f"{state.agent_session_id}.jsonl"
+    transcript.write_text(
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"go"}}\n'
+        '{"type":"assistant","uuid":"a1","requestId":"r1","timestamp":"2026-06-01T10:00:01.000Z",'
+        '"isSidechain":false,"message":{"id":"m1","role":"assistant","stop_reason":"end_turn",'
+        '"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"k"}]}}\n',
+        encoding="utf-8",
+    )
+
+    first = service.snapshot().projects[0].workspaces[0].primary
+    assert first is not None and first.state is AgentActivityState.WAITING
+
+    transcript.unlink()  # the transient collapse (mid-rotation / racing read)
+    second = service.snapshot().projects[0].workspaces[0].primary
+    assert second is not None
+    assert second.state is AgentActivityState.WAITING  # not STARTING
+
+
+def test_settled_working_expires_into_honest_starting(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A settled WORKING ages out on the sidecar window (the dead-agent guard).
+
+    With hooks on, SessionStart settles WORKING before any transcript exists; a
+    workspace whose agent dies at boot — or is never prompted — must fall back
+    to the honest degraded state once the window passes, not read WORKING
+    forever from the hysteresis cache.
+    """
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="dead"))
+
+    t0 = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": state.agent_session_id},
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=t0,
+    )
+    sid = state.agent_session_id
+    assert sid is not None
+    mgr = registry.get(repo)
+
+    def state_at(now: datetime) -> AgentActivityState:
+        return service._session_activity(
+            mgr, state, "claude_code", sid, "grove_launched", now
+        ).activity.state
+
+    # Tick 1 (within the sidecar window): the push wins, WORKING settles.
+    assert state_at(t0) is AgentActivityState.WORKING
+    # Tick 2 (past the window, still no transcript): the cached WORKING must
+    # expire rather than answer the degraded read forever.
+    assert state_at(t0 + timedelta(seconds=600)) is AgentActivityState.STARTING
+
+
+def test_fingerprint_covers_every_session_not_just_primary() -> None:
+    """A secondary session's state change — and the sessions set going empty —
+    must change the fingerprint, or hand-started sessions and discovery misses
+    never stream."""
+    t0 = datetime(2026, 6, 1, tzinfo=UTC)
+
+    def row(sessions: tuple[SessionActivity, ...]) -> WorkspaceActivity:
+        return WorkspaceActivity(
+            state=WorkspaceState(
+                id="w1",
+                title="t",
+                repo_root="/r",
+                branch="b",
+                base_branch="main",
+                worktree_path="/w",
+                tmux_session="s",
+                agent_name="claude",
+                status=WorkspaceStatus.RUNNING,
+                created_at=t0,
+                updated_at=t0,
+            ),
+            sessions=sessions,
+            base_ahead=0,
+            base_behind=0,
+            diff_added=0,
+            diff_removed=0,
+            dirty_files=0,
+            pane_target=None,
+            recent_commits=(),
+            observed_at=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+
+    def sess(sid: str, st: AgentActivityState) -> SessionActivity:
+        return SessionActivity(
+            session=AgentSession(
+                session_id=sid,
+                transcript_path=None,
+                adapter_kind="claude_code",
+                provenance="fs_discovered",
+            ),
+            activity=AgentActivity(state=st),
+        )
+
+    primary = sess("a", AgentActivityState.WORKING)
+    two = row((primary, sess("b", AgentActivityState.WORKING)))
+    two_changed = row((primary, sess("b", AgentActivityState.WAITING)))
+    assert two.fingerprint != two_changed.fingerprint  # secondary streams
+    assert row(()).fingerprint != two.fingerprint  # emptied set streams
+
+
 def test_fs_discovery_surfaces_handstarted_session(
     fake_tmux: FakeTmux, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -427,6 +653,45 @@ def test_null_session_id_recovered_by_discovery(
     assert row.primary is not None
     assert row.sessions[0].session.provenance == "fs_discovered"
     assert row.primary.current_task == "recover me"
+
+
+def test_unmaterialized_minted_id_yields_primary_to_discovered_session(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A minted id whose transcript never materialized must not pin the
+    workspace on STARTING forever: an in-process rotation (``/clear`` mints a
+    NEW session id inside the same claude) leaves the live session under a
+    different id in the same cwd. The newest discovered session takes the
+    primary slot (ungated by hooks); the minted entry stays behind it so it
+    takes back over if it ever materializes."""
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="rotated"))
+    worktree = Path(state.worktree_path)
+    # The minted id exists on the record but no transcript was ever written
+    # for it; the post-/clear session lives under a different id in this cwd.
+    live_sid = "deadbeef-0000-4000-8000-000000000000"
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    (folder / f"{live_sid}.jsonl").write_text(
+        f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
+        '"timestamp":"2026-06-01T10:00:00.000Z","isSidechain":false,'
+        '"message":{"role":"user","content":"the live session"}}\n',
+        encoding="utf-8",
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    assert [s.session.provenance for s in row.sessions] == ["fs_discovered", "grove_launched"]
+    assert row.sessions[0].session.session_id == live_sid
+    assert row.primary is not None
+    assert row.primary.current_task == "the live session"
+    assert row.primary.state is not AgentActivityState.STARTING
 
 
 def test_create_persists_agent_kind(

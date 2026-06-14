@@ -38,7 +38,7 @@ Windows, `~/Library/Application Support` on macOS.
 
 ```json
 {
-  "$schema": "../../../home/me/.config/grove/config.schema.json",
+  "$schema": "~/.config/grove/config.schema.json",
   "worktree": {
     "root_template": "${repo}/.worktrees",
     "branch_prefix": "feat/"
@@ -85,7 +85,7 @@ grove config schema     # writes ${user_config_dir}/grove/config.schema.json
 
 ```json
 {
-  "$schema": "../../../home/me/.config/grove/config.schema.json",
+  "$schema": "~/.config/grove/config.schema.json",
   "worktree": { "branch_prefix": "feat/" }
 }
 ```
@@ -93,6 +93,17 @@ grove config schema     # writes ${user_config_dir}/grove/config.schema.json
 The path is yours to set, relative or absolute. Most IDEs (VS Code,
 JetBrains, Helix, Neovim with `coc.nvim` or `lspconfig`) pick it up
 automatically.
+
+## Per-repo cascade applies everywhere
+
+The daemon, the TUI, and the web dashboard all resolve each repository's full
+cascade (user, project, project-local) independently. A project-scoped agent
+defined in `<repo>/.grove/config.json` shows up in that repo's create picker
+across every surface. A project-enabled `init_script` runs for every new
+workspace in that repo, regardless of whether the create came from the CLI,
+the TUI, or an MCP tool. No daemon restart is needed when you add or update
+the project config: the next workspace create in that repo picks up the
+current cascade.
 
 ## See also
 

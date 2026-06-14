@@ -8,8 +8,8 @@ title: Grove
   <p class="ms-hero__lede">
     Run several coding agents at once. Each gets its own git worktree and tmux session, scoped to one
     repo. They share nothing, so they never collide. Spin a session up, watch the agent work, then tear
-    it down. Every step is a single keypress. Step away from your desk, and a read-only web dashboard
-    keeps every agent in view from your phone.
+    it down. Every step is a single keypress. Step away from your desk, and the web dashboard keeps every
+    agent in view from your phone, where you can steer or stop any of them.
   </p>
   <div class="ms-cta-row">
     <a class="ms-btn ms-btn--primary" href="getting-started/">Install &amp; first workspace</a>
@@ -20,7 +20,7 @@ title: Grove
 
 <div class="ms-devices">
   <img class="no-border" src="img/mockups/tui-laptop-mockup.png" alt="Grove TUI on a MacBook: project-scoped workspaces with a live agent peek rail" />
-  <img class="no-border" src="img/mockups/webapp-phone-mockup.png" alt="Grove read-only web dashboard on a phone, showing the mobile workspace grid" />
+  <img class="no-border" src="img/mockups/webapp-phone-mockup.png" alt="Grove web dashboard on a phone, showing the mobile workspace grid" />
   <p class="ms-devices__caption">Grove in your terminal, and on your phone. Run agents in parallel from your desk, then watch them from anywhere.</p>
 </div>
 
@@ -35,8 +35,9 @@ its own branch, its own copy of the code, and its own terminal to work at. Nothi
 onto the next. The rule is simple: one agent, one worktree, one window.
 
 Launch `grove` inside a repository and you see only that repository's workspaces. From there you
-create, attach, pause, resume, and kill them, and each action is a single keypress. A rail on the right
-mirrors whatever the selected agent is doing.
+create, attach, steer, pause, resume, and kill them, and each action is a single keypress. A rail on the
+right mirrors whatever the selected agent is doing. Press one key to jump to another repo without
+leaving the screen.
 
 Grove tends the worktrees and the sessions. Your git history stays yours. Grove never commits, never
 pushes, and never touches a remote branch.
@@ -58,7 +59,7 @@ pushes, and never touches a remote branch.
   </div>
   <div class="ms-card">
     <span class="ms-card__title">Bring your own agent</span>
-    <p class="ms-card__body">Claude Code, Aider, Cursor, or a plain shell. Anything on your <code>$PATH</code> runs in its own window.</p>
+    <p class="ms-card__body">Claude Code, Codex, Aider, a remote Mewbo session, or a plain shell. Anything on your <code>$PATH</code> runs in its own window.</p>
   </div>
 </div>
 
@@ -88,9 +89,10 @@ default, with room for personal overrides.
 Teams put this to work in familiar ways. They run an agent per feature branch. They pit Claude against
 Aider on the same task and compare the results. They pause a long refactor and pick it up days later.
 
-When others need to watch the fleet, point the read-only web dashboard at the daemon. It shows the same
-status and live output as the TUI, in any browser or on a phone. Lifecycle control stays in the
-terminal, where it belongs.
+When others need to watch the fleet, point the web dashboard at the daemon. It shows the same status and
+live output as the TUI, in any browser or on a phone. You can create a workspace, steer an agent, and
+pause or kill it from there too. Pair a device once to grant it access, and the daemon stays on
+loopback behind that handshake.
 
 ## Explore the docs { .ms-h2-icon data-icon="book" }
 

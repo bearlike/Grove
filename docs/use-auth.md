@@ -32,7 +32,7 @@ Step three happens on the host. Confirm the matching code on the machine that ru
 moment you approve, the browser's next poll picks up its session and redirects into the dashboard.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-pair-approve.png" alt="Grove TUI pairing modal prompting to approve a new device" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-pair-approve.svg" alt="Grove TUI pairing modal prompting to approve a new device" /></div>
   <figcaption class="ms-shot__body">On the host. The TUI pops this modal on its own. Approve with <code>a</code>, deny with <code>d</code>.</figcaption>
 </figure>
 

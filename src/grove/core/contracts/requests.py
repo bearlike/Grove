@@ -54,6 +54,17 @@ class CreateWorkspaceRequest(BaseModel):
     don't need it. Records ``InitStatus.SKIPPED``. Does not persist — it is a
     create-time decision, never re-applied on resume/respawn."""
 
+    initial_prompt: str | None = Field(default=None, max_length=10_000)
+    """The agent's first task, delivered race-free as the session boots so the
+    workspace starts *working* instead of idling at the prompt (#48). Delivered
+    through the launch invocation, never typed in post-boot (which races the
+    agent's boot — the swallowed-Enter trap): claude_code appends it as a
+    trailing positional arg to the launch argv (``claude … "<prompt>"`` starts
+    already working on it); mewbo re-engages the freshly-created session via its
+    ``/message`` API (no boot race). A bare shell (generic) has no prompt concept
+    and ignores it. Create-only — never re-applied on resume/respawn, like
+    ``skip_init``."""
+
     repo_root: Path | None = None
     """Repository root for the workspace. ``None`` for in-process callers
     (the TUI knows its own repo). The HTTP daemon requires this set so it

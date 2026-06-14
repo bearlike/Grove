@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Github, LayoutGrid } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CreateWorkspaceButton } from "@/components/workspace/create-workspace-dialog";
 import { ThemeToggle } from "./theme-toggle";
 
 const REPO_URL = "https://github.com/bearlike/Grove";
@@ -34,6 +35,7 @@ export function Header() {
           </span>
         </Link>
         <nav className="flex items-center gap-1.5" aria-label="Site actions">
+          <CreateWorkspaceButton />
           <Button asChild variant="ghost" size="sm">
             <Link href="/activity" aria-label="Activity dashboard">
               <LayoutGrid />

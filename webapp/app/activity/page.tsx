@@ -15,18 +15,20 @@ import {
   computeFacets,
   emptyFilter,
   filterSnapshot,
-  sortSnapshotByActivity,
+  flattenByAttention,
   type DashboardFilterState,
 } from "@/lib/grove/dashboard-filter";
 import { loadFilter, saveFilter } from "@/lib/grove/filter-persistence";
 import type { DashboardSnapshotView } from "@/lib/grove/types";
 
 /**
- * The cross-project Activity Dashboard — every agent session across every repo,
- * grouped by project, streamed live from the daemon over SSE (with a `/activity`
- * poll fallback). One consolidated filter (projects × agent-states × attention,
- * with live counts) narrows the wall; the single focused pane shows one live
- * terminal at a time.
+ * The cross-project Activity Dashboard — every agent session across every repo
+ * on ONE flat attention-first wall (action-required, then working, then
+ * dormant), streamed live from the daemon over SSE (with a `/activity` poll
+ * fallback). Project identity rides each card as a chip — no group bands, so
+ * the viewport packs with cards from the very top. One consolidated filter
+ * (projects × agent-states × attention, with live counts) narrows the wall;
+ * the single focused pane shows one live terminal at a time.
  */
 export default function ActivityPage() {
   const { snapshot, connected, lastEventAt, refresh } = useActivityStream();
@@ -135,13 +137,14 @@ function ActivityWall({
   liveId: string | null;
   onToggleLive: (id: string) => void;
 }) {
-  // Filter, then float active sessions (and the projects that hold them) to the
-  // front. auto-animate on the containers tweens the resulting reorder.
-  const groups = sortSnapshotByActivity(filterSnapshot(snapshot, filter));
-  // auto-animate honors `prefers-reduced-motion` internally (no-op tween there).
+  // Filter, then flatten attention-first: action-required cards float to the
+  // very top regardless of project. ONE auto-animate ref on the flat grid
+  // tweens every SSE-driven reorder (auto-animate honors
+  // `prefers-reduced-motion` internally — no-op tween there).
+  const cards = flattenByAttention(filterSnapshot(snapshot, filter));
   const [wallRef] = useAutoAnimate<HTMLDivElement>();
 
-  if (groups.length === 0) {
+  if (cards.length === 0) {
     return (
       <div className="grid flex-1 place-items-center text-sm text-muted-foreground">
         {snapshot.total_workspaces === 0
@@ -152,55 +155,26 @@ function ActivityWall({
   }
 
   return (
+    // auto-fill packs as many ≥17rem columns as the viewport holds;
+    // content-start keeps rows pinned to the top of the flexed area.
     <div
       ref={wallRef}
-      className="flex flex-1 flex-col gap-5 overflow-auto"
+      className="grid flex-1 grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] content-start gap-3 overflow-auto"
       data-testid="activity-wall"
     >
-      {groups.map((group) => (
-        <ProjectGroupSection
-          key={group.repo_root}
-          group={group}
-          liveId={liveId}
-          onToggleLive={onToggleLive}
-        />
+      {cards.map(({ workspace: w, repo_name }) => (
+        // One boundary per card: a single malformed row degrades to a
+        // placeholder tile instead of unmounting the whole wall.
+        <ErrorBoundary key={w.state.id} fallback={<CardErrorTile title={w.state.title} />}>
+          <SessionCard
+            activity={w}
+            projectName={repo_name}
+            liveOpen={w.state.id === liveId}
+            onToggleLive={onToggleLive}
+          />
+        </ErrorBoundary>
       ))}
     </div>
-  );
-}
-
-function ProjectGroupSection({
-  group,
-  liveId,
-  onToggleLive,
-}: {
-  group: ReturnType<typeof filterSnapshot>[number];
-  liveId: string | null;
-  onToggleLive: (id: string) => void;
-}) {
-  // Per-group grid gets its own auto-animate ref so card reorders within a
-  // project tween independently of project-group reordering above.
-  const [gridRef] = useAutoAnimate<HTMLDivElement>();
-  return (
-    <section>
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-        {group.repo_name}{" "}
-        <span className="text-muted-foreground/60">({group.workspaces.length})</span>
-      </h2>
-      <div ref={gridRef} className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {group.workspaces.map((w) => (
-          // One boundary per card: a single malformed row degrades to a
-          // placeholder tile instead of unmounting the whole wall.
-          <ErrorBoundary key={w.state.id} fallback={<CardErrorTile title={w.state.title} />}>
-            <SessionCard
-              activity={w}
-              liveOpen={w.state.id === liveId}
-              onToggleLive={onToggleLive}
-            />
-          </ErrorBoundary>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -224,9 +198,9 @@ function CardErrorTile({ title }: { title: string }) {
 
 function SkeletonGrid() {
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <Skeleton key={i} className="h-44 w-full" />
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3">
+      {Array.from({ length: 9 }).map((_, i) => (
+        <Skeleton key={i} className="h-32 w-full" />
       ))}
     </div>
   );

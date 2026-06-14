@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, ConfigDict
 
 from grove.core.agents import AgentActivityState
-from grove.core.contracts.views import CommitSummaryView, WorkspaceStateView
+from grove.core.contracts.views import CommitSummaryView, WorkspacePaneView, WorkspaceStateView
 
 if TYPE_CHECKING:
     from grove.core.activity import (
@@ -70,6 +70,9 @@ class AgentActivityView(BaseModel):
     assistant_replies: int
     replies_per_turn: list[int]
     tool_calls: int
+    # Sub-agents/background tasks spawned but not yet returned — defaults so a
+    # pre-existing client deserializes unchanged (additive wire evolution).
+    active_subagents: int = 0
     model: str | None
     tokens_in: int
     tokens_out: int
@@ -89,6 +92,7 @@ class AgentActivityView(BaseModel):
             assistant_replies=a.assistant_replies,
             replies_per_turn=list(a.replies_per_turn),
             tool_calls=a.tool_calls,
+            active_subagents=a.active_subagents,
             model=a.model,
             tokens_in=a.tokens_in,
             tokens_out=a.tokens_out,
@@ -200,8 +204,11 @@ class DashboardEvent(BaseModel):
     embeds the full ``DashboardSnapshotView``; ``session_activity`` embeds the one
     changed ``WorkspaceActivityView`` so the client patches a single card;
     ``workspace_changed`` is a lifecycle wake-up (re-fetch); ``heartbeat`` keeps
-    the connection warm; ``pane_snapshot`` is reserved for #19. ``seq`` is the
-    monotonic SSE id used for ``Last-Event-ID`` replay.
+    the connection warm; ``pane_snapshot`` embeds one ``WorkspacePaneView`` (#19,
+    the live focused-pane push) and rides a *dedicated* per-workspace stream, not
+    the cross-project ``/events`` fan-out — its ~1 Hz cadence and per-id scope are
+    a different concern from the activity deltas. ``seq`` is the monotonic SSE id
+    used for ``Last-Event-ID`` replay.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -213,6 +220,8 @@ class DashboardEvent(BaseModel):
     detail: dict[str, str] = {}
     workspace: WorkspaceActivityView | None = None
     snapshot: DashboardSnapshotView | None = None
+    # Carried only by ``pane_snapshot`` frames; ``None`` on every other kind.
+    pane: WorkspacePaneView | None = None
 
     @classmethod
     def from_delta(cls, delta: DashboardDelta) -> DashboardEvent:
@@ -236,3 +245,13 @@ class DashboardEvent(BaseModel):
     @classmethod
     def heartbeat(cls, *, seq: int) -> DashboardEvent:
         return cls(kind="heartbeat", seq=seq)
+
+    @classmethod
+    def pane_event(cls, pane: WorkspacePaneView, *, seq: int) -> DashboardEvent:
+        """One live focused-pane push (#19) — the streaming twin of ``GET .../pane``.
+
+        Reuses the one-shot endpoint's ``WorkspacePaneView`` so the snapshot's
+        ``ansi``/``taken_at`` shape is identical whether a client polls once or
+        consumes the stream.
+        """
+        return cls(kind="pane_snapshot", seq=seq, workspace_id=pane.workspace_id, pane=pane)

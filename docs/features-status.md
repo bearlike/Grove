@@ -1,9 +1,18 @@
 # Status semantics
 
+Grove tracks two separate signals, and it helps to keep them apart from
+the start. The **workspace status** is about the container: is the
+worktree on disk, is the tmux session up, has the pane produced output
+lately. The **agent activity state** is about the coding agent running
+inside that container: is it in the tool loop, has it handed the turn
+back to you, is it blocked on a prompt. A workspace can be ACTIVE while
+its agent is WAITING. This page covers the workspace status in full, then
+names the agent activity states and points to where they live.
+
 A workspace's status is two things at once. It is a *persisted intent*
 (what Grove was last told to make true) and a *computed view* (what is
-actually true right now). Reconciliation happens at one site. This page
-names every status and walks the recovery decision tree.
+actually true right now). Reconciliation happens at one site. The
+sections below name every status and walk the recovery decision tree.
 
 ## The spectrum
 
@@ -136,6 +145,33 @@ no longer exists in the enum. The store's decoder coerces those back to
 the persisted intent that produced them, usually `RUNNING`. Loading an
 old state file works without a migration step. New writes never produce
 these values; legacy reads do.
+
+## The other axis: agent activity
+
+The workspace status above answers "is this container running". It says
+nothing about what the agent inside is doing. That is a separate axis,
+read agent-agnostically from the agent's own on-disk transcript rather
+than from tmux output. It lives in `grove.core.agents` as
+`AgentActivityState`, and every client renders it from one shared palette
+in `grove.core.contracts.agent_palette`.
+
+| Agent state | Meaning |
+|---|---|
+| **`STARTING`** | The session id is known, but the transcript file is not on disk yet. |
+| **`WORKING`** | The agent is in the tool loop or mid-response. |
+| **`WAITING`** | The turn ended. The agent may need you. |
+| **`BLOCKED`** | An explicit permission or input prompt is open. |
+| **`IDLE`** | The session is alive but has been quiet. |
+| **`ERROR`** | The transcript shows a parse or process error, or a failed run. |
+| **`UNKNOWN`** | The transcript is unreadable or suppressed (for example a generic agent with no adapter). |
+
+The two axes are orthogonal. A workspace status of ACTIVE means the pane
+produced output recently; an agent state of WAITING means the agent has
+handed the turn back. Those happen together all the time: the agent
+prints its final message (output, so ACTIVE) and then waits for you (turn
+ended, so WAITING). The [Activity Dashboard](features-activity.md) shows
+both at once, and the adapters that derive each agent's state per kind
+are described in [Agents](configure-agents.md).
 
 ## See also
 

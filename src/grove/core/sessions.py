@@ -226,11 +226,11 @@ class SessionExplorer:
 
     def transcripts(self, listing: SessionListing) -> tuple[Path, ...]:
         """Every transcript file for the session — main thread first, then
-        sub-agent files — via the owning adapter's locator."""
+        sub-agent files — via the owning adapter's locator. Empty for a
+        remote-backed session (no local files)."""
         summary = listing.summary
-        cwd = Path(summary.cwd) if summary.cwd else summary.transcript_path.parent
         adapter = get_adapter(summary.adapter_kind)
-        return tuple(adapter.locate_transcripts(cwd, summary.session_id))
+        return tuple(adapter.locate_transcripts(self._session_cwd(listing), summary.session_id))
 
     def turns_for(
         self, listing: SessionListing, *, last: int | None = None
@@ -242,7 +242,23 @@ class SessionExplorer:
         :meth:`resolve` scan.
         """
         adapter = get_adapter(listing.summary.adapter_kind)
-        return adapter.read_turns(self.transcripts(listing), last=last)
+        return adapter.read_turns(self._session_cwd(listing), listing.summary.session_id, last=last)
+
+    def _session_cwd(self, listing: SessionListing) -> Path:
+        """The cwd key the owning adapter resolves this session under.
+
+        The recorded cwd first; a filesystem session that never recorded one
+        falls back to its transcript's own folder; a remote session has
+        neither, so the project root — the directory this explorer is bound
+        to — is the only cwd left to ask under. One derivation for both
+        :meth:`transcripts` and :meth:`turns_for` so they can't drift.
+        """
+        summary = listing.summary
+        if summary.cwd:
+            return Path(summary.cwd)
+        if summary.transcript_path is not None:
+            return summary.transcript_path.parent
+        return self.repo_root
 
     def turns(self, ref: str, *, last: int | None = None) -> tuple[SessionTurn, ...]:
         """The normalized conversation for the session matching ``ref``."""

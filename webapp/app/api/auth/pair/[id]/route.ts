@@ -8,7 +8,7 @@
  * the daemon token never reaches the client side.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { COOKIE_NAME, sharedCookieStore } from "@/lib/auth/cookie-store";
+import { COOKIE_NAME, isSecureRequest, sharedCookieStore } from "@/lib/auth/cookie-store";
 
 const DAEMON = process.env.GROVE_DAEMON_URL ?? "http://127.0.0.1:7421";
 
@@ -106,9 +106,14 @@ export async function GET(
     },
     { status: 200 },
   );
-  // Cookie attributes: HttpOnly (no JS access), SameSite=Strict (no CSRF
-  // surface), Secure when the request was over HTTPS, Path=/ (covers all
-  // routes), Max-Age aligned with the session expiry.
+  // Cookie attributes: HttpOnly (no JS access), SameSite=Lax (survives a
+  // cross-site top-level navigation — opening the dashboard link from a
+  // chat/email/launcher, esp. on mobile, where Strict would arrive
+  // cookie-less and force a re-pair; this is a same-LAN, read-mostly,
+  // JSON-only BFF so the CSRF delta is negligible), Secure honoring
+  // `x-forwarded-proto` so a TLS-terminating reverse proxy is detected
+  // (proxy-aware), Path=/ (covers all routes), Max-Age aligned with the
+  // session expiry.
   const maxAgeSeconds = Math.max(
     60,
     Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000),
@@ -117,8 +122,8 @@ export async function GET(
     name: COOKIE_NAME,
     value: cookieId,
     httpOnly: true,
-    sameSite: "strict",
-    secure: req.nextUrl.protocol === "https:",
+    sameSite: "lax",
+    secure: isSecureRequest(req.headers.get("x-forwarded-proto"), req.nextUrl.protocol),
     path: "/",
     maxAge: maxAgeSeconds,
   });

@@ -27,6 +27,7 @@ dependencies = [
     "typer>=0.12",
     "humanize>=4.9",
     "loguru>=0.7",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -38,13 +39,21 @@ client = [
     "httpx>=0.27",
     "asyncssh>=2.14",
 ]
+mcp = [
+    # Official MCP Python SDK (stdio server). Rides on the client extra:
+    # the MCP server is a thin adapter over GroveClient.
+    "mcp>=1.2",
+    "grove[client]",
+]
 all = [
     "grove[daemon]",
     "grove[client]",
+    "grove[mcp]",
 ]
 
 [project.scripts]
 grove = "grove.cli:app"
+grove-mcp = "grove.mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/krishnakanth-alagiri/grove"
@@ -72,6 +81,7 @@ dev = [
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
     "asyncssh>=2.14",
+    "mcp>=1.2",
 ]
 docs = [
     "mike",
@@ -200,4 +210,28 @@ source_modules = ["grove.client"]
 forbidden_modules = [
     "grove.daemon",
     "grove.tui",
+]
+
+# The MCP server speaks ONLY through the client SDK (issues #1/#6):
+# MCP client → grove.mcp → GroveClient → daemon REST → core. Direct
+# imports of engine internals would bypass the daemon's single authority.
+# allow_indirect_imports because GroveClient/contracts legitimately reach
+# core modules underneath — the rule binds grove.mcp's own imports.
+[[tool.importlinter.contracts]]
+name = "MCP server speaks only through the client SDK"
+type = "forbidden"
+source_modules = ["grove.mcp"]
+allow_indirect_imports = "true"
+forbidden_modules = [
+    "grove.daemon",
+    "grove.tui",
+    "grove.core.activity",
+    "grove.core.auth",
+    "grove.core.config",
+    "grove.core.git",
+    "grove.core.manager",
+    "grove.core.registry",
+    "grove.core.store",
+    "grove.core.tmux",
+    "grove.core.workspace",
 ]

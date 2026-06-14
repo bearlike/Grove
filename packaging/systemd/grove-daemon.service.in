@@ -6,6 +6,12 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=@GROVE_BIN@ daemon serve --host @DAEMON_HOST@ --port @DAEMON_PORT@
+# The daemon runs user-authored init scripts. systemd --user provides a bare
+# PATH (rc files are never sourced), so pyenv/nvm/asdf-managed toolchains
+# resolved to stale system binaries and init failed (issue #9). Rendered from
+# the PATH of the shell that ran `make systemd` — re-run it after toolchain
+# moves (e.g. an nvm default bump), or override: `DAEMON_PATH=... make systemd`.
+Environment=PATH=@DAEMON_PATH@
 Restart=on-failure
 RestartSec=2
 # stdout/stderr -> journalctl --user -u grove-daemon

@@ -11,7 +11,6 @@ import type {
 const SAMPLE_COMMITS: CommitSummaryView[] = [
   { sha: "abc1234def", subject: "wire the SSE stream", committed_at: "2026-06-08T10:00:00Z" },
   { sha: "9988776655", subject: "add the activity tier", committed_at: "2026-06-08T09:00:00Z" },
-  { sha: "1122334455", subject: "seed the dashboard", committed_at: "2026-06-08T08:00:00Z" },
 ];
 
 function activity(
@@ -50,6 +49,7 @@ function activity(
           assistant_replies: 7,
           replies_per_turn: [3, 2, 2],
           tool_calls: 11,
+          active_subagents: 0,
           model: "claude-opus-4-8",
           tokens_in: 1500,
           tokens_out: 150,
@@ -81,163 +81,156 @@ function r(node: React.ReactNode) {
   );
 }
 
+function rerenderWrapped(rerender: (ui: React.ReactNode) => void, node: React.ReactNode) {
+  rerender(
+    <ThemeProvider attribute="class" defaultTheme="dark">
+      {node}
+    </ThemeProvider>,
+  );
+}
+
 describe("SessionCard", () => {
-  it("renders title, branch, agent, state label, and counts", () => {
-    r(<SessionCard activity={activity("working")} />);
-    expect(screen.getByText("ship the dashboard")).toBeInTheDocument();
-    expect(screen.getByText("feat/dash")).toBeInTheDocument();
-    expect(screen.getByText("claude")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-state-label")).toHaveTextContent("working");
-    expect(screen.getByText("claude-opus-4-8")).toBeInTheDocument();
-    expect(screen.getByTestId("status-badge")).toBeInTheDocument();
-  });
-
-  it("leads with the last commit (subject + sha), durable not ephemeral", () => {
-    r(<SessionCard activity={activity("working")} />);
-    const lastCommit = screen.getByTestId("last-commit");
-    expect(lastCommit).toHaveTextContent("wire the SSE stream");
-    expect(lastCommit).toHaveTextContent("abc1234"); // shortened sha
-  });
-
-  it("shows a muted 'no commits yet' when the worktree has none", () => {
-    r(<SessionCard activity={activity("working", { recent_commits: [] })} />);
-    expect(screen.getByTestId("last-commit")).toHaveTextContent("no commits yet");
-  });
-
-  it("shows up to two more recent commits as compact history", () => {
-    r(<SessionCard activity={activity("working")} />);
-    const history = screen.getByTestId("commit-history");
-    expect(history).toHaveTextContent("add the activity tier");
-    expect(history).toHaveTextContent("seed the dashboard");
-  });
-
-  it("shows current_task as an active-only ongoing-action line", () => {
-    const { rerender } = r(<SessionCard activity={activity("working")} />);
-    expect(screen.getByTestId("current-task")).toHaveTextContent("editing session-card.tsx");
-
-    // Dormant / attention tiers hide the live ongoing line.
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard activity={activity("idle")} />
-      </ThemeProvider>,
+  it("slot (a): title link, project chip, and the agent-state badge", () => {
+    r(<SessionCard activity={activity("working")} projectName="Grove" />);
+    expect(screen.getByRole("link", { name: "ship the dashboard" })).toHaveAttribute(
+      "href",
+      "/w/w1",
     );
-    expect(screen.queryByTestId("current-task")).toBeNull();
+    expect(screen.getByTestId("project-chip")).toHaveTextContent("Grove");
+    const badge = screen.getByTestId("agent-state-badge");
+    expect(badge).toHaveAttribute("data-state", "working");
+    expect(badge).toHaveAttribute("aria-label", "agent state: working");
+    expect(screen.getByTestId("agent-state-label")).toHaveTextContent("working");
+    // The agent axis replaces the lifecycle badge on a healthy sessioned card.
+    expect(screen.queryByTestId("status-badge")).toBeNull();
   });
 
-  it("renders the agent brand badge next to the identity", () => {
+  it("slot (a): no project chip when the wall doesn't pass one", () => {
+    r(<SessionCard activity={activity("working")} />);
+    expect(screen.queryByTestId("project-chip")).toBeNull();
+  });
+
+  it("slot (a): blocked reads 'action required' — the loudest badge", () => {
+    r(<SessionCard activity={activity("blocked")} />);
+    const badge = screen.getByTestId("agent-state-badge");
+    expect(badge).toHaveAttribute("aria-label", "agent state: action required");
+    expect(badge).toHaveTextContent("action required");
+  });
+
+  it("slot (a): falls back to the workspace StatusBadge when there is no session", () => {
+    r(<SessionCard activity={activity("working", { sessions: [] })} />);
+    expect(screen.getByTestId("status-badge")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-state-badge")).toBeNull();
+    expect(screen.getByTestId("session-card")).toHaveAttribute("data-agent-state", "unknown");
+  });
+
+  it("slot (a): renders the agent brand badge next to the identity", () => {
     r(<SessionCard activity={activity("working")} />);
     // The Claude brand mark resolves to a labelled svg via AgentBadge → AgentGlyph.
     expect(screen.getByLabelText("Claude Code")).toBeInTheDocument();
   });
 
-  it("surfaces the per-card observed_at refresh time", () => {
-    r(<SessionCard activity={activity("working")} />);
-    expect(screen.getByTestId("observed-at")).toHaveTextContent("updated");
+  it("slot (b): happening-now prefers current_task on every tier", () => {
+    const { rerender } = r(<SessionCard activity={activity("working")} />);
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("editing session-card.tsx");
+
+    // A dormant card still shows its last-known task — the glance line never vanishes.
+    rerenderWrapped(rerender, <SessionCard activity={activity("idle")} />);
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("editing session-card.tsx");
   });
 
-  it("exposes the agent state on the testid seam and links to the detail page", () => {
-    r(<SessionCard activity={activity("waiting")} />);
-    expect(screen.getByTestId("session-card")).toHaveAttribute("data-agent-state", "waiting");
-    expect(screen.getByRole("link", { name: "ship the dashboard" })).toHaveAttribute(
-      "href",
-      "/w/w1",
+  it("slot (b): falls back to the durable session self-name, then a quiet placeholder", () => {
+    const { rerender } = r(
+      <SessionCard activity={activity("idle", {}, { current_task: null })} />,
     );
-  });
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("ai: wiring the SSE stream");
 
-  it("shows a Live toggle only while the agent is working", () => {
-    const onToggleLive = vi.fn();
-    const { rerender } = r(<SessionCard activity={activity("working")} onToggleLive={onToggleLive} />);
-    screen.getByTestId("live-toggle").click();
-    expect(onToggleLive).toHaveBeenCalledWith("w1");
-
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard activity={activity("waiting")} onToggleLive={onToggleLive} />
-      </ThemeProvider>,
+    rerenderWrapped(
+      rerender,
+      <SessionCard activity={activity("idle", {}, { current_task: null, title: null })} />,
     );
-    expect(screen.queryByTestId("live-toggle")).toBeNull(); // gated to WORKING
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("no activity yet");
+
+    rerenderWrapped(rerender, <SessionCard activity={activity("idle", { sessions: [] })} />);
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("no agent session");
   });
 
-  it("shows error_detail only when the state is error and a detail exists", () => {
+  it("slot (b): shows the background-subagent count only when > 0", () => {
+    const { rerender } = r(
+      <SessionCard activity={activity("working", {}, { active_subagents: 2 })} />,
+    );
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("· 2 bg agents");
+
+    rerenderWrapped(
+      rerender,
+      <SessionCard activity={activity("working", {}, { active_subagents: 1 })} />,
+    );
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("· 1 bg agent");
+    expect(screen.getByTestId("happening-now")).not.toHaveTextContent("bg agents");
+
+    rerenderWrapped(rerender, <SessionCard activity={activity("working")} />);
+    expect(screen.getByTestId("happening-now")).not.toHaveTextContent("bg agent");
+  });
+
+  it("slot (b): error_detail takes the happening-now slot while in error", () => {
     const { rerender } = r(
       <SessionCard
         activity={activity("error", {}, { error_detail: "transcript unreadable: bad JSON" })}
       />,
     );
-    expect(screen.getByTestId("error-detail")).toHaveTextContent(
+    expect(screen.getByTestId("happening-now")).toHaveTextContent(
       "transcript unreadable: bad JSON",
     );
 
-    // Error state without a detail → no empty row.
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard activity={activity("error")} />
-      </ThemeProvider>,
-    );
-    expect(screen.queryByTestId("error-detail")).toBeNull();
-
     // A detail left over from a past failure stays hidden while not in error.
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard activity={activity("working", {}, { error_detail: "stale" })} />
-      </ThemeProvider>,
+    rerenderWrapped(
+      rerender,
+      <SessionCard activity={activity("working", {}, { error_detail: "stale" })} />,
     );
-    expect(screen.queryByTestId("error-detail")).toBeNull();
+    expect(screen.getByTestId("happening-now")).toHaveTextContent("editing session-card.tsx");
   });
 
-  it("shows the durable session title on any tier, preferring interpreted_status", () => {
-    // Dormant tier still shows the durable name (only current_task is active-gated).
-    const { rerender } = r(<SessionCard activity={activity("idle")} />);
-    expect(screen.getByTestId("session-title")).toHaveTextContent(
-      "ai: wiring the SSE stream",
-    );
-    expect(screen.queryByTestId("current-task")).toBeNull();
+  it("slot (c): muted metrics one-liner — turns, tools, tokens", () => {
+    const { rerender } = r(<SessionCard activity={activity("working")} />);
+    expect(screen.getByTestId("metrics")).toHaveTextContent("3t · 11⚒ · 1.5k↑ 150↓");
 
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard
-          activity={activity("idle", {}, { interpreted_status: "compiling the webapp" })}
-        />
-      </ThemeProvider>,
-    );
-    expect(screen.getByTestId("session-title")).toHaveTextContent("compiling the webapp");
-
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard
-          activity={activity("idle", {}, { title: null, interpreted_status: null })}
-        />
-      </ThemeProvider>,
-    );
-    expect(screen.queryByTestId("session-title")).toBeNull();
+    rerenderWrapped(rerender, <SessionCard activity={activity("idle", { sessions: [] })} />);
+    expect(screen.getByTestId("metrics")).toHaveTextContent("—");
   });
 
-  it("renders an extra-sessions strip only when more than one session exists", () => {
-    const base = activity("working");
-    const second: WorkspaceActivityView["sessions"][number] = {
-      session: {
-        session_id: "s2",
-        adapter_kind: "codex",
-        provenance: "fs_discovered",
-        tmux_window: null,
-      },
-      activity: { ...base.sessions[0].activity, state: "idle" },
-    };
+  it("slot (d): last commit subject + relative time, or a quiet empty note", () => {
+    const { rerender } = r(<SessionCard activity={activity("working")} />);
+    expect(screen.getByTestId("last-commit")).toHaveTextContent("wire the SSE stream");
+    // Only the LATEST commit shows — no history list on the dense card.
+    expect(screen.getByTestId("session-card")).not.toHaveTextContent("add the activity tier");
 
+    rerenderWrapped(
+      rerender,
+      <SessionCard activity={activity("working", { recent_commits: [] })} />,
+    );
+    expect(screen.getByTestId("last-commit")).toHaveTextContent("no commits yet");
+  });
+
+  it("exposes the agent state and tier on the testid seam", () => {
+    r(<SessionCard activity={activity("waiting")} />);
+    const card = screen.getByTestId("session-card");
+    expect(card).toHaveAttribute("data-agent-state", "waiting");
+    expect(card).toHaveAttribute("data-tier", "attention");
+  });
+
+  it("shows a Live toggle only while the agent is working", () => {
+    const onToggleLive = vi.fn();
     const { rerender } = r(
-      <SessionCard activity={activity("working", { sessions: [...base.sessions, second] })} />,
+      <SessionCard activity={activity("working")} onToggleLive={onToggleLive} />,
     );
-    const strip = screen.getByTestId("extra-sessions");
-    expect(strip).toHaveTextContent("+1 more session");
-    expect(strip).toHaveAttribute("href", "/w/w1");
+    screen.getByTestId("live-toggle").click();
+    expect(onToggleLive).toHaveBeenCalledWith("w1");
 
-    // Single session → no strip at all.
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard activity={activity("working")} />
-      </ThemeProvider>,
+    rerenderWrapped(
+      rerender,
+      <SessionCard activity={activity("waiting")} onToggleLive={onToggleLive} />,
     );
-    expect(screen.queryByTestId("extra-sessions")).toBeNull();
+    expect(screen.queryByTestId("live-toggle")).toBeNull(); // gated to WORKING
   });
 
   it("dims a dormant card and keeps an attention card full-opacity + highlighted", () => {
@@ -248,21 +241,13 @@ describe("SessionCard", () => {
     expect(card().className).toMatch(/opacity-(70|55)/);
 
     // Attention → full opacity, highlight ring (never dimmed).
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard activity={activity("waiting")} />
-      </ThemeProvider>,
-    );
+    rerenderWrapped(rerender, <SessionCard activity={activity("waiting")} />);
     expect(card().getAttribute("data-tier")).toBe("attention");
     expect(card().className).toContain("opacity-100");
     expect(card().className).toContain("ring-2");
 
     // Active → full opacity.
-    rerender(
-      <ThemeProvider attribute="class" defaultTheme="dark">
-        <SessionCard activity={activity("working")} />
-      </ThemeProvider>,
-    );
+    rerenderWrapped(rerender, <SessionCard activity={activity("working")} />);
     expect(card().getAttribute("data-tier")).toBe("active");
     expect(card().className).toContain("opacity-100");
   });

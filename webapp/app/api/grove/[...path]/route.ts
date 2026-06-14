@@ -10,7 +10,23 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Stream `GET /events` straight through from the daemon (SSE pass-through).
+ * Which GET paths are SSE event-streams that must be piped, not buffered:
+ * the cross-project activity stream (`/events`) and the focused live-pane
+ * stream (`/workspaces/{id}/pane/stream`, #19). Both push `text/event-stream`,
+ * so both ride `proxyStream`; everything else buffers through `proxy`.
+ */
+function isEventStreamPath(path: string[]): boolean {
+  if (path.length === 1 && path[0] === "events") return true;
+  return (
+    path.length === 4 &&
+    path[0] === "workspaces" &&
+    path[2] === "pane" &&
+    path[3] === "stream"
+  );
+}
+
+/**
+ * Stream an SSE endpoint straight through from the daemon (SSE pass-through).
  *
  * The browser's cookie-auth `EventSource` hits this BFF; we inject the daemon
  * bearer server-side (the token never reaches the browser) and pipe
@@ -41,7 +57,7 @@ async function proxyStream(req: NextRequest, path: string[]): Promise<Response> 
     });
     if (!res.ok || !res.body) {
       return NextResponse.json(
-        { detail: { error: "daemon_error", message: `events upstream ${res.status}` } },
+        { detail: { error: "daemon_error", message: `stream upstream ${res.status}` } },
         { status: res.status || 502 },
       );
     }
@@ -84,9 +100,13 @@ async function proxy(req: NextRequest, path: string[]) {
   try {
     const res = await fetch(upstream, init);
     const body = await res.text();
+    // A bodyless status (the steering endpoints reply 204) must re-wrap with
+    // null — `new Response("", { status: 204 })` throws, and the catch below
+    // would mislabel the daemon's success as daemon_unreachable.
+    const bodyAllowed = res.status !== 204 && res.status !== 205 && res.status !== 304;
     // If the daemon revoked the session out from under us, clear our cookie
     // so the browser falls back to /login on its next page nav.
-    const out = new NextResponse(body, {
+    const out = new NextResponse(bodyAllowed ? body : null, {
       status: res.status,
       headers: {
         "content-type": res.headers.get("content-type") ?? "application/json",
@@ -111,8 +131,8 @@ async function proxy(req: NextRequest, path: string[]) {
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
-  // The activity stream is the one endpoint we pipe rather than buffer.
-  if (path.length === 1 && path[0] === "events") {
+  // SSE event-streams (activity + focused pane) are piped, not buffered.
+  if (isEventStreamPath(path)) {
     return proxyStream(req, path);
   }
   return proxy(req, path);

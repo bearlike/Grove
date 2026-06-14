@@ -329,6 +329,17 @@ def ensure_can_attach(state: WorkspaceState) -> None:
         )
 
 
+def ensure_can_steer(state: WorkspaceState) -> None:
+    # Steering (send_message) types into the live agent pane, so it has
+    # exactly attach's precondition: the session must be up. OFFLINE wants
+    # a respawn first; PAUSED has no session at all.
+    if state.status not in (LIVE_STATUSES | {WorkspaceStatus.RUNNING}):
+        raise WorkspaceStateError(
+            f"cannot send message to workspace {state.id}: "
+            f"status is {state.status}, expected active/idle"
+        )
+
+
 def ensure_can_update(state: WorkspaceState) -> None:
     # Update is metadata-only (title / description); permitted in every
     # status except ORPHANED, where the worktree is gone and the record is

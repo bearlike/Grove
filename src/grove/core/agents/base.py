@@ -7,15 +7,22 @@ contract, several transport-style implementations" is structural typing (see the
 introducing the abstraction at all (CLAUDE.md: protocols only when more than one
 real implementation exists).
 
-Every method is read-only over the filesystem or pure logic; adapters hold no
-mutable state. The launch decoration is the *only* outward-facing method — it
-feeds argv into ``tmux.build_workspace_layout`` (#13) — and even that returns a
-plain token list, leaving the side effect to ``tmux.py``.
+Every method is read-only over the filesystem (or a remote API) or pure logic;
+adapters hold no mutable state. The launch decoration is the *only*
+outward-facing method — it feeds argv into ``tmux.build_workspace_layout``
+(#13) — and even that returns a plain token list, leaving the side effect to
+``tmux.py``.
+
+The session-reading unit of reference is ``(cwd, session_id)``, never a file
+path: how a session id resolves to backing storage (a transcript glob, an HTTP
+endpoint) is each adapter's internal detail, so a remote adapter (#36) fits the
+seam without faking filesystem ``Path``s. ``locate_transcripts`` is the one
+deliberately filesystem-shaped method, kept for callers that genuinely want
+the files (dump, transcript-path display).
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -32,9 +39,15 @@ class AgentAdapter(Protocol):
 
     ``kind`` is the class-level discriminator that matches ``AgentSpec.kind`` in
     config; ``registry.get_adapter(kind)`` selects the implementation.
+
+    ``remote`` declares where the session actually runs: ``True`` means the work
+    happens on a backend service and the local tmux pane says nothing about it —
+    the blend must trust the adapter's reported state instead of demoting a
+    quiet pane to IDLE. Filesystem adapters are ``False``.
     """
 
     kind: str
+    remote: bool
 
     def launch_decoration(self, session_id: str) -> list[str]:
         """Extra argv tokens appended to the agent command so Grove owns the
@@ -50,8 +63,12 @@ class AgentAdapter(Protocol):
         sub-agent files), resolved under the agent's config dir for a session
         whose working directory is ``cwd``.
 
-        Read-only. Returns ``[]`` — never raises — when nothing is on disk yet
-        (the STARTING window) or the tool isn't Claude Code.
+        The deliberately filesystem-shaped surface: filesystem adapters return
+        the backing files; remote adapters return ``[]`` — their sessions have
+        no local file, and callers wanting session *content* use the
+        ``(cwd, session_id)``-keyed readers below instead. Read-only. Returns
+        ``[]`` — never raises — when nothing is on disk yet (the STARTING
+        window) or the tool keeps no transcripts.
         """
         ...
 
@@ -77,31 +94,34 @@ class AgentAdapter(Protocol):
         ...
 
     def read_turns(
-        self, paths: Sequence[Path], *, last: int | None = None
+        self, cwd: Path, session_id: str, *, last: int | None = None
     ) -> tuple[SessionTurn, ...]:
-        """The normalized conversation in ``paths``, oldest turn first.
+        """The normalized conversation for ``session_id`` in ``cwd``, oldest
+        turn first.
 
         ``last`` keeps only the most recent N turns (the `sessions show
-        --last` window). Best-effort like ``parse_activity``: corrupt lines
-        are skipped, empty ``paths`` yields ``()``.
+        --last` window). Best-effort like ``parse_activity``: corrupt records
+        are skipped, an empty or missing session yields ``()``.
         """
         ...
 
-    def parse_activity(self, paths: Sequence[Path]) -> AgentActivity:
-        """Normalized activity from the transcript file(s).
+    def parse_activity(self, cwd: Path, session_id: str) -> AgentActivity:
+        """Normalized activity for ``session_id`` whose working directory is ``cwd``.
 
-        Best-effort by contract (the peek rule): a corrupt line, an unknown
-        record type, or a vanished file degrades the result rather than raising.
-        Empty ``paths`` yields an ``UNKNOWN`` activity — the STARTING vs UNKNOWN
-        distinction is the ``ActivityService``'s call, since only it knows
-        whether a session id was ever minted.
+        Best-effort by contract (the peek rule): a corrupt record, an unknown
+        record type, or a vanished backing store degrades the result rather
+        than raising. An empty or missing session yields an ``UNKNOWN``
+        activity — the STARTING vs UNKNOWN distinction is the
+        ``ActivityService``'s call, since only it knows whether a session id
+        was ever minted.
         """
         ...
 
-    def transcript_digest(self, paths: Sequence[Path]) -> OrderedDigest:
+    def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
         """Compact ordered slice for the future external-LLM interpreter (#20).
 
         Minimal in the MVP; the seam exists so #20 never has to reshape the
-        adapter contract.
+        adapter contract. Best-effort: an empty or missing session yields an
+        empty digest.
         """
         ...

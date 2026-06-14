@@ -12,17 +12,18 @@ plain shell.
 |---|---|---|---|
 | `name`        | string | yes | Identifier in the picker. Also the merge key when the cascade combines agent lists. |
 | `command`     | string | yes | Shell command sent to the agent window. Quoted args are fine; environment variables expand at run time. |
-| `kind`        | string | no  | Which adapter introspects this agent's sessions: `claude_code` or `generic` (default). See [below](#telling-grove-what-kind-of-agent-it-is). |
+| `kind`        | string | no  | Which adapter introspects this agent's sessions: `claude_code`, `codex`, `mewbo`, or `generic` (default). See [below](#telling-grove-what-kind-of-agent-it-is). |
 | `description` | string | no  | One-line label shown beside the name in the picker. |
 | `env`         | object | no  | Extra environment variables exported in the agent's tmux window. |
 
 ## Defaults
 
-Out of the box Grove ships with two agents:
+Out of the box Grove ships with three agents:
 
 | Name | Command | Kind | Notes |
 |---|---|---|---|
 | `claude` | `claude` | `claude_code` | Anthropic Claude Code, when installed on `$PATH`. |
+| `codex`  | `codex`  | `codex` | OpenAI Codex CLI, when installed on `$PATH`. |
 | `shell`  | `$SHELL` | `generic` | A plain interactive shell. Useful for testing and for workspaces that do not need an agent. |
 
 The most common addition is Aider:
@@ -63,6 +64,21 @@ sessions for the [Activity Dashboard](features-activity.md).
   waiting, blocked), turn and token counts, and the session title. It
   also hands the agent a session id at launch, so session history knows
   which sessions Grove started.
+- `codex` means the agent is the OpenAI Codex CLI. Grove reads its rollout
+  files (under `~/.codex/sessions`, or `$CODEX_HOME`) and derives the same
+  live state, turn counts, and token counts as for Claude Code. Codex mints
+  its own session id internally and offers no flag to set one, so Grove finds
+  the session on disk by its working directory instead of handing the agent an
+  id at launch. The dashboard, history, and transcript view all work the same.
+- `mewbo` means the agent is a remote Mewbo session reached over its REST
+  API. Grove creates the session at workspace launch, anchored to the
+  worktree, and reads live status, turns, and token usage from the API
+  instead of a local file. The `command` field still runs in the agent
+  window, but the session itself lives server side, so the command is
+  typically just a shell (for example `$SHELL`). Connection settings live
+  in the `mewbo` config section: `base_url`, `api_key_env` (the NAME of
+  the environment variable holding your API key, never the key itself),
+  and `timeout_seconds`.
 - `generic` (the default) means Grove launches the command and tracks
   nothing beyond terminal output. The right choice for a plain shell or
   any tool with no transcript Grove understands.
@@ -71,6 +87,30 @@ A `kind` is mechanism, not policy. Declare it per agent and it cascades
 like every other field. An agent declared only in one repo's
 `.grove/config.json` stays scoped to that repo; it never shows up in
 other repos' create menus, and the dashboard still resolves its adapter.
+
+## Custom-named Claude agents: declare `kind` explicitly
+
+If you give a Claude Code agent a custom name (for example, `"claude-opus"` or
+`"code-agent"`), you must declare `kind: "claude_code"` in that entry.
+Merge-by-name does NOT inherit the built-in `claude` agent's kind. An entry
+that matches by name only inherits fields the overlay explicitly provides. If
+you omit `kind`, it silently defaults to `generic`, Grove mints no session id,
+and the Activity Dashboard has no transcript to read.
+
+The fix is one field:
+
+```json
+{
+  "agents": [
+    { "name": "code-agent", "command": "claude --model claude-opus-4-5", "kind": "claude_code" }
+  ]
+}
+```
+
+Overriding only `command` on the built-in `claude` entry is safe: the
+existing `kind: "claude_code"` carries over field-by-field, so the dashboard
+keeps tracking it. The risk is adding a new name that was never in the base
+list at all.
 
 ## Why `agents` merges by `name`
 

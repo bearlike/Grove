@@ -32,13 +32,18 @@ from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import BranchMode, ResolvedBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.errors import (
+    AgentSessionNotFound,
     BranchAlreadyCheckedOut,
     BranchConflict,
     BranchNotFound,
     GroveError,
+    MewboError,
+    PaneNotFound,
+    SteeringUnsupported,
     WorkspaceStateError,
 )
 from grove.core.git import GitRepo
+from grove.core.mewbo import MewboClient
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tmux import AttachInstruction
 from grove.core.workspace import (
@@ -56,6 +61,7 @@ from grove.core.workspace import (
     ensure_can_pause,
     ensure_can_respawn,
     ensure_can_resume,
+    ensure_can_steer,
     ensure_can_update,
 )
 
@@ -71,10 +77,17 @@ EventKindStr = Literal[
     "respawned",
     "killed",
     "updated",
+    "message_sent",
     "error",
     "offline_detected",
     "orphaned_detected",
 ]
+
+# Agent kinds steered over their own API rather than tmux injection. The
+# membership check in send_message/interrupt routes these to _steer_remote —
+# the single remote dispatch point. frozenset[str] rather than AgentKind:
+# the persisted agent_kind being matched is read back from JSON as plain str.
+_REMOTE_STEERED_KINDS: frozenset[str] = frozenset({"mewbo"})
 
 
 class _Unset:
@@ -110,10 +123,14 @@ class WorkspaceManager:
         repo_root: Path,
         cfg: GroveConfig,
         store: JsonWorkspaceStore,
+        mewbo_client: MewboClient | None = None,
     ) -> None:
         self._repo_root = repo_root
         self._cfg = cfg
         self._store = store
+        # Injected for tests (DI at the I/O boundary); production passes None
+        # and the first mewbo launch builds one from cfg.mewbo.
+        self._mewbo_client = mewbo_client
         self._git = GitRepo(repo_root)
         self._subs: list[Callable[[WorkspaceEvent], None]] = []
         # Last reconciled status per workspace ID — drift events fire only
@@ -190,15 +207,6 @@ class WorkspaceManager:
         if agent is None:
             raise GroveError(f"unknown agent: {request.agent_name}")
 
-        # Deterministic session correlation (#11 §2): mint a session id and let
-        # the agent's adapter decide whether it owns one. Claude Code returns a
-        # `--session-id` decoration; a generic/shell agent returns nothing and we
-        # persist no id, so the dashboard tracks no transcript for it.
-        adapter = get_adapter(agent.kind)
-        session_id = WorkspaceIdentity.new_session_id()
-        agent_session_id = session_id if adapter.launch_decoration(session_id) else None
-        launch_decoration = self._compose_launch(agent, agent_session_id)
-
         ts = WorkspaceIdentity.timestamp()
         resolved = request.branch_plan.resolve(self._cfg, request.title, ts)
         self._validate_branch_plan(resolved)
@@ -241,7 +249,7 @@ class WorkspaceManager:
             description=description,
             branch_provenance=resolved.provenance,
             placement=resolved.placement,
-            agent_session_id=agent_session_id,
+            agent_session_id=None,  # minted after the worktree exists, below
             agent_kind=agent.kind,
         )
         # Persist before side effects so a crash leaves a recoverable record.
@@ -298,12 +306,44 @@ class WorkspaceManager:
                 self._emit(
                     "error",
                     state.id,
-                    {"phase": "init_script", "exit_code": str(init_rc)},
+                    {
+                        "phase": "init_script",
+                        "exit_code": str(init_rc),
+                        "log_path": str(init_log),
+                    },
                 )
                 raise GroveError(
-                    f"init script exited {init_rc}; fail_fast=True so workspace was rolled back"
+                    _init_failure_detail(
+                        f"init script exited {init_rc}; fail_fast=True "
+                        "so workspace was rolled back",
+                        init_log,
+                    )
                 )
             logger.warning("init script exited {} but fail_fast=False; continuing", init_rc)
+
+        # Deterministic session correlation (#11 §2): mint the agent session id
+        # AFTER the worktree exists — claude_code ids carry no ordering
+        # constraint, but a mewbo create anchors the remote session to the
+        # worktree cwd, which the API validates is a real directory. Failure is
+        # loud and transactional, exactly like a fail_fast init.
+        try:
+            agent_session_id = self._mint_agent_session_id(
+                agent, worktree=worktree, title=request.title
+            )
+        except MewboError as exc:
+            self._rollback_create(state)
+            self._emit("error", state.id, {"phase": "agent_session", "error": str(exc)})
+            raise
+        if agent_session_id is not None:
+            state = _replace(state, agent_session_id=agent_session_id)
+            self._store.save(state)
+        # `initial_prompt` (#48) is create-only — never threaded into resume/respawn.
+        # For claude_code it rides the launch argv (race-free); for mewbo it is
+        # delivered after the workspace is persisted (below), so it isn't passed
+        # here (mewbo's decoration is empty anyway).
+        launch_decoration = self._compose_launch(
+            agent, agent_session_id, initial_prompt=request.initial_prompt
+        )
 
         try:
             tmux.create_session(
@@ -326,7 +366,34 @@ class WorkspaceManager:
         state = _touch(state)
         self._store.save(state)
         self._emit("created", state.id, {"title": request.title, "agent": request.agent_name})
+        self._deliver_remote_initial_prompt(state, agent, request.initial_prompt)
         return state
+
+    def _deliver_remote_initial_prompt(
+        self, state: WorkspaceState, agent: AgentSpec, initial_prompt: str | None
+    ) -> None:
+        """Re-engage a freshly-created remote (mewbo) session with the user's first
+        task (#48), where the prompt can't ride a launch argv.
+
+        A mewbo session's launch decoration is empty — the pane runs a bare shell
+        and the session lives server-side — so its initial prompt is delivered
+        through the SAME remote dispatch send_message uses; `/message` has no boot
+        race. Best-effort by design: this runs AFTER the workspace is persisted, so
+        a delivery failure must NOT roll back a successfully-created workspace — it
+        is logged, and the user steers manually. A no-op for claude_code (the prompt
+        already rode the launch) and for the empty-prompt case.
+        """
+        if not initial_prompt or agent.kind not in _REMOTE_STEERED_KINDS:
+            return
+        try:
+            self._steer_remote(state, "message", initial_prompt)
+        except (MewboError, GroveError) as exc:
+            logger.warning(
+                "initial prompt delivery to remote session for {} failed; "
+                "workspace is created, steer manually: {}",
+                state.id,
+                exc,
+            )
 
     def _add_worktree(self, resolved: ResolvedBranch, worktree: Path) -> None:
         """Issue the `git worktree add` for a worktree-placement create.
@@ -477,7 +544,9 @@ class WorkspaceManager:
                     log_path=init_log if self._cfg.init_script.enabled else None,
                 )
                 if rc != 0 and self._cfg.init_script.fail_fast:
-                    raise GroveError(f"init script exited {rc} on resume")
+                    raise GroveError(
+                        _init_failure_detail(f"init script exited {rc} on resume", init_log)
+                    )
             except GroveError:
                 self._git.worktree_remove(worktree, force=True)
                 raise
@@ -658,6 +727,86 @@ class WorkspaceManager:
         ensure_can_attach(state)
         return tmux.attach_instruction(state.tmux_session)
 
+    def send_message(self, workspace_id: str, text: str) -> None:
+        """Type ``text`` into the workspace's agent pane and submit it.
+
+        Grove's follow-up/steer surface for tmux-hosted agents (issue #37).
+        Policy lives here; the literal-safe injection mechanism is
+        ``tmux.send_text``. Gates, in order: remote-steered kinds dispatch
+        to the adapter arm; the session must be live (OFFLINE/PAUSED →
+        typed ``WorkspaceStateError``); a pane must resolve via the same
+        ``pane_target`` policy peek captures from (None → ``PaneNotFound``).
+
+        The ``message_sent`` audit event carries the resolved target and
+        the text *length*, never the content — steering text can hold
+        secrets and events fan out to every subscriber and log sink.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        if state.agent_kind is not None and state.agent_kind in _REMOTE_STEERED_KINDS:
+            self._steer_remote(state, "message", text)
+            return
+        ensure_can_steer(state)
+        target = self._pane_target(state)
+        if target is None:
+            raise PaneNotFound(
+                f"no tmux pane resolved for workspace {state.id} "
+                f"(session {state.tmux_session!r} reports no windows)"
+            )
+        tmux.send_text(target, text)
+        self._emit(
+            "message_sent",
+            state.id,
+            {"target": target, "text_length": str(len(text))},
+        )
+
+    def interrupt(self, workspace_id: str) -> None:
+        """Interrupt the workspace's agent, where its adapter supports it.
+
+        Today no tmux-hosted kind does: an Escape or C-c keystroke into an
+        arbitrary CLI is not a contract — it might cancel a prompt, kill a
+        shell job, or do nothing, and the provider-boundary rule forbids
+        guessing per-tool key bindings. So claude_code/generic refuse with
+        ``SteeringUnsupported``. The mewbo arm (a real API interrupt) goes
+        through the same ``_steer_remote`` dispatch point as send_message.
+        """
+        state = self._store.get(workspace_id)
+        if state.agent_kind is not None and state.agent_kind in _REMOTE_STEERED_KINDS:
+            self._steer_remote(state, "interrupt")
+            return
+        raise SteeringUnsupported(
+            f"agent kind {state.agent_kind or 'generic'!r} has no safe interrupt: "
+            "injecting a cancel keystroke into an arbitrary CLI is not a contract"
+        )
+
+    def _steer_remote(
+        self,
+        state: WorkspaceState,
+        op: Literal["message", "interrupt"],
+        text: str | None = None,
+    ) -> None:
+        """THE single dispatch point for remote-steered (mewbo) agents.
+
+        Deliberately no tmux/liveness gate: the remote session outlives the
+        pane, and ``POST /message`` re-engages an idle or finished session by
+        design — only a terminated one rejects, surfacing as the typed
+        ``MewboError``. The audit event mirrors the tmux arm's shape (target +
+        text length, never content).
+        """
+        session_id = state.agent_session_id
+        if not session_id:
+            raise AgentSessionNotFound(
+                f"workspace {state.id} has no recorded mewbo session to steer"
+            )
+        if op == "message":
+            self._mewbo().send_message(session_id, text or "")
+            self._emit(
+                "message_sent",
+                state.id,
+                {"target": f"mewbo:{session_id}", "text_length": str(len(text or ""))},
+            )
+        else:
+            self._mewbo().interrupt(session_id)
+
     def respawn(self, workspace_id: str) -> WorkspaceState:
         """Recreate the tmux session for an OFFLINE workspace.
 
@@ -690,10 +839,18 @@ class WorkspaceManager:
             )
 
         # Respawn starts a *new* agent session (the old process vanished), so mint
-        # a fresh id — a new transcript, not a continuation. resume() keeps the id;
-        # this is the deliberate other branch. Generic agents (no persisted id)
-        # stay untracked.
-        respawn_session_id = WorkspaceIdentity.new_session_id() if state.agent_session_id else None
+        # a fresh id — a new transcript/remote session, not a continuation.
+        # resume() keeps the id; this is the deliberate other branch. Generic
+        # agents (no persisted id) stay untracked.
+        respawn_session_id: str | None = None
+        if state.agent_session_id:
+            try:
+                respawn_session_id = self._mint_agent_session_id(
+                    agent, worktree=worktree, title=state.title
+                )
+            except MewboError as exc:
+                self._emit("error", state.id, {"phase": "respawn.agent_session", "error": str(exc)})
+                raise
         launch_decoration = self._compose_launch(agent, respawn_session_id)
 
         init_changes: dict[str, object] = {}
@@ -708,7 +865,9 @@ class WorkspaceManager:
                     log_path=init_log if self._cfg.init_script.enabled else None,
                 )
                 if rc != 0 and self._cfg.init_script.fail_fast:
-                    raise GroveError(f"init script exited {rc} on respawn")
+                    raise GroveError(
+                        _init_failure_detail(f"init script exited {rc} on respawn", init_log)
+                    )
             except GroveError:
                 self._emit("error", state.id, {"phase": "respawn.init_script"})
                 raise
@@ -844,7 +1003,43 @@ class WorkspaceManager:
             get_adapter(kind).locate_transcripts(Path(state.worktree_path), state.agent_session_id)
         )
 
-    def _compose_launch(self, agent: AgentSpec, session_id: str | None) -> _Argv:
+    def _mint_agent_session_id(self, agent: AgentSpec, *, worktree: Path, title: str) -> str | None:
+        """Mint the session id for a NEW agent run — the single fork create()
+        and respawn() share so the verbs can't drift; resume() deliberately
+        skips it (continue = keep the persisted id; mewbo re-engagement is the
+        follow-up surface, #37).
+
+        Two opposite minting directions, worth naming:
+
+        - **claude_code** (any local CLI): CLIENT-minted — Grove generates the
+          UUID and launches ``--session-id <uuid>``, so the transcript path is
+          known by construction. Generic agents mint nothing (empty decoration).
+        - **mewbo**: SERVER-minted — ``POST /api/sessions`` creates the remote
+          session anchored to the worktree ``cwd`` (which the API validates is
+          an existing directory — callers therefore invoke this only after the
+          worktree is on disk) and the RETURNED id is what Grove persists.
+
+        Local kinds never raise; the remote kind raises the typed ``MewboError``
+        and the caller treats it like a fail_fast init (loud, transactional).
+        """
+        if agent.kind == "mewbo":
+            return self._mewbo().create_session(cwd=str(worktree), title=title)
+        session_id = WorkspaceIdentity.new_session_id()
+        return session_id if get_adapter(agent.kind).launch_decoration(session_id) else None
+
+    def _mewbo(self) -> MewboClient:
+        """The Mewbo REST client: injected (tests) or built once from config."""
+        if self._mewbo_client is None:
+            self._mewbo_client = MewboClient(self._cfg.mewbo)
+        return self._mewbo_client
+
+    def _compose_launch(
+        self,
+        agent: AgentSpec,
+        session_id: str | None,
+        *,
+        initial_prompt: str | None = None,
+    ) -> _Argv:
         """Full argv appended to the agent command at launch, for a known session id.
 
         Composes the adapter's base decoration (`--session-id <uuid>` for Claude
@@ -854,6 +1049,15 @@ class WorkspaceManager:
         touching the user's own `.claude/settings.json`. Empty for a generic/shell
         agent or a legacy record with no session id. Centralizes the composition so
         create/resume/respawn can't drift.
+
+        `initial_prompt` (create-only, #48) rides the launch as a trailing
+        POSITIONAL arg on a claude_code argv (`claude … "<prompt>"` boots already
+        working on it — race-free, unlike post-boot pane typing). It is appended
+        last so it stays the positional after every flag, and goes through the
+        SAME `shlex.quote` path in `tmux.build_workspace_layout` as the rest of the
+        decoration — no second quoting site. Ignored for non-claude_code kinds: a
+        generic shell has no prompt concept, and mewbo carries `[]` here and is
+        re-engaged through its API instead (manager `create()`).
         """
         if session_id is None:
             return []
@@ -862,6 +1066,8 @@ class WorkspaceManager:
             settings = self._ensure_hook_settings()
             if settings is not None:
                 decoration = [*decoration, "--settings", str(settings)]
+        if decoration and agent.kind == "claude_code" and initial_prompt:
+            decoration = [*decoration, initial_prompt]
         return decoration
 
     def _ensure_hook_settings(self) -> Path | None:
@@ -927,7 +1133,7 @@ class WorkspaceManager:
         target = self._pane_target(state)
         if target is None:
             return (None, None)
-        snap = tmux.capture_pane_snapshot(target)
+        snap = tmux.capture_pane_snapshot(target, history_lines=self._cfg.tmux.peek_history_lines)
         if not snap:
             return (None, None)
         return (snap, _utcnow())
@@ -1053,7 +1259,10 @@ class WorkspaceManager:
                 self._git.branch_delete(state.branch, force=True)
             except Exception as exc:
                 logger.warning("rollback: branch_delete failed: {}", exc)
-        _drop_init_log(state.id)
+        # Deliberately NOT dropping the init log here: rollback fires exactly
+        # when a failed init needs diagnosing, and the log is the only artifact
+        # that survives the worktree teardown (issue #9). kill() — intentional
+        # teardown — remains the cleanup point.
         try:
             self._store.delete(state.id)
         except Exception as exc:
@@ -1162,6 +1371,32 @@ def _drop_init_log(workspace_id: str) -> None:
         log.unlink(missing_ok=True)
     except OSError as exc:
         logger.debug("could not unlink init log {}: {}", log, exc)
+
+
+# How much of the init log a fail_fast error carries. Enough to show the
+# stderr of the failing command; small enough for a TUI toast / SSE detail.
+_INIT_LOG_TAIL_LINES = 20
+
+
+def _init_failure_detail(prefix: str, log_path: Path) -> str:
+    """Build a self-diagnosing init-failure message: prefix + log path + log tail.
+
+    Every fail_fast init raise goes through here so a user (or the rail) sees
+    *what* failed without reopening a shell — issue #9's rollback used to
+    delete the log at exactly the moment it was needed. stderr is the last
+    section run_init_script writes, so the file tail doubles as the stderr
+    tail. Best-effort: an unreadable log degrades to just the path; this must
+    never mask the original failure.
+    """
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    except OSError:
+        lines = []
+    message = f"{prefix} — init log kept at {log_path}"
+    if lines:
+        tail = "\n".join(lines[-_INIT_LOG_TAIL_LINES:])
+        message = f"{message}\n--- init log tail ---\n{tail}"
+    return message
 
 
 def _touch(state: WorkspaceState) -> WorkspaceState:

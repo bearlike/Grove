@@ -37,6 +37,37 @@ class AgentSessionNotFound(GroveError):
     """
 
 
+class MewboError(GroveError):
+    """A Mewbo REST API call failed (transport, auth, or malformed response).
+
+    The one exception type ``grove.core.mewbo.MewboClient`` raises — httpx
+    exceptions never leak past that boundary, so callers (the launch fork,
+    the adapter's best-effort reads, the steering arms) handle exactly one type.
+    """
+
+
+# ─── steering errors (raised by WorkspaceManager.send_message / interrupt) ──
+
+
+class PaneNotFound(GroveError):
+    """The workspace is live but no tmux pane resolved to steer.
+
+    ``pane_target`` returned None — the session is up yet reports no
+    windows (emptied or reorganized externally). Distinct from
+    :class:`WorkspaceStateError`: the lifecycle status permitted the
+    operation; the live session just has nowhere to type.
+    """
+
+
+class SteeringUnsupported(GroveError):
+    """The workspace's agent kind has no implementation for this steering op.
+
+    Capability-based, not state-based — retrying after a lifecycle change
+    cannot succeed. Raised for interrupt on tmux-hosted agents (no safe
+    generic interrupt exists).
+    """
+
+
 # ─── branch validation errors (raised by WorkspaceManager.create) ───────────
 
 

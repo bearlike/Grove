@@ -3,7 +3,8 @@
 Grove distinguishes between branches it created and branches you
 attached. The distinction shapes one decision: when you kill a workspace,
 should the branch go too? The default answer is yes if Grove made the
-branch, no if it was already yours.
+branch, no if it was already yours. The thread running through this whole
+page is one promise: your git stays yours.
 
 ## Five branch sources
 

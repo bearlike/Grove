@@ -12,6 +12,7 @@ Attach a user to a workspace's tmux session, and talk to the daemon, over either
 
 ## Transport
 
+- **Three transports, one Protocol.** `LocalTransport` spawns a child daemon; `SshTransport` tunnels to a remote one; `UrlTransport` (`BackendConfig.daemon_url`) points at an already-running daemon — start/close are no-ops (its lifecycle is not ours) and interactive attach is refused (no PTY/SSH channel). `UrlTransport` is [grove.mcp](../mcp/CLAUDE.md)'s path. `_resolve_token` order: explicit `daemon_token` wins on every backend (that's what lets a URL backend reach another machine), then the same-host local mint, then `NeedsPairingError`.
 - **`SshTransport` reuses ONE `asyncssh.SSHClientConnection` for both jobs.** The HTTP forward to the daemon (`forward_local_port`) AND the interactive `tmux attach` (`SSHClientProcess`) ride the same TCP session. One connection, two jobs — daemon RPC and terminal attach never open a second SSH session.
 - The daemon binds loopback only; remote access is this SSH port-forward. The bind/auth-deferral rationale lives in [daemon](../daemon/CLAUDE.md).
 

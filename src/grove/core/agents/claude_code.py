@@ -52,6 +52,13 @@ from grove.core.agents.model import (
 # Markers that flag a ``type:"user"`` line as machinery, not a human turn:
 # slash-command echoes, bash tool I/O, the post-compaction caveat banner, and
 # the compaction summary prefix. Matching any one excludes the line.
+# Background-task completion notices (sub-agents, background shells) are
+# delivered into the conversation as plain ``type:"user"`` lines wrapping this
+# XML envelope (verified on-host, Claude Code 2.1.x). They are notifications
+# the agent received, never human turns — without the marker they rendered as
+# raw ``<task-notification>…`` "user prompts" in every client.
+_NOTIFICATION_MARKER = "<task-notification>"
+
 _NON_HUMAN_MARKERS: tuple[str, ...] = (
     "<command-name>",
     "<command-message>",
@@ -62,7 +69,17 @@ _NON_HUMAN_MARKERS: tuple[str, ...] = (
     "<bash-stderr>",
     "Caveat:",
     "This session is being continued from a previous",
+    _NOTIFICATION_MARKER,
 )
+
+# The harness tools that spawn a sub-agent. ``Task`` is the pre-2.1 name of the
+# same tool; both appear in transcripts depending on the Claude Code version.
+_SUBAGENT_TOOLS = frozenset({"Agent", "Task"})
+
+# Tools whose pending call means "the agent is waiting on the human": an open
+# question or a plan-approval gate. An assistant tail holding one of these with
+# no tool_result yet is BLOCKED (action required), not WORKING.
+_INPUT_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
 # Sentinel model id Claude Code writes for interrupts / synthetic lines; never a
 # real model and never counted toward token usage or the displayed model.
@@ -88,13 +105,19 @@ def _as_bool(value: Any) -> bool:
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
-    """ISO-8601 (``...Z`` accepted) → aware datetime, or ``None`` on anything odd."""
+    """ISO-8601 (``...Z`` accepted) → aware datetime, or ``None`` on anything odd.
+
+    Always aware: a tz-less string is assumed UTC rather than returned naive —
+    downstream freshness math subtracts these from ``utcnow`` and a naive
+    datetime would raise mid-poll instead of degrading.
+    """
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 class _ClaudeHome:
@@ -355,6 +378,47 @@ class _Record:
         return self.type == "assistant" and not self.is_sidechain
 
     @property
+    def is_tool_result(self) -> bool:
+        """A main-thread tool result (``type:"user"`` carrier, not a human turn)."""
+        return self.type == "user" and not self.is_sidechain and self._has_block("tool_result")
+
+    @property
+    def is_task_notification(self) -> bool:
+        """A delivered background-task notice (``type:"user"`` carrier of the
+        ``<task-notification>`` envelope) — the agent being told a sub-agent or
+        background command finished. A notification the agent *received*, so it
+        advances the tail (the agent's move) but is never a human turn."""
+        return (
+            self.type == "user"
+            and not self.is_sidechain
+            and not self._has_block("tool_result")
+            and _NOTIFICATION_MARKER in self.text()
+        )
+
+    def notification_text(self) -> str:
+        """The notice, human-readable: the envelope's ``<summary>`` plus result.
+
+        Falls back to a status line built from the envelope fields so a shape
+        drift never yields raw XML — degraded text beats leaked markup.
+        """
+        body = self.text()
+        summary = self._xml_field(body, "summary")
+        if not summary:
+            status = self._xml_field(body, "status") or "update"
+            summary = f"background task {self._xml_field(body, 'task-id') or '?'}: {status}"
+        result = self._xml_field(body, "result")
+        return f"{summary}\n{result}" if result else summary
+
+    def notification_tool_use_id(self) -> str | None:
+        """The spawning ``tool_use`` id this notice closes (in-flight tracking)."""
+        return self._xml_field(self.text(), "tool-use-id")
+
+    @staticmethod
+    def _xml_field(body: str, tag: str) -> str | None:
+        match = re.search(rf"<{tag}>(.*?)</{tag}>", body, re.DOTALL)
+        return match.group(1).strip() if match else None
+
+    @property
     def stop_reason(self) -> str | None:
         value = self._message.get("stop_reason")
         return value if isinstance(value, str) else None
@@ -387,14 +451,60 @@ class _Record:
                 if isinstance(text, str) and text.strip():
                     entries.append(DigestEntry("assistant", text))
             elif kind == "tool_use" and block.get("name"):
-                entries.append(DigestEntry("tool", str(block.get("name"))))
+                entries.append(DigestEntry("tool", self._tool_text(block)))
         return entries
+
+    @staticmethod
+    def _tool_text(block: dict[str, Any]) -> str:
+        """One tool call as a display line — bare name for most tools, but the
+        spawn/ask tools carry the detail clients need to show *what* was
+        spawned or asked (the sub-agent fleet and pending questions were
+        invisible as bare ``Agent`` / ``AskUserQuestion`` rows)."""
+        name = str(block.get("name"))
+        inp = block.get("input")
+        if not isinstance(inp, dict):
+            return name
+        if name in _SUBAGENT_TOOLS:
+            agent_type = inp.get("subagent_type") or "agent"
+            description = inp.get("description") or ""
+            label = f"{name}({agent_type})"
+            return f"{label}: {description}" if description else label
+        if name == "AskUserQuestion":
+            questions = inp.get("questions")
+            if isinstance(questions, list) and questions:
+                first = questions[0]
+                if isinstance(first, dict) and isinstance(first.get("question"), str):
+                    return f"{name}: {first['question']}"
+        return name
 
     def tool_names(self) -> list[str]:
         return [
             str(b.get("name"))
             for b in self._content_blocks()
             if b.get("type") == "tool_use" and b.get("name")
+        ]
+
+    def subagent_spawns(self) -> list[tuple[str, bool]]:
+        """``(tool_use id, runs_in_background)`` per sub-agent this record spawns.
+
+        The background flag decides what closes the id: a foreground spawn ends
+        with its ``tool_result``, but a backgrounded one gets an *immediate*
+        launch-ack ``tool_result`` while the agent keeps running — only its
+        later ``task-notification`` is the real return (verified on-host;
+        closing on the ack read every background fleet as size 0).
+        """
+        return [
+            (str(b.get("id")), _as_bool((b.get("input") or {}).get("run_in_background")))
+            for b in self._content_blocks()
+            if b.get("type") == "tool_use" and b.get("name") in _SUBAGENT_TOOLS and b.get("id")
+        ]
+
+    def tool_result_ids(self) -> list[str]:
+        """``tool_use_id``s this record resolves (the call's return arriving)."""
+        return [
+            str(b.get("tool_use_id"))
+            for b in self._content_blocks()
+            if b.get("type") == "tool_result" and b.get("tool_use_id")
         ]
 
     @property
@@ -436,10 +546,11 @@ class _Record:
 
     @property
     def dedup_key(self) -> str:
-        """Stable identity for de-duping resume/fork overlap.
+        """Stable identity of the LOGICAL record (one API response = one key).
 
         Assistant lines key on ``message.id`` + ``requestId`` (ccusage's usage
-        de-dup), so a re-emitted response from a forked file counts once. Other
+        de-dup), so the split lines of one response collapse to one logical
+        record and a re-emitted response from a forked file counts once. Other
         lines key on ``uuid``; with neither, the line is unique by parse index.
         """
         if self.type == "assistant":
@@ -450,6 +561,57 @@ class _Record:
         if self.uuid:
             return f"u:{self.uuid}"
         return f"i:{self.index}"
+
+    def absorb_continuation(self, other: _Record) -> None:
+        """Fold a same-message sibling line's content blocks into this record.
+
+        Claude Code 2.x writes **one JSONL line per content block** — a single
+        API response (``thinking`` → ``text`` → ``tool_use``…) arrives as N
+        lines sharing one ``(message.id, requestId)`` with distinct ``uuid``s
+        (verified on-host 2026-06-11: 123/123 multi-line messages). Keeping only
+        the first line (always the ``thinking`` block) silently dropped every
+        text and tool_use follow-up from turns, digests, and tool counts.
+        ``usage`` and ``stop_reason`` are byte-identical across siblings, so
+        only content moves; token math still counts each response once.
+
+        Mutates ``raw`` in place — the frozen dataclass pins field *bindings*,
+        and ``raw`` is the documented heterogeneous-data escape hatch.
+        """
+        mine = self._message.get("content")
+        theirs = other._message.get("content")
+        if isinstance(mine, list) and isinstance(theirs, list):
+            mine.extend(b for b in theirs if isinstance(b, dict))
+
+
+class _SubagentFleet:
+    """Tracks spawned-but-unreturned sub-agents across one record stream.
+
+    The closing rule differs by spawn mode (see ``_Record.subagent_spawns``):
+    a foreground id closes on its ``tool_result``; a backgrounded id survives
+    its immediate launch-ack result and closes only on its task-notification.
+    """
+
+    __slots__ = ("_background", "_in_flight")
+
+    def __init__(self) -> None:
+        self._in_flight: set[str] = set()
+        self._background: set[str] = set()
+
+    def spawn(self, rec: _Record) -> None:
+        for spawn_id, in_background in rec.subagent_spawns():
+            self._in_flight.add(spawn_id)
+            if in_background:
+                self._background.add(spawn_id)
+
+    def on_tool_result(self, rec: _Record) -> None:
+        self._in_flight.difference_update(set(rec.tool_result_ids()) - self._background)
+
+    def on_notification(self, rec: _Record) -> None:
+        self._in_flight.discard(rec.notification_tool_use_id() or "")
+
+    @property
+    def active(self) -> int:
+        return len(self._in_flight)
 
 
 class _TranscriptParser:
@@ -478,6 +640,7 @@ class _TranscriptParser:
         # The last record that is a human turn or an assistant reply — the tail
         # the status rule reads. Side records (titles, attachments) don't move it.
         tail: _Record | None = None
+        fleet = _SubagentFleet()
 
         for rec in self._records:
             ts = rec.timestamp
@@ -499,10 +662,22 @@ class _TranscriptParser:
                 if buckets:
                     buckets[-1] += 1
                 tool_calls += rec.tool_use_count
+                fleet.spawn(rec)
                 t_in, t_out = rec.usage_tokens
                 tokens_in += t_in
                 tokens_out += t_out
                 model = rec.model or model
+                tail = rec
+            elif rec.is_task_notification:
+                # The agent was just told a background task finished → its move.
+                fleet.on_notification(rec)
+                tail = rec
+            elif rec.is_tool_result:
+                # A tool just returned → it's the agent's move. Without this the
+                # tail stays the PREVIOUS assistant record through the whole tool
+                # run, and its stop_reason can mis-report a busy session (one
+                # whole turn of status lag).
+                fleet.on_tool_result(rec)
                 tail = rec
 
         # ``last-prompt`` is the authoritative current task when present; fall
@@ -518,6 +693,7 @@ class _TranscriptParser:
             assistant_replies=sum(buckets),
             replies_per_turn=tuple(buckets),
             tool_calls=tool_calls,
+            active_subagents=fleet.active,
             model=model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
@@ -530,6 +706,9 @@ class _TranscriptParser:
         for rec in self._records:
             if rec.is_human_turn:
                 entries.append(DigestEntry("user", _truncate(rec.text(), _DIGEST_TEXT_CAP)))
+            elif rec.is_task_notification:
+                note = _truncate(rec.notification_text(), _DIGEST_TEXT_CAP)
+                entries.append(DigestEntry("notification", note))
             elif rec.is_assistant:
                 names = rec.tool_names()
                 if names:
@@ -563,6 +742,10 @@ class _TranscriptParser:
                 if current is not None or entries:
                     _flush(*(current or ("", None)))
                 current = (rec.text(), rec.timestamp)
+            elif rec.is_task_notification:
+                # A notice the agent received mid-turn — an entry inside the
+                # current turn, never a new turn of its own.
+                entries.append(DigestEntry("notification", rec.notification_text()))
             elif rec.is_assistant:
                 if current is None and not entries and rec.timestamp is not None:
                     # Leading continuation block inherits the first reply's time.
@@ -631,10 +814,16 @@ class _TranscriptParser:
         """
         if tail is None:
             return AgentActivityState.UNKNOWN
-        if tail.is_human_turn:
+        if tail.is_human_turn or tail.is_task_notification:
             return AgentActivityState.WORKING
         if tail.stop_reason in ("end_turn", "stop_sequence"):
             return AgentActivityState.WAITING
+        # An assistant tail still holding an unanswered ask-the-human call is
+        # action-required, not "working": the question/plan-approval prompt is
+        # the one transcript-visible BLOCKED signal (permission prompts need the
+        # hook sidecar — they never reach the JSONL).
+        if any(name in _INPUT_TOOLS for name in tail.tool_names()):
+            return AgentActivityState.BLOCKED
         return AgentActivityState.WORKING
 
 
@@ -652,6 +841,7 @@ class ClaudeCodeAdapter:
     """
 
     kind = "claude_code"
+    remote = False
 
     def launch_decoration(self, session_id: str) -> list[str]:
         """``--session-id <uuid>`` — what makes correlation deterministic (#13)."""
@@ -697,17 +887,17 @@ class ClaudeCodeAdapter:
         return [self._summarize(sid, path, mtime) for sid, path, mtime in scanned]
 
     def read_turns(
-        self, paths: Sequence[Path], *, last: int | None = None
+        self, cwd: Path, session_id: str, *, last: int | None = None
     ) -> tuple[SessionTurn, ...]:
-        records = self._read(paths)
+        records = self._read(self.locate_transcripts(cwd, session_id))
         return _TranscriptParser(records).turns(last=last)
 
-    def parse_activity(self, paths: Sequence[Path]) -> AgentActivity:
-        records = self._read(paths)
+    def parse_activity(self, cwd: Path, session_id: str) -> AgentActivity:
+        records = self._read(self.locate_transcripts(cwd, session_id))
         return _TranscriptParser(records).activity()
 
-    def transcript_digest(self, paths: Sequence[Path]) -> OrderedDigest:
-        records = self._read(paths)
+    def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
+        records = self._read(self.locate_transcripts(cwd, session_id))
         return _TranscriptParser(records).digest()
 
     # ── internal ──────────────────────────────────────────────────────────
@@ -737,28 +927,43 @@ class ClaudeCodeAdapter:
 
     @staticmethod
     def _read(paths: Sequence[Path]) -> list[_Record]:
-        """Read, de-dup, and time-sort every record across the given files.
+        """Read, de-dup, merge, and time-sort every record across the given files.
 
         Per-line ``try/except`` so a truncated final line never aborts the file;
-        a missing file is tolerated (sessions get cleaned mid-read). De-dup keeps
-        the first occurrence per key; the sort is stable on parse order for
-        records that share (or lack) a timestamp.
+        a missing file is tolerated (sessions get cleaned mid-read). Two layers
+        of identity, because one JSONL line is NOT one logical record:
+
+        - ``uuid`` is line identity. A repeated uuid is a resume/fork replaying
+          history in another file → dropped.
+        - ``dedup_key`` is logical-record identity. A new line under a seen key
+          is a split-block sibling of the same assistant response (Claude Code
+          2.x writes one line per content block) → its blocks are folded into
+          the kept record via :meth:`_Record.absorb_continuation`. The old
+          first-line-wins drop here lost every post-``thinking`` text and
+          tool_use block — the "transcripts show no follow-ups" bug.
+
+        The sort is stable on parse order for records that share (or lack) a
+        timestamp.
         """
-        records: list[_Record] = []
+        seen_lines: set[str] = set()
+        by_key: dict[str, _Record] = {}
+        unique: list[_Record] = []
         index = 0
         for path in paths:
             for raw in _iter_json_lines(path):
-                records.append(_Record(raw=raw, index=index))
+                rec = _Record(raw=raw, index=index)
                 index += 1
-
-        seen: set[str] = set()
-        unique: list[_Record] = []
-        for rec in records:
-            key = rec.dedup_key
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(rec)
+                uid = rec.uuid
+                if uid is not None:
+                    if uid in seen_lines:
+                        continue
+                    seen_lines.add(uid)
+                kept = by_key.get(rec.dedup_key)
+                if kept is not None:
+                    kept.absorb_continuation(rec)
+                    continue
+                by_key[rec.dedup_key] = rec
+                unique.append(rec)
 
         unique.sort(key=_sort_key)
         return unique

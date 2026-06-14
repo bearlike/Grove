@@ -20,13 +20,14 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from grove import __version__ as _GROVE_VERSION
 from grove.core.activity import ActivityService
 from grove.core.auth import SessionStore
-from grove.core.config import GroveConfig
+from grove.core.config import GroveConfig, load_config
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
+from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView
@@ -46,12 +47,15 @@ from grove.core.errors import (
     BranchError,
     BranchNotFound,
     GroveError,
+    PaneNotFound,
+    SteeringUnsupported,
     WorkspaceNotFound,
     WorkspaceStateError,
 )
 from grove.core.manager import WorkspaceManager
 from grove.core.sessions import SessionExplorer, SessionListing
 from grove.core.store import JsonWorkspaceStore
+from grove.daemon._pane_stream import _PaneStreamer
 from grove.daemon._sse import _SseHub
 from grove.daemon.auth import build_auth_router, make_require_session
 from grove.daemon.repos import RepoRegistry
@@ -105,6 +109,18 @@ class _KillBody(BaseModel):
     """
 
     delete_branch: bool | None = None
+
+
+class _SendMessageBody(BaseModel):
+    """Steer request body — the follow-up text typed into the agent pane.
+
+    ``min_length=1``: an empty steer is always a client bug; refusing it
+    at validation (422) keeps the engine's typed-error surface for real
+    state problems. Module-scope for the same forward-ref reason as
+    ``_PauseBody`` above.
+    """
+
+    text: str = Field(min_length=1)
 
 
 def _sse_frame(event: DashboardEvent) -> str:
@@ -165,7 +181,11 @@ def build_app(  # noqa: PLR0915
     factory pattern); the function still has one job — register routes —
     so PLR0915 doesn't flag a real concern here.
     """
-    registry = RepoRegistry(cfg=cfg, store=store)
+    # Resolve each repo's own cascade at first access — `cfg` here is the
+    # global daemon config (loaded `repo_root=None`, the auth/daemon source);
+    # a project's agents + init_script live in `<repo>/.grove/config.json`
+    # and would be invisible to `create` without the per-repo loader (#46/#47).
+    registry = RepoRegistry(cfg=cfg, store=store, config_loader=load_config)
     activity_service = ActivityService(registry=registry)
     sse_hub = _SseHub(activity_service)
     if auth_store is None:
@@ -234,6 +254,14 @@ def build_app(  # noqa: PLR0915
             BranchError: (409, "branch_error"),
             WorkspaceNotFound: (404, "workspace_not_found"),
             WorkspaceStateError: (409, "workspace_state_error"),
+            # Steering refusals (#37). PaneNotFound is 409 like the state
+            # errors: the live session's current shape conflicts with the
+            # request and a respawn can fix it. SteeringUnsupported is 501:
+            # a capability gap (the agent kind has no implementation for
+            # the op) — no state change makes a retry succeed, which is
+            # exactly the false promise a 409 would make.
+            PaneNotFound: (409, "pane_not_found"),
+            SteeringUnsupported: (501, "steering_unsupported"),
             # Agent-transcript sessions; the auth domain's `session_not_found`
             # (revoked bearer sessions) lives in the auth router.
             AgentSessionNotFound: (404, "agent_session_not_found"),
@@ -447,6 +475,36 @@ def build_app(  # noqa: PLR0915
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
 
+    @app.post("/workspaces/{ws_id}/message", status_code=204, dependencies=auth_dep)
+    async def send_workspace_message(ws_id: str, body: _SendMessageBody) -> None:
+        """Steer the workspace's agent with a follow-up message (issue #37).
+
+        Empty 204 on success — the injection has no meaningful response
+        body. Refusals ride the typed-error envelope: 409
+        ``workspace_state_error`` / ``pane_not_found``, 501
+        ``steering_unsupported``.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            mgr.send_message(ws_id, body.text)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post("/workspaces/{ws_id}/interrupt", status_code=204, dependencies=auth_dep)
+    async def interrupt_workspace(ws_id: str) -> None:
+        """Interrupt the workspace's agent, where its adapter supports it.
+
+        Today every kind refuses (501 ``steering_unsupported``) — there is
+        no safe generic interrupt for a tmux-hosted CLI, and the mewbo API
+        arm lands with issue #36. The route exists now so clients code
+        against the final surface.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            mgr.interrupt(ws_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
     @app.patch(
         "/workspaces/{ws_id}",
         response_model=WorkspaceStateView,
@@ -516,6 +574,64 @@ def build_app(  # noqa: PLR0915
         mgr = _manager_for(ws_id)
         snapshot, taken_at = mgr.peek_pane(ws_id)
         return WorkspacePaneView.from_capture(ws_id, snapshot, taken_at)
+
+    @app.get(
+        "/workspaces/{ws_id}/pane/stream",
+        dependencies=auth_dep,
+        responses={
+            200: {
+                "model": DashboardEvent,
+                "description": (
+                    "text/event-stream of `pane_snapshot` DashboardEvent frames for "
+                    "this one workspace's agent pane (#19). A push upgrade of "
+                    "`GET .../pane`: the daemon captures ~1 Hz and emits a frame only "
+                    "when the pane changed (else a keepalive comment). The client opens "
+                    "this for the single focused WORKING card and closes it on blur, so "
+                    "off-screen/idle panes cost nothing."
+                ),
+            }
+        },
+    )
+    async def workspace_pane_stream(ws_id: str) -> StreamingResponse:
+        """Live focused-pane SSE push for one workspace (#19, the streaming wall).
+
+        Resolves the workspace once (404 if unknown), then self-paces: each tick
+        captures the agent pane via the same best-effort ``peek_pane`` seam the
+        one-shot route uses, off-loaded to the executor so the blocking tmux read
+        never stalls the loop. A workspace killed mid-stream degrades to an empty
+        pane (best-effort, like peek) rather than tearing the connection down — the
+        client drops the focus on the next activity tick and closes the stream.
+        """
+        mgr = _manager_for(ws_id)
+        loop = asyncio.get_running_loop()
+
+        async def _capture() -> tuple[str | None, datetime | None]:
+            def _read() -> tuple[str | None, datetime | None]:
+                try:
+                    return mgr.peek_pane(ws_id)
+                except GroveError:
+                    # Killed/vanished mid-stream — empty pane, never raise.
+                    return None, None
+
+            return await loop.run_in_executor(None, _read)
+
+        streamer = _PaneStreamer(
+            workspace_id=ws_id, capture=_capture, next_seq=activity_service.next_seq
+        )
+
+        async def stream() -> AsyncIterator[str]:
+            async for event in streamer.events():
+                yield _sse_frame(event) if event is not None else ": keepalive\n\n"
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.get(
         "/workspaces/{ws_id}/commits",
@@ -598,6 +714,56 @@ def build_app(  # noqa: PLR0915
             return await loop.run_in_executor(None, _read)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
+
+    @app.get("/sessions", response_model=list[SessionSummaryView], dependencies=auth_dep)
+    async def project_sessions(
+        repo: Annotated[Path, Query()],
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[SessionSummaryView]:
+        """Every agent session across one project's worktrees, newest-first.
+
+        The project-landing analogue of ``GET /workspaces/{id}/sessions``: spans
+        every scan root (Grove-managed and hand-staged worktrees alike), so rows
+        carry the ``workspace_*`` attribution trio when Grove owns the directory
+        and ``None`` when staged by hand. ``repo`` follows the ``/branches``
+        convention for repo dispatch; an unknown root is a 404 rather than an
+        empty list so a typo'd path can't masquerade as "no sessions yet".
+
+        ``SessionExplorer.list`` full-parses every transcript across every
+        worktree — heavy per request, acceptable here because the UI fetches it
+        only when the user expands the collapsed sessions section. Blocking I/O,
+        so it runs in the executor like the sibling sessions endpoints.
+        """
+        root = repo.resolve()
+        if root not in {known.resolve() for known in registry.known_roots()}:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "unknown_repo_root",
+                    "message": f"no Grove workspaces recorded under {repo}",
+                },
+            )
+        explorer = SessionExplorer(registry.get(root))
+        loop = asyncio.get_running_loop()
+        try:
+            listings = await loop.run_in_executor(None, lambda: explorer.list(limit=limit))
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return [SessionSummaryView.from_listing(ls) for ls in listings]
+
+    @app.get("/agents", response_model=list[AgentSummaryView], dependencies=auth_dep)
+    async def list_agents(repo: Annotated[Path, Query()]) -> list[AgentSummaryView]:
+        """Configured agents for one repo's cascade — the new-workspace picker source.
+
+        The TUI reads ``cfg.agents`` in-process to build its create-modal dropdown;
+        a remote create form can't, so this returns the same merged list. ``repo``
+        dispatches like ``/branches`` (per-repo cascade), so a project-scoped agent
+        defined in ``<repo>/.grove/config.json`` shows up here too. Read-only and
+        non-git, so it can't raise — an arbitrary path just yields the default
+        cascade.
+        """
+        mgr = registry.get(repo)
+        return [AgentSummaryView.from_spec(spec) for spec in mgr.config.agents]
 
     @app.get(
         "/branches",

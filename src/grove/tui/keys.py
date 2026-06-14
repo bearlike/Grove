@@ -20,7 +20,10 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
     ("r", "refresh", "Refresh"),
     ("n", "new_workspace", "New"),
     ("d", "open_dashboard", "Dashboard"),
+    ("P", "switch_project", "Project"),
+    ("m", "send_message", "Message"),
     ("e", "edit_workspace", "Edit"),
+    ("s", "open_sessions", "Sessions"),
     ("p", "pause_workspace", "Pause"),
     ("R", "resume_workspace", "Resume"),
     ("o", "respawn_workspace", "Respawn"),
@@ -30,9 +33,19 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
     ("?", "help", "Help"),
 ]
 
-LIST_GLOBAL_FOOTER_KEYS: Final[tuple[str, ...]] = ("q", "n", "d", "r", "/", "?")
-# Order in the footer: attach (most common), edit (metadata), pause/resume
+LIST_GLOBAL_FOOTER_KEYS: Final[tuple[str, ...]] = ("q", "n", "d", "P", "r", "/", "?")
+# Order in the footer: attach (most common), message (steer without
+# attaching), edit (metadata), sessions (read-only history), pause/resume
 # (lifecycle pair), respawn (recovery for offline), kill (destructive —
 # last). Each entry is dimmed by the screen when it's not currently
 # applicable to the selection.
-LIST_SELECTION_FOOTER_KEYS: Final[tuple[str, ...]] = ("enter,a", "e", "p", "R", "o", "k")
+LIST_SELECTION_FOOTER_KEYS: Final[tuple[str, ...]] = (
+    "enter,a",
+    "m",
+    "e",
+    "s",
+    "p",
+    "R",
+    "o",
+    "k",
+)

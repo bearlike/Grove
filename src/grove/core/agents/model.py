@@ -72,7 +72,7 @@ class AgentSession:
 class DigestEntry:
     """One line of an :class:`OrderedDigest`: a role tag plus a short summary."""
 
-    role: Literal["user", "assistant", "tool", "summary", "status"]
+    role: Literal["user", "assistant", "tool", "summary", "status", "notification"]
     text: str
 
 
@@ -129,6 +129,10 @@ class AgentActivity:
     assistant_replies: int = 0
     replies_per_turn: tuple[int, ...] = ()
     tool_calls: int = 0
+    # Sub-agent / background-task fleet still in flight: spawned (an Agent/Task
+    # tool_use) but not yet returned (no tool_result and no task-notification
+    # closing its tool-use id). The dashboard's "what runs in the background" count.
+    active_subagents: int = 0
     model: str | None = None
     tokens_in: int = 0
     tokens_out: int = 0
@@ -162,12 +166,14 @@ class SessionSummary:
     normalized model stays recognizable next to the documented contract.
     ``activity`` is the same point-in-time parse the dashboard computes — one
     pass over the file yields both the metadata and the metrics, so listing
-    never reads a transcript twice.
+    never reads a transcript twice. ``transcript_path`` is ``None`` for a
+    remote-backed session (no local file) — and it stays off the wire either
+    way (``contracts/sessions.py``).
     """
 
     session_id: str
     adapter_kind: str
-    transcript_path: Path
+    transcript_path: Path | None
     cwd: str | None
     created_at: datetime | None
     modified_at: datetime | None

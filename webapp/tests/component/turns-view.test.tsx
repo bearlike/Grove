@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TurnsView } from "@/components/workspace/turns-view";
 import type { SessionDetailView } from "@/lib/grove/types";
@@ -10,6 +11,8 @@ const DETAIL: SessionDetailView = {
     adapter_kind: "claude_code",
     provenance: "grove_launched",
     workspace_id: "w1",
+    workspace_title: "feat depth",
+    workspace_branch: "feat/depth",
     git_branch: "feat/depth",
     created_at: "2026-06-10T10:00:00Z",
     modified_at: "2026-06-10T11:00:00Z",
@@ -25,6 +28,7 @@ const DETAIL: SessionDetailView = {
       assistant_replies: 7,
       replies_per_turn: [3, 2, 2],
       tool_calls: 11,
+      active_subagents: 0,
       model: "claude-opus-4-8",
       tokens_in: 1500,
       tokens_out: 150,
@@ -45,13 +49,19 @@ const DETAIL: SessionDetailView = {
       started_at: "2026-06-10T10:00:00Z",
       entries: [
         { role: "assistant", text: "Starting on the panel." },
+        // A consecutive tool run — renders as ONE collapsed "2 tool calls" row.
         { role: "tool", text: "Edit sessions-panel.tsx" },
+        { role: "tool", text: "Bash npm test" },
       ],
     },
     {
       user_text: "run the tests",
       started_at: "2026-06-10T11:00:00Z",
-      entries: [{ role: "status", text: "tests green" }],
+      entries: [
+        // A digest-level user interjection — labeled `you` like the prompt.
+        { role: "user", text: "and lint too" },
+        { role: "status", text: "tests green" },
+      ],
     },
   ],
 };
@@ -101,20 +111,87 @@ describe("TurnsView", () => {
     expect(rows[0]).not.toHaveTextContent("❯");
   });
 
-  it("styles entries by role — tool rows are the mono ⚒ seam", async () => {
+  it("collapses a consecutive tool run into one closed 'N tool calls' row", async () => {
+    stubFetch(DETAIL);
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    await screen.findAllByTestId("turn-row");
+    const group = screen.getByTestId("tool-group");
+    expect(group).toHaveTextContent("2 tool calls");
+
+    // Collapsed by default: the disclosure button reads closed and no
+    // individual tool entries are mounted.
+    const toggle = group.querySelector("button")!;
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const entries = screen.getAllByTestId("turn-entry");
+    expect(entries.some((e) => e.dataset.role === "tool")).toBe(false);
+  });
+
+  it("expanding a tool group reveals the individual mono ⚒ calls", async () => {
+    stubFetch(DETAIL);
+    const user = userEvent.setup();
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    await screen.findAllByTestId("turn-row");
+    const toggle = screen.getByTestId("tool-group").querySelector("button")!;
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    const tools = screen
+      .getAllByTestId("turn-entry")
+      .filter((e) => e.dataset.role === "tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0]).toHaveTextContent("⚒");
+    expect(tools[0]).toHaveTextContent("Edit sessions-panel.tsx");
+    expect(tools[1]).toHaveTextContent("Bash npm test");
+    expect(tools[0].className).toContain("font-mono");
+
+    // Re-click collapses again.
+    await user.click(toggle);
+    expect(
+      screen.getAllByTestId("turn-entry").some((e) => e.dataset.role === "tool"),
+    ).toBe(false);
+  });
+
+  it("styles non-tool entries by role", async () => {
     stubFetch(DETAIL);
     r(<TurnsView workspaceId="w1" sessionId="s1" />);
 
     await screen.findAllByTestId("turn-row");
     const entries = screen.getAllByTestId("turn-entry");
-    const tool = entries.find((e) => e.dataset.role === "tool");
-    expect(tool).toBeDefined();
-    expect(tool).toHaveTextContent("⚒");
-    expect(tool).toHaveTextContent("Edit sessions-panel.tsx");
-    expect(tool!.className).toContain("font-mono");
-
     const assistant = entries.find((e) => e.dataset.role === "assistant");
+    expect(assistant).toBeDefined();
     expect(assistant!.className).not.toContain("font-mono");
+  });
+
+  it("labels speakers IRC-style: you (clay) vs agent (blue)", async () => {
+    stubFetch(DETAIL);
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    const rows = await screen.findAllByTestId("turn-row");
+    // The continued-session head has no speaker, so no label.
+    expect(rows[0].querySelector('[data-testid="role-label"]')).toBeNull();
+
+    const labels = screen.getAllByTestId("role-label");
+    const you = labels.filter((l) => l.dataset.roleLabel === "you");
+    const agent = labels.filter((l) => l.dataset.roleLabel === "agent");
+    expect(you).toHaveLength(3); // two ❯ prompts + one digest user entry
+    expect(agent).toHaveLength(1); // one assistant entry
+    expect(you[0].textContent).toBe("you");
+    expect(agent[0].textContent).toBe("agent");
+
+    // Colors ride existing tokens (shared convention with the TUI): user =
+    // the clay accent (NOT branch teal — branch names sit in teal on the row
+    // above), agent = the agent-identity blue. Class-based tokens, so the
+    // seam is the class — jsdom can't resolve `var()`/theme utilities, which
+    // is why expectColor doesn't apply here.
+    expect(you[0].className).toContain("text-primary");
+    expect(agent[0].className).toContain("text-[var(--ref-info)]");
+
+    // data-role continuity on the labeled entry rows is unchanged.
+    const entries = screen.getAllByTestId("turn-entry");
+    expect(entries.find((e) => e.dataset.role === "assistant")).toBeDefined();
+    expect(entries.find((e) => e.dataset.role === "user")).toBeDefined();
   });
 
   it("shows the error state when the turns fetch fails", async () => {

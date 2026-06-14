@@ -72,6 +72,8 @@ export const FIXTURE_PEEK_W_GROVE_1 = {
     { sha: "abc1234567", subject: "feat: scaffold dashboard", committed_at: "2026-05-09T10:25:00Z" },
     { sha: "def4567890", subject: "feat: card component", committed_at: "2026-05-09T10:10:00Z" },
   ],
-  agent_snapshot: "$ npm run dev\n> next dev\n  ready in 1.2s\n",
+  // The 400-char line pins the horizontal-overflow regression: it must scroll
+  // INSIDE the terminal pane, never widen the page (detail.spec asserts both).
+  agent_snapshot: `$ npm run dev\n> next dev\n  ready in 1.2s\nLOG ${"wide-terminal-grid-".repeat(20)}end\n`,
   snapshot_taken_at: "2026-05-09T10:30:00Z",
 };

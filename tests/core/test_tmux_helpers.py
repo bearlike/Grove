@@ -1,9 +1,10 @@
 """tmux.py — direct unit tests for the read-only helpers.
 
 These pin the *flags* we pass to `tmux capture-pane` / `tmux resize-window`.
-The flags are load-bearing: dropping `-e` strips colors, dropping `-J`
-breaks rewrap, getting `resize-window` wrong silently makes the source
-pane mismatch our viewport. The fakes used elsewhere (FakeTmux) skip
+The flags are load-bearing: dropping `-e` strips colors, dropping `-S -N`
+drops scrollback (only the bottom of the session ever shows), getting
+`resize-window` wrong silently makes the source pane mismatch our
+viewport. The fakes used elsewhere (FakeTmux) skip
 this surface intentionally — they're the manager-level seam, not a
 substitute for verifying the actual subprocess argv we emit.
 """
@@ -15,6 +16,7 @@ from typing import Any
 import pytest
 
 from grove.core import tmux
+from grove.core.errors import TmuxError
 
 
 @pytest.fixture
@@ -38,27 +40,42 @@ def fake_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return calls
 
 
-def test_capture_pane_snapshot_uses_e_and_J_flags(fake_run: list[list[str]]) -> None:
+def test_capture_pane_snapshot_flags(fake_run: list[list[str]]) -> None:
     tmux.capture_pane_snapshot("sess:agent")
 
     assert len(fake_run) == 1
     argv = fake_run[0]
     assert argv[:2] == ["tmux", "capture-pane"]
     assert "-e" in argv  # SGR escapes preserved (color)
-    assert "-J" in argv  # rejoin wrapped lines
     assert "-p" in argv  # print to stdout
     assert "-t" in argv and "sess:agent" in argv
+    # -S -<N> reads N lines of scrollback (the fix for "only the bottom shows").
+    assert "-S" in argv
+    assert argv[argv.index("-S") + 1] == "-500"
+    # -J would rejoin wrapped lines into over-long ones the renderers clip.
+    assert "-J" not in argv
 
 
-def test_capture_pane_snapshot_default_keeps_60_lines(
+def test_capture_pane_snapshot_history_window_is_configurable(
+    fake_run: list[list[str]],
+) -> None:
+    tmux.capture_pane_snapshot("sess:agent", history_lines=1000)
+
+    argv = fake_run[0]
+    assert argv[argv.index("-S") + 1] == "-1000"
+
+
+def test_capture_pane_snapshot_returns_full_capture_with_scrollback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    big = "\n".join(f"L{n}" for n in range(200))
+    # Model a `-S` capture: 200 content lines (scrollback above the viewport
+    # included) plus the empty grid rows below the cursor.
+    captured = "\n".join(f"L{n}" for n in range(200)) + "\n\n\n\n"
 
     def _run(_argv: list[str], **_kwargs: Any) -> Any:
         class _R:
             returncode = 0
-            stdout = big + "\n"
+            stdout = captured
             stderr = ""
 
         return _R()
@@ -69,10 +86,10 @@ def test_capture_pane_snapshot_default_keeps_60_lines(
     out = tmux.capture_pane_snapshot("sess:agent")
 
     lines = out.splitlines()
-    assert len(lines) == 60
-    # Newest lines retained, oldest dropped.
-    assert lines[-1] == "L199"
-    assert lines[0] == "L140"
+    # No 60-line crop: every content line survives, in order.
+    assert len(lines) == 200
+    assert lines[0] == "L0"
+    assert lines[-1] == "L199"  # trailing blank rows trimmed, not L199
 
 
 def test_capture_pane_snapshot_returns_empty_when_tmux_missing(
@@ -315,3 +332,72 @@ def test_list_windows_skips_blank_lines(
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
 
     assert tmux.list_windows("sess") == ["shell", "agent"]
+
+
+# ─── send_text ───────────────────────────────────────────────────────────────
+
+
+def test_send_text_emits_literal_payload_then_separate_enter(
+    fake_run: list[list[str]],
+) -> None:
+    """Pin the exact argv pair: `send-keys -l -- <text>`, then `send-keys Enter`.
+
+    Every token is load-bearing: dropping `-l` makes tmux interpret key
+    names (a message containing "Enter" or "C-c" becomes keystrokes),
+    dropping `--` makes a leading-dash payload parse as a flag, and
+    folding Enter into the literal call would type the word instead of
+    submitting. Verified against real tmux 3.2a on 2026-06-11.
+    """
+    tmux.send_text("sess:agent", "-please continue, then press Enter")
+
+    assert fake_run == [
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "-please continue, then press Enter"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+    ]
+
+
+def test_send_text_raises_when_tmux_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: None)
+
+    with pytest.raises(TmuxError):
+        tmux.send_text("sess:agent", "hello")
+
+
+def test_send_text_raises_on_nonzero_exit_and_skips_enter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlike the read helpers, steering fails LOUDLY — and a failed payload
+    must not be followed by a stray Enter into whatever pane is there."""
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: Any) -> Any:
+        calls.append(argv)
+
+        class _R:
+            returncode = 1
+            stdout = ""
+            stderr = "no such pane"
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    with pytest.raises(TmuxError, match="no such pane"):
+        tmux.send_text("ghost:agent", "hello")
+    assert len(calls) == 1  # the Enter call never fired
+
+
+def test_send_text_wraps_subprocess_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise OSError("tmux exploded")
+
+    monkeypatch.setattr(tmux.subprocess, "run", _boom)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    with pytest.raises(TmuxError):
+        tmux.send_text("sess:agent", "hello")

@@ -55,9 +55,19 @@ FAILED or TIMEOUT.
 - The script exited non-zero.
 - The script ran past `init_script.timeout_seconds`.
 - The configured `shell` (bash, sh, zsh) is not installed.
+- The daemon runs as a `systemd --user` service installed before
+  Grove baked a PATH into the unit, so the script resolves stale
+  system binaries instead of your pyenv/nvm/asdf-managed toolchain.
 
 **Fix.**
 
+- Read the error: a `fail_fast` failure names the kept init log and
+  ends with the log's tail (the failing command's stderr). The log
+  survives the rollback, so open it for the full output.
+- If the failing tool resolves to an old system version only under the
+  daemon, re-run `make systemd` from your normal shell (the unit bakes
+  that shell's PATH at install time; see `packaging/systemd/README.md`)
+  and restart with `systemctl --user restart grove-daemon`.
 - Attach to the workspace before init completes (or pause and resume
   with `run_on_resume: true`) and watch the `init` tmux window output.
 - Run the script standalone in a worktree-shaped environment to
@@ -159,13 +169,15 @@ moves.
 
 - The agent's spec has no `kind`, or `kind: "generic"`. Generic agents
   are launched but never introspected; that is the contract.
-- The agent genuinely is not Claude Code, and no adapter exists for it
-  yet. Terminal-output activity is all Grove can offer.
+- The agent has no adapter for its kind yet. Grove ships adapters for
+  Claude Code, the Codex CLI, and remote Mewbo sessions; anything else
+  gets terminal-output activity only.
 
 **Fix.**
 
-- Add `"kind": "claude_code"` to the agent's spec if it is Claude Code
-  or speaks its session format. See [Agents](configure-agents.md#telling-grove-what-kind-of-agent-it-is).
+- Set the agent's `kind` to the matching adapter (`claude_code`,
+  `codex`, or `mewbo`) if the tool speaks one of those session formats.
+  See [Agents](configure-agents.md#telling-grove-what-kind-of-agent-it-is).
 - Confirm the merged result with `grove config show` and check the
   agent's `kind` in the output.
 - Session history is broader than live state: `grove sessions list`
@@ -214,6 +226,45 @@ is bounced back to the pairing screen.
   approving.
 - List and tidy sessions with `grove auth sessions` and `grove auth revoke`.
 - See [authentication & pairing](use-auth.md) for the full flow.
+
+## Old UI or behavior after an update
+
+**Symptom.** You pulled new code or upgraded Grove, but a surface still
+shows the old version. A new endpoint returns 404, the TUI looks
+unchanged, or the dashboard does not have a feature you just merged.
+
+**Cause.** Grove runs as three long-lived surfaces, and each refreshes on
+its own. Updating the package does not restart what is already running.
+
+**Fix.** Refresh the surface that is stale.
+
+- **CLI and TUI.** Relaunch `grove`. A running TUI keeps the old code
+  until you quit and start it again.
+- **Daemon.** Restart it: `systemctl --user restart grove-daemon` (or
+  stop and re-run `grove daemon serve`). A green `pytest` with a 404 from
+  the live daemon is the classic tell.
+- **Web dashboard.** Rebuild and restart it. The prod server serves a
+  pre-built bundle, so new routes or components are silently absent until
+  you rebuild and restart the web process.
+
+If you installed from a checkout, this is an editable install: you only
+need a reinstall when dependencies change, not on every code pull.
+
+## `grove-mcp` reports `No module named 'mcp'`
+
+**Symptom.** The MCP server fails to start with `ModuleNotFoundError: No
+module named 'mcp'`.
+
+**Cause.** The MCP SDK is an optional extra. The lean `grove[daemon]`
+install deliberately omits it, so the always-present `grove-mcp` script
+cannot import its dependency.
+
+**Fix.** Install an extra that includes the MCP SDK: `grove[mcp]` or
+`grove[all]` (the latter pulls daemon plus client plus MCP). Reinstall,
+for example `uv tool install --reinstall "grove[all] @
+git+https://github.com/bearlike/Grove"`. The MCP client respawns the
+server per connection, so no separate restart is needed once the extra is
+present. See the [MCP server](use-mcp.md) page.
 
 ## Windows-native limitations
 

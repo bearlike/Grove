@@ -2,8 +2,12 @@
 
 Five lifecycle operations cover almost every interaction with Grove. This
 page walks the path you travel in a normal day: create a workspace, attach
-to it, hand work back when you are done, and recover when something went
-sideways.
+to it, steer it without attaching, browse its past sessions, move between
+repos, hand work back when you are done, and recover when something went
+sideways. The same operations are reachable from four surfaces. The TUI is
+the primary one, but the CLI (`grove create`, `grove pause`, and friends),
+the web dashboard, and the MCP server all drive the identical engine. Pick
+whichever is in front of you.
 
 ## Create a workspace
 
@@ -51,6 +55,36 @@ The `shell` window is one tmux switch away (`Ctrl-B 0/1` or `Ctrl-B w`
 for the picker). Use it for `git commit`, `git push`, `lazygit`, or
 anything else you do at a shell. Grove never runs commits or pushes for
 you.
+
+## Steer without attaching
+
+Sometimes the agent has paused with a question and you just want to nudge
+it forward. You do not have to attach for that. Press `m` to open the
+steer modal, type a follow-up, and Grove sends it straight into the
+agent's pane. The same thing works from the CLI (`grove message <id>
+"..."`), the web dashboard, and the MCP server, because steering is one
+engine call behind every surface. Use it to answer a prompt, redirect a
+task, or queue the next instruction while you are reading another
+workspace.
+
+## Browse past sessions
+
+Press `s` to open the sessions browser for the selected workspace. It
+lists the recorded agent sessions discovered across the repo and its
+worktrees, and you can scrub through any session's turns to see what the
+agent did and why. Sessions are recorded history, so they outlive the
+worktree: even an ORPHANED or killed workspace's transcripts stay
+readable. From a shell, `grove sessions list` and `grove sessions show`
+expose the same history.
+
+## Move between repos
+
+Grove is project-scoped, so a TUI launched in repo `A` shows only repo
+`A`'s workspaces. When you keep work in more than one repo, you do not
+have to quit and relaunch. Press `P` to open the project switcher, pick
+another repo Grove already knows about, and the list re-points at it in
+place. The picker opens instantly: it reads a cheap per-repo count, not a
+full live status, so switching stays fast even with many repos.
 
 ## Pause, resume, kill, respawn
 
@@ -112,8 +146,15 @@ forward.
 - **Watch the wall.** Past three or four workspaces, stop cycling
   through them. Press `d` for the
   [Activity Dashboard](features-activity.md) and let the waiting and
-  blocked agents come to you. The same wall is at `/activity` in the
-  [web dashboard](use-webapp.md) when you step away from the desk.
+  blocked agents come to you. The wall shows both axes at once: the
+  workspace status and each agent's live activity state.
+- **Watch from your phone.** The same wall is at `/activity` in the
+  [web dashboard](use-webapp.md) when you step away from the desk. The
+  focused pane streams live over SSE, so you can watch an agent work in
+  real time, and the web UI now does more than watch: you can create a
+  workspace, steer a running agent, and run the full lifecycle from the
+  browser. The daemon stays loopback-only behind a paired session, so
+  the phone reaches it through that paired link, not an open port.
 - **One agent, one shell.** Spawn an agent workspace and a `shell`
   workspace pointed at the same branch (use *Existing local* in the
   create modal). The agent makes changes; the shell side runs `make

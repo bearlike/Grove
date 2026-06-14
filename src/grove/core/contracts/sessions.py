@@ -40,7 +40,7 @@ class DigestEntryView(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    role: Literal["user", "assistant", "tool", "summary", "status"]
+    role: Literal["user", "assistant", "tool", "summary", "status", "notification"]
     text: str
 
     @classmethod
@@ -76,7 +76,8 @@ class SessionSummaryView(BaseModel):
     Flattens the listing's ``SessionSummary`` plus its project annotation.
     ``activity`` reuses the dashboard's ``AgentActivityView`` — the explorer's
     one parse per transcript yields both metadata and metrics, so the wire
-    carries them together too.
+    carries them together too. The ``workspace_*`` trio is ``None`` for a
+    hand-staged session (a directory Grove doesn't manage).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -85,6 +86,8 @@ class SessionSummaryView(BaseModel):
     adapter_kind: str
     provenance: str
     workspace_id: str | None
+    workspace_title: str | None
+    workspace_branch: str | None
     git_branch: str | None
     created_at: datetime | None
     modified_at: datetime | None
@@ -102,6 +105,8 @@ class SessionSummaryView(BaseModel):
             adapter_kind=s.adapter_kind,
             provenance=ls.provenance,
             workspace_id=ls.workspace_id,
+            workspace_title=ls.workspace_title,
+            workspace_branch=ls.workspace_branch,
             git_branch=s.git_branch,
             created_at=s.created_at,
             modified_at=s.modified_at,

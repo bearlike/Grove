@@ -93,6 +93,12 @@ class FakeTmux:
         # Default response for any target without an explicit entry. Set to
         # ``None`` to simulate tmux returning no activity timestamp at all.
         self.default_activity_seconds_ago: int | None = 0
+        # (target, text) per send_text call — steering tests assert both the
+        # resolved pane target and that refusal paths never inject at all.
+        self.sent_texts: list[tuple[str, str]] = []
+
+    def send_text(self, target: str, text: str) -> None:
+        self.sent_texts.append((target, text))
 
     def has_session(self, name: str) -> bool:
         return name in self.sessions
@@ -150,8 +156,8 @@ class FakeTmux:
             )
         return self.init_exit_code
 
-    def capture_pane_snapshot(self, target: str, *, lines: int = 60) -> str:
-        del lines
+    def capture_pane_snapshot(self, target: str, *, history_lines: int = 500) -> str:
+        del history_lines
         return self.snapshots.get(target, "")
 
     def list_windows(self, session: str) -> list[str]:
@@ -176,6 +182,7 @@ def fake_tmux(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTmux]:
     monkeypatch.setattr(tmux_mod, "build_workspace_layout", fake.build_workspace_layout)
     monkeypatch.setattr(tmux_mod, "run_init_script", fake.run_init_script)
     monkeypatch.setattr(tmux_mod, "capture_pane_snapshot", fake.capture_pane_snapshot)
+    monkeypatch.setattr(tmux_mod, "send_text", fake.send_text)
     monkeypatch.setattr(tmux_mod, "list_windows", fake.list_windows)
     monkeypatch.setattr(tmux_mod, "pane_activity_seconds_ago", fake.pane_activity_seconds_ago)
     monkeypatch.setattr(tmux_mod, "attach_instruction", fake.attach_instruction)

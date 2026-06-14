@@ -144,8 +144,9 @@ Opt-in Grove-managed Claude Code **status hooks** for the Activity Dashboard:
 - `peek_pane_refresh_seconds` (float, `0.25`). Fast pane-mirror tick for the peek
   rail.
 - `peek_stats_refresh_seconds` (float, `3.0`). Slower git-stats tick.
-- `activity_threshold_seconds` (int, minimum `1`, default `5`). Seconds of pane
-  quiet before a workspace flips from Active to Idle.
+- `activity_threshold_seconds` (int, minimum `1`, default `30`). Seconds of pane
+  quiet before a workspace flips from Active to Idle. (Was `5`, which read every
+  thinking/long-tool agent as Idle.)
 
 ### `ui`
 - `theme` (string, default `"auto"`). `auto`, `dark`, or `light`, or a custom name

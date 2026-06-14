@@ -1,65 +1,108 @@
 # Web dashboard
 
-Grove is a terminal program first. A read-only web dashboard ships alongside it. With it you can glance
-at your workspaces and watch each agent work from a phone or another machine on your network. The
-dashboard never drives a workspace. It mirrors what the TUI already shows, and every lifecycle action
-stays in the terminal. Think of it as a window onto the fleet, not a control panel.
+Grove is a terminal program first. A web dashboard ships alongside it, so you can watch and steer your
+whole fleet from any device on your network. Open it on a phone on the couch, a laptop in the next room,
+or a second monitor while the TUI runs on the main one. You glance at every workspace, drop into one to
+read the agent's transcript, send it a follow-up, and create or tear down a workspace, all without a
+terminal. Think of it as a web IDE for your agents: the same engine the TUI drives, reachable from a
+browser.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace-detail.png" alt="Grove read-only web dashboard showing a workspace detail page with summary and live agent panels" /></div>
-  <figcaption class="ms-shot__body">The workspace detail view. Git summary and commits on the left, the agent's live tmux pane on the right, sessions below.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home-grid.png" alt="Grove web dashboard home grid: repo tabs across the top, workspace cards with status badges and git stats, daemon status bar along the bottom" /></div>
+  <figcaption class="ms-shot__body">The home grid. One card per workspace, a tab per repository, and the daemon status bar along the bottom.</figcaption>
 </figure>
 
-## What it shows
+## The home grid
 
-The home page is a grid of every workspace the daemon knows about, with a tab per repository. It uses
-the same status glyphs and colors as the TUI. Each card carries the workspace title, status, branch,
-agent, and the ahead, behind, and dirty counts.
+The home page is a grid of every workspace the daemon knows about. A tab row sits across the top: an
+**All** tab, then one tab per repository, each carrying a count. The cards use the same status glyphs and
+colors as the TUI, so the two surfaces read like siblings, not strangers.
+
+Each card carries the workspace title, its placement and status badge, the branch and its base, the
+agent, and the ahead, behind, and dirty counts, with a relative timestamp in the footer. Tap a card to
+open that workspace.
+
+The grid rides a live event stream from the daemon, so a fresh commit, a new dirty file, or a workspace
+changing state shows up within a second or two, with no manual refresh. A status bar along the bottom
+reports the daemon's health, its version, its uptime, and the workspace count.
+
+## The workspace IDE shell
+
+Open a workspace and you land on its detail page, a transcript-first IDE shell. A compact context bar
+runs across the top: a back arrow, the workspace title, its placement, the live agent or lifecycle state
+badge, and a branch-summary popover that folds the ahead, behind, and dirty counts plus recent commits
+into one click. The lifecycle action buttons live in that same bar (more on those below).
+
+Under the context bar sits the agent surface, with two tabs.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home-grid.png" alt="The home grid: six workspace cards across two repositories with status badges and git stats" /></div>
-  <figcaption class="ms-shot__body">The home grid. One card per workspace, tabs per repository, and the daemon status bar along the bottom.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace-detail.png" alt="The workspace detail page: a context bar with title, state badge, and lifecycle buttons over the Transcript tab showing the agent conversation and a steer composer" /></div>
+  <figcaption class="ms-shot__body">The workspace IDE shell. The context bar carries identity, the live state, and the lifecycle buttons; the Transcript tab holds the conversation and the steer composer.</figcaption>
 </figure>
 
-The grid rides a live event stream from the daemon, so a fresh commit, a new dirty file, or a
-workspace changing state shows up within a few seconds, with no manual refresh. Updates pause while
-the browser tab is hidden, then catch up when you return. A status bar along the bottom reports the
-daemon's health, uptime, and version.
-
-Open a workspace and you get three panels that mirror the TUI's three cards. The identity panel names
-the workspace, branch, base, agent, and status. The summary panel carries ahead, behind, and dirty
-counts, the diff size, and the commits since the branch forked. The agent panel mirrors the live tmux
-pane, with real colors and box-drawing intact.
-
-The detail page also carries a **sessions panel**: every agent session recorded for this workspace's
-directory, newest first, including ones you started by hand. Expand a row and the conversation loads
-inline as turns, your prompt followed by the agent's replies and tool calls. It is the browser twin of
-[`grove sessions`](use-cli.md#grove-sessions).
+The **Transcript** tab is a real chat panel. It shows the conversation as it unfolds: your messages and
+the agent's replies, tool calls grouped into collapsible runs, and background notifications. A composer
+sits at the bottom. Type into it ("Steer the agent...") and your message goes straight to the running
+agent as a follow-up, the same as typing into the terminal, just from the browser. While the agent is
+working, an Interrupt button appears next to the composer so you can stop it mid-turn.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace-sessions.png" alt="Sessions panel on the workspace detail page, with a grove-launched session expanded into turns" /></div>
-  <figcaption class="ms-shot__body">The sessions panel. Each row carries state, turns, tokens, and model. The labels on the right tell Grove-launched sessions from hand-started ones.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace-terminal.png" alt="The workspace detail page on its Terminal tab, mirroring the agent's live tmux pane with a live-capture badge" /></div>
+  <figcaption class="ms-shot__body">The Terminal tab. The agent's tmux pane mirrored in near real time, colors and box-drawing intact, with a live-capture badge.</figcaption>
+</figure>
+
+The **Terminal** tab mirrors the agent's live tmux pane, with real colors and box-drawing intact. It
+refreshes itself every couple of seconds and carries a live-capture badge, so the pane tracks the
+terminal in near real time without you reaching for a keyboard. On a wide screen you can switch from
+tabs to a resizable split and watch the transcript and the terminal side by side; drag the handle to set
+the ratio and it sticks.
+
+## Creating and managing workspaces
+
+The dashboard is not just a window onto the fleet. You can drive lifecycle from the browser, the same
+verbs the TUI offers.
+
+**New workspace.** A *New workspace* button in the header opens a create dialog. Pick the project and
+the agent, give it a title, and choose how the branch is made: *auto* (Grove names one from the title
+and a timestamp), *new* (you name it and pick a base), *existing* (check out a local branch), *remote*
+(track a remote branch), or *root* (work in the repo root with no worktree). Add an optional initial
+prompt to hand the agent its first task as the session boots, flip *skip init* if you want to skip the
+init script, and submit. It speaks the same wire contract as the TUI's create modal, so what you build
+in the browser is exactly what the engine builds.
+
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-create-dialog.png" alt="The New workspace dialog: project and agent selectors, a title field, the branch-mode picker, an initial-prompt box, and a skip-init checkbox" /></div>
+  <figcaption class="ms-shot__body">The create dialog. Project, agent, title, branch mode, an optional first prompt, and skip-init, all the way to a live session.</figcaption>
+</figure>
+
+**Lifecycle actions.** The context bar on a workspace detail page carries *Pause*, *Resume*, *Respawn*,
+and *Kill* buttons. Which ones appear depends on the workspace's current status and placement, the same
+matrix the TUI uses, so you never see an action that cannot run. Pause, resume, and respawn fire
+straight away. Kill is the one destructive verb, so it opens a confirm dialog with a delete-branch
+checkbox whose default follows where the branch came from. The engine is the real precondition gate, so
+an action that cannot run surfaces a plain refusal rather than doing something surprising.
+
+## Sessions, project by project
+
+Each repository tab also carries a collapsible **Sessions** section above its grid. Expand it and you
+get every recorded agent session across that repo's worktrees, newest first, the ones Grove launched and
+the ones you started by hand alike. Each row shows the agent state, turn and tool counts, token usage,
+and the model. Grove-managed rows link to their owning workspace and drill down inline into the
+conversation as turns, your prompt followed by the agent's replies and tool calls. It is the browser
+twin of [`grove sessions`](use-cli.md#grove-sessions): `git log` for agent conversations.
+
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace-sessions.png" alt="The home grid with a repository's Sessions section expanded, one session drilled into its turns" /></div>
+  <figcaption class="ms-shot__body">The Sessions section. Every session across a project's worktrees, with one drilled open into its turns.</figcaption>
 </figure>
 
 ## The activity wall
 
-The `/activity` page is the cross-project view, the browser twin of the TUI's `d` screen. One card per
-workspace, every repository, grouped by project. A consolidated filter narrows the wall by project,
-agent state, or "needs attention", and your choices persist in the browser. Each working card carries
-a *Live* toggle. Flip it and a focused pane opens with that agent's real terminal, colors and all. One
-live pane at a time, so the page stays cheap on a phone.
-
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-activity-wall.png" alt="The activity wall: agent cards across two projects with a live terminal pane focused" /></div>
-  <figcaption class="ms-shot__body">The activity wall. Working and waiting agents carry full color, the live pane mirrors one agent's terminal, and the filter sits top right.</figcaption>
-</figure>
-
-What the tiles mean and which signals feed them is on the
-[agent activity and sessions](features-activity.md) page.
-
-The dashboard is read-only by design. There is no create, pause, resume, kill, respawn, edit, or
-attach. Those actions live in the [TUI](use-tui.md) and the [CLI](use-cli.md). The browser is for
-glancing, not for driving.
+The `/activity` page is the cross-project view: every agent session across every repository on one
+attention-first wall. It is the browser twin of the TUI's dashboard screen. Working and waiting agents
+are promoted with full color, one focused agent's live terminal mirrors on the side, and a filter narrows
+the wall by project, by state, or to just the ones that need you. What the tiles mean and which signals
+feed them is on the [agent activity and sessions](features-activity.md) page.
 
 ## Running it
 

@@ -2,11 +2,13 @@
 
 Grove is one engine with several clients around it. The engine
 (`grove.core`) owns every decision. The daemon (`grove.daemon`) serves
-it over loopback HTTP. The client SDK (`grove.client`) is the
-transport-agnostic way to attach. The TUI (`grove.tui`) is the primary
-interactive client, and the web dashboard (`webapp/`) is a read-only
-Next.js client that talks to the daemon. The boundaries between them
-are enforced in CI.
+it over loopback HTTP, with REST for lifecycle and SSE for live activity.
+The client SDK (`grove.client`) is the transport-agnostic way to attach.
+The TUI (`grove.tui`) is the primary interactive client. The MCP server
+(`grove.mcp`) exposes the same lifecycle to MCP-capable agents. The web
+dashboard (`webapp/`) is a Next.js client whose own backend-for-frontend
+(BFF) routes sit in front of the daemon. The boundaries between all of
+them are enforced in CI.
 
 ## The package layout
 
@@ -18,6 +20,7 @@ grove/
 │   ├── workspace.py    # state dataclass + identity + transitions
 │   ├── git.py          # subprocess wrappers (the `git` side-effect surface)
 │   ├── tmux.py         # libtmux wrappers + init runner (the `tmux` side-effect surface)
+│   ├── mewbo.py        # Mewbo REST I/O (the `mewbo` side-effect surface)
 │   ├── store.py        # atomic JSON state, repo-scoped queries
 │   ├── manager.py      # WorkspaceManager façade, orchestration only
 │   ├── registry.py     # RepoRegistry: one manager per repo, for multi-repo clients
@@ -31,16 +34,17 @@ grove/
 │
 ├── daemon/              # loopback FastAPI app: REST + SSE over the engine
 ├── client/              # transport-agnostic attach SDK (local PTY / SSH)
+├── mcp/                 # MCP server: stdio tools over the client SDK
 └── tui/                 # the Textual client
     ├── cli.py          # Typer entry points
     ├── app.py          # GroveApp(textual.App) root
     ├── theme.py        # color tokens + theme registration
     ├── _status.py      # Rich-side glyph + color accessors
     ├── keys.py         # global key spec + footer key partitions
-    ├── screens/        # list, dashboard, create, edit, confirms, help, pairing
+    ├── screens/        # list, dashboard, sessions, project picker, create, edit, steer, confirms, help, pairing
     └── widgets/        # workspace list, dashboard grid, peek rail, status bar, footer
 
-webapp/                  # read-only Next.js dashboard, talks to the daemon
+webapp/                  # Next.js dashboard; its BFF routes talk to the daemon
 ```
 
 The shape encodes a single rule: `grove.core` must not depend on UI
@@ -50,7 +54,7 @@ code. Not Textual, not Rich, not Typer, not Click, and nothing inside
 
 ## The boundaries, enforced
 
-`pyproject.toml` configures `import-linter` with three contracts:
+`pyproject.toml` configures `import-linter` with four contracts:
 
 - **Core has no UI dependencies.** `grove.core` may not import
   `textual`, `rich`, `typer`, `click`, or `grove.tui`.
@@ -60,6 +64,10 @@ code. Not Textual, not Rich, not Typer, not Click, and nothing inside
 - **The client SDK stays clean.** `grove.client` may not import
   `grove.daemon` or `grove.tui`. It speaks wire shapes and HTTP, not
   process internals.
+- **The MCP server speaks only through the client SDK.** `grove.mcp`
+  reaches the engine as MCP client → `grove.mcp` → `GroveClient` →
+  daemon → core, never by importing engine internals. That is what lets
+  it run on a different host than the engine.
 
 `include_external_packages = true` is what makes the third-party block
 real. Without it, `import textual` from inside `grove.core` would slip
@@ -68,16 +76,17 @@ fails the lint job.
 
 ## Side effects at the edges
 
-Two modules carry every subprocess call: `grove/core/git.py` and
-`grove/core/tmux.py`. Everything git-shaped (worktree add and remove,
-branch delete, status, log) lives in one file. Everything tmux-shaped
-(session create, capture-pane, list-windows, switch-client) lives in
-the other.
+Side effects live in dedicated modules. `grove/core/git.py` carries
+everything git-shaped (worktree add and remove, branch delete, status,
+log). `grove/core/tmux.py` carries everything tmux-shaped (session
+create, capture-pane, list-windows, switch-client). `grove/core/mewbo.py`
+carries the Mewbo REST I/O for remote sessions, the HTTP sibling of the
+other two.
 
 Manager methods orchestrate them. The manager itself reads no config
 file directly, runs no subprocess, and is fully testable against
-in-memory fakes for both side-effect modules. New I/O concerns belong
-in those two files, or a third side-effect module. They should not be
+in-memory fakes for those side-effect modules. New I/O concerns belong
+in one of these files, or a fourth side-effect module. They should not be
 scattered.
 
 ## The contracts layer
@@ -105,8 +114,10 @@ this? If yes, Pydantic. If no, dataclass.
 `grove.core.agents` is the provider boundary for coding agents. Each
 adapter knows how to introspect one kind of agent's sessions: where the
 transcripts live, how to parse them, and how to derive a live state.
-`claude_code` reads Claude Code's transcript format. `generic` is the
-deliberate no-op for everything else.
+`claude_code` reads Claude Code's transcript format. `codex` reads the
+Codex CLI's rollout files. `mewbo` reads remote Mewbo sessions over REST.
+`generic` is the deliberate no-op for everything else. Each one maps its
+tool's own vocabulary onto the shared `AgentActivityState` axis.
 
 An adapter normalizes shape, not semantics. It translates launch
 parameters and transcript formats. It never second-guesses what a model
@@ -137,12 +148,15 @@ The dependency graph runs strictly inward from clients to the engine:
 
 ```mermaid
 flowchart LR
+    Browser([browser / phone]) -.http.-> BFF([webapp BFF])
+    BFF -.http + SSE.-> Daemon([grove.daemon])
     TUI([grove.tui]) --> Core([grove.core])
-    Webapp([webapp]) -.http.-> Daemon([grove.daemon])
-    Daemon --> Core
-    Client([grove.client]) -.http.-> Daemon
+    MCP([grove.mcp]) --> Client([grove.client])
+    Client -.http.-> Daemon
+    Daemon -.REST + SSE.-> Core
     Core --> Git([core.git])
     Core --> Tmux([core.tmux])
+    Core --> Mewbo([core.mewbo])
     Core --> Store([core.store])
     Core --> Contracts([core.contracts])
     Core --> Agents([core.agents])

@@ -48,6 +48,7 @@ export function workspace(
           assistant_replies: 0,
           replies_per_turn: [],
           tool_calls: 0,
+          active_subagents: 0,
           model: null,
           tokens_in: 0,
           tokens_out: 0,

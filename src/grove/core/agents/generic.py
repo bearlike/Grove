@@ -7,7 +7,6 @@ activity. It exists so the dashboard treats a ``kind:"generic"`` agent uniformly
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 
 from grove.core.agents.model import (
@@ -23,6 +22,7 @@ class GenericAdapter:
     """No-op :class:`AgentAdapter` for tools with no known transcript format."""
 
     kind = "generic"
+    remote = False
 
     def launch_decoration(self, session_id: str) -> list[str]:
         del session_id
@@ -41,15 +41,15 @@ class GenericAdapter:
         return []
 
     def read_turns(
-        self, paths: Sequence[Path], *, last: int | None = None
+        self, cwd: Path, session_id: str, *, last: int | None = None
     ) -> tuple[SessionTurn, ...]:
-        del paths, last
+        del cwd, session_id, last
         return ()
 
-    def parse_activity(self, paths: Sequence[Path]) -> AgentActivity:
-        del paths
+    def parse_activity(self, cwd: Path, session_id: str) -> AgentActivity:
+        del cwd, session_id
         return AgentActivity.empty(AgentActivityState.UNKNOWN)
 
-    def transcript_digest(self, paths: Sequence[Path]) -> OrderedDigest:
-        del paths
+    def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
+        del cwd, session_id
         return OrderedDigest()

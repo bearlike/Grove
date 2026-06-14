@@ -23,6 +23,7 @@ from grove.core.contracts.activity import (
     SessionActivityView,
     WorkspaceActivityView,
 )
+from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.auth import (
     AuthErrorEnvelope,
     PairingChallengeView,
@@ -57,6 +58,7 @@ from grove.core.contracts.views import (
 __all__ = [
     "AgentActivityView",
     "AgentSessionView",
+    "AgentSummaryView",
     "AttachInstructionView",
     "AuthErrorEnvelope",
     "AutoBranch",

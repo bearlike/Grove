@@ -27,7 +27,7 @@ import httpx
 
 from grove.client.backend import BackendConfig
 from grove.client.errors import NeedsPairingError, ProtocolError, TransportError
-from grove.client.transport import LocalTransport, Transport
+from grove.client.transport import LocalTransport, Transport, UrlTransport
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.views import (
@@ -54,6 +54,10 @@ class GroveClient:
 
     @staticmethod
     def _make_transport(config: BackendConfig) -> Transport:
+        if config.daemon_url is not None:
+            if config.ssh_target is not None:
+                raise ValueError("BackendConfig.daemon_url and ssh_target are mutually exclusive")
+            return UrlTransport(config)
         if config.ssh_target is None:
             return LocalTransport(config)
         # SshTransport lands in Task 13; deferred import keeps Task 12 buildable.
@@ -94,6 +98,11 @@ class GroveClient:
     def _resolve_token(self) -> str | None:
         """Return the bearer token to attach to every request, or raise.
 
+        An explicit ``BackendConfig.daemon_token`` always wins — it is the
+        caller saying "use this credential" (``grove-mcp`` populates it
+        from ``GROVE_API_TOKEN``), and skipping the mint below is what lets
+        a URL backend reach a daemon on another machine.
+
         Local backend (no ``ssh_target``): mints a fresh session against the
         shared ``auth.json`` file. Daemon and client run as the same UID and
         both read the same file, so this works even though the daemon is in
@@ -104,6 +113,8 @@ class GroveClient:
         ``NeedsPairingError`` if absent so the client can surface a pair
         modal — same code path as a 401 from the daemon (token revoked).
         """
+        if self._config.daemon_token is not None:
+            return self._config.daemon_token
         if self._config.ssh_target is None:
             from grove.core.auth import SessionStore  # noqa: PLC0415
 
@@ -113,12 +124,10 @@ class GroveClient:
             store.pair_approve(challenge.challenge_id)
             _, token = store.pair_poll(challenge.challenge_id)
             return token
-        if self._config.daemon_token is None:
-            raise NeedsPairingError(
-                self._config.label,
-                daemon_http_url=self._transport.http_url,
-            )
-        return self._config.daemon_token
+        raise NeedsPairingError(
+            self._config.label,
+            daemon_http_url=self._transport.http_url,
+        )
 
     async def close(self) -> None:
         if self._http is not None:
@@ -165,6 +174,16 @@ class GroveClient:
         body = await self._post(f"/workspaces/{ws_id}/respawn", json_payload={})
         return WorkspaceStateView.model_validate(body)
 
+    async def interrupt(self, ws_id: str) -> None:
+        """Interrupt the workspace's agent, where its adapter supports it.
+
+        Sibling of ``send_message`` on the daemon's steer surface
+        (``POST /workspaces/{id}/interrupt``, empty 204). A capability
+        refusal surfaces as ``ProtocolError`` with code
+        ``steering_unsupported`` (501).
+        """
+        await self._post(f"/workspaces/{ws_id}/interrupt", json_payload={}, expect_204=True)
+
     async def kill(self, ws_id: str, *, delete_branch: bool | None = None) -> None:
         await self._post(
             f"/workspaces/{ws_id}/kill",
@@ -194,6 +213,21 @@ class GroveClient:
             payload["description"] = description
         body = await self._patch(f"/workspaces/{ws_id}", json_payload=payload)
         return WorkspaceStateView.model_validate(body)
+
+    async def send_message(self, ws_id: str, text: str) -> None:
+        """Inject a steering message into the workspace agent's pane.
+
+        Wraps ``POST /workspaces/{id}/message`` with body ``{"text": ...}``
+        (daemon issue #37). Tolerates both 200 and 204 success shapes — the
+        endpoint is being built in parallel, so this method pins only the
+        request contract. A daemon predating the endpoint answers 404/405
+        with a non-envelope body; that surfaces as ``ProtocolError`` with
+        ``code="http_error"``, which callers treat as capability-unavailable
+        rather than failure (see ``grove.mcp``).
+        """
+        resp = await self._ensure_http().post(f"/workspaces/{ws_id}/message", json={"text": text})
+        if not resp.is_success:
+            self._raise_for_status(resp)
 
     async def get_attach(self, ws_id: str) -> AttachInstructionView:
         body = await self._get(f"/workspaces/{ws_id}/attach")

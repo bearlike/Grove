@@ -40,6 +40,7 @@ Anything baked into the unit file is exposed as a Make variable:
 | Variable | Default | Where it lands |
 |---|---|---|
 | `GROVE_BIN` | `command -v grove` | daemon ExecStart |
+| `DAEMON_PATH` | invoking shell's `$PATH` | daemon `Environment=PATH=` |
 | `DAEMON_HOST` | `127.0.0.1` | daemon `--host` |
 | `DAEMON_PORT` | `7421` | daemon `--port`, webapp `GROVE_DAEMON_URL` |
 | `WEBAPP_DIR` | `<repo>/webapp` | webapp `WorkingDirectory` |
@@ -81,4 +82,4 @@ Lingering is host-level, set once, independent of these unit files.
 - **Webapp opt-in.** Most users only need the TUI. Installing the webapp service by default would burn a port and run a Node process for users who never visit the dashboard.
 - **`Wants=` not `Requires=`.** Daemon failure doesn't tear the webapp down. The webapp's status bar already surfaces "daemon unreachable" — failing closed loses signal without buying anything.
 - **Production `npm run start`, not dev.** Dev mode runs hot-reload + telemetry overhead. For a host service you want the static-route, prebuilt bundle.
-- **PATH baked into the unit.** systemd-user inherits a minimal environment; the `Environment=PATH=...` line in the webapp unit is what makes `node`/`npm` resolvable when the user has nvm or asdf-managed Node.
+- **PATH baked into the units.** systemd-user inherits a minimal environment; the `Environment=PATH=...` lines are what make user-managed toolchains resolvable. The webapp unit needs `node`/`npm`; the daemon unit needs the *whole* dev PATH because it runs user-authored init scripts (pyenv/nvm/asdf shims and all — a bare PATH made `uv`/`npm` resolve to stale system binaries and rolled workspace creates back, issue #9). The daemon PATH is a snapshot of the shell that ran `make systemd`: re-run `make systemd` after toolchain moves (e.g. an nvm default-version bump), or pin one explicitly with `DAEMON_PATH=... make systemd`.

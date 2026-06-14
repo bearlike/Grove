@@ -34,25 +34,61 @@ export function applyDashboardEvent(
   return state;
 }
 
+/**
+ * Is `id` present in the snapshot? The hook uses this to detect a
+ * `session_activity` delta for a workspace it doesn't have yet.
+ *
+ * Why it matters (#49): the daemon's `poll_once` re-enumerates the store and
+ * emits `session_activity` — *not* `workspace_changed` — for a workspace
+ * created by a separate process (a second TUI, the MCP server, the CLI). The
+ * bus-bridged `workspace_changed` lifecycle event only fires for ops that go
+ * through the daemon's own in-process managers, so an out-of-band create never
+ * triggers the hook's lifecycle re-fetch. `patchWorkspace` deliberately drops a
+ * delta for an unknown workspace (keeps the wall stable), which would leave the
+ * new row invisible until a reconnect/focus-heal. The hook closes that gap by
+ * re-fetching the full snapshot when this predicate is false for an incoming
+ * delta. Pure, so it stays a unit-test seam alongside the reducer.
+ */
+export function snapshotHasWorkspace(
+  state: DashboardSnapshotView | null,
+  id: string,
+): boolean {
+  if (!state) return false;
+  return state.projects.some((g) => g.workspaces.some((w) => w.state.id === id));
+}
+
+// The daemon's connect-time snapshot and its poll loop race: a delta read
+// BEFORE the snapshot was computed can be queued and delivered AFTER it.
+// `observed_at` (when the engine actually read the row) is the true freshness
+// key — the event seq is not. Malformed/missing timestamps fail open (apply
+// the patch) so a bad clock can never freeze a card.
+function isStaleDelta(
+  existing: WorkspaceActivityView,
+  incoming: WorkspaceActivityView,
+): boolean {
+  const have = Date.parse(existing.observed_at);
+  const got = Date.parse(incoming.observed_at);
+  return Number.isFinite(have) && Number.isFinite(got) && got < have;
+}
+
 function patchWorkspace(
   state: DashboardSnapshotView | null,
   changed: WorkspaceActivityView,
 ): DashboardSnapshotView | null {
   if (!state) return state;
-  let found = false;
-  const projects: ProjectGroupView[] = state.projects.map((group) => ({
-    ...group,
-    workspaces: group.workspaces.map((existing) => {
-      if (existing.state.id === changed.state.id) {
-        found = true;
-        return changed;
-      }
-      return existing;
-    }),
-  }));
+  const current = state.projects
+    .flatMap((g) => g.workspaces)
+    .find((w) => w.state.id === changed.state.id);
   // An activity delta for a workspace we don't have yet (created since the last
   // snapshot) — leave state untouched; the lifecycle re-fetch will pick it up.
-  if (!found) return state;
+  if (!current) return state;
+  if (isStaleDelta(current, changed)) return state;
+  const projects: ProjectGroupView[] = state.projects.map((group) => ({
+    ...group,
+    workspaces: group.workspaces.map((existing) =>
+      existing.state.id === changed.state.id ? changed : existing,
+    ),
+  }));
   const all = projects.flatMap((g) => g.workspaces);
   return {
     ...state,

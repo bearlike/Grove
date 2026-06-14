@@ -5,7 +5,7 @@ This page covers what each one touches and what each one deliberately
 does not.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.png" alt="Grove TUI showing four workspaces in mixed lifecycle states" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI showing four workspaces in mixed lifecycle states" /></div>
   <figcaption class="ms-shot__body">Four workspaces, four lifecycle moments. Active and idle on top. The offline row offers <code>o</code> (respawn) and <code>k</code> (kill).</figcaption>
 </figure>
 
@@ -43,7 +43,14 @@ stateDiagram-v2
 `create`, `pause`, `resume`, and `kill` are the four lifecycle verbs the
 operator drives directly. `respawn` is a recovery path for the specific
 case where the tmux session vanished externally but the worktree is
-intact.
+intact. `attach` opens an interactive session into a running workspace.
+
+Every one of these verbs reaches the same engine, so they behave the same
+wherever you call them: the [TUI](use-tui.md), the [CLI](use-cli.md), the
+[web dashboard](use-webapp.md), and the [MCP server](use-mcp.md). One
+lifecycle, four front doors. Create a workspace from your editor's MCP
+client, pause it from the TUI, and resume it from the web dashboard. The
+state lives in one shared store, not in any single client.
 
 The table above describes the default shape, where each workspace gets
 its own worktree. A workspace can also run in the repo root instead. See

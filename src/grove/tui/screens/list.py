@@ -10,9 +10,11 @@ view when no workspaces exist.
 Two refresh cadences keep the rail live without burning resources:
 * fast tick (`cfg.peek_pane_refresh_seconds`, default 0.25 s) — `peek_pane`
   only, splices the fresh snapshot into the cached full peek;
-* slow tick (`cfg.peek_stats_refresh_seconds`, default 3 s) — full `peek`
-  (git ahead/behind/diff/dirty), refreshes the cache, and recomputes the
-  agent-activity axis for the visible rows (cards + rail metrics line).
+* slow tick (`cfg.peek_stats_refresh_seconds`, default 3 s) — re-enumerates
+  the workspace set (`manager.list()`, id-diffed so out-of-band creates/kills
+  appear without a restart), full `peek` (git ahead/behind/diff/dirty),
+  refreshes the cache, and recomputes the agent-activity axis for the
+  visible rows (cards + rail metrics line).
 Both ticks are frozen when a modal is on top of us. Number keys 1-9 jump
 cursor.
 """
@@ -23,6 +25,7 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import replace as _dc_replace
+from pathlib import Path
 from typing import ClassVar
 
 from loguru import logger
@@ -41,15 +44,17 @@ from grove.core import (
     CreateWorkspaceRequest,
     GroveError,
     RepoRegistry,
+    SessionExplorer,
     UpdateWorkspaceRequest,
     WorkspaceEvent,
     WorkspaceManager,
     WorkspacePeek,
     WorkspaceState,
     WorkspaceStatus,
+    load_config,
 )
 from grove.core.activity import ActivityService
-from grove.core.agents import AgentActivity
+from grove.core.agents import AgentActivity, SessionTurn
 from grove.core.workspace import LIVE_STATUSES, Placement
 from grove.tui._status import ACTIVE_PULSE_FRAMES
 from grove.tui.keys import (
@@ -62,6 +67,9 @@ from grove.tui.screens.create import CreateWorkspaceScreen
 from grove.tui.screens.dashboard import DashboardScreen
 from grove.tui.screens.edit import EditWorkspaceScreen
 from grove.tui.screens.help import HelpScreen
+from grove.tui.screens.message import SendMessageScreen
+from grove.tui.screens.project_picker import ProjectPickerScreen, RepoChoice
+from grove.tui.screens.sessions import SessionsScreen
 from grove.tui.widgets.filter_bar import FilterBar
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
 from grove.tui.widgets.list import WorkspaceList
@@ -69,6 +77,11 @@ from grove.tui.widgets.peek_rail import PeekRail
 from grove.tui.widgets.status import FlashLevel, StatusBar
 
 _PEEK_DEBOUNCE_SECONDS = 0.08
+
+# How many tail turns feed the peek rail's transcript tab. The rail is a
+# glance surface — the sessions screen (50) and `grove sessions show` are
+# the read-deeply surfaces.
+_RAIL_TURNS = 20
 
 # Live-signal pulse cadence. 4 Hz — same budget as the existing peek-pane
 # fast tick — gives a full ●→◉→● cycle every 0.5 s, which is fast enough
@@ -144,11 +157,20 @@ class WorkspaceListScreen(Screen[None]):
         # ever reads its own repo through it (`sessions_for(self._manager, …)`),
         # but sharing the service keeps the blend + hook-sidecar policy in the
         # engine's single site instead of re-implementing it TUI-side.
+        if registry is None:
+            registry = RepoRegistry(
+                cfg=manager.config, store=manager.store, config_loader=load_config
+            )
+        # Retained so the project switcher (`P`) can resolve a Manager for any
+        # repo the store knows — the same cache the daemon/dashboard share, so
+        # switching back to a repo reuses its already-built Manager.
+        self._registry = registry
         if service is None:
-            if registry is None:
-                registry = RepoRegistry(cfg=manager.config, store=manager.store)
             service = ActivityService(registry=registry)
         self._service = service
+        # Session read-path for the rail's transcript tab and the sessions
+        # screen — stateless over the manager, so one instance serves both.
+        self._explorer = SessionExplorer(manager)
         # Primary AgentActivity per workspace id, recomputed by the slow
         # stats tick for the *visible* rows. Cards take the state enum; the
         # peek rail takes the selected row's full activity (metrics line).
@@ -167,6 +189,11 @@ class WorkspaceListScreen(Screen[None]):
         # the git work. Invalidated on selection change and rebuilt by the
         # next slow stats tick (or on the debounced selection-change tick).
         self._cached_peek: WorkspacePeek | None = None
+        # Tail turns of the selected row's newest session, refreshed on the
+        # same slow path as the peek. The fast pane tick re-passes the
+        # cached tuple so the rail's transcript tab doesn't flicker off
+        # between slow ticks (same reason the agent activity is re-passed).
+        self._cached_turns: tuple[SessionTurn, ...] = ()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -248,6 +275,70 @@ class WorkspaceListScreen(Screen[None]):
         leaks a timer.
         """
         self.app.push_screen(DashboardScreen(self._manager))
+
+    def action_switch_project(self) -> None:
+        """Open the project switcher: re-point this screen at another repo.
+
+        Counts come from one cheap ``store.load_all()`` grouped by repo_root —
+        no git/tmux reconciliation (that's the dashboard's job). On a chosen
+        repo, ``_handle_switch_result`` resolves a Manager through the shared
+        registry and ``switch_screen``s to a fresh list screen for it, so the
+        screen stack never grows on repeated switches.
+        """
+        choices = RepoChoice.group(self._manager.store.load_all(), current=self._manager.repo_root)
+        self.app.push_screen(ProjectPickerScreen(choices), self._handle_switch_result)
+
+    def _handle_switch_result(self, repo_root: Path | None) -> None:
+        if repo_root is None or repo_root.resolve() == self._manager.repo_root.resolve():
+            return
+        new_manager = self._registry.get(repo_root)
+        self.app.switch_screen(WorkspaceListScreen(new_manager, registry=self._registry))
+
+    def action_open_sessions(self) -> None:
+        """Browse the selected workspace's agent-session history.
+
+        Reads through the engine's bounded ``SessionExplorer.for_workspace``
+        seam (one-cwd scan). Transcripts outlive worktrees — they live under
+        the agent tool's own data dir — so the key stays available in every
+        status: a paused or orphaned workspace still has readable history.
+        """
+        wid = self._selected_id()
+        if wid is None:
+            self._flash("nothing selected")
+            return
+        state = self._selected_state()
+        title = state.title if state is not None else wid[:8]
+        self.app.push_screen(
+            SessionsScreen(
+                self._explorer,
+                workspace_id=wid,
+                workspace_title=title,
+            )
+        )
+
+    def action_send_message(self) -> None:
+        """Send a follow-up message to the selected workspace's agent.
+
+        The manager owns the per-kind dispatch (tmux inject for
+        claude_code/generic, remote API for mewbo) — the TUI never reads
+        ``agent_kind``. Success surfaces through the manager's
+        ``message_sent`` event (same convention as the lifecycle flashes);
+        typed refusals (offline/paused, no pane, remote errors) land as an
+        error flash via ``_safe_call``.
+        """
+        wid = self._selected_id()
+        if wid is None:
+            self._flash("nothing selected")
+            return
+        state = self._selected_state()
+        title = state.title if state is not None else wid[:8]
+
+        def _on_result(text: str | None) -> None:
+            if text is None:
+                return
+            self._safe_call("message", lambda: self._manager.send_message(wid, text))
+
+        self.app.push_screen(SendMessageScreen(workspace_title=title), _on_result)
 
     def action_focus_filter(self) -> None:
         bar = self.query_one(FilterBar)
@@ -472,19 +563,32 @@ class WorkspaceListScreen(Screen[None]):
             self._peek_timer = None
 
     def _tick_stats(self) -> None:
-        """Slow ticker: full peek refresh (git ahead/behind/diff/dirty + tmux).
+        """Slow ticker: re-enumerate the workspace set, then full peek refresh.
 
         Frozen on modal: when any modal is on top of us, `app.screen` is
         not this screen. Skipping the recompute keeps the user's typing
         in the create dialog snappy and avoids spurious git/tmux calls
         when the rail is not visible to the user anyway.
 
-        Also recomputes the agent-activity axis (one transcript parse per
-        visible row) *before* the peek refresh so the rail's metrics line
-        renders from this tick's data, not the previous one's.
+        Re-reads ``manager.list()`` first so out-of-band lifecycle changes
+        (a workspace created/killed/paused/resumed via MCP, the daemon, or
+        a second TUI on the same project) appear without a restart. The
+        store is the shared source of truth and ``list()`` re-reads it
+        whole-file (the engine's atomic ``os.replace`` writes mean reads
+        are always consistent); ``populate`` diffs by id and preserves the
+        selected row, so repeated ticks are idempotent (no duplicate rows,
+        no cursor jump). The manager's ``_maybe_emit_status_drift`` guard
+        is idempotent across consecutive ``list()`` calls, so this refresh
+        can't recurse through ``_on_manager_event``.
+
+        Then recomputes the agent-activity axis (one transcript parse per
+        visible row) over the *fresh* set *before* the peek refresh so the
+        rail's metrics line renders from this tick's data, not the previous
+        one's.
         """
         if self.app.screen is not self:
             return
+        self._refresh()
         self._tick_agent_states()
         self._refresh_peek()
 
@@ -540,9 +644,13 @@ class WorkspaceListScreen(Screen[None]):
             agent_snapshot=snap,
             snapshot_taken_at=captured_at,
         )
-        # Pass the cached agent activity too — otherwise the splice would
-        # drop the metrics line and the slow tick would re-add it (flicker).
-        self.query_one(PeekRail).set_peek(spliced, agent=self._agent_activity.get(wid))
+        # Pass the cached agent activity and turns too — otherwise the
+        # splice would drop the metrics line / transcript tab and the slow
+        # tick would re-add them (flicker). The fast tick stays tmux-only:
+        # no transcript parse on this path.
+        self.query_one(PeekRail).set_peek(
+            spliced, agent=self._agent_activity.get(wid), turns=self._cached_turns
+        )
 
     def _tick_pulse(self) -> None:
         """Advance the live-signal pulse and push it to cards + status bar.
@@ -567,6 +675,7 @@ class WorkspaceListScreen(Screen[None]):
         wid = self._selected_id()
         if wid is None:
             self._cached_peek = None
+            self._cached_turns = ()
             rail.set_peek(None)
             return
         try:
@@ -575,12 +684,32 @@ class WorkspaceListScreen(Screen[None]):
             # peek() is contractually best-effort, but workspace might have
             # been killed externally between selection and recompute.
             self._cached_peek = None
+            self._cached_turns = ()
             rail.set_peek(None)
             return
         self._cached_peek = peek
+        self._cached_turns = self._recent_turns(wid)
         # The agent map is fed by the slow tick; a row it hasn't covered yet
         # (fresh selection, sessionless workspace) simply renders no line.
-        rail.set_peek(peek, agent=self._agent_activity.get(wid))
+        rail.set_peek(peek, agent=self._agent_activity.get(wid), turns=self._cached_turns)
+
+    def _recent_turns(self, wid: str) -> tuple[SessionTurn, ...]:
+        """Tail turns of the selected row's newest session, for the rail.
+
+        Rides the same slow path as ``peek()`` (selection debounce + slow
+        stats tick), so the cost — one directory scan plus one transcript
+        parse — is the same class the activity tick already pays per row.
+        Best-effort like peek: any failure renders no transcript tab
+        rather than breaking the rail.
+        """
+        try:
+            listings = self._explorer.for_workspace(wid)
+            if not listings:
+                return ()
+            return self._explorer.turns_for(listings[0], last=_RAIL_TURNS)
+        except Exception as exc:  # best-effort, peek contract
+            logger.debug("transcript tail for {} failed: {}", wid, exc)
+            return ()
 
     # ─── filter ───────────────────────────────────────────────────────────
 
@@ -631,27 +760,21 @@ class WorkspaceListScreen(Screen[None]):
         self._refresh_peek()
         self._refresh_footer()
         kind = event.kind
-        if kind == "error":
+        # Constant-message kinds resolve through the data table (same
+        # data-not-branches idiom as the footer gating); only kinds whose
+        # message depends on the event detail keep a branch.
+        flash = _EVENT_FLASH.get(kind)
+        if flash is not None:
+            self._flash(flash[0], level=flash[1])
+        elif kind == "error":
             error = event.detail.get("error") or event.detail.get("exit_code") or ""
             self._flash(f"error in {event.detail.get('phase', '?')}: {error}", level="error")
-        elif kind == "offline_detected":
-            self._flash("workspace went offline — press 'o' to respawn", level="error")
-        elif kind == "orphaned_detected":
-            self._flash("worktree missing on disk — press 'k' to clean up", level="error")
         elif kind == "created":
             title = event.detail.get("title", "")
             self._flash(
                 f"created '{title}'" if title else "workspace created",
                 level="success",
             )
-        elif kind == "paused":
-            self._flash("workspace paused", level="success")
-        elif kind == "resumed":
-            self._flash("workspace resumed", level="success")
-        elif kind == "respawned":
-            self._flash("workspace respawned", level="success")
-        elif kind == "killed":
-            self._flash("workspace killed", level="success")
         elif kind == "updated":
             # Tailor the message so the user sees what actually changed.
             title_changed = event.detail.get("title_changed") == "true"
@@ -747,18 +870,38 @@ def _breakdown(states: list[WorkspaceState]) -> dict[WorkspaceStatus, int]:
     return out
 
 
+# Manager events whose flash message is a constant. Kinds with
+# detail-dependent copy (error / created / updated) stay as branches in
+# `_on_manager_event`.
+_EVENT_FLASH: dict[str, tuple[str, FlashLevel]] = {
+    "offline_detected": ("workspace went offline — press 'o' to respawn", "error"),
+    "orphaned_detected": ("worktree missing on disk — press 'k' to clean up", "error"),
+    "paused": ("workspace paused", "success"),
+    "resumed": ("workspace resumed", "success"),
+    "respawned": ("workspace respawned", "success"),
+    "killed": ("workspace killed", "success"),
+    "message_sent": ("message sent", "success"),
+}
+
+
 _AVAILABLE_KEYS_BY_STATUS: dict[WorkspaceStatus, frozenset[str]] = {
     # Edit ('e') is permitted in every status except ORPHANED — the engine's
     # ensure_can_update has the same rule (orphaned records are headed for
     # kill; renaming a doomed record adds confusion). ERROR allows edit so
     # users can annotate ("see ticket #X") while a workspace is broken.
-    WorkspaceStatus.ACTIVE: frozenset({"enter,a", "e", "p", "k"}),
-    WorkspaceStatus.IDLE: frozenset({"enter,a", "e", "p", "k"}),
-    WorkspaceStatus.RUNNING: frozenset({"enter,a", "e", "p", "k"}),  # raw intent leak
-    WorkspaceStatus.PAUSED: frozenset({"e", "R", "k"}),
-    WorkspaceStatus.OFFLINE: frozenset({"e", "o", "k"}),
-    WorkspaceStatus.ORPHANED: frozenset({"k"}),
-    WorkspaceStatus.ERROR: frozenset({"e", "k"}),
+    # Sessions ('s') is permitted in EVERY status — transcripts outlive
+    # worktrees (they live in the agent tool's own data dir), so even an
+    # orphaned record's history is readable.
+    # Message ('m') is RUNNING-family only — same gate family as pause:
+    # steering needs a live session (the engine refuses OFFLINE/PAUSED with
+    # a typed error; the footer dims the key so the modal isn't a trap).
+    WorkspaceStatus.ACTIVE: frozenset({"enter,a", "m", "e", "s", "p", "k"}),
+    WorkspaceStatus.IDLE: frozenset({"enter,a", "m", "e", "s", "p", "k"}),
+    WorkspaceStatus.RUNNING: frozenset({"enter,a", "m", "e", "s", "p", "k"}),  # raw intent leak
+    WorkspaceStatus.PAUSED: frozenset({"e", "s", "R", "k"}),
+    WorkspaceStatus.OFFLINE: frozenset({"e", "s", "o", "k"}),
+    WorkspaceStatus.ORPHANED: frozenset({"s", "k"}),
+    WorkspaceStatus.ERROR: frozenset({"e", "s", "k"}),
 }
 
 # Keys a placement strips out *after* the status gate. ROOT workspaces have no

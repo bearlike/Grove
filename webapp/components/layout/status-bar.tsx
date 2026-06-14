@@ -118,7 +118,7 @@ export function StatusBar() {
           <span>{count} {count === 1 ? "workspace" : "workspaces"}</span>
         </span>
         <span className="ml-auto inline-flex items-center gap-3">
-          <span className="hidden sm:inline">read-only dashboard</span>
+          <span className="hidden sm:inline">web dashboard</span>
           <Link
             href={REPO_URL}
             target="_blank"

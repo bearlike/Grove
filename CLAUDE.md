@@ -23,13 +23,14 @@ Maintain context across sessions. When you hit a non-trivial lesson, write it in
 | `src/grove/core/agents/` | tool-agnostic agent introspection (adapters) | [agents/CLAUDE.md](src/grove/core/agents/CLAUDE.md) |
 | `src/grove/daemon/` | loopback FastAPI daemon (multi-repo, SSE) | [daemon/CLAUDE.md](src/grove/daemon/CLAUDE.md) |
 | `src/grove/client/` | transport-agnostic attach (local PTY / SSH) | [client/CLAUDE.md](src/grove/client/CLAUDE.md) |
+| `src/grove/mcp/` | MCP server (stdio tools over the client SDK) | [mcp/CLAUDE.md](src/grove/mcp/CLAUDE.md) |
 | `src/grove/tui/` | Textual terminal UI | [tui/CLAUDE.md](src/grove/tui/CLAUDE.md) + [design-system.md](docs/design-system.md) |
 | `webapp/` | read-only Next.js dashboard | [webapp/CLAUDE.md](webapp/CLAUDE.md) |
 | `docs/` | published mkdocs site | [docs/CLAUDE.md](docs/CLAUDE.md) |
 | `packaging/` | systemd-user service units | [packaging/CLAUDE.md](packaging/CLAUDE.md) |
 | `tests/` | pytest suite + CI/lint gotchas | [tests/CLAUDE.md](tests/CLAUDE.md) |
 
-Side-effect surfaces live in `core/git.py` and `core/tmux.py` only; everything else is pure. The package root (`__init__.py` re-exports) is the contract; modules below it are internal even without an underscore.
+Side-effect surfaces live in dedicated modules only (`core/git.py`, `core/tmux.py`, `core/mewbo.py` for the Mewbo REST API); everything else is pure. The package root (`__init__.py` re-exports) is the contract; modules below it are internal even without an underscore.
 
 ## The distributed CLAUDE.md tree
 
@@ -44,6 +45,7 @@ Working memory is **distributed and recursive**: every component owns a nested `
 │  └─ src/grove/core/agents/CLAUDE.md       tool-agnostic agent introspection (adapters)
 ├─ src/grove/daemon/CLAUDE.md          loopback HTTP daemon (multi-repo, SSE)
 ├─ src/grove/client/CLAUDE.md          transport-agnostic attach (local PTY / SSH)
+├─ src/grove/mcp/CLAUDE.md             MCP server (stdio tools over GroveClient)
 ├─ src/grove/tui/CLAUDE.md             Textual TUI   (+ docs/design-system.md = visual contract)
 ├─ webapp/CLAUDE.md                    read-only Next.js dashboard
 ├─ docs/CLAUDE.md                      published mkdocs site
@@ -88,15 +90,15 @@ These apply across every module. Some areas already follow them tightly; others 
 
 ## Running, testing, linting
 
-- Install (editable, with the daemon extra): `uv tool install --reinstall --force --editable '.[daemon]'` from the repo root, then `systemctl --user restart grove-daemon`.
-- Tests: `uv run pytest`. Lint: `make lint` (runs **both** `ruff format --check` and `ruff check` — always the full target before pushing, never just `ruff check`). Types: `uv run mypy src`. Architecture: import-linter.
+- Install (editable, all surfaces): `uv tool install --reinstall --force --editable '.[all]'` from the repo root, then `systemctl --user restart grove-daemon`. `[all]` = daemon+client+mcp, so `grove-mcp` actually works; `'.[daemon]'` is the lean daemon-only variant that intentionally omits the MCP SDK and leaves `grove-mcp` non-functional (`ModuleNotFoundError: No module named 'mcp'`).
+- Tests: `uv run pytest`. Lint: `make lint` is the full gate — it runs `ruff check`, `ruff format --check`, `mypy src/grove`, and `lint-imports` (import-linter) in sequence. Always run the full target before pushing, never just `ruff check`. Standalone equivalents if you need one in isolation: `uv run mypy src`, `uv run lint-imports`.
 - CI is Linux-only; cross-platform defenses are unverified by CI. See [tests/CLAUDE.md](tests/CLAUDE.md) for the test seams and the Windows/macOS gotchas to reason about by hand.
 
 ## Cross-cutting process lessons (no single component owner)
 
 > Workflow and tooling lessons with no component home. Component-specific learnings live in the nested files mapped above — don't re-log them here.
 
-- **Running Grove from a checkout means an editable install; an update refreshes three surfaces.** `~/.local/bin/grove` resolves to whatever was last `uv tool install`ed; a vanilla install pulls the published PyPI wheel (the release), not your checkout. Symptom: a new endpoint or method is green in `pytest` but the running daemon serves 404 / `No such command`. Fix: `uv tool install --reinstall --force --editable '.[daemon]'`, then restart the daemon (the `[daemon]` extra is load-bearing). Updating Grove means refreshing the CLI/TUI (relaunch), the daemon (restart), and the webapp (rebuild `.next` + restart) — each is a separate surface.
+- **Running Grove from a checkout means an editable install; an update refreshes three long-lived surfaces.** `~/.local/bin/grove` resolves to whatever was last `uv tool install`ed; a vanilla install pulls the published PyPI wheel (the release), not your checkout. Symptom: a new endpoint or method is green in `pytest` but the running daemon serves 404 / `No such command`. Fix: `uv tool install --reinstall --force --editable '.[all]'`, then restart the daemon (the `[daemon]` extra is load-bearing for the server; `[all]` adds the `mcp` extra so the always-installed `grove-mcp` script can import). Updating Grove means refreshing the CLI/TUI (relaunch), the daemon (restart), and the webapp (rebuild `.next` + restart) — each is a separate surface. (The opt-in `grove-mcp` MCP server needs no refresh step: the MCP client respawns it per connection, so an editable pull is live on its next launch — only a changed `mcp` extra needs a reinstall. See the `reinstalling-grove` skill.)
 - **A Grove workspace is a git worktree, so it sees only committed files.** Uncommitted working-tree edits never propagate into a worktree. Commit shared config (e.g. `.mcp.json`, whose tokens are env refs, not literals) for worktrees to inherit it. Config layers: user `~/.config/grove/config.json`, committed project `.grove/config.json`, gitignored `.grove/config.local.json`.
 - **Parallel-agent build pattern.** Build the shared foundation solo and verify it, then fan out one agent per *disjoint* directory. Agents only consume the foundation, never edit it → zero conflicts. Give each the exact contract plus the source to match; integrate and verify last. You own the shared contention points solo. (This very doc tree was built that way.)
 - **The working tree can advance under you mid-session (concurrent dev).** If the Edit "modified since read" guard fires, re-read the file fresh and re-derive the edit against current content — never force it. `git log` / `git diff --stat` to map the real blast radius before integrating.

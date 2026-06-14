@@ -21,6 +21,14 @@ class BackendConfig:
     """OpenSSH-syntax target (``user@host`` or any ssh_config alias).
     ``None`` means a local backend — the client spawns its own daemon."""
 
+    daemon_url: str | None = None
+    """Base URL of an already-running daemon (``http://127.0.0.1:7421``).
+
+    Set this to attach to an externally supervised daemon (systemd unit,
+    ``grove-mcp``) instead of spawning a child process or opening an SSH
+    tunnel. Mutually exclusive with ``ssh_target``. Interactive attach is
+    unavailable on this transport — there is no PTY or SSH channel to ride."""
+
     daemon_port: int = 7421
     """Daemon port on the remote host. Ignored for local backends
     (LocalTransport always picks an ephemeral port)."""

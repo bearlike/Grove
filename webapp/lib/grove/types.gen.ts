@@ -341,6 +341,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Workspace Message
+         * @description Steer the workspace's agent with a follow-up message (issue #37).
+         *
+         *     Empty 204 on success — the injection has no meaningful response
+         *     body. Refusals ride the typed-error envelope: 409
+         *     ``workspace_state_error`` / ``pane_not_found``, 501
+         *     ``steering_unsupported``.
+         */
+        post: operations["send_workspace_message_workspaces__ws_id__message_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Interrupt Workspace
+         * @description Interrupt the workspace's agent, where its adapter supports it.
+         *
+         *     Today every kind refuses (501 ``steering_unsupported``) — there is
+         *     no safe generic interrupt for a tmux-hosted CLI, and the mewbo API
+         *     arm lands with issue #36. The route exists now so clients code
+         *     against the final surface.
+         */
+        post: operations["interrupt_workspace_workspaces__ws_id__interrupt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/attach": {
         parameters: {
             query?: never;
@@ -392,6 +442,33 @@ export interface paths {
          *     ``ansi: null`` when the session isn't live).
          */
         get: operations["workspace_pane_workspaces__ws_id__pane_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/pane/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Pane Stream
+         * @description Live focused-pane SSE push for one workspace (#19, the streaming wall).
+         *
+         *     Resolves the workspace once (404 if unknown), then self-paces: each tick
+         *     captures the agent pane via the same best-effort ``peek_pane`` seam the
+         *     one-shot route uses, off-loaded to the executor so the blocking tmux read
+         *     never stalls the loop. A workspace killed mid-stream degrades to an empty
+         *     pane (best-effort, like peek) rather than tearing the connection down — the
+         *     client drops the focus on the next activity tick and closes the stream.
+         */
+        get: operations["workspace_pane_stream_workspaces__ws_id__pane_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -476,6 +553,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Project Sessions
+         * @description Every agent session across one project's worktrees, newest-first.
+         *
+         *     The project-landing analogue of ``GET /workspaces/{id}/sessions``: spans
+         *     every scan root (Grove-managed and hand-staged worktrees alike), so rows
+         *     carry the ``workspace_*`` attribution trio when Grove owns the directory
+         *     and ``None`` when staged by hand. ``repo`` follows the ``/branches``
+         *     convention for repo dispatch; an unknown root is a 404 rather than an
+         *     empty list so a typo'd path can't masquerade as "no sessions yet".
+         *
+         *     ``SessionExplorer.list`` full-parses every transcript across every
+         *     worktree — heavy per request, acceptable here because the UI fetches it
+         *     only when the user expands the collapsed sessions section. Blocking I/O,
+         *     so it runs in the executor like the sibling sessions endpoints.
+         */
+        get: operations["project_sessions_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agents
+         * @description Configured agents for one repo's cascade — the new-workspace picker source.
+         *
+         *     The TUI reads ``cfg.agents`` in-process to build its create-modal dropdown;
+         *     a remote create form can't, so this returns the same merged list. ``repo``
+         *     dispatches like ``/branches`` (per-repo cascade), so a project-scoped agent
+         *     defined in ``<repo>/.grove/config.json`` shows up here too. Read-only and
+         *     non-git, so it can't raise — an arbitrary path just yields the default
+         *     cascade.
+         */
+        get: operations["list_agents_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/branches": {
         parameters: {
             query?: never;
@@ -527,6 +663,11 @@ export interface components {
             replies_per_turn: number[];
             /** Tool Calls */
             tool_calls: number;
+            /**
+             * Active Subagents
+             * @default 0
+             */
+            active_subagents: number;
             /** Model */
             model: string | null;
             /** Tokens In */
@@ -559,6 +700,24 @@ export interface components {
             provenance: string;
             /** Tmux Window */
             tmux_window: string | null;
+        };
+        /**
+         * AgentSummaryView
+         * @description One selectable agent as a create-form client sees it.
+         */
+        AgentSummaryView: {
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "claude_code" | "codex" | "generic" | "mewbo";
+            /**
+             * Description
+             * @default
+             */
+            description: string;
         };
         /**
          * AttachInstructionView
@@ -677,6 +836,8 @@ export interface components {
              * @default false
              */
             skip_init: boolean;
+            /** Initial Prompt */
+            initial_prompt?: string | null;
             /** Repo Root */
             repo_root?: string | null;
         };
@@ -688,8 +849,11 @@ export interface components {
          *     embeds the full ``DashboardSnapshotView``; ``session_activity`` embeds the one
          *     changed ``WorkspaceActivityView`` so the client patches a single card;
          *     ``workspace_changed`` is a lifecycle wake-up (re-fetch); ``heartbeat`` keeps
-         *     the connection warm; ``pane_snapshot`` is reserved for #19. ``seq`` is the
-         *     monotonic SSE id used for ``Last-Event-ID`` replay.
+         *     the connection warm; ``pane_snapshot`` embeds one ``WorkspacePaneView`` (#19,
+         *     the live focused-pane push) and rides a *dedicated* per-workspace stream, not
+         *     the cross-project ``/events`` fan-out — its ~1 Hz cadence and per-id scope are
+         *     a different concern from the activity deltas. ``seq`` is the monotonic SSE id
+         *     used for ``Last-Event-ID`` replay.
          */
         DashboardEvent: {
             /**
@@ -712,6 +876,7 @@ export interface components {
             };
             workspace?: components["schemas"]["WorkspaceActivityView"] | null;
             snapshot?: components["schemas"]["DashboardSnapshotView"] | null;
+            pane?: components["schemas"]["WorkspacePaneView"] | null;
         };
         /**
          * DashboardSnapshotView
@@ -739,7 +904,7 @@ export interface components {
              * Role
              * @enum {string}
              */
-            role: "user" | "assistant" | "tool" | "summary" | "status";
+            role: "user" | "assistant" | "tool" | "summary" | "status" | "notification";
             /** Text */
             text: string;
         };
@@ -941,7 +1106,8 @@ export interface components {
          *     Flattens the listing's ``SessionSummary`` plus its project annotation.
          *     ``activity`` reuses the dashboard's ``AgentActivityView`` — the explorer's
          *     one parse per transcript yields both metadata and metrics, so the wire
-         *     carries them together too.
+         *     carries them together too. The ``workspace_*`` trio is ``None`` for a
+         *     hand-staged session (a directory Grove doesn't manage).
          */
         SessionSummaryView: {
             /** Session Id */
@@ -952,6 +1118,10 @@ export interface components {
             provenance: string;
             /** Workspace Id */
             workspace_id: string | null;
+            /** Workspace Title */
+            workspace_title: string | null;
+            /** Workspace Branch */
+            workspace_branch: string | null;
             /** Git Branch */
             git_branch: string | null;
             /** Created At */
@@ -1267,6 +1437,19 @@ export interface components {
              * @default false
              */
             force: boolean;
+        };
+        /**
+         * _SendMessageBody
+         * @description Steer request body — the follow-up text typed into the agent pane.
+         *
+         *     ``min_length=1``: an empty steer is always a client bug; refusing it
+         *     at validation (422) keeps the engine's typed-error surface for real
+         *     state problems. Module-scope for the same forward-ref reason as
+         *     ``_PauseBody`` above.
+         */
+        _SendMessageBody: {
+            /** Text */
+            text: string;
         };
     };
     responses: never;
@@ -1788,6 +1971,68 @@ export interface operations {
             };
         };
     };
+    send_workspace_message_workspaces__ws_id__message_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_SendMessageBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    interrupt_workspace_workspaces__ws_id__interrupt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     attach_workspace_workspaces__ws_id__attach_get: {
         parameters: {
             query?: never;
@@ -1868,6 +2113,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspacePaneView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_pane_stream_workspaces__ws_id__pane_stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description text/event-stream of `pane_snapshot` DashboardEvent frames for this one workspace's agent pane (#19). A push upgrade of `GET .../pane`: the daemon captures ~1 Hz and emits a frame only when the pane changed (else a keepalive comment). The client opens this for the single focused WORKING card and closes it on blur, so off-screen/idle panes cost nothing. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardEvent"];
                 };
             };
             /** @description Validation Error */
@@ -1966,6 +2242,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionDetailView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_sessions_sessions_get: {
+        parameters: {
+            query: {
+                repo: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSummaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agents_agents_get: {
+        parameters: {
+            query: {
+                repo: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSummaryView"][];
                 };
             };
             /** @description Validation Error */

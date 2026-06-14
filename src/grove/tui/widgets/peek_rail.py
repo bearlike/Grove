@@ -5,21 +5,28 @@ The rail is purely a renderer: callers compute a `WorkspacePeek` via
 That keeps the test seam at `manager.peek` and lets the same data shape
 serve any future client.
 
-Layout: two stacked `Static` cards. The **workspace card** carries the
-metadata (stats, agent session metrics, description, init failure,
-lifecycle affordances, recent commits) — its border stays in `$secondary` because metadata
-describes state, it doesn't *carry* attention. The **pane card** mirrors
-the live agent pane; while the workspace is RUNNING it gains the `-live`
-class and its border switches to `$primary` (the brand clay) so the eye
-can find "what's actually live" at a glance. When not running, the pane
-card hides via `-hidden` and the workspace card carries the affordance.
+Layout: the **workspace card** (a `Static`) carries the metadata (stats,
+agent session metrics, description, init failure, lifecycle affordances,
+recent commits) — its border stays in `$secondary` because metadata
+describes state, it doesn't *carry* attention. Below it, a **tabbed
+preview** (`TabbedContent`) holds two panes: the **transcript tab** (a
+digest of the primary session's recent turns, tool runs grouped — the
+rail never lists individual calls) and the **terminal tab** (the live
+tmux pane mirror). While the workspace is RUNNING the container gains
+the `-live` class and its border switches to `$primary` (the brand clay)
+so the eye can find "what's actually live" at a glance. With nothing to
+preview (not live, no recorded transcript) the container hides via
+`-hidden` and the workspace card carries the affordance.
 
-Why two Statics rather than one (cf. CLAUDE.md): the rule against many
-child widgets was about `dozens` of nested widgets churning Textual's
-reactive layout per frame. Two cards have aligned paint cadences — the
-fast pane tick (~4 Hz, diff guarded) only repaints the pane card; the
-selection-driven tick (debounced 80 ms) repaints both. So the split
-*reduces* per-frame work on the hot path.
+Default-tab policy: transcript whenever turns exist for the selection,
+else terminal — re-derived per selection, but a tab the user picked by
+hand is respected until the selection changes (never fight the user).
+
+Paint cadences stay aligned (cf. CLAUDE.md): the fast pane tick (~4 Hz,
+diff guarded) only repaints the terminal pane's Static; the slow stats
+tick / selection debounce repaint workspace card + transcript. Each
+surface is one `Static` written via Rich `Text` — no per-frame widget
+churn.
 """
 
 from __future__ import annotations
@@ -28,14 +35,15 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 import humanize
+from rich.markup import escape
 from rich.style import Style
 from rich.text import Span, Text
 from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Static
+from textual.containers import Vertical, VerticalScroll
+from textual.widgets import Static, TabbedContent, TabPane
 
 from grove.core import CommitSummary, InitStatus, WorkspacePeek, WorkspaceState, WorkspaceStatus
-from grove.core.agents import AgentActivity
+from grove.core.agents import AgentActivity, SessionTurn
 from grove.core.workspace import LIVE_STATUSES
 from grove.tui._status import (
     agent_state_color,
@@ -45,6 +53,7 @@ from grove.tui._status import (
     ref_color,
     status_color,
 )
+from grove.tui._turns import render_transcript_digest
 from grove.tui.widgets.dashboard_grid import _human_tokens
 
 _SUBJECT_TRIM = 56
@@ -61,7 +70,11 @@ class PeekRail(Vertical):
 
     # Card chrome (background + border + border-title-color + padding) is
     # hoisted into GroveApp.CSS as `.grove-card`. Local rules below only
-    # cover layout + the live-pane border swap specific to this rail.
+    # cover layout + the live border swap specific to this rail. The tab
+    # bar itself keeps Textual's stock Tabs chrome: the active-tab
+    # underline resolves to `$accent` (= the brand clay on Grove themes),
+    # so no per-tab color overrides are needed — focus/hover chrome stays
+    # TCSS-only, never glyphs in rendered text.
     DEFAULT_CSS = """
     PeekRail {
         width: 60%;
@@ -72,14 +85,25 @@ class PeekRail(Vertical):
         height: auto;
         margin-bottom: 1;
     }
-    PeekRail #card-pane {
+    PeekRail #peek-tabs {
         height: 1fr;
     }
-    PeekRail #card-pane.-live {
+    PeekRail #peek-tabs ContentSwitcher {
+        height: 1fr;
+    }
+    PeekRail #peek-tabs TabPane {
+        height: 1fr;
+        padding: 0;
+    }
+    PeekRail #peek-tabs.-live {
         border: round $primary;
     }
-    PeekRail #card-pane.-hidden {
+    PeekRail #peek-tabs.-hidden {
         display: none;
+    }
+    PeekRail #transcript-scroll {
+        height: 1fr;
+        scrollbar-size-vertical: 1;
     }
     PeekRail.-empty #card-workspace {
         color: $text-muted;
@@ -87,54 +111,83 @@ class PeekRail(Vertical):
     """
 
     _EMPTY_PLACEHOLDER: ClassVar[str] = "(no workspace selected)"
+    _NO_TRANSCRIPT: ClassVar[str] = "[dim](no transcript)[/]"
+    _TRANSCRIPT_TAB: ClassVar[str] = "tab-transcript"
+    _TERMINAL_TAB: ClassVar[str] = "tab-terminal"
 
     def __init__(self) -> None:
         super().__init__()
-        # Mirrors what each card currently displays (plain text). Used as
-        # the per-card diff guard for `set_peek` so identical successive
-        # frames coalesce, and as the test seam via `body_text`.
+        # Mirrors what each surface currently displays (plain text). Used
+        # as the per-surface diff guard for `set_peek` so identical
+        # successive frames coalesce, and as the test seam via `body_text`.
         self._workspace_text: str = self._EMPTY_PLACEHOLDER
         self._pane_text: str = ""
+        self._transcript_text: str = ""
+        # Default-tab bookkeeping: which selection the current tab choice
+        # belongs to, and whether the user picked the tab by hand for it.
+        self._tab_wid: str | None = None
+        self._user_tab_choice = False
+        # Pane ids of programmatic tab switches whose TabActivated echo we
+        # have not yet consumed. TabbedContent posts the same message for
+        # our own `.active` writes and for user clicks; without this set
+        # the rail would mistake its own default-switch (or the framework's
+        # first-tab activation at mount — pre-seeded below) for a user
+        # choice and stop applying defaults.
+        self._auto_switches: set[str] = {self._TRANSCRIPT_TAB}
 
     def compose(self) -> ComposeResult:
         yield Static(self._EMPTY_PLACEHOLDER, id="card-workspace", classes="grove-card")
-        yield Static("", id="card-pane", classes="grove-card -hidden")
+        with TabbedContent(id="peek-tabs", classes="grove-card -hidden"):
+            # Scroll container so the newest exchange (the tail) stays
+            # reachable when the digest outgrows the pane — same shape as
+            # the sessions screen's history panel.
+            with (
+                TabPane("transcript", id=self._TRANSCRIPT_TAB),
+                VerticalScroll(id="transcript-scroll"),
+            ):
+                yield Static(self._NO_TRANSCRIPT, id="card-transcript")
+            with TabPane("terminal", id=self._TERMINAL_TAB):
+                yield Static("", id="card-pane")
 
     def on_mount(self) -> None:
         self.add_class("-empty")
         # `border_title` is set after compose because Textual binds it on
-        # the Static instance; doing it in compose() would race with mount.
-        # Titles are deliberately distinct from the list panel's "workspaces"
-        # — earlier revisions had "workspace" + "workspaces" living one
-        # column apart, which the eye reads as a typo. "summary" names the
-        # left card's role; "Live Workspace Preview" names the right card
-        # explicitly — earlier "agent" was inaccurate because the captured
-        # window can host any process the user runs (shell, htop, lazygit,
-        # etc.), not strictly an LLM agent.
+        # the widget instance; doing it in compose() would race with mount.
+        # Titles are deliberately distinct from the list panel's
+        # "workspaces" — earlier revisions had "workspace" + "workspaces"
+        # living one column apart, which the eye reads as a typo. "summary"
+        # names the left card's role; "preview" names the tabbed container
+        # (its tabs — transcript / terminal — name the two content shapes).
         self.query_one("#card-workspace", Static).border_title = "summary"
-        self.query_one("#card-pane", Static).border_title = "Live Workspace Preview"
+        self.query_one("#peek-tabs", TabbedContent).border_title = "preview"
 
-    def set_peek(self, peek: WorkspacePeek | None, *, agent: AgentActivity | None = None) -> None:
+    def set_peek(
+        self,
+        peek: WorkspacePeek | None,
+        *,
+        agent: AgentActivity | None = None,
+        turns: tuple[SessionTurn, ...] = (),
+    ) -> None:
         """Render the rail for `peek`, or show the empty placeholder if None.
 
-        Each card has its own diff guard: the pane card repaints at 4 Hz
-        on the fast tick and short-circuits when an idle agent emits the
-        same frame; the workspace card only repaints on selection change
-        and short-circuits when `peek` is structurally identical (same
-        rendered metadata).
+        Each surface has its own diff guard: the terminal pane repaints at
+        4 Hz on the fast tick and short-circuits when an idle agent emits
+        the same frame; the workspace card and transcript digest repaint
+        on selection change / slow tick and short-circuit when the
+        rendered plain text is identical.
 
         ``agent`` is the selected row's primary ``AgentActivity`` from the
         list screen's activity-tick map (no extra transcript parse on this
-        path). Keyword-only with a ``None`` default so callers without the
-        agent axis — and the pre-existing tests — stay untouched; ``None``
-        skips the agent-metrics line entirely.
+        path). ``turns`` is the same session's recent-turns tail, fetched
+        by the list screen's slow path; both are keyword-only with empty
+        defaults so callers without those axes — and the pre-existing
+        tests — stay untouched.
         """
         ws_card = self.query_one("#card-workspace", Static)
-        pane_card = self.query_one("#card-pane", Static)
 
         if peek is None:
             self._set_workspace(ws_card, self._EMPTY_PLACEHOLDER)
-            self._hide_pane(pane_card)
+            self._hide_tabs()
             self.add_class("-empty")
             return
 
@@ -142,24 +195,45 @@ class PeekRail(Vertical):
         self._set_workspace(
             ws_card, _render_workspace(peek, dark=self.app.current_theme.dark, agent=agent)
         )
-        if peek.state.status in LIVE_STATUSES:
-            self._show_pane(pane_card, _render_pane_body(peek))
+        live = peek.state.status in LIVE_STATUSES
+        self._update_transcript(turns)
+        if live:
+            self._update_pane(_render_pane_body(peek))
         else:
-            self._hide_pane(pane_card)
+            self._clear_pane()
+        self._update_tabs(peek.state.id, live=live, has_turns=bool(turns))
 
     @property
     def body_text(self) -> str:
         """Last rendered body as plain text. Stable seam for tests.
 
-        Concatenates the workspace card and pane card so existing tests
-        ("title in rail.body_text", "frame-two in rail.body_text") work
-        unchanged across the structural split.
+        Concatenates the workspace card, the transcript digest, and the
+        terminal pane so existing tests ("title in rail.body_text",
+        "frame-two in rail.body_text") work unchanged across the
+        structural split.
         """
+        parts = [self._workspace_text]
+        if self._transcript_text:
+            parts.append(self._transcript_text)
         if self._pane_text:
-            return f"{self._workspace_text}\n{self._pane_text}"
-        return self._workspace_text
+            parts.append(self._pane_text)
+        return "\n".join(parts)
 
-    # ─── private: per-card diff-guarded updates ───────────────────────────
+    # ─── tab activation (user vs. programmatic) ───────────────────────────
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        if event.tabbed_content.id != "peek-tabs":
+            return
+        pane_id = event.pane.id or ""
+        if pane_id in self._auto_switches:
+            # Our own default-switch echoing back through the message pump.
+            self._auto_switches.discard(pane_id)
+            return
+        # Any activation the rail didn't initiate is the user's choice —
+        # respect it until the selection changes.
+        self._user_tab_choice = True
+
+    # ─── private: per-surface diff-guarded updates ────────────────────────
 
     def _set_workspace(self, card: Static, content: Text | str) -> None:
         plain = content.plain if isinstance(content, Text) else content
@@ -168,25 +242,71 @@ class PeekRail(Vertical):
         self._workspace_text = plain
         card.update(content)
 
-    def _show_pane(self, card: Static, content: Text) -> None:
-        if card.has_class("-hidden"):
-            card.remove_class("-hidden")
-        if not card.has_class("-live"):
-            card.add_class("-live")
+    def _update_transcript(self, turns: tuple[SessionTurn, ...]) -> None:
+        card = self.query_one("#card-transcript", Static)
+        if not turns:
+            if self._transcript_text:
+                self._transcript_text = ""
+                card.update(self._NO_TRANSCRIPT)
+            return
+        content = render_transcript_digest(turns, dark=self.app.current_theme.dark)
+        plain = content.plain
+        if plain == self._transcript_text:
+            return
+        self._transcript_text = plain
+        card.update(content)
+        # The newest exchange is what the user glances for — land at the
+        # tail. After-refresh because the Static's new height isn't laid
+        # out yet at update() time (same lesson as the sessions screen).
+        scroll = self.query_one("#transcript-scroll", VerticalScroll)
+        self.call_after_refresh(lambda: scroll.scroll_end(animate=False))
+
+    def _update_pane(self, content: Text) -> None:
         plain = content.plain
         if plain == self._pane_text:
             return
         self._pane_text = plain
-        card.update(content)
+        self.query_one("#card-pane", Static).update(content)
 
-    def _hide_pane(self, card: Static) -> None:
-        if not card.has_class("-hidden"):
-            card.add_class("-hidden")
-        if card.has_class("-live"):
-            card.remove_class("-live")
-        # Hidden card stays whatever it was; clearing tracked text lets
-        # body_text fall back to the workspace card alone for tests.
-        self._pane_text = ""
+    def _clear_pane(self) -> None:
+        # No live pane to mirror (paused/offline/orphaned). Clear rather
+        # than keep a stale frame: the terminal tab stays reachable when a
+        # transcript keeps the container visible, and stale output would
+        # read as live.
+        if self._pane_text:
+            self._pane_text = ""
+            self.query_one("#card-pane", Static).update(Text.from_markup("[dim](no output)[/]"))
+
+    def _update_tabs(self, wid: str, *, live: bool, has_turns: bool) -> None:
+        """Container visibility, `-live` chrome, and the default-tab policy."""
+        if wid != self._tab_wid:
+            self._tab_wid = wid
+            self._user_tab_choice = False
+        tabs = self.query_one("#peek-tabs", TabbedContent)
+        if not (live or has_turns):
+            # Nothing to preview: no live pane and no recorded transcript.
+            tabs.add_class("-hidden")
+            tabs.remove_class("-live")
+            return
+        tabs.remove_class("-hidden")
+        tabs.set_class(live, "-live")
+        if self._user_tab_choice:
+            return
+        desired = self._TRANSCRIPT_TAB if has_turns else self._TERMINAL_TAB
+        if tabs.active != desired:
+            self._auto_switches.add(desired)
+            tabs.active = desired
+
+    def _hide_tabs(self) -> None:
+        tabs = self.query_one("#peek-tabs", TabbedContent)
+        tabs.add_class("-hidden")
+        tabs.remove_class("-live")
+        self._clear_pane()
+        if self._transcript_text:
+            self._transcript_text = ""
+            self.query_one("#card-transcript", Static).update(self._NO_TRANSCRIPT)
+        self._tab_wid = None
+        self._user_tab_choice = False
 
 
 def _render_peek(
@@ -251,7 +371,17 @@ def _render_workspace(
 
 
 def _markup(text: Text, line: str) -> None:
-    """Append one Rich-markup line + newline (shared by the block helpers)."""
+    """Append one Rich-markup line + newline (shared by the block helpers).
+
+    `line` is parsed as Rich markup, so any **external** value interpolated
+    into it (a git commit subject, a persisted `error_detail`, a filesystem
+    path) MUST be passed through `rich.markup.escape` first — otherwise a
+    stray `[...]` in that text is read as a style tag and crashes the rail
+    at paint time (rich `MissingStyle`, e.g. a subject containing `[mcp]`).
+    Only code-controlled chrome (the hex colors, glyphs, labels below) is
+    safe to embed raw. Same rule the `_description_block` plain-append note
+    states from the other direction.
+    """
     text.append_text(Text.from_markup(line))
     text.append("\n")
 
@@ -311,8 +441,8 @@ def _agent_line(agent: AgentActivity, *, dark: bool) -> Text:
     card's ahead/behind counters); tokens are humanized (`412.0k↑ 38.0k↓`,
     via the dashboard's `_human_tokens` — one formatter, two surfaces) and
     muted; the state label takes its agent-state color, mirroring the
-    list card's segment. Absent pieces (no model, zero tokens) are
-    skipped, not blank-filled.
+    list card's segment. Absent pieces (no model, zero tokens, zero
+    in-flight bg subagents) are skipped, not blank-filled.
     """
     muted_hex = chrome_color("muted", dark=dark)
     segments: list[Text] = []
@@ -324,6 +454,16 @@ def _agent_line(agent: AgentActivity, *, dark: bool) -> Text:
             style="bold",
         )
     )
+    if agent.active_subagents:
+        # In-flight background subagents — a live signal, so it takes the
+        # agent hue rather than the neutral-counter tier; hidden at zero.
+        noun = "bg agent" if agent.active_subagents == 1 else "bg agents"
+        segments.append(
+            Text(
+                f"{agent.active_subagents} {noun}",
+                style=f"bold {ref_color('info', dark=dark)}",
+            )
+        )
     if agent.tokens_in or agent.tokens_out:
         segments.append(
             Text(
@@ -387,7 +527,7 @@ def _affordance_block(s: WorkspaceState, *, dark: bool) -> Text:
         text.append("\n")
         _markup(text, f"[bold {fail_hex}]✗ init failed[/]")
         if s.init_log_path:
-            _markup(text, f"[{muted_hex}]log:[/] {s.init_log_path}")
+            _markup(text, f"[{muted_hex}]log:[/] {escape(s.init_log_path)}")
 
     # Paused affordance — the worktree is gone; tell the user how to bring it back.
     # Coloured with the (neutral gray) paused token, not amber: pause is
@@ -427,7 +567,7 @@ def _affordance_block(s: WorkspaceState, *, dark: bool) -> Text:
     # Error: persisted error_detail tells the user what went wrong.
     if s.status == WorkspaceStatus.ERROR and s.error_detail:
         text.append("\n")
-        _markup(text, f"[{muted_hex}]error:[/] {s.error_detail}")
+        _markup(text, f"[{muted_hex}]error:[/] {escape(s.error_detail)}")
 
     return text
 
@@ -452,7 +592,10 @@ def _commits_block(commits: tuple[CommitSummary, ...], *, dark: bool) -> Text:
         subject = (
             c.subject if len(c.subject) <= _SUBJECT_TRIM else c.subject[: _SUBJECT_TRIM - 1] + "…"
         )
-        _markup(text, f"  [bold {branch_hex}]{c.sha[:8]:>8}[/]  {subject}  [{muted_hex}]{ago}[/]")
+        _markup(
+            text,
+            f"  [bold {branch_hex}]{c.sha[:8]:>8}[/]  {escape(subject)}  [{muted_hex}]{ago}[/]",
+        )
     return text
 
 

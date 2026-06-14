@@ -132,22 +132,15 @@ export function filterSnapshot(
     .filter((g) => g.workspaces.length > 0);
 }
 
-// ─── Active-to-front sort ────────────────────────────────────────────────────
+// ─── Attention-first wall order ──────────────────────────────────────────────
 //
-// The wall is most useful when what's *happening* sits at the top. We order on
-// the shared `activityRank` policy (active=0 < attention=1 < dormant=2, with the
-// tmux fallback for session-less workspaces) so a card's sort position and its
-// dim/highlight treatment can never drift apart. Pure & stable so auto-animate
-// at the page only ever sees a deterministic reorder.
-
-/** The min activityRank across a group's workspaces (∞ when empty → sinks last). */
-function groupRank(group: ProjectGroupView): number {
-  let best = Number.POSITIVE_INFINITY;
-  for (const w of group.workspaces) {
-    best = Math.min(best, workspaceRank(w));
-  }
-  return best;
-}
+// The wall is glanceable only if what NEEDS YOU sits at the very top, across
+// every project. The rank itself lives with the tier policy (`activityRank`
+// in activity-tier.ts: attention=0 < active=1 < dormant=2, with the tmux
+// fallback for session-less workspaces) so a card's sort position and its
+// dim/highlight treatment can never drift apart. Project grouping is dropped
+// here on purpose — group bands would pin an action-required card below a
+// quieter project's rows; identity rides each card as a chip instead.
 
 function workspaceRank(w: WorkspaceActivityView): number {
   // null primary → activityRank takes the tmux/workspace-status fallback.
@@ -155,26 +148,36 @@ function workspaceRank(w: WorkspaceActivityView): number {
 }
 
 /**
- * Float active/working workspaces to the front. Within each project, sort by
- * `activityRank` ascending, tie-broken by `observed_at` desc (freshest first),
- * then by the original order. Project GROUPS are ordered so any project holding
- * an active session comes first (by each group's min rank). `Array.sort` is
- * stable, so equal keys preserve incoming order — pair this with the shared
- * comparator and the reorder stays deterministic frame to frame.
+ * The attention-first comparator: lower `activityRank` first (action-required,
+ * then working, then dormant), tie-broken by `observed_at` desc (freshest
+ * first). Returns 0 for fully-equal keys so `Array.sort` (stable) preserves
+ * incoming order and the SSE-driven reorder stays deterministic frame to frame.
  */
-export function sortSnapshotByActivity(
-  groups: readonly ProjectGroupView[],
-): ProjectGroupView[] {
-  const sortedGroups = groups.map((g) => ({
-    ...g,
-    workspaces: [...g.workspaces].sort((a, b) => {
-      const byRank = workspaceRank(a) - workspaceRank(b);
-      if (byRank !== 0) return byRank;
-      // Freshest observation first within a tier.
-      const byObserved = b.observed_at.localeCompare(a.observed_at);
-      if (byObserved !== 0) return byObserved;
-      return 0; // equal → stable (incoming order preserved)
-    }),
-  }));
-  return sortedGroups.sort((a, b) => groupRank(a) - groupRank(b));
+export function compareByAttention(
+  a: WorkspaceActivityView,
+  b: WorkspaceActivityView,
+): number {
+  const byRank = workspaceRank(a) - workspaceRank(b);
+  if (byRank !== 0) return byRank;
+  return b.observed_at.localeCompare(a.observed_at);
+}
+
+/** One card on the flat wall: the workspace plus its project identity chip. */
+export interface WallEntry {
+  workspace: WorkspaceActivityView;
+  repo_root: string;
+  repo_name: string;
+}
+
+/** Flatten filtered groups into one attention-first card list for the wall. */
+export function flattenByAttention(groups: readonly ProjectGroupView[]): WallEntry[] {
+  return groups
+    .flatMap((g) =>
+      g.workspaces.map((workspace) => ({
+        workspace,
+        repo_root: g.repo_root,
+        repo_name: g.repo_name,
+      })),
+    )
+    .sort((a, b) => compareByAttention(a.workspace, b.workspace));
 }

@@ -7,7 +7,8 @@ import {
   filterSnapshot,
   groupsForLens,
   passesLens,
-  sortSnapshotByActivity,
+  compareByAttention,
+  flattenByAttention,
 } from "@/lib/grove/dashboard-filter";
 import { loadFilter, saveFilter } from "@/lib/grove/filter-persistence";
 import { snapshot, workspace } from "@/tests/_helpers/activity-fixtures";
@@ -97,41 +98,68 @@ describe("consolidated filter", () => {
   });
 });
 
-describe("sortSnapshotByActivity", () => {
+describe("attention-first wall order", () => {
   const group = (repo: string, ...ws: WorkspaceActivityView[]): ProjectGroupView => ({
     repo_root: repo,
     repo_name: repo.replace("/", ""),
     workspaces: ws,
   });
+  const ids = (groups: ProjectGroupView[]) =>
+    flattenByAttention(groups).map((e) => e.workspace.state.id);
 
-  it("floats working above attention above idle within a project", () => {
-    // Provide them out of rank order; the sort must reorder by activityRank.
-    const g = group("/r", workspace("idle", "idle"), workspace("wait", "waiting"), workspace("work", "working"));
-    const sorted = sortSnapshotByActivity([g]);
-    expect(sorted[0].workspaces.map((w) => w.state.id)).toEqual(["work", "wait", "idle"]);
+  it("compareByAttention ranks every action-required state above working", () => {
+    for (const state of ["waiting", "blocked", "error"] as const) {
+      expect(compareByAttention(workspace("a", state), workspace("b", "working"))).toBeLessThan(0);
+      expect(compareByAttention(workspace("b", "working"), workspace("a", state))).toBeGreaterThan(0);
+    }
   });
 
-  it("orders a project with an active session before an all-idle project", () => {
-    const idleProject = group("/r1", workspace("i1", "idle"), workspace("i2", "idle"));
-    const activeProject = group("/r2", workspace("i3", "idle"), workspace("w", "working"));
-    // Active project given second — must float to the front by its min rank.
-    const sorted = sortSnapshotByActivity([idleProject, activeProject]);
-    expect(sorted.map((g) => g.repo_root)).toEqual(["/r2", "/r1"]);
+  it("compareByAttention ranks working above dormant", () => {
+    expect(compareByAttention(workspace("w", "working"), workspace("i", "idle"))).toBeLessThan(0);
+  });
+
+  it("orders attention before working before dormant within a project", () => {
+    // Provide them out of rank order; the flatten must reorder by activityRank.
+    const g = group("/r", workspace("idle", "idle"), workspace("work", "working"), workspace("block", "blocked"));
+    expect(ids([g])).toEqual(["block", "work", "idle"]);
+  });
+
+  it("interleaves across projects — another repo's blocked card floats over my working one", () => {
+    const busy = group("/r1", workspace("work", "working"), workspace("i1", "idle"));
+    const stuck = group("/r2", workspace("block", "blocked"));
+    // The blocked card given LAST must still come out first, project be damned.
+    expect(ids([busy, stuck])).toEqual(["block", "work", "i1"]);
+  });
+
+  it("carries the project identity chip on every entry", () => {
+    const entries = flattenByAttention([
+      group("/r1", workspace("a", "working")),
+      group("/r2", workspace("b", "idle")),
+    ]);
+    expect(entries.map((e) => [e.workspace.state.id, e.repo_name])).toEqual([
+      ["a", "r1"],
+      ["b", "r2"],
+    ]);
+  });
+
+  it("a sessionless tmux-active workspace ranks as working, never attention", () => {
+    const noSession = { ...workspace("tmux", "idle"), sessions: [] as never[] };
+    // fixture status is "active" → fallback puts it in the active tier.
+    const g = group("/r", noSession, workspace("wait", "waiting"));
+    expect(ids([g])).toEqual(["wait", "tmux"]);
   });
 
   it("tie-breaks equal-rank workspaces by observed_at desc, then stable", () => {
     const older = workspace("old", "idle", "2026-06-01T00:00:00Z");
     const newer = workspace("new", "idle", "2026-06-02T00:00:00Z");
-    const sorted = sortSnapshotByActivity([group("/r", older, newer)]);
     // freshest observation first within the same (dormant) tier
-    expect(sorted[0].workspaces.map((w) => w.state.id)).toEqual(["new", "old"]);
+    expect(ids([group("/r", older, newer)])).toEqual(["new", "old"]);
   });
 
   it("is stable for fully-equal keys (preserves incoming order)", () => {
     const a = workspace("a", "idle", "2026-06-01T00:00:00Z");
     const b = workspace("b", "idle", "2026-06-01T00:00:00Z");
-    const sorted = sortSnapshotByActivity([group("/r", a, b)]);
-    expect(sorted[0].workspaces.map((w) => w.state.id)).toEqual(["a", "b"]);
+    expect(ids([group("/r", a, b)])).toEqual(["a", "b"]);
   });
 });
 

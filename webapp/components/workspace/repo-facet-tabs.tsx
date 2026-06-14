@@ -2,6 +2,7 @@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { WorkspaceCard } from "./card";
+import { ProjectSessions } from "./project-sessions";
 import { WorkspaceCardModel } from "@/lib/grove/workspace-card";
 import { RepoFacet } from "@/lib/grove/repo-facet";
 import type { WorkspaceActivityView, WorkspaceStateView } from "@/lib/grove/types";
@@ -37,7 +38,11 @@ export function RepoFacetTabs({ activities }: { activities: WorkspaceActivityVie
         <Grid models={all} />
       </TabsContent>
       {facets.map((f) => (
-        <TabsContent key={f.repoRoot} value={f.repoRoot}>
+        <TabsContent key={f.repoRoot} value={f.repoRoot} className="space-y-3">
+          {/* Project-wide session history sits above the grid; collapsed it is
+              one compact row, so the cards never jump. The All tab spans many
+              repos and the endpoint is repo-scoped, so it carries no section. */}
+          <ProjectSessions repoRoot={f.repoRoot} />
           <Grid models={toModels(f.workspaces)} />
         </TabsContent>
       ))}

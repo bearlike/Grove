@@ -50,6 +50,33 @@ candidate (this branch):
   peek      :  12.8 ms ± 0.3  (-32%)
 EOF
     ;;
+  nav-redesign*)
+    cat <<'EOF'
+> Editing components/layout/nav-bar.tsx
+
+  Collapsed the primary nav into a single sticky row. The repo
+  switcher moves into a dropdown so the bar stays one line on
+  narrow viewports. Active link state now reads from the router.
+
+  Updated 4 files (+88 / -54).
+
+· Want me to wire up the mobile drawer next? [y/n]
+EOF
+    ;;
+  mobile-fixes*)
+    cat <<'EOF'
+> npm run test -- --watch=false src/layout
+
+ PASS  src/layout/grid.test.tsx
+ PASS  src/layout/safe-area.test.tsx
+
+  The card grid now reflows to a single column below 640px and
+  respects the iOS safe-area insets. Verifying the sticky footer
+  does not overlap the home indicator.
+
+> Editing src/layout/app-shell.tsx
+EOF
+    ;;
   *)
     printf 'claude session for %s\n' "$title"
     ;;

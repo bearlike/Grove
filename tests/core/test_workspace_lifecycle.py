@@ -532,8 +532,18 @@ def test_kill_explicit_delete_branch_false_overrides_provenance_default(
 
 
 def test_init_script_failure_rolls_back(
-    manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Sandbox the init log: it survives rollback by design (issue #9), so an
+    # unpatched path would leave an orphan file in the real user state dir.
+    monkeypatch.setattr(
+        "grove.core.paths.init_log_path",
+        lambda workspace_id: tmp_path / "init-logs" / f"{workspace_id}-init.log",
+    )
     # Configure the manager's config to enable init + fail_fast.
     cfg = GroveConfig.model_validate(
         {
@@ -560,3 +570,47 @@ def test_init_script_failure_rolls_back(
     assert all("dies-" not in str(p) for p in _worktrees(tmp_repo))
     assert all("dies-" not in s for s in fake_tmux.sessions)
     assert rollback_manager.store.load_all() == []
+
+
+def test_failed_init_keeps_log_and_error_carries_tail(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #9: rollback used to delete the init log — the one artifact that
+    explains a fail_fast failure — and the error named neither the failing
+    command nor its stderr. Pin both halves of the fix.
+    """
+    logs_dir = tmp_path / "init-logs"
+    monkeypatch.setattr(
+        "grove.core.paths.init_log_path",
+        lambda workspace_id: logs_dir / f"{workspace_id}-init.log",
+    )
+    cfg = GroveConfig.model_validate(
+        {
+            "worktree": {
+                "root_template": manager.config.worktree.root_template,
+                "branch_prefix": manager.config.worktree.branch_prefix,
+            },
+            "tmux": {"session_prefix": manager.config.tmux.session_prefix},
+            "init_script": {"enabled": True, "inline": "false", "fail_fast": True},
+        }
+    )
+    rollback_manager = WorkspaceManager(repo_root=tmp_repo, cfg=cfg, store=manager.store)
+    fake_tmux.init_exit_code = 1
+    fake_tmux.init_stderr = "error: unrecognized subcommand 'sync'\n"
+
+    with pytest.raises(GroveError) as excinfo:
+        rollback_manager.create(CreateWorkspaceRequest(agent_name="claude", title="diag"))
+
+    # Rollback completed (no record left) but the log survived it.
+    assert rollback_manager.store.load_all() == []
+    logs = list(logs_dir.glob("*-init.log"))
+    assert len(logs) == 1
+
+    # The error is self-diagnosing: log path + stderr tail, no shell reopening.
+    message = str(excinfo.value)
+    assert str(logs[0]) in message
+    assert "unrecognized subcommand 'sync'" in message

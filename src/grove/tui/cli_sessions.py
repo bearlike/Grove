@@ -80,7 +80,8 @@ def _listing_payload(ls: SessionListing) -> dict[str, Any]:
         "workspace_branch": ls.workspace_branch,
         "cwd": s.cwd,
         "git_branch": s.git_branch,
-        "transcript_path": str(s.transcript_path),
+        # None (JSON null) for a remote-backed session — there is no local file.
+        "transcript_path": str(s.transcript_path) if s.transcript_path is not None else None,
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "modified_at": s.modified_at.isoformat() if s.modified_at else None,
         "size_bytes": s.size_bytes,

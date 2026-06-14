@@ -1,12 +1,18 @@
 import { test, expect } from "@playwright/test";
 
-test("activity dashboard renders project groups and session cards", async ({ page }) => {
+test("activity dashboard renders one attention-first card wall", async ({ page }) => {
   await page.goto("/activity");
   await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
-  // Three fixture workspaces across two repos.
+  // Three fixture workspaces across two repos on ONE flat wall — project
+  // identity is a per-card chip, not a group heading.
   await expect(page.getByTestId("session-card")).toHaveCount(3);
-  await expect(page.getByRole("heading", { name: /Grove/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /website/ })).toBeVisible();
+  await expect(page.getByTestId("project-chip").filter({ hasText: "Grove" }).first()).toBeVisible();
+  await expect(page.getByTestId("project-chip").filter({ hasText: "website" }).first()).toBeVisible();
+  // Attention-first ordering: a WAITING fixture outranks the WORKING one.
+  await expect(page.getByTestId("session-card").first()).toHaveAttribute(
+    "data-agent-state",
+    "waiting",
+  );
 });
 
 test("the consolidated filter narrows the wall", async ({ page }) => {

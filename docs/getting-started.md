@@ -110,7 +110,7 @@ runs the init script if one is configured, spawns a tmux session with
 window.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.png" alt="Create workspace modal" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal" /></div>
   <figcaption class="ms-shot__body">Create modal. Branch source variants are atomic. Picking one activates only that variant's inputs.</figcaption>
 </figure>
 
@@ -135,4 +135,5 @@ Set `GROVE_DEBUG=1` to enable verbose loguru output on stderr.
 - [Custom agents](configure-agents.md) covers wiring Aider, Cursor, or any shell command.
 - [Daily workflow](use-workflow.md) covers create, attach, pause, resume, kill.
 - [Agent activity and sessions](features-activity.md) shows the whole fleet on one wall and replays past sessions.
-- [Web dashboard](use-webapp.md) opens a read-only view in the browser or on your phone.
+- [Web dashboard](use-webapp.md) opens the fleet in the browser or on your phone, with create, steer, and full lifecycle.
+- [MCP server](use-mcp.md) exposes the fleet to MCP-capable agents (needs the `grove[mcp]` or `grove[all]` extra, not `grove[daemon]`).

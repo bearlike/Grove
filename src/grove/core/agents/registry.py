@@ -10,15 +10,21 @@ from __future__ import annotations
 
 from grove.core.agents.base import AgentAdapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter
+from grove.core.agents.codex import CodexAdapter
 from grove.core.agents.generic import GenericAdapter
+from grove.core.agents.mewbo import MewboAdapter
 
 # Built once; adapters carry no mutable state so sharing is safe and cheap.
 _CLAUDE_CODE = ClaudeCodeAdapter()
+_CODEX = CodexAdapter()
 _GENERIC = GenericAdapter()
+_MEWBO = MewboAdapter()
 
 _ADAPTERS: dict[str, AgentAdapter] = {
     ClaudeCodeAdapter.kind: _CLAUDE_CODE,
+    CodexAdapter.kind: _CODEX,
     GenericAdapter.kind: _GENERIC,
+    MewboAdapter.kind: _MEWBO,
 }
 
 

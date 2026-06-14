@@ -69,12 +69,13 @@ this doc in the same PR.
   - [6.5 PeekRail](#65-peekrail)
   - [6.6 StatusBar](#66-statusbar)
   - [6.7 ContextualFooter](#67-contextualfooter)
-  - [6.8 Modals — Confirm, Create, Help](#68-modals--confirm-create-help)
+  - [6.8 Modals — Confirm, Create, Edit, Message, Help](#68-modals--confirm-create-edit-message-help)
 - [7. Patterns](#7-patterns)
 - [8. Interaction model](#8-interaction-model)
 - [9. Theming & overrides](#9-theming--overrides)
 - [10. Glossary](#10-glossary)
 - [11. References & influences](#11-references--influences)
+- [12. Activity dashboard (webapp)](#12-activity-dashboard-webapp)
 
 ---
 
@@ -134,9 +135,10 @@ ties back to a concrete decision in the codebase.
    semantic hue when nonzero. Label and value share the polarity hue
    so the pair reads as one chunk.
 6. **Each panel has a unique role-noun title.** `workspaces ·
-   summary · Live Workspace Preview` — never `workspaces` next to
-   `workspace`. The preview card was previously titled `agent`; that
-   was inaccurate because the captured window can host any process.
+   summary · preview` — never `workspaces` next to `workspace`. The
+   preview container's tabs (`transcript` / `terminal`) name its two
+   content shapes; an earlier title `agent` was rejected as inaccurate
+   because the captured window can host any process.
 7. **Tier model = inset wells on an ambient canvas.** Panels
    (`$surface`) are darker than the screen root (`$background`). The
    highlighted row lifts to the lightest tier (`$panel`). Same axis in
@@ -205,7 +207,7 @@ panels rise *above* a darker canvas like raised cards on a table.
 | TCSS slot | Role | Dark hex | Light hex | Where it shows |
 |---|---|---|---|---|
 | `$background` | Ambient canvas (middle tier) | `#2d2d2b` | `#faf9f5` | `Screen` root, `ContextualFooter`, anywhere chrome bars touch the user's terminal bg |
-| `$surface` | Panel-well tier (deepest) | `#0e0e0d` | `#a89f86` | Every `.grove-card` body — `WorkspaceList`, peek-rail summary card, peek-rail Live Workspace Preview card, modals (`.grove-dialog`), the empty-state banner |
+| `$surface` | Panel-well tier (deepest) | `#0e0e0d` | `#a89f86` | Every `.grove-card` body — `WorkspaceList`, peek-rail summary card, peek-rail tabbed preview, modals (`.grove-dialog`), the empty-state banner |
 | `$panel` | Highlight-lift tier (lightest) | `#363633` | `#ffffff` | `WorkspaceList:focus > WorkspaceCard.-highlight` only — the focused row |
 
 Both polarities follow **the same axis**: `surface` is the deepest,
@@ -459,7 +461,7 @@ Every visible boundary in Grove is either:
 - A focused panel takes a `round $primary` border. Defocusing returns
   it to `round $secondary`. Pinned by:
   - `WorkspaceList { border: round $secondary; } WorkspaceList:focus { border: round $primary; }`
-  - `PeekRail #card-pane.-live { border: round $primary; }` (the
+  - `PeekRail #peek-tabs.-live { border: round $primary; }` (the
     "active" cue here is "live agent output", not "keyboard focus" —
     the rail is not focusable)
 - A highlighted row inside the focused list takes a *full* `round
@@ -680,10 +682,10 @@ Grove's primary screen is the workspace list. Layout, top to bottom:
 │ │ │ WorkspaceCard (4 rows)   │ │ │ │  $secondary border          │ │
 │ │ │   line 1: ● title  · age │ │ │ └─────────────────────────────┘ │
 │ │ │   line 2: branch · agent │ │ │ ┌─────────────────────────────┐ │
-│ │ │           · status       │ │ │ │ #card-pane                  │ │
-│ │ │                          │ │ │ │  (Live Workspace Preview)   │ │
+│ │ │           · status       │ │ │ │ #peek-tabs (`preview`)      │ │
+│ │ │                          │ │ │ │  transcript │ terminal tabs │ │
 │ │ └──────────────────────────┘ │ │ │  -live = $primary border    │ │
-│ │ ...                          │ │ │  -hidden when not RUNNING   │ │
+│ │ ...                          │ │ │  -hidden: nothing to show   │ │
 │ └──────────────────────────────┘ │ └─────────────────────────────┘ │
 │   ↑ $surface bg, $secondary      │   ↑ same .grove-card chrome     │
 │     border, becomes $primary     │                                 │
@@ -889,32 +891,58 @@ per cursor move. Focus is **only** in CSS; the renderer doesn't know.
 
 ### 6.5 PeekRail
 
-Right-side rail. Two stacked Static cards inside a `Vertical` with
-`padding: 0 1`.
+Right-side rail. A summary card stacked above a tabbed preview inside a
+`Vertical` with `padding: 0 1`.
 
 - `#card-workspace` (title `summary`) — the summary card. Border stays
   `$secondary`. Carries: live diff stats, init-failure badge,
   paused / offline / orphaned affordance lines, recent commits.
-- `#card-pane` (title `Live Workspace Preview`) — the live tmux pane
-  mirror. Title is the user-facing role-noun (was `agent`, but the
-  captured window may host any process — shell, htop, lazygit, an LLM
-  agent — not strictly an LLM). Border swaps to `$primary` when the
-  card has `-live` class (workspace is RUNNING / ACTIVE / IDLE — the
-  `LIVE_STATUSES` set). Hidden via `-hidden` class when the workspace
-  is not running. Captured SGR background codes from `tmux capture-pane`
-  are stripped before render (`_strip_pane_bgcolors`) so the card's
-  `$surface` shows through; fg/style attributes are preserved.
+- `#peek-tabs` (title `preview`) — a `TabbedContent` with the shared
+  `.grove-card` chrome and two panes. Its tabs name the two content
+  shapes (an earlier single-card title `agent` was rejected — the
+  captured window may host any process):
+  - **`transcript` tab** (`#card-transcript` inside a `VerticalScroll`)
+    — a digest of the selected workspace's primary session's recent
+    turns (last 20), rendered by the same `_turns.py` implementation
+    the sessions browser uses: bold clay `you ❯` prompt label,
+    `agent ⏺` rows (label bold agent-cyan via the `info` ref slot,
+    reply text default fg), tool runs ALWAYS grouped into one muted
+    `⚒ N tool calls` row — the rail digest never lists individual
+    calls. Scrolls to the tail on update (the newest exchange is the
+    glance target).
+  - **`terminal` tab** (`#card-pane`) — the live tmux pane mirror.
+    Captured SGR background codes from `tmux capture-pane` are stripped
+    before render (`_strip_pane_bgcolors`) so the card's `$surface`
+    shows through; fg/style attributes are preserved.
+- The container's border swaps to `$primary` via `-live` while the
+  workspace is RUNNING / ACTIVE / IDLE (the `LIVE_STATUSES` set), and
+  the whole container hides via `-hidden` when there is nothing to
+  preview (not live AND no recorded transcript — a paused workspace
+  with history keeps its transcript readable; transcripts outlive
+  worktrees). The tab bar keeps Textual's stock Tabs chrome — the
+  active-tab underline resolves to `$accent` (the brand clay), so no
+  per-tab overrides are needed.
 
-**Why two cards, not one.** Two cards have aligned paint cadences:
+**Default tab.** `transcript` whenever turns exist for the selection,
+else `terminal` — recomputed per selected workspace. A tab the user
+picked by hand is respected until the selection changes: the rail never
+fights the user.
+
+**Why split surfaces, not one.** The surfaces have aligned paint cadences:
 
 - Fast pane tick (~4 Hz, `cfg.peek_pane_refresh_seconds = 0.25 s`) —
   `peek_pane()` only, splices fresh tmux snapshot into cached peek,
-  repaints **only** `#card-pane`.
-- Selection-driven debounce (~80 ms) — full `peek()`, repaints both.
+  repaints **only** `#card-pane` (terminal). No transcript parse on
+  this path.
+- Selection-driven debounce (~80 ms) — full `peek()` plus the
+  transcript tail, repaints all surfaces.
 - Slow stats tick (`cfg.peek_stats_refresh_seconds = 3 s`) — full
-  `peek()` (git ahead/behind/diff/dirty), repaints both.
+  `peek()` (git ahead/behind/diff/dirty) plus the transcript tail (one
+  directory scan + one transcript parse — the same cost class the
+  activity tick already pays per row), repaints all surfaces.
 
 All three are frozen on modal (`if self.app.screen is not self: return`).
+Each surface is one `Static` with its own plain-text diff guard.
 
 **Summary card content (in order, conditional):**
 
@@ -950,7 +978,7 @@ All three are frozen on modal (`if self.app.screen is not self: return`).
    SHA + heading share the branch hue (teal) so the eye groups them as
    one column. Subject = default fg; age = muted.
 
-**Pane card content.**
+**Terminal pane content.**
 
 - `Text.from_ansi(snapshot)` of the tail (`_PANE_TAIL_LINES = 30`) —
   tmux's `capture-pane -e -p -J` produces SGR-only output.
@@ -958,7 +986,8 @@ All three are frozen on modal (`if self.app.screen is not self: return`).
   rather than wrapping; the source tmux pane is **never** resized to
   fit (that would mutate a session the user might be attached to
   elsewhere).
-- Empty capture → `[dim](no output)[/]` placeholder.
+- Empty capture (or not live) → `[dim](no output)[/]` placeholder; the
+  transcript pane's analogue is `[dim](no transcript)[/]`.
 
 ### 6.6 StatusBar
 
@@ -1058,11 +1087,12 @@ the empty-set default leaves WORKTREE workspaces untouched.
 
 **On the list screen, the footer carries two groups:**
 
-- Globals: `q · n · r · / · ?` — always available.
-- Selection: `enter/a · p · R · o · k` — dimmed individually based on
-  the selected row's status and placement (root drops `p` / `R`).
+- Globals: `q · n · d · r · / · ?` — always available.
+- Selection: `enter/a · m · e · s · p · R · o · k` — dimmed individually
+  based on the selected row's status and placement (root drops `p` /
+  `R`).
 
-### 6.8 Modals — Confirm, Create, Edit, Help
+### 6.8 Modals — Confirm, Create, Edit, Message, Help
 
 All extend `GroveModal[T]` for centered + bordered + dimmed-backdrop
 chrome (see [§5.2](#52-modal-anatomy)).
@@ -1133,6 +1163,24 @@ dismissing (matches CreateWorkspaceScreen). Returns
 The `e` key on the list screen opens this modal for the selected
 workspace; available in every status except ORPHANED (matches the
 engine's `ensure_can_update` rule).
+
+**SendMessageScreen** — steer the selected workspace's agent with a
+follow-up. One single-line `Input` under a `message to <title>` label
+(the workspace title renders as a literal, never markup). Returns the
+message text or `None` on cancel; empty message bells without
+dismissing. The list screen calls `manager.send_message`, which
+dispatches per agent kind engine-side (tmux inject vs remote API) — the
+modal never branches on kind. Success flashes `message sent` via the
+manager's `message_sent` event; typed refusals flash as errors.
+
+| Key | Action |
+|---|---|
+| `escape` | Cancel |
+| `enter` (in the input) | Send |
+
+The `m` key on the list screen opens this modal; available in the
+RUNNING family (ACTIVE / IDLE / RUNNING) where steering can succeed —
+the same gate family as pause.
 
 **HelpScreen** — context-aware key list, generated from
 `DEFAULT_BINDINGS` + the selection partition. Selection-only entries
@@ -1207,6 +1255,63 @@ Pane snapshots cache by workspace id so a wall rebuild re-applies them without a
 blank flash. Lifecycle changes (create / kill / …) arrive promptly via the
 service's bridged manager bus, no waiting for the next poll.
 
+### 6.10 Sessions browser — SessionsScreen, SessionList, SessionRow
+
+The per-workspace session-history browser (`screens/sessions.py`).
+Opened from the list screen on `s` for the selected workspace
+(selection-gated footer key, available in **every** status — transcripts
+outlive worktrees); `s` / `escape` / `q` pop back, `t` toggles tool-call
+detail, `r` re-scans. Data is the engine's bounded
+`SessionExplorer.for_workspace(id)` + `turns_for(listing)` seams. **No
+timers** — this surface reads recorded history, it doesn't stream.
+
+**Screen anatomy.** `Header` (no clock) · `Horizontal #main` holding two
+role-noun panels · `ContextualFooter`. Title `Grove — Sessions`,
+subtitle = the workspace title. Left: `SessionList` (title `sessions`,
+40% / min 30 cols) — one `SessionRow` per on-disk session, newest first.
+Right: a `.grove-card` `VerticalScroll` (title `history`, fluid width)
+showing the highlighted session's turns; highlight drives the load (one
+cached parse per session), and the panel scrolls to the tail — the
+newest exchange is what the user came for. Zero sessions flips the
+screen to a centered muted empty banner, same `-empty` idiom as the
+list screen.
+
+**SessionRow** (fixed `height: 4`, same chrome contract as
+`WorkspaceCard`: transparent `round $surface` border, `$secondary` on
+hover, list-scoped highlight rule lifts to `$panel` + `round $primary`):
+
+- line 1 — agent-state glyph (§4.8 color) · **bold** session-id prefix
+  (8 chars) · title-or-prompt label (default fg, trimmed at 48).
+- line 2 — adapter kind (bold cyan, the `info` slot) · turn count (bold
+  default-fg counter, muted `turns` label) · agent-state label (bold,
+  state color — the twice-read color pattern) · muted age · a quiet
+  muted `grove` tag when provenance is `grove_launched` (absence is the
+  default, same convention as the `root` tag).
+
+**Turns panel.** Mirrors the `grove sessions show` renderer: a header
+line (id prefix · adapter cyan · branch teal), then per turn a muted
+`── turn N <timestamp>` divider and the shared turn body from
+`_turns.py` (the same implementation the peek rail's transcript tab
+renders through), with IRC-style role labels so the eye splits the
+conversation by speaker:
+
+- `you ❯ <prompt>` — label + chevron are ONE bold clay-accent span
+  (`chrome_color('accent')`, the prompt chevron's existing hue —
+  human turn = clay accent stays a single statement).
+- `agent ⏺ <reply>` — the `agent` label is bold agent-cyan
+  (`ref_color('info')`, the same "who is the agent" hue as the row
+  cards); the `⏺` marker and reply text stay default fg.
+- `⚒ tool` rows stay muted and label-free (tier 3). Branch teal was
+  deliberately NOT used for `you`: this panel's header and the rail's
+  summary card render branch names in teal right beside the turns.
+
+Consecutive tool calls are
+GROUPED by default into one muted `⚒ N tool calls` row (`1 tool call`
+singular); `t` toggles the individual `⚒ <text>` lines and re-renders.
+User-authored text renders as literals (`Text.append`, never markup).
+Bounded at the most recent 50 turns with a muted notice; entry text
+caps at 2000 chars.
+
 ---
 
 ## 7. Patterns
@@ -1218,7 +1323,7 @@ Recurring solutions to recurring problems.
 Every focusable container takes `border: round $secondary` by default
 and `border: round $primary` on `:focus`. Used by `WorkspaceList`,
 implicitly by Textual's `Input` (which has its own border-focused
-behavior), and by the `-live` class on `PeekRail #card-pane` (where
+behavior), and by the `-live` class on `PeekRail #peek-tabs` (where
 "focus" means "live agent output", not keyboard focus).
 
 ### Highlight = inset row that lifts above its panel
@@ -1347,9 +1452,9 @@ While any modal is on top of the list screen:
 
 | Cadence | Trigger | What it does |
 |---|---|---|
-| Selection-debounce | `~80 ms` after cursor move | Coalesces rapid j/k into one `peek()`. |
-| Fast pane tick | `cfg.peek_pane_refresh_seconds` (default `0.25 s`) | `peek_pane()` only — one tmux `capture-pane` subprocess; splices snapshot into cached full peek; repaints `#card-pane` only. |
-| Slow stats tick | `cfg.peek_stats_refresh_seconds` (default `3 s`) | Full `peek()` — git ahead/behind/diff/dirty + tmux. Repaints both cards. |
+| Selection-debounce | `~80 ms` after cursor move | Coalesces rapid j/k into one `peek()` + transcript tail. |
+| Fast pane tick | `cfg.peek_pane_refresh_seconds` (default `0.25 s`) | `peek_pane()` only — one tmux `capture-pane` subprocess; splices snapshot into cached full peek; repaints `#card-pane` (terminal tab) only. |
+| Slow stats tick | `cfg.peek_stats_refresh_seconds` (default `3 s`) | Full `peek()` — git ahead/behind/diff/dirty + tmux — plus the selected row's transcript tail for the rail's transcript tab. Repaints all rail surfaces. |
 
 All three frozen on modal. The split is what keeps the rail "live"
 without burning git IO at 4 Hz.
@@ -1358,7 +1463,7 @@ without burning git IO at 4 Hz.
 
 `ACTIVE` vs `IDLE` is decided by `tmux #{window_activity}` (NOT
 `#{pane_activity}` — which is empty on tmux ≤3.3). Threshold is
-`cfg.tmux.activity_threshold_seconds` (default 5 s). Future timestamps
+`cfg.tmux.activity_threshold_seconds` (default 30 s). Future timestamps
 and non-numeric output coerce to `None` → reconciler treats unknown
 age as IDLE (fallback, not signal).
 
@@ -1508,8 +1613,8 @@ the focused row inside the focused list. See [§3.2](#32-tier-model--inset-wells
 
 **Live status** — the set `{ACTIVE, IDLE, RUNNING}` (in
 `grove.core.workspace.LIVE_STATUSES`). When the selected workspace's
-status is in this set, the peek rail's `#card-pane` is shown with
-the `-live` class.
+status is in this set, the peek rail's tabbed preview (`#peek-tabs`)
+carries the `-live` class (clay border).
 
 **Pane** — a tmux window's single pane in Grove's layout. Each
 workspace's tmux session has at most two windows (`shell`, `agent`),
@@ -1625,6 +1730,49 @@ linkability.
 - [bearlike/Assistant — `Assistant console`](https://github.com/bearlike/Assistant) (`the bearlike/Assistant brand palette`,
   `warm_terracotta.toml`) — every hex atom in `theme.py` originated
   here. Theme overrides follow this file's TOML shape.
+
+---
+
+## 12. Activity dashboard (webapp)
+
+The webapp's `/activity` wall (`webapp/app/activity/`,
+`webapp/components/dashboard/`) shares the TUI's tokens (status §4.3,
+agent-state §4.8) but has its own layout contract. Its one job is
+**glanceability without interaction**: a wall you read in five seconds
+from across the room. Four principles, in priority order:
+
+1. **Attention-first ordering.** One flat wall, no project bands. Cards
+   self-sort: action-required (blocked / waiting / error) first, then
+   working, then dormant — a stalled agent burns wall-clock until a
+   human answers; a working one needs nobody. The rank lives with the
+   tier policy (`lib/grove/activity-tier.ts` `activityRank`; comparator
+   `compareByAttention` beside it in `dashboard-filter.ts`) so a card's
+   treatment and its position can never drift. SSE-driven reorders
+   tween via auto-animate, which no-ops under `prefers-reduced-motion`.
+2. **Density / auto-fill.** The grid is
+   `repeat(auto-fill, minmax(17rem, 1fr))` — as many columns as the
+   viewport holds, rows packed from the top, no fixed breakpoint
+   ladder. Project identity is a compact per-card chip, never a group
+   header that wastes a band per repo.
+3. **Fixed card slot hierarchy.** Every card carries the SAME four
+   slots, top to bottom: (a) identity — agent brand badge · title ·
+   project chip · ONE state badge; (b) happening-now —
+   `current_task` (fallback: session self-name; error detail while in
+   error), plus "· N bg agents" while subagents run; (c) muted metrics
+   one-liner (turns · tools · tokens); (d) durable signal — last commit
+   subject + relative time. Anything else belongs on the detail page.
+   `blocked` is the loudest treatment on the wall: filled amber badge
+   reading "action required", plus the attention ring.
+4. **Accessibility.** Color is never the only signal — every state
+   badge pairs glyph + text label, with an `aria-label`; tier is also
+   encoded as opacity (dormant dims) and ring (attention). Visible
+   focus states on every interactive element; all motion honors
+   `prefers-reduced-motion`; label contrast stays AA by lighting only
+   the glyph with the state hue (the StatusBadge rule, §"webapp/CLAUDE.md").
+
+Webapp engineering detail stays in `webapp/CLAUDE.md`; this section
+pins only the dashboard's design language so future work stays
+consistent.
 
 ---
 

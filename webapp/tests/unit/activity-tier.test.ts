@@ -60,29 +60,39 @@ describe("tierForActivity (tmux/status fallback, no agent session)", () => {
   });
 });
 
-describe("activityRank ordering (lower = first)", () => {
-  it("active < attention < dormant", () => {
-    expect(activityRank("working", "active")).toBe(0);
-    expect(activityRank("waiting", "active")).toBe(1);
+describe("activityRank ordering (attention-first, lower = first)", () => {
+  it("attention < active < dormant — action-required outranks working", () => {
+    expect(activityRank("waiting", "active")).toBe(0);
+    expect(activityRank("working", "active")).toBe(1);
     expect(activityRank("idle", "active")).toBe(2);
-    expect(activityRank("working", "active")).toBeLessThan(activityRank("waiting", "active"));
-    expect(activityRank("waiting", "active")).toBeLessThan(activityRank("idle", "active"));
+    expect(activityRank("waiting", "active")).toBeLessThan(activityRank("working", "active"));
+    expect(activityRank("working", "active")).toBeLessThan(activityRank("idle", "active"));
   });
 
-  it("sorts a mixed set so running floats to the front", () => {
-    const states: Array<["working" | "idle" | "waiting", number]> = [
+  it("every attention state (waiting / blocked / error) outranks working", () => {
+    for (const state of ["waiting", "blocked", "error"] as const) {
+      expect(activityRank(state, "active")).toBeLessThan(activityRank("working", "active"));
+    }
+  });
+
+  it("sorts a mixed set so action-required floats to the front", () => {
+    const states: Array<["working" | "idle" | "blocked", number]> = [
       ["idle", 0],
       ["working", 0],
-      ["waiting", 0],
+      ["blocked", 0],
     ];
     const sorted = [...states].sort(
       (a, b) => activityRank(a[0], "active") - activityRank(b[0], "active"),
     );
-    expect(sorted.map((s) => s[0])).toEqual(["working", "waiting", "idle"]);
+    expect(sorted.map((s) => s[0])).toEqual(["blocked", "working", "idle"]);
   });
 
   it("the tmux fallback ranks active workspaces ahead of idle ones", () => {
     expect(activityRank(null, "active")).toBeLessThan(activityRank(null, "idle"));
+  });
+
+  it("the tmux fallback never reaches attention — it ranks behind a waiting agent", () => {
+    expect(activityRank("waiting", "idle")).toBeLessThan(activityRank(null, "active"));
   });
 });
 

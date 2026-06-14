@@ -82,12 +82,16 @@ export function tierForActivity(
   return TREATMENTS[primaryState] ?? TREATMENTS.unknown;
 }
 
-const RANK: Record<ActivityTier, number> = { active: 0, attention: 1, dormant: 2 };
+// Attention-first: a blocked/waiting/errored agent burns wall-clock until a
+// human answers, while a working agent needs nobody — so action-required cards
+// outrank working ones on the wall. Dormant always sinks last.
+const RANK: Record<ActivityTier, number> = { attention: 0, active: 1, dormant: 2 };
 
 /**
- * Sort key — LOWER comes first. active=0, attention=1, dormant=2, so running
- * sessions float to the front of the wall. Tie-breaking within a tier is the
- * caller's job (e.g. most-recently-observed first).
+ * Sort key — LOWER comes first. attention=0, active=1, dormant=2, so the cards
+ * that need a human float to the front of the wall, then the working ones.
+ * Tie-breaking within a tier is the caller's job (e.g. most-recently-observed
+ * first).
  */
 export function activityRank(
   primaryState: AgentActivityState | null,

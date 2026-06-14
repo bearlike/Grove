@@ -65,6 +65,23 @@ def test_create_request_rejects_overlong_description() -> None:
         CreateWorkspaceRequest(agent_name="claude", title="t", description="x" * 2001)
 
 
+def test_create_request_initial_prompt_defaults_none() -> None:
+    req = CreateWorkspaceRequest(agent_name="claude", title="t")
+    assert req.initial_prompt is None
+
+
+def test_create_request_accepts_initial_prompt_and_round_trips() -> None:
+    req = CreateWorkspaceRequest(agent_name="claude", title="t", initial_prompt="do X")
+    assert req.initial_prompt == "do X"
+    reloaded = CreateWorkspaceRequest.model_validate_json(req.model_dump_json())
+    assert reloaded.initial_prompt == "do X"
+
+
+def test_create_request_rejects_overlong_initial_prompt() -> None:
+    with pytest.raises(ValidationError):
+        CreateWorkspaceRequest(agent_name="claude", title="t", initial_prompt="x" * 10_001)
+
+
 # ─── UpdateWorkspaceRequest ────────────────────────────────────────────────
 
 

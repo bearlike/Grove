@@ -34,7 +34,7 @@ resume or respawn.
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `enabled`         | bool   | `false`  | Master switch. Init runs only when this is `true`. |
-| `shell`           | string | `"bash"` | One of `bash`, `sh`, `zsh`. Used as `<shell> -lc <script>`. |
+| `shell`           | string | `"bash"` | One of `bash`, `sh`, `zsh`. Used as `<shell> -c <inline>` for inline scripts, or `<shell> <path>` for file-based scripts. |
 | `inline`          | string | `null`   | Inline shell snippet. Mutually exclusive with `path`. |
 | `path`            | string | `null`   | Repo-relative path to a script file. Mutually exclusive with `inline`. |
 | `timeout_seconds` | int    | `300`    | Hard wall-clock cap. Past this, Grove kills the script and treats it as failed. |

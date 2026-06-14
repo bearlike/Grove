@@ -42,6 +42,7 @@ theme:
     CLI: lucide:terminal
     "Web Dashboard": lucide:monitor-smartphone
     "Authentication & Pairing": lucide:key-round
+    "MCP Server": lucide:plug
     "Daily Workflow": lucide:workflow
 
     Capabilities: lucide:sparkles
@@ -125,6 +126,7 @@ nav:
           - CLI: use-cli.md
           - Web Dashboard: use-webapp.md
           - Authentication & Pairing: use-auth.md
+          - MCP Server: use-mcp.md
           - Daily Workflow: use-workflow.md
       - Capabilities:
           - Workspace Lifecycle: features-workspace-lifecycle.md

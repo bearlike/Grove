@@ -49,9 +49,12 @@ _STATE_BY_EVENT: Final[dict[str, AgentActivityState]] = {
     "SessionEnd": AgentActivityState.IDLE,
 }
 
-# How long a sidecar's push state is trusted before the poller takes back over.
-# Hooks fire on every lifecycle event, so a fresh session keeps this current; a
-# stale sidecar means the session went quiet and the polled blend should win.
+# How long a WORKING push is trusted with no newer signal. Only WORKING ages out
+# (the dead-agent guard: a session killed right after PreToolUse must not pin
+# WORKING forever). Settled pushes (WAITING/BLOCKED/IDLE) never age out — they
+# stay true until the transcript moves, and BLOCKED is precisely the state
+# polling cannot see, so expiring it into a polled guess re-creates the
+# "permission prompt shows as working" bug it exists to fix.
 DEFAULT_SIDECAR_MAX_AGE_SECONDS: Final = 300
 
 
@@ -82,6 +85,13 @@ class HookRecord:
     def from_json(cls, data: dict[str, Any]) -> HookRecord | None:
         """Parse a sidecar; return ``None`` on anything malformed (best-effort)."""
         try:
+            ts = datetime.fromisoformat(data["ts"])
+            if ts.tzinfo is None:
+                # Grove always writes aware UTC; a naive ts is foreign/corrupt.
+                # Rejecting HERE keeps the aware-vs-naive TypeError out of
+                # supersedes_poll's comparisons, where it would escape the
+                # malformed-handling boundary and break the whole snapshot.
+                return None
             return cls(
                 session_id=str(data["session_id"]),
                 state=AgentActivityState(data["state"]),
@@ -89,10 +99,39 @@ class HookRecord:
                 cwd=_opt_str(data.get("cwd")),
                 transcript_path=_opt_str(data.get("transcript_path")),
                 tmux_pane=_opt_str(data.get("tmux_pane")),
-                ts=datetime.fromisoformat(data["ts"]),
+                ts=ts,
             )
         except (KeyError, ValueError, TypeError):
             return None
+
+    def supersedes_poll(
+        self,
+        *,
+        now: datetime,
+        transcript_at: datetime | None,
+        max_age_seconds: int = DEFAULT_SIDECAR_MAX_AGE_SECONDS,
+    ) -> bool:
+        """Whether this push still outranks the polled blend.
+
+        The push describes one moment; the transcript is the ground truth that
+        moves past it. Two rules, in order:
+
+        - **Transcript outran the push → defer to polled.** A ``Stop`` (WAITING)
+          followed by a steer that wrote new transcript records is stale even
+          seconds later — wall-clock age is the wrong staleness axis (the old
+          age-only rule pinned WAITING on a re-engaged agent for 5 minutes).
+        - **WORKING ages out; settled states never do.** A WORKING push with no
+          newer signal eventually means a dead agent (kill mid-tool), so the
+          poller takes over after ``max_age_seconds``. WAITING/BLOCKED/IDLE stay
+          authoritative however old: nothing happened since, so they are still
+          true — and BLOCKED is invisible to polling entirely.
+        """
+        if transcript_at is not None and transcript_at > self.ts:
+            return False
+        if self.state is AgentActivityState.WORKING:
+            age = (now - self.ts).total_seconds()
+            return 0 <= age <= max_age_seconds
+        return True
 
 
 class ClaudeHook:
@@ -158,17 +197,12 @@ class ClaudeHook:
             logger.debug("could not write agent sidecar for {}: {}", record.session_id, exc)
 
     @staticmethod
-    def read(
-        session_id: str,
-        *,
-        sidecar_dir: Path,
-        now: datetime,
-        max_age_seconds: int = DEFAULT_SIDECAR_MAX_AGE_SECONDS,
-    ) -> HookRecord | None:
-        """Read a session's sidecar, or ``None`` if missing, malformed, or stale.
+    def read(session_id: str, *, sidecar_dir: Path) -> HookRecord | None:
+        """Read a session's sidecar, or ``None`` if missing or malformed.
 
-        Staleness is the fallback contract: an old sidecar means the push signal
-        went quiet, so the caller should defer to the polled status instead.
+        Pure mechanism — whether the push still outranks the polled blend is the
+        record's own call (:meth:`HookRecord.supersedes_poll`), because that
+        judgment needs the transcript's clock, which only the blend site has.
         """
         path = sidecar_dir / f"{session_id}.json"
         try:
@@ -180,13 +214,7 @@ class ClaudeHook:
             return None
         if not isinstance(data, dict):
             return None
-        record = HookRecord.from_json(data)
-        if record is None:
-            return None
-        age = (now - record.ts).total_seconds()
-        if age < 0 or age > max_age_seconds:
-            return None
-        return record
+        return HookRecord.from_json(data)
 
     @staticmethod
     def settings(command: str = COMMAND) -> dict[str, Any]:

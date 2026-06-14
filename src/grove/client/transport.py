@@ -37,6 +37,38 @@ class Transport(Protocol):
     async def close(self) -> None: ...
 
 
+class UrlTransport:
+    """Points at an already-running daemon URL — no child process, no tunnel.
+
+    For callers that attach to an externally supervised daemon (the
+    systemd unit, ``grove-mcp``): ``start``/``close`` are no-ops because
+    the daemon's lifecycle is not ours to manage. ``open_attach`` raises —
+    a bare URL carries no PTY or SSH channel; interactive attach belongs
+    to ``LocalTransport``/``SshTransport``.
+    """
+
+    def __init__(self, config: BackendConfig) -> None:
+        if config.daemon_url is None:
+            raise ValueError("UrlTransport requires daemon_url set")
+        self._url = config.daemon_url.rstrip("/")
+
+    @property
+    def http_url(self) -> str:
+        return self._url
+
+    async def start(self) -> None:
+        return None
+
+    async def open_attach(self, tmux_session: str) -> AttachSession:
+        raise TransportError(
+            f"interactive attach to {tmux_session!r} is not available over a URL backend; "
+            "run `tmux attach` on the daemon's host instead"
+        )
+
+    async def close(self) -> None:
+        return None
+
+
 class LocalTransport:
     """Spawns and supervises a child ``grove daemon serve`` process."""
 

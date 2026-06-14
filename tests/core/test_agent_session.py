@@ -84,6 +84,52 @@ def test_create_shell_tracks_no_session(manager: WorkspaceManager, fake_tmux: Fa
     assert _last_decoration(fake_tmux, state.tmux_session) == []
 
 
+# ─── #48 initial_prompt rides the launch argv (claude_code) ──────────────────
+
+
+def test_create_claude_appends_initial_prompt_as_trailing_positional(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """The prompt rides the launch argv as the LAST token — after `--session-id`
+    — so claude boots already working on it. It goes through the same shell-quote
+    path in build_workspace_layout as the rest of the decoration (no second
+    quoting site), so the decoration list carries the raw prompt string."""
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="task", initial_prompt="do X please")
+    )
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+        "do X please",
+    ]
+
+
+def test_create_claude_without_initial_prompt_is_byte_identical(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """No initial_prompt → launch decoration is exactly what it was before #48."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="noprompt"))
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+    ]
+
+
+def test_create_shell_ignores_initial_prompt(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """A bare shell (generic) has no prompt concept — the decoration stays empty,
+    the prompt is silently dropped (not typed into the pane)."""
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="shell", title="plain", initial_prompt="ignored")
+    )
+
+    assert state.agent_session_id is None
+    assert _last_decoration(fake_tmux, state.tmux_session) == []
+
+
 # ─── persistence / legacy ───────────────────────────────────────────────────
 
 

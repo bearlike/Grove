@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from grove.core.agents.hook import ClaudeHook, run_hook_from_stdin
+from grove.core.agents.hook import ClaudeHook, HookRecord, run_hook_from_stdin
 from grove.core.agents.model import AgentActivityState
 
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
@@ -42,7 +42,7 @@ def test_record_event_round_trips(tmp_path: Path) -> None:
     rec = ClaudeHook.record_event(payload, sidecar_dir=tmp_path, tmux_pane="%7", now=NOW)
     assert rec is not None and rec.state is AgentActivityState.BLOCKED
 
-    back = ClaudeHook.read("abc-123", sidecar_dir=tmp_path, now=NOW)
+    back = ClaudeHook.read("abc-123", sidecar_dir=tmp_path)
     assert back is not None
     assert back.state is AgentActivityState.BLOCKED
     assert back.tmux_pane == "%7"
@@ -57,24 +57,73 @@ def test_record_event_ignores_untracked(tmp_path: Path) -> None:
         now=NOW,
     )
     assert rec is None
-    assert ClaudeHook.read("x", sidecar_dir=tmp_path, now=NOW) is None
+    assert ClaudeHook.read("x", sidecar_dir=tmp_path) is None
 
 
-def test_read_stale_sidecar_returns_none(tmp_path: Path) -> None:
-    ClaudeHook.record_event(
-        {"hook_event_name": "Stop", "session_id": "s"},
-        sidecar_dir=tmp_path,
+def _record(event: str) -> HookRecord:
+    state = ClaudeHook.state_for(event, {})
+    assert state is not None
+    return HookRecord(
+        session_id="s",
+        state=state,
+        event=event,
+        cwd=None,
+        transcript_path=None,
         tmux_pane=None,
-        now=NOW,
+        ts=NOW,
     )
-    later = NOW + timedelta(seconds=10_000)
-    assert ClaudeHook.read("s", sidecar_dir=tmp_path, now=later, max_age_seconds=300) is None
-    # Within the window it's still trusted.
-    assert ClaudeHook.read("s", sidecar_dir=tmp_path, now=NOW + timedelta(seconds=5)) is not None
+
+
+def test_supersedes_poll_transcript_advance_beats_any_push() -> None:
+    """A transcript record newer than the push makes the push stale instantly.
+
+    This is the steer-after-Stop fix: WAITING must not pin a re-engaged agent
+    for the old 5-minute wall-clock window.
+    """
+    rec = _record("Stop")  # WAITING
+    fresh_transcript = NOW + timedelta(seconds=2)
+    assert not rec.supersedes_poll(now=NOW + timedelta(seconds=3), transcript_at=fresh_transcript)
+
+
+def test_supersedes_poll_settled_states_never_age_out() -> None:
+    """BLOCKED (polling-invisible) stays authoritative however old, until the
+    transcript moves — expiring it into a polled guess re-creates the bug the
+    hook exists to fix."""
+    rec = _record("Notification")  # BLOCKED
+    much_later = NOW + timedelta(hours=2)
+    assert rec.supersedes_poll(now=much_later, transcript_at=None)
+    assert rec.supersedes_poll(now=much_later, transcript_at=NOW - timedelta(seconds=1))
+
+
+def test_supersedes_poll_working_ages_out() -> None:
+    """WORKING with no newer signal eventually means a dead agent — the poller
+    takes over past the window (and on negative clock skew)."""
+    rec = _record("PreToolUse")  # WORKING
+    assert rec.supersedes_poll(now=NOW + timedelta(seconds=200), transcript_at=None)
+    assert not rec.supersedes_poll(now=NOW + timedelta(seconds=10_000), transcript_at=None)
+    assert not rec.supersedes_poll(now=NOW - timedelta(seconds=5), transcript_at=None)
 
 
 def test_read_missing_returns_none(tmp_path: Path) -> None:
-    assert ClaudeHook.read("nope", sidecar_dir=tmp_path, now=NOW) is None
+    assert ClaudeHook.read("nope", sidecar_dir=tmp_path) is None
+
+
+def test_naive_ts_sidecar_is_rejected_as_malformed(tmp_path: Path) -> None:
+    """A timezone-naive ts parses fine but would raise TypeError later, inside
+    supersedes_poll's aware comparisons — past the malformed-handling boundary,
+    where it breaks the whole snapshot. Reject it at parse time instead."""
+    (tmp_path / "s.json").write_text(
+        json.dumps(
+            {
+                "session_id": "s",
+                "state": "working",
+                "event": "PreToolUse",
+                "ts": "2026-06-01T12:00:00",  # no offset → naive
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert ClaudeHook.read("s", sidecar_dir=tmp_path) is None
 
 
 def test_settings_installs_a_command_per_event() -> None:
@@ -94,7 +143,7 @@ def test_run_hook_from_stdin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setenv("TMUX_PANE", "%3")
 
     assert run_hook_from_stdin() == 0
-    rec = ClaudeHook.read("cli-1", sidecar_dir=sidecar, now=datetime.now(tz=UTC))
+    rec = ClaudeHook.read("cli-1", sidecar_dir=sidecar)
     assert rec is not None
     assert rec.state is AgentActivityState.WAITING
     assert rec.tmux_pane == "%3"

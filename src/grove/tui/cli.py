@@ -18,6 +18,7 @@ from grove.core.agents.hook import run_hook_from_stdin
 from grove.core.config import dump_config_json, dump_schema_json, write_schema
 from grove.core.git import detect_root
 from grove.tui.cli_sessions import sessions_app
+from grove.tui.cli_workspace import register as register_workspace_commands
 
 app = typer.Typer(
     name="grove",
@@ -39,6 +40,10 @@ auth_app = typer.Typer(
 )
 app.add_typer(auth_app, name="auth")
 app.add_typer(sessions_app, name="sessions")
+
+# Flat workspace verbs (`grove create` / `grove message`) — grafted on like
+# `ls`/`version` rather than nested under a `workspace` subgroup (issue #45).
+register_workspace_commands(app)
 
 
 # ─── default command (TUI) ──────────────────────────────────────────────────

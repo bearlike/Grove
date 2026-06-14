@@ -7,7 +7,7 @@ subcommand when its extra is installed. A missing extra silently skips
 the mount, so a bare TUI install keeps the historical behavior.
 
 This is the project's "mechanism, not policy" surface (CLAUDE.md):
-the user composes their install with ``grove[daemon|client|all]``,
+the user composes their install with ``grove[daemon|client|mcp|all]``,
 the CLI grows the corresponding subcommands, and a single ``grove``
 binary stays the deterministic entry point.
 

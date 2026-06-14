@@ -21,10 +21,12 @@ from fastapi.testclient import TestClient
 from grove.core.activity import ActivityService, DashboardDelta
 from grove.core.config import GroveConfig
 from grove.core.contracts.activity import DashboardEvent
+from grove.core.contracts.views import WorkspacePaneView
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
 from grove.daemon import build_app
+from grove.daemon._pane_stream import _PaneStreamer
 from grove.daemon._sse import _SseHub
 from tests.daemon.conftest import daemon_test_config
 
@@ -145,6 +147,79 @@ def test_pane_endpoint_unknown_workspace_404(client: TestClient) -> None:
     assert client.get("/workspaces/nope/pane").status_code == 404
 
 
+# ─── GET /workspaces/{id}/pane/stream (#19, the live focused-pane push) ──────
+
+
+async def test_pane_stream_emits_pane_snapshot_first(tmp_state_dir: Path) -> None:
+    store = JsonWorkspaceStore()
+    store.save(_state("a1", str(tmp_state_dir / "repo-a")))
+    app = build_app(cfg=daemon_test_config(), store=store)
+
+    start, frame_text = await _first_sse_frame(app, "/workspaces/a1/pane/stream")
+
+    assert start["status"] == 200
+    headers = {k.decode(): v.decode() for k, v in start["headers"]}
+    assert headers["content-type"].startswith("text/event-stream")
+    assert headers["x-accel-buffering"] == "no"
+
+    frame = frame_text.splitlines()
+    assert next(item for item in frame if item.startswith("event:")) == "event: pane_snapshot"
+    payload = json.loads(
+        next(item for item in frame if item.startswith("data:"))[len("data:") :].strip()
+    )
+    assert payload["kind"] == "pane_snapshot"
+    # PAUSED fixture → no live pane, but the frame still carries the view so the
+    # client can drop "connecting…" (best-effort: ansi is None, never a raise).
+    assert payload["pane"]["workspace_id"] == "a1"
+    assert payload["pane"]["ansi"] is None
+
+
+def test_pane_stream_unknown_workspace_404(client: TestClient) -> None:
+    # Resolution (404) happens before streaming begins, so TestClient is fine here.
+    assert client.get("/workspaces/nope/pane/stream").status_code == 404
+
+
+def test_pane_stream_requires_auth(tmp_state_dir: Path) -> None:
+    store = JsonWorkspaceStore()
+    store.save(_state("a1", str(tmp_state_dir / "repo-a")))
+    app = build_app(cfg=GroveConfig(), store=store)  # auth enabled (default)
+    with TestClient(app) as authed:
+        assert authed.get("/workspaces/a1/pane/stream").status_code == 401
+
+
+async def test_pane_streamer_diff_guards_and_keepalives() -> None:
+    """Changed pane → a pane_snapshot event; unchanged → None (keepalive beat)."""
+    t = datetime.now(tz=UTC)
+    captures = iter(
+        [
+            ("frame-1", t),  # first tick always emits (sentinel)
+            ("frame-1", t),  # unchanged → keepalive
+            ("frame-2", t),  # changed → emit
+            (None, None),  # changed to empty → emit (ansi None)
+        ]
+    )
+
+    async def capture() -> tuple[str | None, datetime | None]:
+        return next(captures)
+
+    async def _no_sleep(_: float) -> None:
+        return None
+
+    seqs = iter([10, 11, 12])
+    streamer = _PaneStreamer(
+        workspace_id="w", capture=capture, next_seq=lambda: next(seqs), sleep=_no_sleep
+    )
+    gen = streamer.events()
+    e1, e2, e3, e4 = [await anext(gen) for _ in range(4)]
+    await gen.aclose()
+
+    assert e1 is not None and e1.kind == "pane_snapshot" and e1.pane is not None
+    assert e1.pane.ansi == "frame-1" and e1.seq == 10 and e1.workspace_id == "w"
+    assert e2 is None  # unchanged → keepalive, no new seq consumed
+    assert e3 is not None and e3.pane is not None and e3.pane.ansi == "frame-2" and e3.seq == 11
+    assert e4 is not None and e4.pane is not None and e4.pane.ansi is None and e4.seq == 12
+
+
 async def test_events_emits_snapshot_first(tmp_state_dir: Path) -> None:
     store = JsonWorkspaceStore()
     store.save(_state("a1", str(tmp_state_dir / "repo-a")))
@@ -180,6 +255,8 @@ def test_openapi_documents_activity_routes_and_views(client: TestClient) -> None
     spec = client.get("/openapi.json").json()
     assert "/activity" in spec["paths"]
     assert "/events" in spec["paths"]
+    # The pane stream must be documented so the webapp codegen picks up the path.
+    assert "/workspaces/{ws_id}/pane/stream" in spec["paths"]
     schemas = spec["components"]["schemas"]
     # Both must appear so the webapp codegen picks the wire types up.
     assert "DashboardSnapshotView" in schemas
@@ -236,3 +313,14 @@ def test_event_from_delta_carries_workspace_none_for_lifecycle() -> None:
     assert event.kind == "workspace_changed"
     assert event.workspace is None
     assert event.detail["event"] == "killed"
+
+
+def test_pane_event_carries_pane_payload() -> None:
+    pane = WorkspacePaneView.from_capture("w7", "hello\n", datetime.now(tz=UTC))
+    event = DashboardEvent.pane_event(pane, seq=9)
+    assert event.kind == "pane_snapshot"
+    assert event.seq == 9
+    assert event.workspace_id == "w7"
+    assert event.pane is not None and event.pane.ansi == "hello\n"
+    # Activity-shaped payloads stay empty on a pane frame.
+    assert event.workspace is None and event.snapshot is None

@@ -26,4 +26,4 @@ systemd-user service units for the Grove daemon and the optional webapp, plus th
 
 ## Session lessons
 
-_None yet._
+- **The daemon unit bakes an install-time PATH via `@DAEMON_PATH@` (issue #9, 2026-06-11).** `systemd --user` never sources shell rc files, so without `Environment=PATH=` the daemon ran user init scripts against a bare PATH and pyenv/nvm/asdf toolchains resolved to stale system binaries. `DAEMON_PATH` defaults to the PATH of the shell running `make systemd` — snapshot semantics, so toolchain moves (e.g. an nvm default bump) need a `make systemd` re-run, not a hand-edited drop-in. Any future unit that executes user-authored commands needs the same line.

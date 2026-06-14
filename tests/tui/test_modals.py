@@ -29,6 +29,7 @@ from grove.tui.screens.confirm import ConfirmScreen
 from grove.tui.screens.create import CreateWorkspaceScreen
 from grove.tui.screens.edit import EditWorkspaceScreen
 from grove.tui.screens.help import HelpScreen
+from grove.tui.screens.message import SendMessageScreen
 from tests.conftest import FakeTmux
 
 
@@ -489,6 +490,42 @@ async def test_edit_modal_empty_title_does_not_submit() -> None:
 
 def test_edit_inherits_grove_modal_chrome() -> None:
     assert issubclass(EditWorkspaceScreen, GroveModal)
+
+
+# ─── Message (steer) ─────────────────────────────────────────────────────────
+
+
+class _MessageHost(App[None]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.result: object = "unset"
+
+    def compose(self) -> ComposeResult:
+        return iter(())
+
+    def on_mount(self) -> None:
+        self.push_screen(SendMessageScreen(workspace_title="my task"), self._captured)
+
+    def _captured(self, value: object) -> None:
+        self.result = value
+
+
+@pytest.mark.asyncio
+async def test_message_modal_empty_text_does_not_submit() -> None:
+    """Bell + keep modal open on empty input — same UX as create/edit titles."""
+    app = _MessageHost()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, SendMessageScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+    assert app.result is None
+
+
+def test_message_inherits_grove_modal_chrome() -> None:
+    assert issubclass(SendMessageScreen, GroveModal)
 
 
 def test_create_workspace_request_is_frozen() -> None:

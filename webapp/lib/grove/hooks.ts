@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GroveClient } from "./client";
-import { applyDashboardEvent } from "./activity-stream";
+import { applyDashboardEvent, snapshotHasWorkspace } from "./activity-stream";
 import type {
+  AgentSummaryView,
+  BranchInfo,
   CommitSummaryView,
+  CreateWorkspaceRequest,
   DashboardEvent,
   DashboardSnapshotView,
   SessionDetailView,
@@ -77,7 +80,6 @@ export function useWorkspaceCommits(id: string) {
 }
 
 /**
-/**
  * Recorded agent sessions for the detail page's Sessions panel. History-tier
  * cadence (15 s, same as commits): a session list changes when an agent run
  * starts/ends or a transcript grows — minutes apart, not seconds.
@@ -92,18 +94,186 @@ export function useWorkspaceSessions(id: string) {
 }
 
 /**
+ * Every recorded agent session across one project's worktrees — the home
+ * page's per-repo Sessions section. Fetched on expand only: the section
+ * mounts its body (and therefore this hook) when the user opens it, and
+ * `repo` null keeps the query disabled (zero requests), exactly the
+ * `useSessionTurns` gating. History-tier cadence (15 s, same as commits)
+ * while expanded — session lists change when runs start/end, minutes apart.
+ */
+export function useProjectSessions(repo: string | null) {
+  return useQuery<SessionSummaryView[]>({
+    queryKey: ["project-sessions", repo],
+    queryFn: () => client.getProjectSessions(repo as string),
+    refetchInterval: 15_000,
+    enabled: Boolean(repo),
+  });
+}
+
+/**
  * One session's conversation digest, fetched on expand only (`sessionId` null →
  * disabled, zero requests). Turns never poll fast: the digest is a transcript
  * read, the heaviest per-request endpoint here, and the live signal already
  * comes from peek/activity — 30 s keeps an expanded view fresh without burning
- * the daemon on parses nobody is watching.
+ * the daemon on parses nobody is watching. The chat panel passes a hotter
+ * `refetchMs` (it's a conversation surface, mounted only while in view) —
+ * cadence is the caller's policy, the hook is the mechanism.
  */
-export function useSessionTurns(id: string, sessionId: string | null) {
+export function useSessionTurns(id: string, sessionId: string | null, refetchMs = 30_000) {
   return useQuery<SessionDetailView>({
     queryKey: ["turns", id, sessionId],
     queryFn: () => client.getSessionTurns(id, sessionId as string, 100),
-    refetchInterval: 30_000,
+    refetchInterval: refetchMs,
     enabled: Boolean(id) && Boolean(sessionId),
+  });
+}
+
+/**
+ * Steer the workspace's agent with a follow-up message — POST
+ * `/workspaces/{id}/message`, 204 on success. The one optimistic write in the
+ * app: `onMutate` appends a pending user turn to the session's turns cache so
+ * the sent message appears instantly; the next transcript fetch is the
+ * reconciliation (it replaces the whole array, so no rollback bookkeeping —
+ * on error we just invalidate to drop the phantom row early). `sessionId`
+ * names the cache target; null (no recorded session yet) sends without the
+ * optimistic echo.
+ */
+export function useSendMessage(workspaceId: string, sessionId: string | null) {
+  const queryClient = useQueryClient();
+  const turnsKey = ["turns", workspaceId, sessionId];
+  return useMutation({
+    mutationFn: (text: string) => client.sendMessage(workspaceId, text),
+    onMutate: async (text: string) => {
+      if (!sessionId) return;
+      await queryClient.cancelQueries({ queryKey: turnsKey });
+      queryClient.setQueryData<SessionDetailView>(turnsKey, (prev) =>
+        prev
+          ? {
+              ...prev,
+              turns: [
+                ...prev.turns,
+                { user_text: text, started_at: new Date().toISOString(), entries: [] },
+              ],
+            }
+          : prev,
+      );
+    },
+    onError: () => {
+      // The send never reached the agent — refetch so the optimistic row drops.
+      if (sessionId) void queryClient.invalidateQueries({ queryKey: turnsKey });
+    },
+  });
+}
+
+/**
+ * Interrupt the workspace's agent — POST `/workspaces/{id}/interrupt`, 204 on
+ * success. Callers gate the affordance on the agent actually WORKING (mirror
+ * of the dashboard's live-toggle gating); a 409/501 refusal envelope is the
+ * daemon saying "nothing to interrupt / adapter can't" and renders as a quiet
+ * notice, never a crash.
+ */
+export function useInterrupt(workspaceId: string) {
+  return useMutation({
+    mutationFn: () => client.interrupt(workspaceId),
+  });
+}
+
+// ─── Lifecycle mutations (workspace parity, #56) ─────────────────────────────
+
+/**
+ * Invalidate every cache a lifecycle mutation can stale. The SSE stream already
+ * carries the change for the list surfaces (the daemon's bus emits on each op),
+ * but the detail page rides polled queries — invalidating both keeps every
+ * surface fresh whether or not a stream is connected. One helper so the four
+ * mutations + create can't drift on which keys they refresh.
+ */
+function invalidateWorkspace(queryClient: ReturnType<typeof useQueryClient>, id?: string) {
+  void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+  void queryClient.invalidateQueries({ queryKey: ["activity"] });
+  if (id) {
+    void queryClient.invalidateQueries({ queryKey: ["workspace", id] });
+    void queryClient.invalidateQueries({ queryKey: ["peek", id] });
+    void queryClient.invalidateQueries({ queryKey: ["commits", id] });
+  }
+}
+
+/**
+ * The full per-workspace lifecycle as one cohesive action object: pause / resume
+ * / respawn / kill, each a TanStack mutation sharing one cache-invalidation
+ * policy. Bundling them is the "state + the methods over it as one unit"
+ * principle — the four ops are the same concern (this workspace's lifecycle) and
+ * must invalidate identically, so they live together rather than as four loose
+ * hooks a caller wires up by hand. The UI gates *which* it shows via the pure
+ * `availableActions`; the engine is the real precondition gate.
+ */
+export function useWorkspaceActions(workspaceId: string) {
+  const queryClient = useQueryClient();
+  const onSuccess = () => invalidateWorkspace(queryClient, workspaceId);
+  return {
+    pause: useMutation({
+      // Explicit `boolean` variable (not a defaulted param) so TanStack types
+      // `mutate(force)` as taking the flag rather than collapsing it to `void`.
+      mutationFn: (force: boolean) => client.pauseWorkspace(workspaceId, force),
+      onSuccess,
+    }),
+    resume: useMutation({
+      mutationFn: () => client.resumeWorkspace(workspaceId),
+      onSuccess,
+    }),
+    respawn: useMutation({
+      mutationFn: () => client.respawnWorkspace(workspaceId),
+      onSuccess,
+    }),
+    kill: useMutation({
+      // `null` defers the delete-branch choice to the engine's provenance
+      // default; an explicit boolean (from the confirm dialog) overrides it.
+      mutationFn: (deleteBranch: boolean | null) =>
+        client.killWorkspace(workspaceId, deleteBranch),
+      onSuccess,
+    }),
+  };
+}
+
+/**
+ * Create a workspace from a full `CreateWorkspaceRequest`. On success the list +
+ * activity caches invalidate so the new card appears immediately even before the
+ * SSE `workspace_changed` delta lands. Refusals (unknown agent, branch conflict,
+ * a 422 from a bad branch plan) surface as the typed `GroveProtocolError`.
+ */
+export function useCreateWorkspace() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (req: CreateWorkspaceRequest) => client.createWorkspace(req),
+    onSuccess: () => invalidateWorkspace(queryClient),
+  });
+}
+
+/**
+ * Configured agents for one repo — the create form's agent picker. `repo` null
+ * keeps the query disabled (the form hasn't picked a project yet). Agent config
+ * changes rarely, so a 30 s staleTime avoids re-fetching as the user toggles
+ * other form fields.
+ */
+export function useAgents(repo: string | null) {
+  return useQuery<AgentSummaryView[]>({
+    queryKey: ["agents", repo],
+    queryFn: () => client.listAgents(repo as string),
+    enabled: Boolean(repo),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Branches for one repo at one scope — the create form's Existing/Remote
+ * pickers. `enabled` lets the form fetch a scope only when its branch mode needs
+ * it (Existing → local, Remote → remote), so picking Auto fetches nothing.
+ */
+export function useBranches(repo: string | null, scope: "local" | "remote", enabled = true) {
+  return useQuery<BranchInfo[]>({
+    queryKey: ["branches", repo, scope],
+    queryFn: () => client.listBranches(repo as string, scope),
+    enabled: Boolean(repo) && enabled,
+    staleTime: 15_000,
   });
 }
 
@@ -143,6 +313,11 @@ export function useActivityStream(): ActivityStream {
   // Ref twin of `lastEventAt` so the visibilitychange listener reads the
   // current value without re-subscribing on every event.
   const lastEventAtRef = useRef<number | null>(null);
+  // Ref twin of `snapshot` so the `session_activity` listener can test whether
+  // an incoming delta is for a known workspace without re-subscribing on every
+  // snapshot change (the effect re-runs only on reconnect).
+  const snapshotRef = useRef<DashboardSnapshotView | null>(null);
+  snapshotRef.current = snapshot;
   const stamp = useCallback(() => {
     lastEventAtRef.current = Date.now();
     setLastEventAt(lastEventAtRef.current);
@@ -161,13 +336,29 @@ export function useActivityStream(): ActivityStream {
       stamp();
       setSnapshot((prev) => applyDashboardEvent(prev, JSON.parse(e.data) as DashboardEvent));
     };
-    es.addEventListener("snapshot", fold);
-    es.addEventListener("session_activity", fold);
-    es.addEventListener("workspace_changed", () => {
+    // Lifecycle wake-up (or an out-of-band create the poll surfaced as a
+    // `session_activity` for a workspace we don't have yet, #49) — re-fetch
+    // the full snapshot so the new row appears and gone rows drop.
+    const refetch = () => {
       stamp();
-      // Lifecycle wake-up carries no payload — re-fetch the full snapshot.
       client.getActivity().then(setSnapshot).catch(() => undefined);
+    };
+    es.addEventListener("snapshot", fold);
+    es.addEventListener("session_activity", (e: MessageEvent) => {
+      // A `session_activity` for an unknown workspace means a separate process
+      // (a second TUI, the MCP server, the CLI) created it — the daemon's poll
+      // emits `session_activity`, not the bus-bridged `workspace_changed`, for
+      // those. The pure reducer drops it to keep the wall stable, so promote it
+      // to a full re-fetch instead of swallowing the create.
+      const event = JSON.parse(e.data) as DashboardEvent;
+      const id = event.workspace?.state.id;
+      if (id && !snapshotHasWorkspace(snapshotRef.current, id)) {
+        refetch();
+        return;
+      }
+      fold(e);
     });
+    es.addEventListener("workspace_changed", refetch);
     es.addEventListener("heartbeat", stamp);
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
@@ -222,17 +413,51 @@ export function useActivityStream(): ActivityStream {
 }
 
 /**
- * Poll one workspace's agent pane for the dashboard's focused live view.
+ * Stream one workspace's agent pane for the dashboard's focused live view.
  *
- * Enabled only for the single expanded/focused card (`enabled`) — the
- * "summary wall + one live focus" shape, never N live panes. ~1 s cadence
- * matches the agent-pane refresh; disabled → no request.
+ * Primary path (mirrors `useActivityStream`): a cookie-auth `EventSource` to the
+ * BFF `/workspaces/{id}/pane/stream` — the daemon pushes diff-guarded
+ * `pane_snapshot` frames (~1 Hz, an event only when the ANSI changed) which we
+ * store as the latest `WorkspacePaneView`. The connection is the "dispose the
+ * prior one on focus switch" mechanism: a new `id` (or `enabled → false`) tears
+ * the EventSource down, and the stored pane resets to `undefined` so a stale
+ * pane from the previously-focused workspace never flashes on the new one.
+ *
+ * Fallback: in jsdom/SSR (no `EventSource`) or when the stream can't connect, a
+ * one-shot `getPane` poll keeps the pane live, enabled only while disconnected.
+ *
+ * Gating is client-side: the page enables this for the single focused WORKING
+ * card only (page-level `liveId`), so the wall streams one pane, never N.
  */
 export function useWorkspacePane(id: string | null, enabled: boolean) {
-  return useQuery<WorkspacePaneView>({
+  const [pane, setPane] = useState<WorkspacePaneView | undefined>(undefined);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    // Reset on every connection-key change (id switch / disable / unmount) so a
+    // stale pane from the prior focus can't flash on the new one.
+    setPane(undefined);
+    setConnected(false);
+    if (!enabled || !id) return;
+    if (typeof EventSource === "undefined") return; // jsdom / SSR → poll fallback only
+    const es = new EventSource(GroveClient.paneStreamUrl(id));
+    es.addEventListener("pane_snapshot", (e: MessageEvent) => {
+      const event = JSON.parse(e.data) as DashboardEvent;
+      setPane(event.pane ?? undefined);
+    });
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
+    return () => es.close();
+  }, [id, enabled]);
+
+  const poll = useQuery<WorkspacePaneView>({
     queryKey: ["pane", id],
     queryFn: () => client.getPane(id as string),
     refetchInterval: 1_000,
-    enabled: Boolean(id) && enabled,
+    // Poll only when SSE isn't carrying the pane (jsdom / SSR / no stream).
+    enabled: Boolean(id) && enabled && !connected,
   });
+
+  const data = pane ?? poll.data;
+  return { data, isLoading: enabled && Boolean(id) && data === undefined };
 }

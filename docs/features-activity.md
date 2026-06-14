@@ -17,42 +17,64 @@ Grove tracks agents on two time scales, and gives each its own surface.
   this moment? The Activity Dashboard shows it, across every project.
 - **Session history** is the past tense. What did the agent do, and
   what did you ask for? `grove sessions` and the web dashboard's
-  sessions panel replay it.
+  per-project Sessions section replay it.
 
 Both are read-only by construction. Grove reads transcripts and git
-state from disk. It never writes into an agent's session.
+state from disk to build these views. It never edits a past session;
+when you steer an agent from the dashboard, that is a fresh follow-up to
+the live agent, not a rewrite of the record.
 
 ## The Activity Dashboard
 
 Press `d` in the TUI, or open `/activity` in the
 [web dashboard](use-webapp.md). Either way you get the same wall: every
-workspace across every repository the daemon knows about, one tile per
-workspace, grouped by project.
+agent session across every repository the daemon knows about, on one
+attention-first grid that puts the agents needing you at the very top.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-activity-wall.png" alt="The Activity Dashboard in the web dashboard: agent tiles across two projects, with one live terminal pane focused" /></div>
-  <figcaption class="ms-shot__body">The wall in the browser. Two projects, six workspaces, one live pane. Working agents glow, waiting agents carry the amber accent, and the idle one dims.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-activity-wall.png" alt="The Activity Dashboard in the web dashboard: a flat grid of agent session cards across projects, each with a project chip, and one live terminal pane focused on the side" /></div>
+  <figcaption class="ms-shot__body">The wall in the browser. One flat grid, a project chip on each card, one live pane. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
 </figure>
 
-Quiet tiles stay compact. A tile whose agent is working, waiting,
-blocked, or erroring grows and shows a live tail of the agent's
-terminal. So the wall is not a static grid. It breathes with the fleet,
-and the tiles that matter take the space.
+In the browser the wall is one flat grid rather than project bands, so
+it packs with cards from the very top. Each card carries a project chip
+to keep its origin legible. The grid streams live from the daemon over
+SSE (server-sent events), so a state change tweens into place within a
+second, no manual refresh; a poll fallback covers a dropped stream, and
+the corner shows whether the feed is *live* or *polling*. One
+consolidated filter narrows the wall by project, by agent state, or to
+just the ones that need attention, and your choices persist in the
+browser.
 
-Each tile carries the branch, the agent and model, the diff size,
-ahead and behind counts, turn and token totals, and the agent's own
-one-line summary of what it is doing.
+Each card carries the agent and its state, the workspace title and
+project, the agent's own one-line summary of what it is doing right now,
+a compact turns-tools-tokens metrics line, and the last commit with its
+relative time. A working card offers a *Live* toggle: flip it and a
+single focused pane mirrors that agent's real terminal on the side,
+colors and all, streamed over SSE. One live pane at a time, so the page
+stays cheap on a phone.
+
+In the TUI the same wall groups tiles by project and lets the active
+tiles grow a live tail in place: quiet tiles stay compact, and a tile
+whose agent is working, waiting, blocked, or erroring expands to show
+its terminal. Either way, the tiles that matter take the space.
+
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-dashboard.svg" alt="The TUI Activity Dashboard: agent tiles grouped by project, working and waiting tiles promoted with token metrics and a live pane tail" /></div>
+  <figcaption class="ms-shot__body">The same wall in the terminal. Tiles group by project, and the working and waiting agents promote to show their state, token counts, and a tail of their pane.</figcaption>
+</figure>
 
 ## What Grove watches
 
 Four signals feed every tile.
 
 1. **Agent state.** For agents Grove knows how to introspect (Claude
-   Code today), Grove reads the session transcript and derives a
-   precise state: `◌ starting`, `▶ working`, `◑ waiting`, `⚠ blocked`,
-   `○ idle`, `✗ error`. Waiting means the turn ended and the agent
-   wants you. Blocked means it is stuck on an explicit prompt. Before
-   any transcript exists, the state reads as a quiet `· unknown`.
+   Code and Codex from their on-disk transcripts, Mewbo over its API),
+   Grove derives a precise state: `◌ starting`, `▶ working`,
+   `◑ waiting`, `⚠ blocked`, `○ idle`, `✗ error`. Waiting means the
+   turn ended and the agent wants you. Blocked means it is stuck on an
+   explicit prompt. Before any session exists, the state reads as a
+   quiet `· unknown`.
 2. **Terminal output.** Agents Grove cannot introspect still get a
    signal. If the tmux window is producing output, the workspace reads
    as active. Quiet past the threshold reads as idle.
@@ -97,6 +119,10 @@ Grove which adapter, if any, can introspect that agent's sessions.
 - `claude_code` enables the full treatment: transcript-derived state,
   turn and token counts, the session's own title, and session history.
   The built-in `claude` agent ships with this kind.
+- `codex` reads the Codex CLI's rollout transcripts for the same state,
+  turn, and token signals. The built-in `codex` agent ships with it.
+- `mewbo` introspects a remote Mewbo session over its REST API rather
+  than from local files.
 - `generic` is the default for everything else. The command runs
   normally and the dashboard falls back to the terminal-output signal.
 
@@ -130,9 +156,10 @@ grove sessions dump 7b3f2c1a       # the raw transcript records
 The full command reference, with filters for agent, workspace, and
 time window, lives on the [CLI page](use-cli.md#grove-sessions).
 
-In the web dashboard, each workspace detail page carries a sessions
-panel. It lists the workspace's sessions newest first, and expanding a
-row loads the conversation inline.
+In the web dashboard, each repository tab on the home grid carries a
+collapsible Sessions section. It lists every session across that repo's
+worktrees newest first, and expanding a row loads the conversation
+inline as turns.
 
 Grove also labels where each session came from. Sessions Grove launched
 are tagged as Grove's, because Grove handed the agent its session id at
@@ -145,7 +172,7 @@ not start it.
 - [TUI tour](use-tui.md): the dashboard screen, its keys, and where
   agent state appears on the list.
 - [Web dashboard](use-webapp.md): the `/activity` wall and the
-  sessions panel in the browser.
+  per-project Sessions section in the browser.
 - [CLI](use-cli.md#grove-sessions): `grove sessions list`, `show`, and `dump`.
 - [Agents](configure-agents.md): declaring an agent's `kind`.
 - [Status semantics](features-status.md): workspace status, the other

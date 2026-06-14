@@ -254,6 +254,7 @@ __marimo__/
 /webapp/coverage
 /webapp/playwright-report
 /webapp/test-results
+/webapp/tests/e2e/.auth
 /webapp/.env.local
 # The Python `lib/` rule above (distutils build) sweeps up the webapp's
 # source `lib/` directory. Negate it explicitly so source TS files are

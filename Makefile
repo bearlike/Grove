@@ -48,12 +48,20 @@ check: lint test  ## Run lint + unit tests (no integration)
 
 # ─── docs ───────────────────────────────────────────────────────────────────
 
-.PHONY: docs-schema docs-screenshots docs docs-build
+.PHONY: docs-schema docs-screenshots docs-webapp-screenshots docs-mockups docs-images docs docs-build
 docs-schema:  ## Regenerate docs/grove.schema.json from the Pydantic model
 	$(UV) run grove config schema --stdout > docs/grove.schema.json
 
-docs-screenshots:  ## Regenerate docs/img/screenshots/*.svg from the live TUI
+docs-screenshots:  ## Regenerate the TUI SVG screenshots from the live TUI
 	$(UV) run python -m tools.screenshots.capture
+
+docs-webapp-screenshots: webapp-build  ## Regenerate the web dashboard PNG screenshots (needs webapp/.next)
+	$(UV) run python -m tools.screenshots.webapp_capture
+
+docs-mockups:  ## Composite the landing-page device mockups from the latest screenshots
+	$(UV) run python -m tools.screenshots.mockups
+
+docs-images: docs-screenshots docs-webapp-screenshots docs-mockups  ## Regenerate every doc image (TUI + web + mockups)
 
 docs: docs-schema  ## Serve the docs site locally (live reload)
 	$(UV) run --group docs mkdocs serve
@@ -138,6 +146,12 @@ GROVE_BIN ?= $(shell command -v grove 2>/dev/null)
 NPM_BIN   ?= $(shell command -v npm 2>/dev/null)
 NODE_BIN_DIR := $(if $(NPM_BIN),$(dir $(NPM_BIN)),)
 
+# PATH baked into the daemon unit. Defaults to the invoking shell's PATH so
+# pyenv/nvm/asdf-managed toolchains stay visible to init scripts under
+# systemd --user, which otherwise provides a bare PATH (issue #9). Snapshot
+# semantics: re-run `make systemd` after toolchain moves.
+DAEMON_PATH ?= $(PATH)
+
 DAEMON_HOST ?= 127.0.0.1
 DAEMON_PORT ?= 7421
 WEBAPP_HOST ?= 0.0.0.0
@@ -184,6 +198,7 @@ _systemd-precheck:
 # so file paths don't need escaping.
 _SED_SUBST := sed \
 	-e 's,@GROVE_BIN@,$(GROVE_BIN),g' \
+	-e 's,@DAEMON_PATH@,$(DAEMON_PATH),g' \
 	-e 's,@DAEMON_HOST@,$(DAEMON_HOST),g' \
 	-e 's,@DAEMON_PORT@,$(DAEMON_PORT),g' \
 	-e 's,@WEBAPP_DIR@,$(WEBAPP_DIR),g' \

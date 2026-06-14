@@ -43,7 +43,8 @@ across layers. `agents` is special:
 
 ```python
 [
-    AgentSpec(name="claude", command="claude"),
+    AgentSpec(name="claude", command="claude", kind="claude_code"),
+    AgentSpec(name="codex",  command="codex",  kind="codex"),
     AgentSpec(name="shell",  command="$SHELL"),
 ]
 ```
@@ -54,8 +55,8 @@ If your project layer adds:
 { "agents": [{ "name": "aider", "command": "aider --model sonnet" }] }
 ```
 
-The merged result is all three: the defaults `claude` and `shell` plus
-the project's `aider`. New names append in overlay order. Matching names
+The merged result is all four: the defaults `claude`, `codex`, and `shell`
+plus the project's `aider`. New names append in overlay order. Matching names
 merge field by field: the overlay's fields win, and the base entry fills
 the gaps. Override only the `claude` agent's `command` and its
 `kind: "claude_code"` survives, so the [Activity
@@ -66,6 +67,15 @@ forking lists.
 
 When you need to *replace* the defaults, give every entry a custom name.
 The merge cannot insert a `claude` you did not ask for.
+
+## Per-repo resolution
+
+The daemon, the TUI, and the web dashboard all resolve each repo's full
+cascade independently. The user layer applies to every repo; layers 3 and 4
+(project and project-local) apply only for workspaces in that specific repo.
+A project-scoped agent or a project-enabled init script defined in
+`<repo>/.grove/config.json` is honored consistently across every surface for
+that repo. You do not need to duplicate project settings in your user config.
 
 ## `${repo}` and `${repo_name}` expand at consume time
 

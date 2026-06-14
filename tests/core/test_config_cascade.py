@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from grove.core import paths as paths_mod
 from grove.core.config import (
@@ -88,7 +89,7 @@ def test_load_defaults_when_no_layers(
     monkeypatch.delenv("GROVE_WORKTREE__BRANCH_PREFIX", raising=False)
     cfg = load_config(tmp_repo, env={})
     assert cfg.worktree.branch_prefix == "grove/"
-    assert {a.name for a in cfg.agents} == {"claude", "shell"}
+    assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
 
 
 def test_tmux_config_has_peek_refresh_defaults() -> None:
@@ -213,3 +214,33 @@ def test_round_trip_dump_then_validate() -> None:
     text = cfg.model_dump_json(indent=2, by_alias=True)
     again = GroveConfig.model_validate_json(text)
     assert again == cfg
+
+
+# ─── mewbo section (#35) ────────────────────────────────────────────────────
+
+
+def test_mewbo_section_defaults_and_round_trip() -> None:
+    """The mewbo section validates, overrides, and survives dump→validate.
+    ``api_key_env`` is the env-var NAME, never a literal secret."""
+    cfg = GroveConfig.model_validate({"mewbo": {"base_url": "http://127.0.0.1:9999"}})
+    assert cfg.mewbo.base_url == "http://127.0.0.1:9999"
+    assert cfg.mewbo.api_key_env == "MEWBO_API_KEY"
+    assert cfg.mewbo.timeout_seconds == 10.0
+    again = GroveConfig.model_validate_json(cfg.model_dump_json(indent=2, by_alias=True))
+    assert again.mewbo == cfg.mewbo
+
+
+def test_mewbo_section_forbids_unknown_fields() -> None:
+    """``extra="forbid"`` holds for the new section — a literal ``api_key``
+    (the typo'd or secret-leaking shape) is rejected at validation."""
+    with pytest.raises(ValidationError):
+        GroveConfig.model_validate({"mewbo": {"api_key": "literal-secret"}})
+
+
+def test_agent_spec_accepts_mewbo_kind() -> None:
+    cfg = GroveConfig.model_validate(
+        {"agents": [{"name": "mewbo", "command": "true", "kind": "mewbo"}]}
+    )
+    spec = cfg.find_agent("mewbo")
+    assert spec is not None
+    assert spec.kind == "mewbo"

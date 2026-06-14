@@ -222,26 +222,39 @@ def run_init_script(
     return result.returncode
 
 
-def capture_pane_snapshot(target: str, *, lines: int = 60) -> str:
-    """Read-only snapshot of a tmux pane's visible content.
+def capture_pane_snapshot(target: str, *, history_lines: int = 500) -> str:
+    """Read-only snapshot of a tmux pane, INCLUDING scrollback.
 
     `target` is a tmux target spec (`session`, `session:window`, or
     `session:window.pane`). Best-effort: returns "" on any failure
     (missing tmux, dead session, bad target). Never raises — `peek()`
     must keep rendering even if tmux has gone away.
 
+    Returns the captured grid as-is (the client owns the viewport: the
+    rail/tile tail it, the webapp `<pre>` scrolls it), with only the
+    viewport's trailing blank rows below the cursor trimmed. Core does
+    NOT pre-crop to a fixed line count for everyone.
+
     Flags:
         -p  print to stdout
         -e  preserve SGR (color/attribute) escapes — capture-pane reads
             the rendered grid, not the input stream, so cursor-move CSI
             is never emitted; safe to feed straight to Text.from_ansi.
-        -J  rejoin lines wrapped by the source pane.
+        -S -N  start N lines back into scrollback (the fix for "only the
+            bottom of the session is ever shown" — without it tmux starts
+            at the top of the *visible viewport* and history is never read).
+
+    `-J` (rejoin wrapped lines) is deliberately NOT passed: it produces
+    logical lines far wider than the pane, which the TUI rail (`no_wrap`)
+    and the webapp `<pre>` then clip. The raw grid — one line per display
+    row, already pane-width-bounded — is the faithful snapshot every
+    consumer wants.
     """
     if shutil.which("tmux") is None:
         return ""
     try:
         result = subprocess.run(
-            ["tmux", "capture-pane", "-p", "-e", "-J", "-t", target],
+            ["tmux", "capture-pane", "-p", "-e", "-S", f"-{history_lines}", "-t", target],
             capture_output=True,
             text=True,
             check=False,
@@ -254,7 +267,52 @@ def capture_pane_snapshot(target: str, *, lines: int = 60) -> str:
     if result.returncode != 0 or not result.stdout:
         return ""
     out_lines = result.stdout.splitlines()
-    return "\n".join(out_lines[-lines:])
+    # Trim only the viewport's trailing blank rows (the empty grid below the
+    # cursor); keep interior/leading blanks — they're real screen content.
+    while out_lines and not out_lines[-1].strip():
+        out_lines.pop()
+    return "\n".join(out_lines)
+
+
+def send_text(target: str, text: str) -> None:
+    """Type `text` into the pane at `target`, then press Enter to submit it.
+
+    Two deliberate ``send-keys`` calls, never one:
+
+    * The payload call passes ``-l`` so tmux treats the text as a literal
+      byte string — without it tmux interprets key *names*, so a message
+      containing "Enter", "C-c", or "Escape" would be executed as
+      keystrokes instead of typed as text. ``--`` ends option parsing so
+      a payload starting with ``-`` can't be misread as a flag.
+    * The submitting Enter is its own, non-``-l`` call: under ``-l`` the
+      word "Enter" would just be five typed characters.
+
+    Mechanism only — resolving *which* pane to steer is the manager's
+    ``pane_target`` policy. Unlike this module's best-effort read helpers,
+    failures raise ``TmuxError``: a steer that silently vanished is worse
+    than one that failed loudly.
+    """
+    if shutil.which("tmux") is None:
+        raise TmuxError("tmux not found on PATH — on Windows, run Grove inside WSL2")
+    for argv in (
+        ["tmux", "send-keys", "-t", target, "-l", "--", text],
+        ["tmux", "send-keys", "-t", target, "Enter"],
+    ):
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=False,
+                timeout=5,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            raise TmuxError(f"send-keys to {target} failed: {exc}") from exc
+        if result.returncode != 0:
+            raise TmuxError(
+                f"send-keys to {target} exited {result.returncode}: {result.stderr.strip()}"
+            )
 
 
 def pane_activity_seconds_ago(target: str) -> int | None:

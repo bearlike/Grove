@@ -37,7 +37,7 @@ from grove.core.agents import (
     SessionProvenance,
     get_adapter,
 )
-from grove.core.agents.hook import ClaudeHook
+from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook
 from grove.core.git import GitRepo
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
 from grove.core.registry import RepoRegistry
@@ -107,7 +107,6 @@ class WorkspaceActivity:
         included so a fresh commit streams promptly even when it doesn't move the
         ahead/behind counts (an amend on the tip).
         """
-        p = self.primary
         return (
             self.state.status,
             self.diff_added,
@@ -116,10 +115,18 @@ class WorkspaceActivity:
             self.base_ahead,
             self.base_behind,
             self.recent_commits[0].sha if self.recent_commits else None,
-            p.state if p else None,
-            p.last_event_at if p else None,
-            p.assistant_replies if p else 0,
-            p.tool_calls if p else 0,
+            # Every session, not just the primary: a hand-started secondary's
+            # state change must stream too, and a sessions set going empty (a
+            # discovery miss) is itself a change worth emitting.
+            tuple(
+                (
+                    s.activity.state,
+                    s.activity.last_event_at,
+                    s.activity.assistant_replies,
+                    s.activity.tool_calls,
+                )
+                for s in self.sessions
+            ),
         )
 
 
@@ -195,6 +202,12 @@ class ActivityService:
         # (SSE snapshot frames) without a lock or a torn counter.
         self._seq = itertools.count(1)
         self._last_fingerprint: dict[str, tuple[object, ...]] = {}
+        # Last definitive (state, settled_at) per session id — the hysteresis
+        # memory that keeps a transient read failure (mid-write JSONL tail,
+        # remote /events timeout) from flashing a live session back to
+        # STARTING/UNKNOWN. Unbounded like the registry: loopback-only, small N,
+        # tiny entries.
+        self._settled: dict[str, tuple[AgentActivityState, datetime]] = {}
         self._git_cache: dict[Path, GitRepo] = {}
 
     # ─── snapshot ──────────────────────────────────────────────────────────
@@ -327,6 +340,9 @@ class ActivityService:
           session is the primary. When the #18 enhancement is on
           (``cfg.hooks.enabled``), concurrent sessions the user started by hand in
           this worktree are discovered and appended (``provenance="fs_discovered"``).
+          Exception: a minted id that never materialized (no transcript, blend
+          still STARTING/UNKNOWN) yields the primary slot to the newest
+          discovered session — the in-process-rotation recovery below.
         - **No minted id** — a workspace whose agent wasn't ``kind="claude_code"``
           at create (so no ``--session-id`` was injected), one created before
           minting existed, or a purely hand-started run. The deterministic lookup
@@ -349,19 +365,42 @@ class ActivityService:
         now = _utcnow()
 
         if state.agent_session_id:
-            out = [
-                self._session_activity(
-                    mgr, state, kind, state.agent_session_id, "grove_launched", now
-                )
-            ]
+            minted = self._session_activity(
+                mgr, state, kind, state.agent_session_id, "grove_launched", now
+            )
+            extras: list[SessionActivity] = []
             if mgr.config.hooks.enabled:
-                for discovered in adapter.discover_sessions(
-                    worktree, exclude_id=state.agent_session_id
-                ):
-                    out.append(
-                        self._session_activity(mgr, state, kind, discovered, "fs_discovered", now)
+                extras = [
+                    self._session_activity(mgr, state, kind, discovered, "fs_discovered", now)
+                    for discovered in adapter.discover_sessions(
+                        worktree, exclude_id=state.agent_session_id
                     )
-            return out
+                ]
+            # A minted id that never materialized is a dead pointer, not a young
+            # session: an in-process rotation (`/clear` mints a NEW session id
+            # inside the same claude) or a hand-restarted agent leaves the
+            # workspace pinned on STARTING forever while the live session sits
+            # discoverable in the same cwd. Recover it (ungated by hooks — same
+            # read-only-discovery rule as the no-minted-id path) and surface it
+            # FIRST so it becomes the primary; the minted entry stays behind it
+            # and takes back over if it ever materializes. The sidecar-settled
+            # case (hook says WORKING before any transcript) is deliberately not
+            # demoted — only a STARTING/UNKNOWN blend means "nothing alive here".
+            unmaterialized = (
+                not adapter.remote
+                and minted.session.transcript_path is None
+                and minted.activity.state
+                in (AgentActivityState.STARTING, AgentActivityState.UNKNOWN)
+            )
+            if unmaterialized and not extras:
+                recent = adapter.discover_sessions(worktree, exclude_id=state.agent_session_id)[:1]
+                extras = [
+                    self._session_activity(mgr, state, kind, sid, "fs_discovered", now)
+                    for sid in recent
+                ]
+            if unmaterialized and extras:
+                return [*extras, minted]
+            return [minted, *extras]
 
         # `discover_sessions` returns newest-first; surface exactly ONE — a worktree
         # accumulates a long transcript history, so the latest is the running session
@@ -381,15 +420,34 @@ class ActivityService:
         now: datetime,
     ) -> SessionActivity:
         adapter = get_adapter(kind)
-        paths = adapter.locate_transcripts(Path(state.worktree_path), session_id)
-        transcript = adapter.parse_activity(paths)
-        blended = self._blend(state.status, transcript, has_file=bool(paths), provenance=provenance)
-        # Push-status override (#18): a fresh sidecar from the managed hook is the
+        worktree = Path(state.worktree_path)
+        # locate stays alongside the (cwd, session_id)-keyed parse: the paths
+        # feed the displayed transcript_path and the STARTING detection below.
+        paths = adapter.locate_transcripts(worktree, session_id)
+        transcript = adapter.parse_activity(worktree, session_id)
+        # Remote adapters surface state with no local file, so "materialized"
+        # can't mean "a file exists" — UNKNOWN-and-fileless is the only true
+        # STARTING window.
+        has_transcript = bool(paths) or transcript.state is not AgentActivityState.UNKNOWN
+        blended = self._blend(
+            state.status,
+            transcript,
+            has_transcript=has_transcript,
+            provenance=provenance,
+            remote=adapter.remote,
+            now=now,
+        )
+        # Push-status override (#18): a sidecar from the managed hook is the
         # authoritative signal — it sees BLOCKED (permission prompt) and the clean
-        # waiting/done split that polling can't. Stale/absent → polled blend stands.
-        sidecar = ClaudeHook.read(session_id, sidecar_dir=core_paths.agent_sidecar_dir(), now=now)
-        if sidecar is not None:
+        # waiting/done split that polling can't. It outranks the poll until the
+        # transcript outruns it (the record's own staleness call); absent or
+        # superseded → polled blend stands.
+        sidecar = ClaudeHook.read(session_id, sidecar_dir=core_paths.agent_sidecar_dir())
+        if sidecar is not None and sidecar.supersedes_poll(
+            now=now, transcript_at=transcript.last_event_at
+        ):
             blended = sidecar.state
+        blended = self._settle(session_id, blended, now)
         session = AgentSession(
             session_id=session_id,
             transcript_path=paths[0] if paths else None,
@@ -404,8 +462,10 @@ class ActivityService:
         ws_status: WorkspaceStatus,
         transcript: AgentActivity,
         *,
-        has_file: bool,
+        has_transcript: bool,
         provenance: SessionProvenance,
+        remote: bool,
+        now: datetime,
     ) -> AgentActivityState:
         """The single status-blend policy site (mirrors ``_reconcile_status``).
 
@@ -415,22 +475,35 @@ class ActivityService:
         manager already computed that, the blend needs no extra tmux call.
 
         Truth table:
-          - no transcript on disk → STARTING for a grove_launched session (the
-            file is created lazily on its first turn), else UNKNOWN (an
-            fs_discovered file that vanished/raced between discover and read).
-          - transcript UNKNOWN/ERROR/WAITING → returned as-is (definitive signals;
-            an ended turn stays WAITING regardless of tmux noise).
+          - no transcript materialized (no file AND nothing parseable — remote
+            adapters have no file but still surface state) → STARTING for a
+            grove_launched session (created lazily on its first turn), else
+            UNKNOWN (an fs_discovered file that vanished/raced between
+            discover and read).
+          - transcript UNKNOWN/ERROR/WAITING/BLOCKED → returned as-is (definitive
+            signals; an ended turn stays WAITING, a needs-input prompt stays
+            BLOCKED, regardless of tmux noise).
           - transcript WORKING (tool_use / mid-stream tail):
+              · remote adapter → WORKING (the backend's status is authoritative;
+                the local pane runs a bare shell and says nothing about remote
+                work — gating on it read every busy remote agent as IDLE).
               · workspace ACTIVE (tmux fresh) → WORKING.
-              · otherwise (tmux quiet, or session not live) → IDLE — a tool_use tail
-                with no recent output is alive-but-stalled; precise BLOCKED needs a
-                hook (#18).
+              · transcript fresh (``last_event_at`` within the sidecar window) →
+                WORKING. The adapter's own abstraction outranks the tmux
+                heuristic: a thinking/long-tool agent emits no pane output, and
+                demoting on the quiet pane alone was the flaky WORKING→IDLE
+                flapping. Tmux becomes the tiebreak only once the transcript
+                itself has gone stale.
+              · otherwise (both signals stale, or session not live) → IDLE — a
+                tool_use tail with nothing advancing is alive-but-stalled (or a
+                killed agent whose transcript froze mid-tool); precise BLOCKED
+                needs a hook (#18).
         """
-        # No transcript on disk: only a Grove-launched session is legitimately
-        # mid-STARTING (file not yet written on its first turn). An fs_discovered
+        # No transcript materialized: only a Grove-launched session is legitimately
+        # mid-STARTING (nothing written yet on its first turn). An fs_discovered
         # session whose file we confirmed in discover() but can't read now is a
         # vanished/raced transcript → UNKNOWN, never a false "starting".
-        if not has_file:
+        if not has_transcript:
             return (
                 AgentActivityState.STARTING
                 if provenance == "grove_launched"
@@ -441,11 +514,52 @@ class ActivityService:
             AgentActivityState.UNKNOWN,
             AgentActivityState.ERROR,
             AgentActivityState.WAITING,
+            AgentActivityState.BLOCKED,
         ):
+            return t
+        if remote:
             return t
         if ws_status == WorkspaceStatus.ACTIVE:
             return AgentActivityState.WORKING
+        if (
+            transcript.last_event_at is not None
+            and (now - transcript.last_event_at).total_seconds() <= DEFAULT_SIDECAR_MAX_AGE_SECONDS
+        ):
+            return AgentActivityState.WORKING
         return AgentActivityState.IDLE
+
+    def _settle(
+        self, session_id: str, fresh: AgentActivityState, now: datetime
+    ) -> AgentActivityState:
+        """Hysteresis: a degraded read never erases a definitive state.
+
+        A live session's read can transiently collapse to STARTING/UNKNOWN — a
+        JSONL tail caught mid-write, a remote ``/events`` timeout, a transcript
+        glob racing a file rotation — and the memoryless blend would flash the
+        card back to "starting" each time. Keep the last definitive state for
+        the degraded tick; the next clean read takes over. A session that never
+        materialized keeps its honest STARTING/UNKNOWN.
+
+        A settled WORKING expires on the sidecar's window (the same dead-agent
+        guard, same reason): with hooks on, ``SessionStart`` settles WORKING
+        before any transcript exists, so a workspace whose agent dies at boot —
+        or is simply never prompted — would otherwise read WORKING forever once
+        the degraded fallthrough starts answering from this cache. Settled
+        WAITING/BLOCKED/ERROR/IDLE stay age-less: nothing happened since, so
+        they are still true.
+        """
+        degraded = fresh in (AgentActivityState.STARTING, AgentActivityState.UNKNOWN)
+        cached = self._settled.get(session_id)
+        if degraded and cached is not None:
+            state, settled_at = cached
+            expired = (
+                state is AgentActivityState.WORKING
+                and (now - settled_at).total_seconds() > DEFAULT_SIDECAR_MAX_AGE_SECONDS
+            )
+            if state is not AgentActivityState.STARTING and not expired:
+                return state
+        self._settled[session_id] = (fresh, now)
+        return fresh
 
     # ─── manager-bus bridge ────────────────────────────────────────────────
 

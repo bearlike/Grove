@@ -101,6 +101,20 @@ def test_webapp_unit_default_host_is_lan_reachable() -> None:
     assert "--hostname 0.0.0.0" in out
 
 
+def test_daemon_unit_bakes_install_time_path() -> None:
+    """The daemon runs user-authored init scripts; under systemd --user a bare
+    PATH made pyenv/nvm/asdf toolchains invisible and rolled creates back
+    (issue #9). The unit must bake DAEMON_PATH (default: the installing
+    shell's PATH) into Environment=PATH=.
+    """
+    out = _run_print(
+        with_webapp=False,
+        env_overrides={"DAEMON_PATH": "/opt/toolchain/bin:/usr/bin"},
+    )
+    assert "Environment=PATH=/opt/toolchain/bin:/usr/bin" in out
+    assert "@DAEMON_PATH@" not in out
+
+
 def test_no_unsubstituted_placeholders_remain() -> None:
     """No @TOKEN@ should survive in either rendered unit."""
     out = _run_print(with_webapp=True)

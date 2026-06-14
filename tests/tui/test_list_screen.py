@@ -100,6 +100,77 @@ async def test_refresh_picks_up_new_workspace(
 
 
 @pytest.mark.asyncio
+async def test_stats_tick_picks_up_out_of_band_create_and_kill(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The slow stats tick re-enumerates the workspace set from the store.
+
+    Issue #49: a second TUI / the MCP server / the daemon can create or
+    kill a workspace out-of-band; the open TUI's row set was built once at
+    mount and never re-read, so the change only appeared on a full restart.
+    Now ``_tick_stats`` re-reads ``manager.list()`` and ``populate`` diffs
+    by id.
+
+    The out-of-band actor is a *second* manager over the *same* store path
+    (a separate process — a second TUI / the MCP server / the daemon). Its
+    writes never reach this screen's in-process ``subscribe`` callback, so
+    the only way the row appears is the slow tick re-reading the shared
+    store. Drives the tick directly (interval timers stopped first per the
+    pulse-timer lesson) and asserts: the out-of-band row appears, a second
+    tick adds no duplicate, and a removed workspace disappears.
+    """
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    first = manager.create(CreateWorkspaceRequest(agent_name="claude", title="alpha"))
+    # A second manager over the same store path stands in for a separate
+    # process; its lifecycle events never reach this screen's subscription.
+    other = WorkspaceManager(repo_root=manager.repo_root, cfg=manager.config, store=manager.store)
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        ws_list = screen.query_one(WorkspaceList)
+        # Stop the auto-intervals so the manual tick is the only writer
+        # (pulse-timer lesson: a live interval can fire inside pilot.pause).
+        for attr in ("_stats_timer", "_pane_timer", "_pulse_timer"):
+            timer = getattr(screen, attr)
+            assert timer is not None, f"{attr} must be wired in on_mount"
+            timer.stop()
+        assert len(ws_list.visible_states) == 1
+
+        # Out-of-band create: the OTHER manager writes a second workspace to
+        # the shared store while this screen is open and idle.
+        second = other.create(CreateWorkspaceRequest(agent_name="claude", title="beta"))
+
+        # The set is stale until the slow tick re-enumerates it — this
+        # screen's subscription never saw the other manager's event.
+        assert len(ws_list.visible_states) == 1
+
+        screen._tick_stats()
+        await pilot.pause()
+        ids = {s.id for s in ws_list.visible_states}
+        assert ids == {first.id, second.id}, "out-of-band create must appear on the slow tick"
+        assert len(ws_list.query(WorkspaceCard)) == 2
+
+        # A second tick with no store change is idempotent — no duplicate rows.
+        screen._tick_stats()
+        await pilot.pause()
+        assert len(ws_list.visible_states) == 2
+        assert len(ws_list.query(WorkspaceCard)) == 2, "repeated ticks must not duplicate rows"
+
+        # Out-of-band kill: the second workspace disappears on the next tick.
+        other.kill(second.id, delete_branch=False)
+        screen._tick_stats()
+        await pilot.pause()
+        assert {s.id for s in ws_list.visible_states} == {first.id}
+        assert len(ws_list.query(WorkspaceCard)) == 1, "out-of-band kill must drop the row"
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
 async def test_tick_pulse_propagates_frame_to_card_and_status_bar(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
@@ -639,5 +710,83 @@ async def test_e_with_no_selection_flashes(
         await pilot.press("e")
         await pilot.pause()
         assert not isinstance(app.screen, EditWorkspaceScreen)
+        await pilot.press("q")
+        await pilot.pause()
+
+
+# ─── message (steer the agent, issue #38) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_m_then_submit_sends_message_to_agent_pane(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """'m' → type → Enter reaches the manager's tmux-inject seam at the
+    pane_target-resolved window, and the success flash rides the
+    `message_sent` event."""
+    manager = _manager(tmp_repo, tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="steerable"))
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("m")
+        await pilot.pause()
+        for ch in "run the tests":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert fake_tmux.sent_texts == [(f"{state.tmux_session}:agent", "run the tests")]
+        bar = app.screen.query_one(StatusBar)
+        assert bar.flash_message == "message sent"
+        assert bar.flash_level == "success"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_m_refusal_flashes_error_and_never_injects(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A typed refusal (session vanished → OFFLINE) surfaces as an error
+    flash — the screen never crashes — and nothing reaches the inject seam."""
+    manager = _manager(tmp_repo, tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="gone"))
+    fake_tmux.sessions.discard(state.tmux_session)  # vanished externally → OFFLINE
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("m")
+        await pilot.pause()
+        for ch in "hello":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert fake_tmux.sent_texts == []
+        bar = app.screen.query_one(StatusBar)
+        assert bar.flash_message.startswith("message failed:")
+        assert bar.flash_level == "error"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_m_modal_cancel_sends_nothing(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="quiet"))
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("m")
+        await pilot.pause()
+        for ch in "discard me":
+            await pilot.press(ch)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert fake_tmux.sent_texts == []
         await pilot.press("q")
         await pilot.pause()

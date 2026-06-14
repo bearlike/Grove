@@ -23,7 +23,16 @@ export type AgentSessionView = components["schemas"]["AgentSessionView"];
 export type AgentActivityState = components["schemas"]["AgentActivityState"];
 export type WorkspacePaneView = components["schemas"]["WorkspacePaneView"];
 
+// Mutation wire shapes (workspace lifecycle parity, #56). The create request +
+// its branch-plan discriminated union, the branch/agent listings the create
+// form reads to populate its pickers.
+export type CreateWorkspaceRequest = components["schemas"]["CreateWorkspaceRequest"];
+export type BranchPlan = components["schemas"]["BranchPlan"];
+export type BranchInfo = components["schemas"]["BranchInfo"];
+export type AgentSummaryView = components["schemas"]["AgentSummaryView"];
+
 // Session drill-down wire shapes (workspace detail's Sessions panel).
 export type SessionSummaryView = components["schemas"]["SessionSummaryView"];
 export type SessionDetailView = components["schemas"]["SessionDetailView"];
 export type SessionTurnView = components["schemas"]["SessionTurnView"];
+export type DigestEntryView = components["schemas"]["DigestEntryView"];

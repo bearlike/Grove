@@ -7,13 +7,15 @@ import { TerminalView } from "@/components/terminal/terminal-view";
 import { useWorkspacePane } from "@/lib/grove/hooks";
 
 /**
- * The dashboard's single live focus pane (#19) — now a real colored terminal.
+ * The dashboard's single live focus pane (#19).
  *
- * Polls one workspace's agent pane (~1 s) and renders it with xterm.js (the
- * "made-to-fit containerized view of the tmux session"), color intact. Exactly
- * one is mounted at a time (the page tracks a single `liveId`), so the wall
- * never pays for N live terminals. The accessible `<pre>` fallback inside
- * `TerminalView` keeps the output in the DOM for screen readers + the e2e seam.
+ * Streams one workspace's agent pane over SSE (`useWorkspacePane` opens an
+ * `EventSource` to `GET /workspaces/{id}/pane/stream`, diff-guarded server-side)
+ * and renders it via `<TerminalView>` (ANSI→HTML into a real `<pre>` through
+ * `fancy-ansi`, color intact — NOT a terminal emulator). Exactly one is mounted
+ * at a time (the page tracks a single `liveId`), disposed on close/blur, so the
+ * wall never pays for N live streams. The `<pre>` keeps the output in the DOM
+ * for screen readers + the e2e seam.
  */
 export function FocusedPane({
   workspaceId,

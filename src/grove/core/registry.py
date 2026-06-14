@@ -15,6 +15,7 @@ re-exports it for back-compat.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from grove.core.config import GroveConfig
@@ -25,21 +26,42 @@ from grove.core.store import JsonWorkspaceStore
 class RepoRegistry:
     """Lazy ``WorkspaceManager`` cache keyed by canonical ``repo_root``."""
 
-    def __init__(self, *, cfg: GroveConfig, store: JsonWorkspaceStore) -> None:
+    def __init__(
+        self,
+        *,
+        cfg: GroveConfig,
+        store: JsonWorkspaceStore,
+        config_loader: Callable[[Path], GroveConfig] | None = None,
+    ) -> None:
         self._cfg = cfg
         self._store = store
+        # How each repo's config is resolved at first access. The daemon
+        # injects ``load_config`` so every Manager sees its OWN cascade
+        # (defaults → user → project ``<repo>/.grove/config.json`` →
+        # project-local). Without this the daemon validated ``create`` against
+        # the single global config it loaded with ``repo_root=None`` — so a
+        # project-scoped agent read as "unknown" and a project ``init_script``
+        # read as disabled → ``SKIPPED`` (issues #46/#47). ``None`` falls back
+        # to the shared ``cfg`` for every repo — the seam tests use to inject
+        # an in-memory config with no files on disk. Auth/daemon sections are
+        # safe to vary per repo here: they are consumed only from the global
+        # ``cfg`` build_app holds, never off a registry Manager.
+        self._config_loader = config_loader
         self._cache: dict[Path, WorkspaceManager] = {}
 
     def get(self, repo_root: Path) -> WorkspaceManager:
         """Return (or create) a Manager for ``repo_root``.
 
         ``repo_root`` is canonicalized via ``Path.resolve()`` so distinct
-        symlink paths to the same repo collapse to a single Manager.
+        symlink paths to the same repo collapse to a single Manager. The
+        Manager's config is resolved once per repo via ``config_loader`` (or
+        the shared ``cfg`` when none was injected) and cached with it.
         """
         key = repo_root.resolve()
         mgr = self._cache.get(key)
         if mgr is None:
-            mgr = WorkspaceManager(repo_root=key, cfg=self._cfg, store=self._store)
+            cfg = self._config_loader(key) if self._config_loader is not None else self._cfg
+            mgr = WorkspaceManager(repo_root=key, cfg=cfg, store=self._store)
             self._cache[key] = mgr
         return mgr
 

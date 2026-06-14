@@ -42,7 +42,7 @@ from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Header, Static
 
-from grove.core import RepoRegistry, WorkspaceManager
+from grove.core import RepoRegistry, WorkspaceManager, load_config
 from grove.core.activity import (
     ActivityService,
     DashboardDelta,
@@ -154,7 +154,9 @@ class DashboardScreen(Screen[None]):
         # filesystem.
         self._manager = manager
         if registry is None:
-            registry = RepoRegistry(cfg=manager.config, store=manager.store)
+            registry = RepoRegistry(
+                cfg=manager.config, store=manager.store, config_loader=load_config
+            )
         self._registry = registry
         if service is None:
             service = ActivityService(registry=registry)

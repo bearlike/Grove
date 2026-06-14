@@ -9,12 +9,15 @@ Pin the contract:
 
 from __future__ import annotations
 
+import io
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from rich.style import Style
-from textual.widgets import Static
+from rich.text import Text
+from textual.widgets import Static, TabbedContent, TabPane
 
 from grove.core import (
     CommitSummary,
@@ -23,7 +26,7 @@ from grove.core import (
     WorkspaceState,
     WorkspaceStatus,
 )
-from grove.core.agents import AgentActivity, AgentActivityState
+from grove.core.agents import AgentActivity, AgentActivityState, DigestEntry, SessionTurn
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
@@ -322,6 +325,22 @@ def test_agent_line_skips_model_and_tokens_when_absent() -> None:
     assert "0t/0r/0⚒" in plain
     assert "waiting" in plain
     assert "↑" not in plain and "↓" not in plain
+    assert "bg agent" not in plain  # hidden at zero
+
+
+def test_agent_line_shows_active_subagents_when_nonzero() -> None:
+    """In-flight background subagents surface as `N bg agents` in the agent
+    hue; singular at one, hidden entirely at zero (asserted above)."""
+    agent = AgentActivity(state=AgentActivityState.WORKING, active_subagents=2)
+    text = _agent_line(agent, dark=True)
+    assert "2 bg agents" in text.plain
+    info_hex = ref_color("info", dark=True).lower()
+    styles = {text.plain[s:e]: str(st).lower() for s, e, st in text.spans}
+    assert "bold" in styles["2 bg agents"] and info_hex in styles["2 bg agents"]
+    single = _agent_line(
+        AgentActivity(state=AgentActivityState.WORKING, active_subagents=1), dark=True
+    ).plain
+    assert "1 bg agent" in single and "1 bg agents" not in single
 
 
 def test_render_workspace_places_agent_line_between_stats_and_description() -> None:
@@ -439,6 +458,91 @@ def test_render_peek_includes_recent_commits_and_pane() -> None:
     assert "abcdef12" in body
     assert "add widget" in body
     assert "line3" in body  # the tail-trim must keep recent lines
+
+
+def _force_style_resolution(text: Text) -> str:
+    """Render `text` through a real Console so Rich resolves every span's
+    style. The peek crash (rich MissingStyle: "unable to parse 'mcp' as
+    color") fires HERE, never at `.plain` — Rich resolves styles lazily at
+    paint time, so a `.plain`-only assertion silently passes a broken rail.
+    """
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=True, color_system="truecolor", width=120)
+    console.print(text)
+    return buf.getvalue()
+
+
+def test_render_commit_subject_with_brackets_is_literal_not_markup() -> None:
+    """A commit subject containing `[...]` (e.g. `docs: surface the [mcp]
+    extra`) must render as literal text, never as Rich markup. Regression
+    for the rail crash where Rich parsed `[mcp]` as a style tag and blew up
+    with MissingStyle at paint time (git subjects are external text)."""
+    peek = WorkspacePeek(
+        state=_stub_state(),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        recent_commits=(
+            CommitSummary(
+                sha="fb5bdc31",
+                subject="docs: surface the [mcp] extra so grove-mcp isn't broken",
+                committed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    body = _render_workspace(peek, dark=True)
+    # The brackets survive verbatim (proof they were not consumed as a tag)…
+    assert "[mcp]" in body.plain
+    # …and forcing style resolution must not raise MissingStyle.
+    _force_style_resolution(body)
+
+
+def test_render_error_detail_with_brackets_is_literal_not_markup() -> None:
+    """Persisted `error_detail` is external text (git/engine output) and may
+    contain `[...]`; it must not be parsed as Rich markup."""
+    peek = WorkspacePeek(
+        state=_stub_state(
+            status=WorkspaceStatus.ERROR,
+            error_detail="fatal: ref [abc] is not a valid color name",
+        ),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    body = _render_workspace(peek, dark=True)
+    assert "[abc]" in body.plain
+    _force_style_resolution(body)
+
+
+def test_render_init_log_path_with_brackets_is_literal_not_markup() -> None:
+    """A filesystem `init_log_path` can contain `[...]`; it must render as a
+    literal path, never as Rich markup."""
+    peek = WorkspacePeek(
+        state=_stub_state(
+            init_status=InitStatus.FAILED,
+            init_log_path="/tmp/grove/[weird]/wid-1-init.log",
+        ),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    body = _render_workspace(peek, dark=True)
+    assert "[weird]" in body.plain
+    _force_style_resolution(body)
 
 
 def test_render_peek_running_with_empty_pane_shows_silent_marker() -> None:
@@ -840,16 +944,17 @@ async def test_rail_fast_tick_updates_pane_block_when_snapshot_changes(
         await pilot.pause()
 
 
-# ─── two-card structure (workspace metadata + live pane) ────────────────────
+# ─── tabbed structure (workspace metadata + transcript/terminal tabs) ────────
 
 
 @pytest.mark.asyncio
-async def test_rail_has_workspace_and_pane_cards(
+async def test_rail_has_workspace_card_and_tabbed_preview(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """Structural seam: rail composes a workspace card and a pane card,
-    each with the shared `.grove-card` class. Renaming or removing either
-    breaks this loudly so we don't silently lose the visual boundary."""
+    """Structural seam: rail composes a workspace card plus a tabbed
+    preview container (`#peek-tabs`, sharing the `.grove-card` chrome)
+    holding the transcript and terminal panes. Renaming or removing any
+    of them breaks this loudly so we don't silently lose the boundary."""
     del fake_tmux
     manager = _manager(tmp_repo, tmp_path)
     manager.create(CreateWorkspaceRequest(agent_name="claude", title="cards"))
@@ -858,9 +963,14 @@ async def test_rail_has_workspace_and_pane_cards(
         await pilot.pause()
         rail = app.screen.query_one(PeekRail)
         ws_card = rail.query_one("#card-workspace", Static)
-        pane_card = rail.query_one("#card-pane", Static)
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
         assert ws_card.has_class("grove-card")
-        assert pane_card.has_class("grove-card")
+        assert tabs.has_class("grove-card")
+        # Both panes exist with their content Statics.
+        assert rail.query_one("#tab-transcript", TabPane) is not None
+        assert rail.query_one("#tab-terminal", TabPane) is not None
+        assert rail.query_one("#card-transcript", Static) is not None
+        assert rail.query_one("#card-pane", Static) is not None
         await pilot.press("q")
         await pilot.pause()
 
@@ -868,10 +978,11 @@ async def test_rail_has_workspace_and_pane_cards(
 @pytest.mark.asyncio
 async def test_panel_titles_are_unique(tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path) -> None:
     """The three panels visible on the list screen — the WorkspaceList on
-    the left, and PeekRail's two cards on the right — carry distinct
-    border titles. An earlier revision shipped 'workspace' next to
-    'workspaces' which the eye reads as a typo; pin against that
-    regression. The trio is `workspaces · summary · agent`."""
+    the left, and PeekRail's summary card + tabbed preview on the right —
+    carry distinct border titles. An earlier revision shipped 'workspace'
+    next to 'workspaces' which the eye reads as a typo; pin against that
+    regression. The trio is `workspaces · summary · preview` (the preview
+    container's tabs name its two content shapes: transcript / terminal)."""
     del fake_tmux
     manager = _manager(tmp_repo, tmp_path)
     manager.create(CreateWorkspaceRequest(agent_name="claude", title="x"))
@@ -881,29 +992,30 @@ async def test_panel_titles_are_unique(tmp_repo: Path, fake_tmux: FakeTmux, tmp_
         wlist = app.screen.query_one(WorkspaceList)
         rail = app.screen.query_one(PeekRail)
         ws_card = rail.query_one("#card-workspace", Static)
-        pane_card = rail.query_one("#card-pane", Static)
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
         titles = {
             str(wlist.border_title),
             str(ws_card.border_title),
-            str(pane_card.border_title),
+            str(tabs.border_title),
         }
         assert len(titles) == 3, f"expected three distinct panel titles; got {sorted(titles)}"
         # Pin the actual names — moving titles around without updating
         # docs / muscle memory is itself a regression.
         assert str(wlist.border_title) == "workspaces"
         assert str(ws_card.border_title) == "summary"
-        assert str(pane_card.border_title) == "Live Workspace Preview"
+        assert str(tabs.border_title) == "preview"
         await pilot.press("q")
         await pilot.pause()
 
 
 @pytest.mark.asyncio
-async def test_pane_card_is_live_when_running(
+async def test_preview_container_is_live_when_running(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """Brand-language: the live pane card carries `-live` so its border
-    swaps to `$primary` (clay). The workspace card never gets `-live`
-    — it describes state, it doesn't carry attention."""
+    """Brand-language: the tabbed preview container carries `-live` so its
+    border swaps to `$primary` (clay) while the workspace is live. The
+    workspace card never gets `-live` — it describes state, it doesn't
+    carry attention."""
     manager = _manager(tmp_repo, tmp_path)
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="live"))
     fake_tmux.snapshots[f"{state.tmux_session}:agent"] = "live work"
@@ -912,22 +1024,23 @@ async def test_pane_card_is_live_when_running(
         await pilot.pause()
         await pilot.pause(delay=0.2)
         rail = app.screen.query_one(PeekRail)
-        pane_card = rail.query_one("#card-pane", Static)
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
         ws_card = rail.query_one("#card-workspace", Static)
-        assert pane_card.has_class("-live")
-        assert not pane_card.has_class("-hidden")
+        assert tabs.has_class("-live")
+        assert not tabs.has_class("-hidden")
         assert not ws_card.has_class("-live")
         await pilot.press("q")
         await pilot.pause()
 
 
 @pytest.mark.asyncio
-async def test_pane_card_hidden_when_paused(
+async def test_preview_hidden_when_paused_without_transcript(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """Workspace not RUNNING → pane card hidden (no `-live`, gets `-hidden`).
-    The workspace card still carries the paused affordance, so we don't
-    duplicate placeholder text — the hidden pane card just gives the
+    """Workspace not live AND no recorded transcript → nothing to preview,
+    so the whole tabbed container hides (no `-live`, gets `-hidden`). The
+    workspace card still carries the paused affordance, so we don't
+    duplicate placeholder text — the hidden container just gives the
     workspace card more vertical room."""
     del fake_tmux
     manager = _manager(tmp_repo, tmp_path)
@@ -938,9 +1051,9 @@ async def test_pane_card_hidden_when_paused(
         await pilot.pause()
         await pilot.pause(delay=0.2)
         rail = app.screen.query_one(PeekRail)
-        pane_card = rail.query_one("#card-pane", Static)
-        assert pane_card.has_class("-hidden")
-        assert not pane_card.has_class("-live")
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+        assert tabs.has_class("-hidden")
+        assert not tabs.has_class("-live")
         # And the workspace card still surfaces the resume affordance.
         assert "resume" in rail.body_text.lower()
         await pilot.press("q")
@@ -948,20 +1061,210 @@ async def test_pane_card_hidden_when_paused(
 
 
 @pytest.mark.asyncio
-async def test_pane_card_hidden_when_no_peek(
+async def test_preview_hidden_when_no_peek(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
     """No peek (no workspaces) → workspace card shows the empty placeholder
-    and the pane card is fully hidden."""
+    and the tabbed preview is fully hidden."""
     del fake_tmux
     manager = _manager(tmp_repo, tmp_path)
     app = GroveApp(manager)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
         rail = app.screen.query_one(PeekRail)
-        pane_card = rail.query_one("#card-pane", Static)
-        assert pane_card.has_class("-hidden")
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+        assert tabs.has_class("-hidden")
         assert "(no workspace selected)" in rail.body_text
+        await pilot.press("q")
+        await pilot.pause()
+
+
+# ─── transcript tab + default-tab preference ─────────────────────────────────
+
+
+def _stub_peek(**state_overrides: object) -> WorkspacePeek:
+    """Minimal zero-stats peek over `_stub_state` for the tab tests."""
+    return WorkspacePeek(
+        state=_stub_state(**state_overrides),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+
+
+def _stub_turns() -> tuple[SessionTurn, ...]:
+    """One turn with a two-call tool run — exercises the grouped digest."""
+    return (
+        SessionTurn(
+            user_text="fix the parser",
+            started_at=datetime(2026, 6, 11, tzinfo=UTC),
+            entries=(
+                DigestEntry(role="tool", text="Read parser.py"),
+                DigestEntry(role="tool", text="Edit parser.py"),
+                DigestEntry(role="assistant", text="patched it"),
+            ),
+        ),
+    )
+
+
+def _stop_screen_timers(screen: object) -> None:
+    """Freeze the screen's own peek/pulse ticks so manual set_peek calls are
+    the only writer (same discipline as the pulse-timer lesson)."""
+    for attr in ("_stats_timer", "_pane_timer", "_pulse_timer"):
+        timer = getattr(screen, attr)
+        assert timer is not None
+        timer.stop()
+
+
+@pytest.mark.asyncio
+async def test_transcript_tab_is_default_and_renders_grouped_digest(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """With turns present, the transcript tab is the default and carries the
+    digest: prompt + assistant reply + ONE grouped '2 tool calls' row —
+    the rail digest never lists individual calls."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        rail.set_peek(_stub_peek(), turns=_stub_turns())
+        await pilot.pause()
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+        assert tabs.active == "tab-transcript"
+        assert not tabs.has_class("-hidden")
+        content = rail.query_one("#card-transcript", Static).content
+        plain = content.plain if isinstance(content, Text) else str(content)
+        assert "fix the parser" in plain
+        assert "⏺ patched it" in plain
+        assert "⚒ 2 tool calls" in plain
+        assert "Edit parser.py" not in plain  # individual calls never listed
+        # The digest is part of the body_text test seam too.
+        assert "2 tool calls" in rail.body_text
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_terminal_tab_is_default_without_turns(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """No transcript turns for the selection → the terminal tab is the
+    default and the transcript pane shows its placeholder."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        rail.set_peek(_stub_peek())
+        await pilot.pause()
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+        assert tabs.active == "tab-terminal"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_user_tab_choice_respected_until_selection_changes(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A tab the user switched to by hand survives subsequent set_peek
+    pushes for the same selection (the rail never fights the user), and
+    resets to the computed default when the selection changes."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+
+        rail.set_peek(_stub_peek(id="wid-1"), turns=_stub_turns())
+        await pilot.pause()
+        assert tabs.active == "tab-transcript"
+
+        # The user flips to the terminal tab (any activation the rail
+        # didn't initiate counts as the user — same path a tab click takes).
+        tabs.active = "tab-terminal"
+        await pilot.pause()
+
+        # The next pushes for the SAME selection must not flip back.
+        rail.set_peek(_stub_peek(id="wid-1"), turns=_stub_turns())
+        await pilot.pause()
+        assert tabs.active == "tab-terminal"
+
+        # Selection change → preference resets to the computed default.
+        rail.set_peek(_stub_peek(id="wid-2", title="other"), turns=_stub_turns())
+        await pilot.pause()
+        assert tabs.active == "tab-transcript"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_preview_visible_for_paused_workspace_with_transcript(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Transcripts outlive worktrees: a paused workspace WITH recorded
+    turns keeps the preview visible (transcript default, no `-live` —
+    the clay border means a live pane, not keyboard focus)."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        rail.set_peek(_stub_peek(status=WorkspaceStatus.PAUSED), turns=_stub_turns())
+        await pilot.pause()
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+        assert not tabs.has_class("-hidden")
+        assert not tabs.has_class("-live")
+        assert tabs.active == "tab-transcript"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_transcript_diff_guard_coalesces_identical_frames(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Re-pushing the same turns must not repaint the transcript Static —
+    the per-surface diff guard holds across the tabbed restructure (the
+    fast tick re-passes the cached turns at 4 Hz)."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        card = rail.query_one("#card-transcript", Static)
+        updates: list[object] = []
+        original_update = card.update
+
+        def _spy(content: object = "") -> None:
+            updates.append(content)
+            original_update(content)  # type: ignore[arg-type]
+
+        card.update = _spy  # type: ignore[method-assign]
+
+        rail.set_peek(_stub_peek(), turns=_stub_turns())
+        await pilot.pause()
+        assert len(updates) == 1
+        rail.set_peek(_stub_peek(), turns=_stub_turns())
+        await pilot.pause()
+        assert len(updates) == 1, "identical turns must coalesce in the diff guard"
         await pilot.press("q")
         await pilot.pause()
 
