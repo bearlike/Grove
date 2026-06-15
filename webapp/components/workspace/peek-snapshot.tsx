@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { TerminalView } from "@/components/terminal/terminal-view";
+import { JetBrainsMonoNerd } from "@/app/fonts";
 
 interface Props {
   snapshot: string | null;
@@ -33,12 +34,16 @@ export function PeekSnapshot({ snapshot, takenAt, className }: Props) {
   // The detail page wraps us in a flex-fill column so on lg+ we grow into the
   // remaining viewport.
   return (
+    // `JetBrainsMonoNerd.variable` scopes the Nerd Font to this terminal
+    // subtree (#92) so the `<pre>`'s `font-terminal` resolves the powerline/
+    // icon glyphs even when PeekSnapshot renders standalone (the dashboard's
+    // FocusedPane), not only nested under TerminalPane.
     <TerminalView
       ansi={snapshot}
       takenAt={takenAt}
       textTestId="peek-snapshot"
       ariaLabel="Agent terminal output"
-      className={cn("h-full min-h-[28rem] rounded-md border border-border bg-card", className)}
+      className={cn(JetBrainsMonoNerd.variable, "h-full min-h-[28rem] rounded-md border border-border bg-card", className)}
     />
   );
 }

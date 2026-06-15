@@ -46,6 +46,28 @@ STUB_AIDER = REPO_ROOT / "tools" / "screenshots" / "agents" / "stub-aider.sh"
 # without leaking anything host-specific.
 _DEMO_MODEL = "claude-opus-4-8"
 
+# A structured question the agent asks the user (epic #74). Planted as an
+# ``AskUserQuestion`` tool call so the adapter renders it as a question card with
+# selectable choices; the turn's tool ``result`` is the chosen answer. The
+# webapp renders this in the transcript, which the split-pane capture shows.
+_DEMO_QUESTION: dict[str, Any] = {
+    "questions": [
+        {
+            "question": "The legacy header path still has callers. How should I handle it?",
+            "header": "Legacy header",
+            "multiSelect": False,
+            "options": [
+                {"label": "Keep it behind a flag", "description": "Existing clients keep working."},
+                {
+                    "label": "Deprecate with a warning",
+                    "description": "Log on use, remove next major.",
+                },
+                {"label": "Remove it now", "description": "Breaking change, simplest code."},
+            ],
+        }
+    ]
+}
+
 
 def install_quiet_tmux() -> None:
     """Force demo panes to spawn a bare shell so no MOTD leaks into captures.
@@ -228,7 +250,14 @@ def _plant_transcript(
                             "cache_read_input_tokens": in_tok,
                             "output_tokens": 120,
                         },
-                        "content": [{"type": "tool_use", "id": tu_id, "name": tool, "input": {}}],
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": tu_id,
+                                "name": tool,
+                                "input": _DEMO_QUESTION if tool == "AskUserQuestion" else {},
+                            }
+                        ],
                     },
                 }
             )
@@ -299,6 +328,11 @@ _TRANSCRIPTS: dict[str, tuple[str, list[tuple[str, str, list[tuple[str, str]]]]]
                 "Move token reading off the cookie jar and onto the request scope.",
                 "Pulled token resolution into the middleware; gated the legacy header path.",
                 [("Read", "middleware.py"), ("Edit", "+47 / -12")],
+            ),
+            (
+                "Refactor the legacy header callers too.",
+                "Kept the legacy path behind a flag so existing clients keep working.",
+                [("AskUserQuestion", "Keep it behind a flag")],
             ),
             (
                 "Now run the auth tests and fix anything that breaks.",

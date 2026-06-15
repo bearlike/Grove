@@ -1,5 +1,5 @@
 "use client";
-import { Activity, Github, Server } from "lucide-react";
+import { Activity, ArrowUpCircle, Github, Server } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
@@ -74,9 +74,9 @@ export function StatusBar() {
   return (
     <footer
       role="contentinfo"
-      className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-card/90 text-[11px] backdrop-blur supports-[backdrop-filter]:bg-card/70"
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-sidebar-border bg-sidebar/90 text-[11px] backdrop-blur supports-[backdrop-filter]:bg-sidebar/75"
     >
-      <div className="mx-auto flex h-7 max-w-screen-xl items-center gap-3 px-3 text-muted-foreground">
+      <div className="flex h-7 w-full items-center gap-3 px-3 text-muted-foreground">
         <Tooltip>
           <TooltipTrigger asChild>
             <span
@@ -104,7 +104,9 @@ export function StatusBar() {
                     v{whoami.version}
                   </span>
                   <span className="text-muted-foreground/60">·</span>
-                  <span data-testid="daemon-uptime">up {formatUptime(liveUptime)}</span>
+                  <span className="tabular-nums" data-testid="daemon-uptime">
+                    up {formatUptime(liveUptime)}
+                  </span>
                 </>
               )}
             </span>
@@ -113,12 +115,32 @@ export function StatusBar() {
             <span data-testid="daemon-tooltip">{tooltipText}</span>
           </TooltipContent>
         </Tooltip>
-        <span className="hidden sm:inline-flex items-center gap-1.5">
+        {whoami?.update_available && (
+          // Unobtrusive newer-release nudge (#80). Amber = the shared "work to
+          // pull" hue (mirrors the TUI status bar's chip + the "behind" stat
+          // polarity). The daemon ran the single GitHub check; the browser only
+          // reads whoami — it never polls GitHub itself. Links to the release.
+          <Link
+            href={`${REPO_URL}/releases/latest`}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="update-available"
+            aria-label={`Grove ${whoami.latest_version ? `v${whoami.latest_version} ` : ""}is available — view the release`}
+            className="inline-flex items-center gap-1 rounded-sm px-1 font-medium hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            style={{ color: "var(--status-orphaned)" }}
+          >
+            <ArrowUpCircle className="size-3" aria-hidden />
+            <span>{whoami.latest_version ? `v${whoami.latest_version}` : "update"}</span>
+          </Link>
+        )}
+        <span className="hidden items-center gap-1.5 tabular-nums sm:inline-flex">
           <Activity className="size-3" aria-hidden />
-          <span>{count} {count === 1 ? "workspace" : "workspaces"}</span>
+          <span>
+            {count} {count === 1 ? "workspace" : "workspaces"}
+          </span>
         </span>
-        <span className="ml-auto inline-flex items-center gap-3">
-          <span className="hidden sm:inline">web dashboard</span>
+        <span className="ml-auto inline-flex items-center gap-2.5">
+          <span className="hidden text-muted-foreground/70 sm:inline">web dashboard</span>
           <Link
             href={REPO_URL}
             target="_blank"

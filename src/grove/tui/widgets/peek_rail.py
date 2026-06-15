@@ -44,6 +44,7 @@ from textual.widgets import Static, TabbedContent, TabPane
 
 from grove.core import CommitSummary, InitStatus, WorkspacePeek, WorkspaceState, WorkspaceStatus
 from grove.core.agents import AgentActivity, SessionTurn
+from grove.core.contracts.tickets import TicketRef
 from grove.core.workspace import LIVE_STATUSES
 from grove.tui._status import (
     agent_state_color,
@@ -54,6 +55,7 @@ from grove.tui._status import (
     status_color,
 )
 from grove.tui._turns import render_transcript_digest
+from grove.tui.widgets.card import ticket_pill
 from grove.tui.widgets.dashboard_grid import _human_tokens
 
 _SUBJECT_TRIM = 56
@@ -254,7 +256,7 @@ class PeekRail(Vertical):
         if plain == self._transcript_text:
             return
         self._transcript_text = plain
-        card.update(content)
+        card.update(content.renderable)
         # The newest exchange is what the user glances for — land at the
         # tail. After-refresh because the Static's new height isn't laid
         # out yet at update() time (same lesson as the sessions screen).
@@ -364,6 +366,7 @@ def _render_workspace(
     text.append_text(_stats_line(peek, dark=dark))
     if agent is not None:
         text.append_text(_agent_line(agent, dark=dark))
+    text.append_text(_ticket_block(s.ticket_refs, dark=dark))
     text.append_text(_description_block(s))
     text.append_text(_affordance_block(s, dark=dark))
     text.append_text(_commits_block(peek.recent_commits, dark=dark))
@@ -485,6 +488,46 @@ def _agent_line(agent: AgentActivity, *, dark: bool) -> Text:
             text.append("  ")
         text.append_text(segment)
     text.append("\n")
+    return text
+
+
+def _ticket_block(refs: list[TicketRef], *, dark: bool) -> Text:
+    """Associated tickets — one line each, or nothing when there are none.
+
+    Each line leads with the same compact pill the row card shows
+    (``ticket_pill``, agent-info cyan so the reference reads as auxiliary
+    metadata), then the title (default fg, bold — the human-readable
+    identity), then ``status`` / ``assignee`` as muted-label · bold-value
+    pairs, and finally the url muted. Absent fields are skipped, never
+    blank-filled — same convention as the agent line. Empty ``refs`` yields
+    an empty ``Text`` so the rail ships no placeholder.
+    """
+    text = Text()
+    if not refs:
+        return text
+    info_hex = ref_color("info", dark=dark)
+    muted_hex = chrome_color("muted", dark=dark)
+    for ref in refs:
+        text.append("\n")
+        text.append(ticket_pill(ref), style=f"bold {info_hex}")
+        if ref.title:
+            text.append("  ")
+            text.append(ref.title, style="bold")
+        if ref.status:
+            text.append("  ")
+            text.append("· ", style=muted_hex)
+            text.append("status ", style=muted_hex)
+            text.append(ref.status, style="bold")
+        if ref.assignee:
+            text.append("  ")
+            text.append("· ", style=muted_hex)
+            text.append("assignee ", style=muted_hex)
+            text.append(ref.assignee, style="bold")
+        if ref.url:
+            text.append("  ")
+            text.append("· ", style=muted_hex)
+            text.append(ref.url, style=muted_hex)
+        text.append("\n")
     return text
 
 

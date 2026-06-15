@@ -1,3 +1,4 @@
+import { SparklesIcon, UserIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -11,6 +12,11 @@ import { cn } from "@/lib/utils";
  * Existing tokens only, micro-label tier (`text-[10px] uppercase
  * tracking-wider`, mono), matching the adjacent provenance label.
  *
+ * A leading glyph is the transcript's one-per-concept vocabulary: `Sparkles`
+ * is the agent/response mark everywhere the agent speaks, `User` the human.
+ * Both inherit the label's color and are `aria-hidden` (the word carries the
+ * meaning), so the label's `textContent` stays exactly `you` / `agent`.
+ *
  * Test seam: `data-testid="role-label"` + `data-role-label`.
  */
 export function RoleLabel({
@@ -20,16 +26,18 @@ export function RoleLabel({
   role: "you" | "agent";
   className?: string;
 }) {
+  const Glyph = role === "you" ? UserIcon : SparklesIcon;
   return (
     <span
       data-testid="role-label"
       data-role-label={role}
       className={cn(
-        "select-none font-mono text-[10px] font-semibold uppercase tracking-wider",
+        "inline-flex items-center gap-1 select-none align-middle font-mono text-[10px] font-semibold uppercase tracking-wider",
         role === "you" ? "text-primary" : "text-[var(--ref-info)]",
         className,
       )}
     >
+      <Glyph aria-hidden className="size-3 shrink-0" />
       {role}
     </span>
   );

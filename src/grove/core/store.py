@@ -21,6 +21,7 @@ from typing import Any
 from loguru import logger
 
 from grove.core import paths
+from grove.core.contracts.tickets import TicketRef
 from grove.core.errors import GroveError, WorkspaceNotFound
 from grove.core.workspace import (
     PERSISTED_STATUSES,
@@ -146,6 +147,10 @@ class JsonWorkspaceStore:
         data["init_status"] = state.init_status.value if state.init_status else None
         data["branch_provenance"] = state.branch_provenance.value
         data["placement"] = state.placement.value
+        # `asdict` leaves the Pydantic TicketRefs as model instances (it only
+        # recurses dataclasses), so serialize them to plain JSON dicts here —
+        # the same explicit-field treatment the enums/datetimes get.
+        data["ticket_refs"] = [r.model_dump(mode="json") for r in state.ticket_refs]
         return data
 
     @staticmethod
@@ -188,6 +193,10 @@ class JsonWorkspaceStore:
             # persisted; None makes the ActivityService fall back to a config
             # lookup for those legacy records.
             agent_kind=data.get("agent_kind"),
+            # `.get()` — absent on records written before ticket association
+            # existed; re-validated through the Pydantic model so a corrupt
+            # on-disk ref fails loudly here rather than mid-render.
+            ticket_refs=[TicketRef.model_validate(r) for r in (data.get("ticket_refs") or [])],
         )
 
 

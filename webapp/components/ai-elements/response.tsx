@@ -18,7 +18,14 @@ export type ResponseProps = ComponentProps<typeof Streamdown>;
 export const Response = memo(
   ({ className, ...props }: ResponseProps) => (
     <Streamdown
-      className={cn("size-full text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
+      className={cn(
+        // Body is Geist Sans `text-sm`; ALL code (inline + fenced) rides Geist
+        // Mono at the transcript's `text-[13px]` code scale, the same family +
+        // size the Tool blocks use — one code voice across the surface.
+        "size-full text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "[&_code]:font-mono [&_code]:text-[13px] [&_pre]:font-mono [&_pre]:text-[13px]",
+        className,
+      )}
       {...props}
     />
   ),

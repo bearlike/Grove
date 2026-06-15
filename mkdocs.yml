@@ -35,6 +35,7 @@ theme:
     "Project Setup": lucide:folder-cog
     Agents: lucide:bot
     "Init Scripts": lucide:play
+    "Ticket Providers": lucide:ticket
     "Configuration Reference": lucide:file-json
 
     Use: lucide:monitor-play
@@ -120,6 +121,7 @@ nav:
           - Project Setup: configure-project.md
           - Agents: configure-agents.md
           - Init Scripts: configure-init-scripts.md
+          - Ticket Providers: configure-ticket-providers.md
           - Configuration Reference: configure-reference.md
       - Use:
           - TUI Tour: use-tui.md
@@ -131,7 +133,9 @@ nav:
       - Capabilities:
           - Workspace Lifecycle: features-workspace-lifecycle.md
           - Branch Provenance: features-branch-provenance.md
+          - Ticket Providers: features-ticket-providers.md
           - Agent Activity & Sessions: features-activity.md
+          - Push Notifications: features-notifications.md
           - Peek Rail: features-peek.md
           - Status Semantics: features-status.md
           - Configuration Cascade: features-cascade.md

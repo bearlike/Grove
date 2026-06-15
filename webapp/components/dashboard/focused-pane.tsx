@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dot } from "@/components/shared/dot";
 import { TerminalView } from "@/components/terminal/terminal-view";
 import { useWorkspacePane } from "@/lib/grove/hooks";
 
@@ -38,10 +39,7 @@ export function FocusedPane({
         <span className="truncate text-sm font-medium" title={title}>
           {title}
         </span>
-        <span
-          className="size-2 shrink-0 rounded-full bg-[var(--agent-working)] motion-safe:animate-pulse"
-          aria-hidden
-        />
+        <Dot tone="var(--agent-working)" pulse />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -56,7 +54,10 @@ export function FocusedPane({
         ansi={data?.ansi ?? null}
         ariaLabel={`Live terminal for ${title}`}
         emptyLabel={emptyLabel}
-        className="h-64 rounded-md border border-border bg-muted/40"
+        // The deeper `bg-background` well (the terminal-emulator tier, #92) reads
+        // as inset against the card's `bg-card` — siblings with the detail page's
+        // TerminalPane, not the lighter muted strip it used before.
+        className="h-64 rounded-md border border-border bg-background"
       />
     </Card>
   );

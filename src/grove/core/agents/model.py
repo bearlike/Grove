@@ -15,7 +15,7 @@ in-process state".
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -68,12 +68,166 @@ class AgentSession:
     tmux_window: str | None = None
 
 
+# A structured question an agent asked the user (epic #74). One closed set of
+# kinds drives the client's rendering affordance; it is provider-neutral — the
+# adapters map a native tool call onto it, never the reverse.
+AgentQuestionKind = Literal["single_select", "multi_select", "free_text", "confirm"]
+
+# The native tool names that *are* a question. Single source of truth: the
+# normalizer below recognizes exactly these, and the Claude status path reuses
+# the same set to flag an unanswered tail as BLOCKED. Adding a provider's
+# question tool is one entry here.
+QUESTION_TOOL_NAMES: frozenset[str] = frozenset({"AskUserQuestion", "ExitPlanMode"})
+
+
+@dataclass(slots=True, frozen=True)
+class AgentQuestionOption:
+    """One selectable choice in an :class:`AgentQuestion` — a label, optionally
+    a one-line description. Shape only; the adapter never invents semantics."""
+
+    label: str
+    description: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class AgentQuestion:
+    """A provider-neutral question an agent asked the user (epic #74).
+
+    The normalized target every adapter maps its native ask-the-human tool onto
+    (Claude Code's ``AskUserQuestion`` / ``ExitPlanMode``; a Codex MCP-bridged
+    equivalent). ``id`` is the stable per-question answer-back address and
+    ``group_id`` the native tool-call id a *batch* shares — the two together are
+    what a future "answer back" write-path (and the #70 notifier) address, so
+    they are part of the contract even though the MVP only renders. ``answered``
+    /``answer`` model resolution (a matching ``tool_result`` / ``function_call_
+    output``) at the group level — no semantic per-question split of the result.
+    """
+
+    id: str
+    group_id: str
+    kind: AgentQuestionKind
+    prompt: str
+    header: str | None = None
+    options: tuple[AgentQuestionOption, ...] = ()
+    multiselect: bool = False
+    answered: bool = False
+    answer: str | None = None
+    source_tool: str = ""
+
+    @staticmethod
+    def recognizes(tool_name: str) -> bool:
+        """Whether a native tool name is an ask-the-human question tool.
+
+        The one predicate the status path shares with normalization, so "what is
+        a question" is defined exactly once.
+        """
+        return tool_name in QUESTION_TOOL_NAMES
+
+    @classmethod
+    def from_tool_call(
+        cls, tool_name: str, raw_input: object, call_id: str
+    ) -> tuple[AgentQuestion, ...]:
+        """Normalize one native tool call into zero or more questions.
+
+        The single normalization seam both adapters call (DRY across the provider
+        boundary). Returns ``()`` for any non-question tool or a malformed payload
+        — defensive like the rest of transcript parsing: a junk block is dropped,
+        never raised, so it can't break the render loop. A batch
+        (``AskUserQuestion`` with N questions) yields N rows whose ``id`` encodes
+        the source position (``f"{call_id}#{i}"``), stable across re-parses.
+        """
+        if tool_name == "ExitPlanMode":
+            plan = raw_input.get("plan") if isinstance(raw_input, dict) else None
+            prompt = plan if isinstance(plan, str) and plan.strip() else "Approve this plan?"
+            return (
+                cls(
+                    id=f"{call_id}#0",
+                    group_id=call_id,
+                    kind="confirm",
+                    prompt=prompt,
+                    source_tool="ExitPlanMode",
+                ),
+            )
+        if tool_name != "AskUserQuestion" or not isinstance(raw_input, dict):
+            return ()
+        questions = raw_input.get("questions")
+        if not isinstance(questions, list):
+            return ()
+        out: list[AgentQuestion] = []
+        for i, q in enumerate(questions):
+            if not isinstance(q, dict):
+                continue
+            text = q.get("question")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            options = cls._options(q.get("options"))
+            # Shape, not semantics: a question with no choices is a descriptive
+            # / free-text ask (an MCP-bridged elicitation), not a select with an
+            # empty list — and ``multiSelect`` is moot when there is nothing to
+            # select. With choices, ``multiSelect`` picks single vs multi.
+            multiselect = bool(options) and bool(q.get("multiSelect"))
+            if not options:
+                kind: AgentQuestionKind = "free_text"
+            elif multiselect:
+                kind = "multi_select"
+            else:
+                kind = "single_select"
+            out.append(
+                cls(
+                    id=f"{call_id}#{i}",
+                    group_id=call_id,
+                    kind=kind,
+                    prompt=text,
+                    header=q.get("header") if isinstance(q.get("header"), str) else None,
+                    options=options,
+                    multiselect=multiselect,
+                    source_tool="AskUserQuestion",
+                )
+            )
+        return tuple(out)
+
+    @staticmethod
+    def _options(raw: object) -> tuple[AgentQuestionOption, ...]:
+        if not isinstance(raw, list):
+            return ()
+        out: list[AgentQuestionOption] = []
+        for opt in raw:
+            if not isinstance(opt, dict):
+                continue
+            label = opt.get("label")
+            if not isinstance(label, str) or not label:
+                continue
+            desc = opt.get("description")
+            out.append(
+                AgentQuestionOption(
+                    label=label, description=desc if isinstance(desc, str) else None
+                )
+            )
+        return tuple(out)
+
+    def resolved(self, answer: str | None) -> AgentQuestion:
+        """A copy stamped answered with the group-level result text.
+
+        Called by the parser once a matching result record is found — keeps the
+        frozen contract immutable and the resolution policy in one place.
+        """
+        return replace(self, answered=True, answer=answer)
+
+
 @dataclass(slots=True, frozen=True)
 class DigestEntry:
-    """One line of an :class:`OrderedDigest`: a role tag plus a short summary."""
+    """One line of an :class:`OrderedDigest`: a role tag plus a short summary.
 
-    role: Literal["user", "assistant", "tool", "summary", "status", "notification"]
+    ``question`` is populated *only* for ``role=="question"`` — the structured
+    payload the transcript renderers (TUI + webapp) draw as a choice card; for
+    every other role it is ``None`` and ``text`` carries the line. A question
+    entry keeps ``text`` set to its prompt so a role-unaware consumer (the
+    ``OrderedDigest`` LLM-interpreter seam) still reads something sensible.
+    """
+
+    role: Literal["user", "assistant", "tool", "summary", "status", "notification", "question"]
     text: str
+    question: AgentQuestion | None = None
 
 
 @dataclass(slots=True, frozen=True)

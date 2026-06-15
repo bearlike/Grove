@@ -73,7 +73,21 @@ class AgentSpec(BaseModel):
     agent and it cascades like every other field."""
 
     env: dict[str, str] = Field(default_factory=dict)
-    """Extra env vars exported in the agent's tmux window."""
+    """Extra env vars *exported* into the agent's tmux window before launch."""
+
+    env_unset: tuple[str, ...] = ()
+    """Env vars *cleared* in the agent's tmux window before ``env`` is applied.
+
+    The hermetic half of the launch env (issue #82): a tmux pane inherits the
+    tmux server's environment, which inherited the daemon's, so an ambient value
+    (a profile selector like ``CLAUDE_CONFIG_DIR``) silently leaks daemon → server
+    → pane → agent. Listing a var here ``unset``s it at the pane boundary, so the
+    agent starts from a known base and ``env`` — or, when ``env`` is silent, the
+    tool's own default — decides instead of whatever the daemon happened to carry.
+    Unset runs first, so a key present in both ``env_unset`` and ``env`` ends up
+    exported. Pure mechanism, not policy: the launcher just clears whatever vars
+    the config names — no var name is hard-coded anywhere — and a future container
+    launcher applies the same ``env`` / ``env_unset`` set at create time."""
 
     description: str = ""
 
@@ -214,6 +228,152 @@ class MewboConfig(BaseModel):
     """Per-request HTTP timeout for Mewbo API calls."""
 
 
+class GiteaTicketConfig(BaseModel):
+    """Gitea Issues provider settings (``provider: "gitea"``).
+
+    Secret-free like every config layer: ``token_env`` is the NAME of the
+    environment variable holding the API token, never the token itself, so a
+    committed ``.grove/config.json`` stays publishable. ``base_url`` is the
+    instance root (the provider appends ``/api/v1``). ``branch_prefix`` is an
+    optional extra keyword prepended when formatting a branch (e.g. ``"gtea-"``
+    → ``gtea-123-slug``); empty means the bare numeric form ``123-slug``. The
+    parser recognizes the bare numeric leading segment, the built-in keywords,
+    and this configured prefix — mechanism, not policy.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    base_url: str = "https://gitea.com"
+    owner: str | None = None
+    repo: str | None = None
+    token_env: str = "GROVE_GITEA_TOKEN"
+    branch_prefix: str = ""
+
+
+class GitHubTicketConfig(BaseModel):
+    """GitHub Issues provider settings (``provider: "github"``).
+
+    ``base_url`` defaults to the public REST API; point it at a GitHub
+    Enterprise ``/api/v3`` root to use Enterprise. Same secret-free
+    ``token_env`` + optional ``branch_prefix`` contract as the Gitea provider.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    base_url: str = "https://api.github.com"
+    owner: str | None = None
+    repo: str | None = None
+    token_env: str = "GROVE_GITHUB_TOKEN"
+    branch_prefix: str = ""
+
+
+class LinearTicketConfig(BaseModel):
+    """Linear provider settings (``provider: "linear"``).
+
+    Linear keys are alphanumeric (``ENG-123``), so there is no numeric
+    ``branch_prefix`` — the team key IS the discriminator. ``team_key`` scopes
+    both branch parsing (only ``{team_key}-N`` keys are claimed) and the
+    ``get_ticket`` lookup; leave it unset to match any uppercase key on parse.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    base_url: str = "https://api.linear.app/graphql"
+    team_key: str | None = None
+    token_env: str = "GROVE_LINEAR_TOKEN"
+
+
+class TicketsConfig(BaseModel):
+    """External ticket-tracker integration, one submodel per MVP provider.
+
+    Each provider is independently ``enabled`` and configured. All three stay
+    off by default (mechanism, not policy): a repo opts in by enabling the
+    tracker its branches reference. Credentials never live here — only the NAME
+    of the env var holding each token.
+    """
+
+    model_config = _FROZEN
+
+    gitea: GiteaTicketConfig = Field(default_factory=GiteaTicketConfig)
+    github: GitHubTicketConfig = Field(default_factory=GitHubTicketConfig)
+    linear: LinearTicketConfig = Field(default_factory=LinearTicketConfig)
+
+
+# Which agent-state edges may fire a push. String values mirror
+# ``AgentActivityState`` (waiting/blocked/error/idle) — kept a Literal here, not
+# the imported enum, so ``config.py`` never imports ``grove.core.agents`` (which
+# would cycle: agents → registry → adapters → config). The notifications
+# subpackage coerces these strings back to the enum at its construction edge.
+NotifyTransition = Literal["waiting", "blocked", "error", "idle"]
+_DEFAULT_NOTIFY_ON: list[NotifyTransition] = ["waiting", "blocked", "error"]
+
+
+class GotifyChannelConfig(BaseModel):
+    """Gotify push channel (#70's first channel).
+
+    ``server_url`` is the Gotify base (e.g. ``https://gotify.example.com``);
+    ``token_env`` is the NAME of the env var holding the application token, never
+    the token itself — committed config stays secret-free, exactly like
+    ``mewbo.api_key_env``.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    server_url: str = ""
+    token_env: str = "GROVE_GOTIFY_TOKEN"
+    priority: int = Field(default=5, ge=0, le=10)
+    """Gotify message priority (0 to 10); ~8+ triggers high-priority delivery."""
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+
+
+class WebhookChannelConfig(BaseModel):
+    """Generic JSON webhook channel — the "mechanism, not policy" sink.
+
+    POSTs the notification as JSON to ``url``. ntfy's JSON-publish API works
+    directly: set ``topic`` and point ``url`` at the ntfy base. ``token_env`` (a
+    NAME, never the secret) adds a ``Bearer`` header when set.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    url: str = ""
+    token_env: str = ""
+    topic: str = ""
+    """ntfy topic; included in the JSON body only when set (ntfy requires it)."""
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+
+
+class NotificationsConfig(BaseModel):
+    """Push notifications on agent-state edges (#70). Off by default.
+
+    The broker fires a debounced rising edge into one of the ``on`` states —
+    ``waiting`` (turn finished), ``blocked`` (awaiting input), ``error`` — and
+    fans out to every enabled channel. ``deep_link_base_url`` is the webapp base
+    (e.g. ``https://grove.example.com``); a notification deep-links to
+    ``{base}/w/{id}`` so tapping it opens that workspace. Mechanism, not policy:
+    every value cascades like the rest of the config.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    on: list[NotifyTransition] = Field(default_factory=lambda: list(_DEFAULT_NOTIFY_ON))
+    debounce_seconds: float = Field(default=30.0, ge=0)
+    """Per-workspace quiet window after a fire — one buzz per attention episode,
+    not one per WAITING↔WORKING tool round-trip."""
+
+    deep_link_base_url: str = ""
+    gotify: GotifyChannelConfig = Field(default_factory=GotifyChannelConfig)
+    webhook: WebhookChannelConfig = Field(default_factory=WebhookChannelConfig)
+
+
 class UIConfig(BaseModel):
     """Client-facing UI knobs. The TUI consumes these; core ignores them."""
 
@@ -257,6 +417,13 @@ class GroveConfig(BaseModel):
     model_config = _MUTABLE
 
     schema_url: str = Field(default="", alias="$schema")
+    # Repo roots to surface as "known projects" even with zero workspaces, so a
+    # freshly-added project (or one whose workspaces were all killed) stays
+    # visible in the pickers. Mechanism, not policy: a plain list of path strings
+    # (``~`` expanded at consume time, like ``expand_template``); the registry
+    # unions these into ``known_roots()`` and drops any that aren't an existing
+    # git repo. A user-level concern that still cascades like every other field.
+    projects: list[str] = Field(default_factory=list)
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
     agents: list[AgentSpec] = Field(default_factory=_default_agents)
     init_script: InitScriptConfig = Field(default_factory=InitScriptConfig)
@@ -265,6 +432,8 @@ class GroveConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     mewbo: MewboConfig = Field(default_factory=MewboConfig)
+    tickets: TicketsConfig = Field(default_factory=TicketsConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
 
     def find_agent(self, name: str) -> AgentSpec | None:
         for spec in self.agents:

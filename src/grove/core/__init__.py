@@ -40,6 +40,7 @@ from grove.core.errors import (
 )
 from grove.core.manager import WorkspaceEvent, WorkspaceManager, build
 from grove.core.registry import RepoRegistry
+from grove.core.release import ReleaseChecker, ReleaseStatus
 from grove.core.sessions import SessionExplorer, SessionListing
 from grove.core.tmux import AttachInstruction
 from grove.core.workspace import (
@@ -75,6 +76,8 @@ __all__ = [
     "InitStatus",
     "NewNamedBranch",
     "Placement",
+    "ReleaseChecker",
+    "ReleaseStatus",
     "RepoRegistry",
     "RootBranch",
     "SessionExplorer",

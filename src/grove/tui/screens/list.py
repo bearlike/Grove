@@ -43,6 +43,8 @@ from grove.core import (
     BranchNotFound,
     CreateWorkspaceRequest,
     GroveError,
+    ReleaseChecker,
+    ReleaseStatus,
     RepoRegistry,
     SessionExplorer,
     UpdateWorkspaceRequest,
@@ -148,9 +150,15 @@ class WorkspaceListScreen(Screen[None]):
         *,
         service: ActivityService | None = None,
         registry: RepoRegistry | None = None,
+        release_checker: ReleaseChecker | None = None,
     ) -> None:
         super().__init__()
         self._manager = manager
+        # Newer-release nudge (#80). The TUI is a separate process from the
+        # daemon, so it holds its OWN checker — same engine code + bounded cache,
+        # not a second polling implementation. Best-effort and run in a thread
+        # worker so the GitHub GET never blocks the UI. Injectable for tests.
+        self._release_checker = release_checker or ReleaseChecker()
         # Agent-activity machinery — same construction pattern as
         # DashboardScreen: built once here from the manager's config + shared
         # store unless a test injects pre-built fakes. The list screen only
@@ -227,6 +235,12 @@ class WorkspaceListScreen(Screen[None]):
         self._stats_timer = self.set_interval(cfg.peek_stats_refresh_seconds, self._tick_stats)
         self._pane_timer = self.set_interval(cfg.peek_pane_refresh_seconds, self._tick_pane)
         self._pulse_timer = self.set_interval(_PULSE_TICK_SECONDS, self._tick_pulse)
+        # One-shot newer-release check (#80) in a thread worker — the GitHub GET
+        # is bounded + best-effort, and a session is short-lived relative to the
+        # 6h release cadence, so checking once at mount is enough (a daemon/web
+        # client re-checks on its own TTL). `thread=True` keeps the blocking GET
+        # off the UI loop; `exclusive` coalesces if mount ever re-fires.
+        self.run_worker(self._poll_release, thread=True, group="release", exclusive=True)
 
     def on_unmount(self) -> None:
         if self._unsub is not None:
@@ -285,7 +299,11 @@ class WorkspaceListScreen(Screen[None]):
         registry and ``switch_screen``s to a fresh list screen for it, so the
         screen stack never grows on repeated switches.
         """
-        choices = RepoChoice.group(self._manager.store.load_all(), current=self._manager.repo_root)
+        choices = RepoChoice.group(
+            self._manager.store.load_all(),
+            current=self._manager.repo_root,
+            known=self._registry.known_roots(),
+        )
         self.app.push_screen(ProjectPickerScreen(choices), self._handle_switch_result)
 
     def _handle_switch_result(self, repo_root: Path | None) -> None:
@@ -821,6 +839,20 @@ class WorkspaceListScreen(Screen[None]):
         bar.breakdown = _breakdown(pool)
         bar.selection = self._selected_state(pool)
         bar.filter_query = self.query_one(WorkspaceList).filter_query
+
+    def _poll_release(self) -> None:
+        """Thread-worker body: run the best-effort release check, push to the bar.
+
+        `check()` never raises (engine contract); the result is applied on the UI
+        thread via `call_from_thread` so the reactive write is loop-safe.
+        """
+        status = self._release_checker.check()
+        self.app.call_from_thread(self._apply_release_status, status)
+
+    def _apply_release_status(self, status: ReleaseStatus) -> None:
+        bar = self.query_one(StatusBar)
+        bar.update_available = status.update_available
+        bar.latest_version = status.latest or ""
 
     def _refresh_footer(self) -> None:
         groups = self._footer_groups()

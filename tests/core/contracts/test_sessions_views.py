@@ -11,6 +11,8 @@ from pathlib import Path
 from grove.core.agents import (
     AgentActivity,
     AgentActivityState,
+    AgentQuestion,
+    AgentQuestionOption,
     DigestEntry,
     SessionSummary,
     SessionTurn,
@@ -71,6 +73,48 @@ def test_turn_view_caps_entry_text() -> None:
     # Short text passes through untouched — the ellipsis is the only trim signal.
     short = SessionTurnView.from_turn(SessionTurn(user_text="hi"))
     assert short.user_text == "hi"
+
+
+def test_question_entry_serializes_its_structured_payload() -> None:
+    """A ``role=="question"`` entry carries the full ``AgentQuestion`` on the
+    wire so the client can render a choice card; other roles carry ``None``."""
+    q = AgentQuestion(
+        id="call_1#0",
+        group_id="call_1",
+        kind="single_select",
+        prompt="Merge or rebase?",
+        header="Strategy",
+        options=(
+            AgentQuestionOption(label="Merge", description="keep both"),
+            AgentQuestionOption(label="Rebase"),
+        ),
+        multiselect=False,
+        answered=True,
+        answer="Merge",
+        source_tool="AskUserQuestion",
+    )
+    turn = SessionTurn(
+        user_text="",
+        entries=(
+            DigestEntry(role="question", text="Merge or rebase?", question=q),
+            DigestEntry(role="assistant", text="ok"),
+        ),
+    )
+    view = SessionTurnView.from_turn(turn)
+
+    qview = view.entries[0]
+    assert qview.role == "question"
+    assert qview.question is not None
+    assert qview.question.id == "call_1#0"
+    assert qview.question.kind == "single_select"
+    assert qview.question.answered is True
+    assert qview.question.answer == "Merge"
+    assert [o.label for o in qview.question.options] == ["Merge", "Rebase"]
+    assert qview.question.options[1].description is None
+    # A plain entry has no structured payload.
+    assert view.entries[1].question is None
+    # Round-trips through JSON (the daemon serializes this).
+    assert "Merge or rebase?" in view.model_dump_json()
 
 
 def test_detail_view_composes_session_and_turns() -> None:

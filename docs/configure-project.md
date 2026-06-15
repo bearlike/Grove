@@ -34,6 +34,29 @@ cascade](features-cascade.md) for the full narrative.
 `${user_config_dir}` follows `platformdirs`: XDG on Linux, `%APPDATA%` on
 Windows, `~/Library/Application Support` on macOS.
 
+## Known projects (keep empty repos visible)
+
+Grove learns which projects exist from the workspaces it has created. So a
+repo with zero workspaces (a freshly-added project, or one whose workspaces
+were all killed) drops out of the webapp new-workspace dialog and the TUI
+project switcher. Declare such repos in the user config to keep them listed.
+
+```json
+{
+  "projects": [
+    "~/code/my-app",
+    "~/code/another-project"
+  ]
+}
+```
+
+`projects` is a plain list of repo-root paths (`~` is expanded). Each path
+joins the "known projects" set alongside the repos Grove already tracks,
+deduped by canonical path. A declared path that does not exist, or is not a
+git repo, is ignored silently. It never breaks config load. This is a
+user-level convenience, so it belongs in
+`${user_config_dir}/grove/config.json`.
+
 ## Worked example
 
 ```json

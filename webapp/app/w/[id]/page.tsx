@@ -23,6 +23,15 @@ type AgentTab = "transcript" | "terminal";
  * is a fixed-height flex column (`100dvh` minus the h-14 header and the h-7
  * status bar) whose panes scroll internally; on mobile it falls back to natural
  * document flow and each pane carries its own min-height floor.
+ *
+ * Three elevation layers (issue #90): the page `<main>` is the base `bg-background`
+ * canvas; the ContextBar + AgentWorkspace compose ONE lifted `bg-card` well
+ * (`rounded-lg border shadow-sm`) so identity + transcript read as a single
+ * bordered card sitting off the canvas — the ContextBar is that card's header
+ * strip (`border-b bg-muted/40`), the transcript/terminal its body. Message rows
+ * and the terminal surface own their own (deeper) treatment inside the body.
+ * The `p-4` gutter around the card is what makes the well visibly lift; the card
+ * carries the `min-h-0` flex chain so the panes still scroll internally.
  */
 export default function DetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -47,7 +56,7 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   return (
     <>
       <Header />
-      <main className="flex flex-col lg:h-[calc(100dvh-5.25rem)] lg:min-h-0">
+      <main className="flex flex-col lg:h-[calc(100dvh-4.75rem)] lg:min-h-0">
         {isLoading && <DetailSkeleton />}
         {isError && (
           <div
@@ -59,7 +68,10 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
         )}
 
         {data && (
-          <>
+          <div
+            data-testid="detail-panel"
+            className="m-3 flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-card shadow-sm lg:m-4"
+          >
             <ContextBar
               peek={data}
               live={live}
@@ -75,7 +87,7 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
               defaultTab={defaultTab}
               subagents={live.subagents}
             />
-          </>
+          </div>
         )}
       </main>
     </>

@@ -1,18 +1,30 @@
-"""Composite the landing-page device mockups from the latest screenshots.
+"""Composite the header device mockups by seating screenshots inside real
+device shells (MacBook Pro 14, iPhone 15) with ImageMagick.
 
-The landing page (`docs/index.md`) shows Grove twice: the TUI on a laptop
-and the web dashboard on a phone. This tool frames the freshest captures
-in lightweight CSS device frames and rasterizes them with headless
-Chromium, so the mockups always carry the current synthetic fleet (and
-never leak a real repo or profile name).
+Device shells are ONLY used for the top-level header on the README and the
+landing page: a laptop that swaps between the terminal UI and the web UI every
+three seconds (an animated GIF), and a phone showing the web landing page. Every
+other doc/README image is a plain screenshot, never framed.
 
-Inputs (produced by the other two capture tools):
-- ``docs/img/screenshots/tui-list.svg``         → the laptop screen
-- ``docs/img/screenshots/webapp-home-mobile.png`` → the phone screen
+The shells live in ``tools/screenshots/device-shells/`` (committed PNGs from
+mockuphone.com): the device body is opaque, the screen and the exterior are
+transparent. We seat a screenshot BEHIND the shell, confined to the screen
+rectangle, so the bezel/notch/rounded-corners overlay the screenshot edges
+(``-compose DstOver``). No headless browser needed.
 
-Outputs:
-- ``docs/img/mockups/tui-laptop-mockup.png``
-- ``docs/img/mockups/webapp-phone-mockup.png``
+The screen rectangle of each shell was measured once by flood-filling the
+exterior of the alpha mask and trimming to the remaining interior hole:
+
+    convert SHELL -alpha extract -threshold 50% -bordercolor black -border 2 \\
+      -fill red -draw 'color 0,0 floodfill' -shave 2x2 -fill white +opaque black \\
+      -trim -format '%wx%h%X%Y'
+
+Re-measure with that command if a shell is ever replaced.
+
+Inputs (produced by the capture tools):
+- ``docs/img/screenshots/tui-list.svg``            ┐ MacBook GIF →  hero-laptop.gif
+- ``docs/img/screenshots/webapp-home-grid.png``    ┘ (3s swap, TUI ↔ web UI)
+- ``docs/img/screenshots/webapp-home-mobile.png``    iPhone        →  webapp-phone-mockup.png
 
 Run via:
 
@@ -22,8 +34,8 @@ or directly:
 
     uv run python -m tools.screenshots.mockups
 
-Requires a Chromium binary on PATH (``chromium`` / ``chromium-browser`` /
-``google-chrome``).
+Requires ImageMagick (``convert`` / ``magick``) for the framing, and a
+Chromium binary on PATH to rasterize the Textual SVG faithfully.
 """
 
 from __future__ import annotations
@@ -33,17 +45,118 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHOTS = REPO_ROOT / "docs" / "img" / "screenshots"
 OUT = REPO_ROOT / "docs" / "img" / "mockups"
+SHELLS = Path(__file__).resolve().parent / "device-shells"
 
 
-def _data_uri(path: Path) -> str:
-    mime = "image/svg+xml" if path.suffix == ".svg" else "image/png"
-    raw = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{raw}"
+def _magick() -> list[str]:
+    """ImageMagick invocation prefix (IM7 ``magick`` or IM6 ``convert``)."""
+    if shutil.which("magick"):
+        return ["magick"]
+    if shutil.which("convert"):
+        return ["convert"]
+    raise RuntimeError("ImageMagick not found on PATH (need `magick` or `convert`)")
+
+
+@dataclass(frozen=True, slots=True)
+class Device:
+    """A device shell plus the on-shell screen rectangle to seat a shot into."""
+
+    shell: Path
+    # Screen rectangle within the shell, in shell pixels.
+    sx: int
+    sy: int
+    sw: int
+    sh: int
+
+    def frame(
+        self,
+        source: Path,
+        out: Path,
+        *,
+        fit: str = "cover",
+        width: int = 1280,
+        inset: tuple[int, int, int, int] = (0, 0, 0, 0),
+    ) -> Path:
+        """Seat ``source`` behind the shell, confined to the screen rectangle.
+
+        ``fit='cover'`` fills the usable area and crops the overflow;
+        ``fit='contain'`` fits the whole shot (bars stay black). ``inset`` is the
+        ``(top, right, bottom, left)`` safe-area padding in shell pixels, filled
+        black: a phone needs it so the app sits BELOW the Dynamic Island and home
+        indicator (an app drawn edge-to-edge under the notch reads as "bleeding").
+        ``width`` caps the output so the committed PNG/GIF stays lean.
+
+        Built in two layers: a black screen canvas (so inset/letterbox areas are
+        opaque, not see-through), the screenshot composited into the usable
+        sub-rect, then that whole screen seated behind the shell with DstOver.
+
+        NOTE: ``-gravity`` is reset to NorthWest before every ``-geometry`` —
+        the ``center`` gravity used for the extent leaks past the parentheses and
+        would otherwise offset the seat from center instead of the rect's
+        top-left. ``+repage`` clears each extent's virtual canvas.
+        """
+        top, right, bottom, left = inset
+        uw, uh = self.sw - left - right, self.sh - top - bottom  # usable sub-rect
+        usable = f"{uw}x{uh}"
+        screen = f"{self.sw}x{self.sh}"
+        subprocess.run(
+            [
+                *_magick(),
+                str(self.shell),
+                # Build the screen content: black canvas + the fitted screenshot
+                # placed inside the safe-area sub-rect.
+                "(",
+                "-size",
+                screen,
+                "xc:black",
+                "(",
+                str(source),
+                "-background",
+                "none",
+                "-resize",
+                f"{usable}^" if fit == "cover" else usable,
+                "-gravity",
+                "center",
+                "-extent",
+                usable,
+                "+repage",
+                ")",
+                "-gravity",
+                "NorthWest",
+                "-geometry",
+                f"+{left}+{top}",
+                "-compose",
+                "over",
+                "-composite",
+                "+repage",
+                ")",
+                # Seat the assembled screen behind the shell.
+                "-gravity",
+                "NorthWest",
+                "-geometry",
+                f"+{self.sx}+{self.sy}",
+                "-compose",
+                "DstOver",
+                "-composite",
+                "+repage",
+                "-resize",
+                f"{width}x>",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return out
+
+
+MACBOOK = Device(SHELLS / "macbookpro14-front.png", sx=461, sy=300, sw=3022, sh=1964)
+IPHONE = Device(SHELLS / "iphone-15-black-portrait.png", sx=120, sy=120, sw=1179, sh=2556)
 
 
 def _chromium() -> str:
@@ -54,83 +167,103 @@ def _chromium() -> str:
     raise RuntimeError("no Chromium binary found on PATH")
 
 
-_LAPTOP_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
-  html,body{{margin:0;background:transparent}}
-  .stage{{width:920px;height:560px;display:flex;align-items:center;justify-content:center}}
-  .laptop{{display:flex;flex-direction:column;align-items:center;
-    filter:drop-shadow(0 22px 40px rgba(0,0,0,.32))}}
-  .screen{{width:792px;padding:14px 14px 16px;background:#0d0d0f;border-radius:18px 18px 6px 6px;
-    box-shadow:inset 0 0 0 1px #2a2a2e}}
-  .screen img{{display:block;width:764px;height:430px;object-fit:cover;object-position:top left;
-    border-radius:6px;background:#1b1b1d}}
-  .cam{{width:6px;height:6px;border-radius:50%;background:#26262a;margin:0 auto 6px}}
-  .base{{width:888px;height:18px;background:linear-gradient(#d7dade,#b9bdc2);
-    border-radius:0 0 12px 12px;clip-path:polygon(2% 0,98% 0,100% 100%,0 100%)}}
-  .notch{{width:120px;height:9px;background:#aeb2b7;border-radius:0 0 9px 9px;margin:-1px auto 0}}
-</style></head><body><div class="stage"><div class="laptop">
-  <div class="screen"><div class="cam"></div><img src="{src}"></div>
-  <div class="base"></div><div class="notch"></div>
-</div></div></body></html>"""
-
-_PHONE_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
-  html,body{{margin:0;background:transparent}}
-  .stage{{width:400px;height:800px;display:flex;align-items:center;justify-content:center}}
-  .phone{{position:relative;width:340px;height:736px;background:#0c0c0e;border-radius:52px;
-    padding:13px;box-shadow:inset 0 0 0 2px #2c2c30,0 22px 44px rgba(0,0,0,.34)}}
-  .phone img{{display:block;width:314px;height:710px;object-fit:cover;object-position:top center;
-    border-radius:40px;background:#1b1b1d}}
-  .island{{position:absolute;top:24px;left:50%;transform:translateX(-50%);
-    width:104px;height:28px;background:#000;border-radius:16px;z-index:2}}
-</style></head><body><div class="stage"><div class="phone">
-  <div class="island"></div><img src="{src}">
-</div></div></body></html>"""
+_SVG_HTML = (
+    '<!doctype html><html><head><meta charset="utf-8">'
+    "<style>html,body{{margin:0;background:transparent}}"
+    "img{{display:block;width:{w}px;height:{h}px}}</style></head>"
+    '<body><img src="{src}"></body></html>'
+)
 
 
-def _render(html: str, size: tuple[int, int], out: Path) -> None:
-    with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as fh:
-        fh.write(html)
-        page = Path(fh.name)
-    try:
-        subprocess.run(
-            [
-                _chromium(),
-                "--headless",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--hide-scrollbars",
-                "--force-device-scale-factor=2",
-                "--default-background-color=00000000",
-                f"--window-size={size[0]},{size[1]}",
-                f"--screenshot={out}",
-                page.as_uri(),
-            ],
-            check=True,
-            capture_output=True,
-        )
-    finally:
-        page.unlink(missing_ok=True)
+def _rasterize_svg(svg: Path) -> Path:
+    """Rasterize a Textual SVG capture to a temp PNG via headless Chromium.
+
+    ImageMagick's rsvg delegate renders Textual SVGs poorly (it drops the cell
+    backgrounds, the peek rail, and the colors, leaving only stray titles), so
+    the faithful path is Chromium, which has full SVG + embedded-font support.
+    """
+    identify = ["magick", "identify"] if shutil.which("magick") else ["identify"]
+    w, h = subprocess.run(
+        [*identify, "-format", "%w %h", str(svg)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    work = Path(tempfile.mkdtemp())
+    page = work / "page.html"
+    src = f"data:image/svg+xml;base64,{base64.b64encode(svg.read_bytes()).decode('ascii')}"
+    page.write_text(_SVG_HTML.format(w=w, h=h, src=src))
+    png = work / f"{svg.stem}.png"
+    subprocess.run(
+        [
+            _chromium(),
+            "--headless",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--force-device-scale-factor=2",
+            "--default-background-color=00000000",
+            f"--window-size={w},{h}",
+            f"--screenshot={png}",
+            page.as_uri(),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return png
+
+
+def _laptop_swap_gif(frames: list[Path], out: Path, *, seconds: int = 3) -> None:
+    """Assemble same-sized laptop frames into a looping GIF, ``seconds`` per frame."""
+    subprocess.run(
+        [
+            *_magick(),
+            "-loop",
+            "0",
+            "-delay",
+            str(seconds * 100),  # centiseconds
+            *(str(f) for f in frames),
+            "-layers",
+            "optimize",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
-    tui = SHOTS / "tui-list.svg"
-    phone = SHOTS / "webapp-home-mobile.png"
-    missing = [p.name for p in (tui, phone) if not p.exists()]
+
+    tui_svg = SHOTS / "tui-list.svg"
+    home_grid = SHOTS / "webapp-home-grid.png"
+    home_mobile = SHOTS / "webapp-home-mobile.png"
+
+    inputs = [tui_svg, home_grid, home_mobile, MACBOOK.shell, IPHONE.shell]
+    missing = [p.name for p in inputs if not p.exists()]
     if missing:
         print(f"missing inputs: {missing}; run the capture tools first", file=sys.stderr)
         return 2
 
-    _render(
-        _LAPTOP_HTML.format(src=_data_uri(tui)),
-        (920, 560),
-        OUT / "tui-laptop-mockup.png",
-    )
-    _render(
-        _PHONE_HTML.format(src=_data_uri(phone)),
-        (400, 800),
+    tmp = Path(tempfile.mkdtemp())
+    # Header laptop: a 3s swap between the terminal UI and the web UI, both
+    # seated edge-to-edge in the MacBook screen (cover, so each fills it).
+    tui_frame = MACBOOK.frame(_rasterize_svg(tui_svg), tmp / "laptop-tui.png", fit="cover")
+    web_frame = MACBOOK.frame(home_grid, tmp / "laptop-web.png", fit="cover")
+    _laptop_swap_gif([tui_frame, web_frame], OUT / "hero-laptop.gif")
+
+    # Header phone: the web landing page, inset into the iPhone safe area so the
+    # app sits below the Dynamic Island and home indicator (top/bottom black
+    # bands), not edge-to-edge under the notch.
+    IPHONE.frame(
+        home_mobile,
         OUT / "webapp-phone-mockup.png",
+        fit="contain",
+        width=900,
+        inset=(150, 0, 90, 0),
     )
-    print(f"wrote device mockups to {OUT}", file=sys.stderr)
+
+    print(f"wrote header device mockups to {OUT}", file=sys.stderr)
     return 0
 
 

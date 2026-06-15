@@ -11,7 +11,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { CheckCircleIcon, ChevronDownIcon, WrenchIcon } from "lucide-react";
+import { ChevronDownIcon, CircleCheckIcon, WrenchIcon } from "lucide-react";
 import type { HTMLAttributes } from "react";
 import { useState } from "react";
 import type { ToolCall } from "@/lib/grove/chat-turns";
@@ -25,7 +25,13 @@ export type ToolProps = HTMLAttributes<HTMLDivElement> & {
   defaultOpen?: boolean;
 };
 
-export const Tool = ({ className, name, detail, defaultOpen = true, ...props }: ToolProps) => {
+export const Tool = ({
+  className,
+  name,
+  detail,
+  defaultOpen = true,
+  ...props
+}: ToolProps) => {
   const [open, setOpen] = useState(defaultOpen);
   const hasBody = Boolean(detail);
 
@@ -43,8 +49,11 @@ export const Tool = ({ className, name, detail, defaultOpen = true, ...props }: 
         )}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* Tool blocks are neutral chrome — the glyph (one Wrench per tool
+              concept, everywhere) inherits muted; only the state badge carries
+              a saturated hue (error red / success green). */}
           <WrenchIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate font-mono text-xs font-medium text-foreground">{name}</span>
+          <span className="truncate font-mono text-[13px] font-medium text-foreground">{name}</span>
           {/* The detail rides the row inline (truncated) so subagent spawns —
               "Agent(Explore): map the webapp" — are legible without expanding;
               the disclosure still holds the full untruncated line. */}
@@ -53,8 +62,11 @@ export const Tool = ({ className, name, detail, defaultOpen = true, ...props }: 
               {detail}
             </span>
           )}
+          {/* Grove's wire emits a tool digest line only post-hoc, so a call is
+              always completed by the time it renders — one success badge, no
+              speculative failure branch (add one when the wire gains a signal). */}
           <Badge className="shrink-0 gap-1 rounded-full text-[10px]" variant="secondary">
-            <CheckCircleIcon aria-hidden className="size-3 text-[var(--ref-add)]" />
+            <CircleCheckIcon aria-hidden className="size-3 text-[var(--ref-add)]" />
             Completed
           </Badge>
         </div>
@@ -70,7 +82,7 @@ export const Tool = ({ className, name, detail, defaultOpen = true, ...props }: 
       </button>
       {hasBody && open && (
         <div className="border-t border-border bg-muted/40 p-2">
-          <p className="break-words font-mono text-xs text-muted-foreground">{detail}</p>
+          <p className="break-words font-mono text-[13px] text-muted-foreground">{detail}</p>
         </div>
       )}
     </div>

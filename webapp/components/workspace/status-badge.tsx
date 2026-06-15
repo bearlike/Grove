@@ -40,8 +40,8 @@ export function StatusBadge({
       data-status={status}
       data-testid="status-badge"
       className={cn(
-        "gap-1.5 rounded-full bg-muted/60 font-medium uppercase tracking-wide text-foreground",
-        size === "sm" ? "px-2 py-0 text-[10px]" : "text-[11px]",
+        "gap-1 rounded-full border-transparent bg-muted/40 font-medium uppercase tracking-[0.08em] text-muted-foreground",
+        size === "sm" ? "px-1.5 py-0 text-[10px]" : "px-2 text-[10px]",
         className,
       )}
       style={{ ["--status-c" as string]: color }}

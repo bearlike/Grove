@@ -11,11 +11,13 @@ substitute for verifying the actual subprocess argv we emit.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from grove.core import tmux
+from grove.core.config import AgentSpec, GroveConfig
 from grove.core.errors import TmuxError
 
 
@@ -401,3 +403,102 @@ def test_send_text_wraps_subprocess_errors(
 
     with pytest.raises(TmuxError):
         tmux.send_text("sess:agent", "hello")
+
+
+# ─── build_workspace_layout — the hermetic launch env (#82) ──────────────────
+
+
+class _FakePane:
+    """Records every send_keys so we can assert the unset/export/command order."""
+
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+    def send_keys(self, cmd: str, *, enter: bool = True, suppress_history: bool = False) -> None:
+        del enter, suppress_history
+        self.keys.append(cmd)
+
+
+class _FakeWindow:
+    def __init__(self, pane: _FakePane) -> None:
+        self.active_pane = pane
+
+    def rename_window(self, _name: str) -> None: ...
+    def select_window(self) -> None: ...
+
+
+class _FakeSession:
+    def __init__(self, window: _FakeWindow) -> None:
+        self.windows = [window]
+        self._agent_window = window
+
+    def new_window(self, *, window_name: str, start_directory: str, attach: bool) -> _FakeWindow:
+        del window_name, start_directory, attach
+        return self._agent_window
+
+
+class _FakeServer:
+    def __init__(self, session: _FakeSession) -> None:
+        self._session = session
+
+        class _Sessions:
+            def filter(self, *, session_name: str) -> list[_FakeSession]:
+                del session_name
+                return [session]
+
+        self.sessions = _Sessions()
+
+
+@pytest.fixture
+def fake_pane(monkeypatch: pytest.MonkeyPatch) -> _FakePane:
+    """Drive the real ``build_workspace_layout`` against an in-memory libtmux."""
+    pane = _FakePane()
+    server = _FakeServer(_FakeSession(_FakeWindow(pane)))
+    monkeypatch.setattr(tmux, "_server", lambda: server)
+    return pane
+
+
+def _layout(pane_fixture: _FakePane, agent: AgentSpec) -> list[str]:
+    tmux.build_workspace_layout(
+        "test-sess", cfg=GroveConfig(), worktree=Path("/tmp/wt"), agent=agent
+    )
+    return pane_fixture.keys
+
+
+def test_layout_unsets_before_export_so_pane_is_hermetic(fake_pane: _FakePane) -> None:
+    """The leaked var is ``unset`` and a configured var ``export``ed, both before
+    the command — so the pane's profile is decided by the agent, not the daemon."""
+    agent = AgentSpec(
+        name="claude",
+        command="claude",
+        env={"FOO": "bar"},
+        env_unset=("CLAUDE_CONFIG_DIR",),
+    )
+    keys = _layout(fake_pane, agent)
+    assert "unset CLAUDE_CONFIG_DIR" in keys
+    assert "export FOO='bar'" in keys
+    # unset and export both precede the launched command.
+    assert keys.index("unset CLAUDE_CONFIG_DIR") < keys.index("claude")
+    assert keys.index("export FOO='bar'") < keys.index("claude")
+
+
+def test_layout_export_wins_over_unset_for_same_key(fake_pane: _FakePane) -> None:
+    """A key in both ``env_unset`` and ``env`` ends up exported: unset runs first,
+    so a user who pins ``CLAUDE_CONFIG_DIR`` via ``env`` gets that dir, not the
+    cleared default."""
+    agent = AgentSpec(
+        name="claude",
+        command="claude",
+        env={"CLAUDE_CONFIG_DIR": "/work"},
+        env_unset=("CLAUDE_CONFIG_DIR",),
+    )
+    keys = _layout(fake_pane, agent)
+    assert keys.index("unset CLAUDE_CONFIG_DIR") < keys.index("export CLAUDE_CONFIG_DIR='/work'")
+
+
+def test_layout_no_env_unset_emits_no_unset(fake_pane: _FakePane) -> None:
+    """A plain agent (no ``env_unset``) emits no ``unset`` — the mechanism is opt-in
+    per agent, not a blanket scrub."""
+    agent = AgentSpec(name="shell", command="$SHELL")
+    keys = _layout(fake_pane, agent)
+    assert not any(k.startswith("unset ") for k in keys)

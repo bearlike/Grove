@@ -12,6 +12,7 @@ from grove.core.contracts.requests import (
     CreateWorkspaceRequest,
     UpdateWorkspaceRequest,
 )
+from grove.core.contracts.tickets import TicketSelector
 
 
 def test_create_request_skip_init_defaults_false() -> None:
@@ -137,3 +138,23 @@ def test_update_request_round_trip_via_json() -> None:
     req = UpdateWorkspaceRequest(title="renamed", description="why")
     reloaded = UpdateWorkspaceRequest.model_validate_json(req.model_dump_json())
     assert reloaded == req
+
+
+# ─── ticket selector on create (#7) ──────────────────────────────────────────
+
+
+def test_create_request_accepts_ticket_selector() -> None:
+    req = CreateWorkspaceRequest(
+        agent_name="claude",
+        title="Fix it",
+        ticket=TicketSelector(provider="linear", id="ENG-1"),
+    )
+    assert req.ticket is not None
+    assert req.ticket.provider == "linear"
+    # round-trips through JSON like the rest of the request envelope
+    reloaded = CreateWorkspaceRequest.model_validate_json(req.model_dump_json())
+    assert reloaded.ticket == req.ticket
+
+
+def test_create_request_ticket_defaults_none() -> None:
+    assert CreateWorkspaceRequest(agent_name="claude", title="x").ticket is None

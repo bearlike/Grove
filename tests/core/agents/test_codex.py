@@ -26,10 +26,14 @@ from grove.core.agents.codex import CodexAdapter, _RolloutParser
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASIC = FIXTURES / "codex_basic.jsonl"
+QUESTIONS = FIXTURES / "codex_questions.jsonl"
 
 # The id + cwd the fixture's session_meta records in-line.
 BASIC_SID = "019dd5d5-60fb-7461-bd07-b6e8cf342726"
 BASIC_CWD = Path("/home/dev/work/svc")
+
+# The questions fixture's session_meta id (same cwd as BASIC).
+QUESTIONS_SID = "019dd6aa-11aa-7461-bd07-aaaaaaaaaaaa"
 
 
 @pytest.fixture
@@ -121,6 +125,48 @@ def test_read_turns_groups_replies_under_the_prompt(
         ("assistant", "I'll add the endpoint."),
         ("tool", "exec_command"),
     ]
+
+
+# ─── agent questions (issue #74 — MCP-bridged question tool in the rollout) ───
+
+
+def test_question_function_call_becomes_resolved_question_entry(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A question-shaped ``function_call`` (``AskUserQuestion``, the MCP-bridge
+    name) becomes a structured ``role="question"`` entry, resolved by its
+    matching ``function_call_output``. Shape normalization, not fabricated
+    semantics: Codex never persists native approval prompts."""
+    _install(codex_home, QUESTIONS_SID, QUESTIONS)
+    (turn,) = adapter.read_turns(BASIC_CWD, QUESTIONS_SID)
+    questions = [e for e in turn.entries if e.role == "question"]
+    assert len(questions) == 1
+    entry = questions[0]
+    assert entry.text == "Pick a deploy target"
+    assert entry.question is not None
+    q = entry.question
+    assert q.kind == "single_select"
+    assert q.prompt == "Pick a deploy target"
+    assert q.header == "Deploy"
+    assert len(q.options) == 2
+    assert q.options[0].label == "staging"
+    assert q.options[1].label == "prod"
+    assert q.answered is True
+    assert q.answer == "staging"
+
+
+def test_normal_function_call_still_renders_as_tool(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A non-question ``function_call`` (e.g. ``exec_command``) is unaffected —
+    it still renders as a ``role="tool"`` entry, no regression."""
+    _install(codex_home, BASIC_SID, BASIC)
+    (turn,) = adapter.read_turns(BASIC_CWD, BASIC_SID)
+    assert [(e.role, e.text) for e in turn.entries] == [
+        ("assistant", "I'll add the endpoint."),
+        ("tool", "exec_command"),
+    ]
+    assert all(e.question is None for e in turn.entries)
 
 
 def test_status_working_when_a_turn_is_in_flight(adapter: CodexAdapter, codex_home: Path) -> None:
@@ -327,6 +373,11 @@ def test_codex_launch_decoration_is_empty() -> None:
     """Codex mints its own thread id (no settable id flag), so no decoration —
     Grove correlates purely through fs discovery."""
     assert get_adapter("codex").launch_decoration("anything") == []
+
+
+def test_codex_model_decoration_is_model_flag() -> None:
+    """Codex honors ``--model <id>`` at launch even though it mints no id (#96)."""
+    assert get_adapter("codex").model_decoration("gpt-5.5") == ["--model", "gpt-5.5"]
 
 
 def _install_text(codex_home: Path, sid: str, text: str) -> Path:

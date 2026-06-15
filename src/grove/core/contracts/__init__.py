@@ -42,10 +42,18 @@ from grove.core.contracts.branch_plan import (
 )
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import (
+    AgentQuestionOptionView,
+    AgentQuestionView,
     DigestEntryView,
     SessionDetailView,
     SessionSummaryView,
     SessionTurnView,
+)
+from grove.core.contracts.tickets import (
+    TicketProviderName,
+    TicketProviderView,
+    TicketRef,
+    TicketSelector,
 )
 from grove.core.contracts.views import (
     AttachInstructionView,
@@ -57,6 +65,8 @@ from grove.core.contracts.views import (
 
 __all__ = [
     "AgentActivityView",
+    "AgentQuestionOptionView",
+    "AgentQuestionView",
     "AgentSessionView",
     "AgentSummaryView",
     "AttachInstructionView",
@@ -81,6 +91,10 @@ __all__ = [
     "SessionSummaryView",
     "SessionTurnView",
     "SessionView",
+    "TicketProviderName",
+    "TicketProviderView",
+    "TicketRef",
+    "TicketSelector",
     "TrackRemoteBranch",
     "UpdateWorkspaceRequest",
     "WorkspaceActivityView",

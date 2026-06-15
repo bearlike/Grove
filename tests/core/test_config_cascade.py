@@ -244,3 +244,50 @@ def test_agent_spec_accepts_mewbo_kind() -> None:
     spec = cfg.find_agent("mewbo")
     assert spec is not None
     assert spec.kind == "mewbo"
+
+
+# ─── tickets section (#7) ────────────────────────────────────────────────────
+
+
+def test_tickets_section_defaults_off_and_secret_free() -> None:
+    """All providers default disabled; only token-env NAMES are stored, never
+    a literal secret (the repo is published)."""
+    cfg = GroveConfig()
+    assert cfg.tickets.gitea.enabled is False
+    assert cfg.tickets.github.enabled is False
+    assert cfg.tickets.linear.enabled is False
+    assert cfg.tickets.gitea.token_env == "GROVE_GITEA_TOKEN"
+    assert cfg.tickets.github.token_env == "GROVE_GITHUB_TOKEN"
+    assert cfg.tickets.linear.token_env == "GROVE_LINEAR_TOKEN"
+
+
+def test_tickets_section_overrides_and_round_trip() -> None:
+    cfg = GroveConfig.model_validate(
+        {
+            "tickets": {
+                "gitea": {"enabled": True, "owner": "bearlike", "repo": "Grove"},
+                "linear": {"enabled": True, "team_key": "ENG"},
+            }
+        }
+    )
+    assert cfg.tickets.gitea.enabled is True
+    assert cfg.tickets.gitea.owner == "bearlike"
+    assert cfg.tickets.linear.team_key == "ENG"
+    again = GroveConfig.model_validate_json(cfg.model_dump_json(indent=2, by_alias=True))
+    assert again.tickets == cfg.tickets
+
+
+def test_tickets_section_forbids_unknown_fields() -> None:
+    """``extra="forbid"`` rejects a literal ``token`` (the secret-leaking shape)."""
+    with pytest.raises(ValidationError):
+        GroveConfig.model_validate({"tickets": {"gitea": {"token": "literal-secret"}}})
+
+
+def test_tickets_provider_layers_merge_per_field() -> None:
+    """A project layer enabling a provider deep-merges over the global default."""
+    base = {"tickets": {"gitea": {"owner": "bearlike", "repo": "Grove"}}}
+    overlay = {"tickets": {"gitea": {"enabled": True}}}
+    merged = _deep_merge(base, overlay)
+    cfg = GroveConfig.model_validate(merged)
+    assert cfg.tickets.gitea.enabled is True
+    assert cfg.tickets.gitea.owner == "bearlike"  # base field survived the merge

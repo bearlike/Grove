@@ -30,6 +30,12 @@ from grove.client.errors import NeedsPairingError, ProtocolError, TransportError
 from grove.client.transport import LocalTransport, Transport, UrlTransport
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.tickets import (
+    TicketProviderName,
+    TicketProviderView,
+    TicketRef,
+    TicketSelector,
+)
 from grove.core.contracts.views import (
     AttachInstructionView,
     HealthView,
@@ -243,6 +249,58 @@ class GroveClient:
         body = await self._get("/branches", params={"repo": str(repo), "scope": scope})
         return [BranchInfo.model_validate(item) for item in body]
 
+    # ─── tickets ─────────────────────────────────────────────────────────────
+
+    async def list_ticket_providers(self, repo: Path) -> list[TicketProviderView]:
+        """The trackers a client may offer for ``repo`` — one row per provider,
+        each carrying its ``configured`` (credentials-present) signal so the UI
+        grays out a dead picker rather than offering it."""
+        body = await self._get("/tickets/providers", params={"repo": str(repo)})
+        return [TicketProviderView.model_validate(item) for item in body]
+
+    async def list_assigned_tickets(
+        self,
+        repo: Path,
+        *,
+        provider: TicketProviderName | None = None,
+        status: str | None = None,
+    ) -> list[TicketRef]:
+        """Tickets assigned to the authenticated user across ``repo``'s trackers.
+
+        ``provider`` narrows to a single tracker; ``status`` filters by the
+        provider's status string. Both are omitted from the query when ``None``
+        so the daemon applies its own default scope.
+        """
+        params: dict[str, str] = {"repo": str(repo)}
+        if provider is not None:
+            params["provider"] = provider
+        if status is not None:
+            params["status"] = status
+        body = await self._get("/tickets/assigned", params=params)
+        return [TicketRef.model_validate(item) for item in body]
+
+    async def get_ticket(
+        self, repo: Path, provider: TicketProviderName, ticket_id: str
+    ) -> TicketRef:
+        """Fetch one ticket by provider + canonical id, scoped to ``repo``."""
+        body = await self._get(f"/tickets/{provider}/{ticket_id}", params={"repo": str(repo)})
+        return TicketRef.model_validate(body)
+
+    async def attach_ticket(self, ws_id: str, selector: TicketSelector) -> WorkspaceStateView:
+        """Associate a ticket with a workspace — returns the updated state."""
+        body = await self._post(
+            f"/workspaces/{ws_id}/tickets",
+            json_payload=selector.model_dump(mode="json"),
+        )
+        return WorkspaceStateView.model_validate(body)
+
+    async def detach_ticket(
+        self, ws_id: str, provider: TicketProviderName, ticket_id: str
+    ) -> WorkspaceStateView:
+        """Remove a ticket association from a workspace — returns the updated state."""
+        body = await self._delete(f"/workspaces/{ws_id}/tickets/{provider}/{ticket_id}")
+        return WorkspaceStateView.model_validate(body)
+
     async def open_attach(self, tmux_session: str) -> AttachSession:
         """Return an interactive AttachSession bound to the tmux session.
 
@@ -282,6 +340,10 @@ class GroveClient:
 
     async def _patch(self, path: str, *, json_payload: dict[str, object]) -> Any:
         resp = await self._ensure_http().patch(path, json=json_payload)
+        return self._unwrap(resp)
+
+    async def _delete(self, path: str) -> Any:
+        resp = await self._ensure_http().delete(path)
         return self._unwrap(resp)
 
     def _unwrap(self, resp: httpx.Response) -> Any:

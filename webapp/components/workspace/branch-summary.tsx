@@ -49,7 +49,7 @@ export function BranchSummary({
           type="button"
           data-testid="branch-summary-trigger"
           aria-label="Branch summary"
-          className="inline-flex h-8 shrink-0 items-center gap-2.5 rounded-md border border-border bg-muted/30 px-2.5 font-mono text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="inline-flex h-8 shrink-0 items-center gap-2.5 rounded-md border border-border bg-muted/40 px-2.5 font-mono text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           <Stat icon={<ArrowUp className="size-3" />} value={ahead} color={statColor("ahead", ahead, dark)} />
           <Stat icon={<ArrowDown className="size-3" />} value={behind} color={statColor("behind", behind, dark)} />

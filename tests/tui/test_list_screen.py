@@ -13,6 +13,7 @@ from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
+from grove.core.release import ReleaseChecker
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceStatus
 from grove.tui.app import GroveApp
@@ -50,6 +51,33 @@ async def test_list_screen_renders_empty_and_quits(
         status = screen.query_one(StatusBar)
         assert len(table.visible_states) == 0
         assert status.count == 0
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_release_worker_pushes_update_to_status_bar(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The mount-time release worker flows an injected checker's verdict to the bar (#80)."""
+    del fake_tmux
+    app = GroveApp(_manager(tmp_repo, tmp_path))
+    async with app.run_test(size=(140, 40)) as pilot:  # wide tier so the chip renders
+        await pilot.pause()
+        # Replace the auto-pushed screen with one wired to a checker that
+        # reports a newer release, then let its mount worker run to completion.
+        screen = WorkspaceListScreen(
+            _manager(tmp_repo, tmp_path),
+            release_checker=ReleaseChecker(installed="0.1.0", fetcher=lambda: "v9.9.9"),
+        )
+        await app.switch_screen(screen)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        bar = screen.query_one(StatusBar)
+        assert bar.update_available is True
+        assert bar.latest_version == "9.9.9"
+        assert "⇡ v9.9.9" in bar.render().plain
         await pilot.press("q")
         await pilot.pause()
 

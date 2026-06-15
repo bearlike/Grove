@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from grove import __version__ as GROVE_VERSION
+from grove.core.release import ReleaseChecker
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon import build_app
 from tests.daemon.conftest import daemon_test_config
@@ -52,3 +53,33 @@ def test_whoami_returns_daemon_identity(daemon_client: TestClient) -> None:
     assert body["user"]
     assert body["platform"] in {"linux", "darwin", "windows"}
     assert body["python_version"]
+    # Release-skew fields default to "unknown" — the autouse offline fixture
+    # keeps the default checker from reaching GitHub.
+    assert body["latest_version"] is None
+    assert body["update_available"] is False
+
+
+def test_whoami_surfaces_a_newer_release(tmp_state_dir: Path) -> None:
+    """An injected checker reporting a higher tag flows to the wire fields (#80)."""
+    app = build_app(
+        cfg=daemon_test_config(),
+        store=JsonWorkspaceStore(),
+        release_checker=ReleaseChecker(installed=GROVE_VERSION, fetcher=lambda: "v999.0.0"),
+    )
+    with TestClient(app) as client:
+        body = client.get("/whoami").json()
+    assert body["latest_version"] == "999.0.0"
+    assert body["update_available"] is True
+
+
+def test_whoami_no_update_when_remote_not_newer(tmp_state_dir: Path) -> None:
+    """A tag equal to the installed version reports the version but no nudge."""
+    app = build_app(
+        cfg=daemon_test_config(),
+        store=JsonWorkspaceStore(),
+        release_checker=ReleaseChecker(installed=GROVE_VERSION, fetcher=lambda: GROVE_VERSION),
+    )
+    with TestClient(app) as client:
+        body = client.get("/whoami").json()
+    assert body["latest_version"] == GROVE_VERSION
+    assert body["update_available"] is False

@@ -9,7 +9,7 @@ name: Docs
 
 on:
   push:
-    branches: [main]
+    branches: [main, current]
   pull_request:
     types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
@@ -64,7 +64,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Publish to GitHub Pages
-        if: github.server_url == 'https://github.com' && github.ref == 'refs/heads/main'
+        if: github.server_url == 'https://github.com' && github.ref == 'refs/heads/current'
         run: |
           uv run mike deploy --push --update-aliases main latest --alias-type copy
           uv run mike set-default --push latest
@@ -80,7 +80,7 @@ jobs:
 
       # --- internal docs host: single version, static upload ---
       - name: Publish to internal docs host
-        if: github.server_url != 'https://github.com'
+        if: github.server_url != 'https://github.com' && github.ref != 'refs/heads/current'
         run: |
           slug="grove"
           [ "${{ github.event_name }}" = "pull_request" ] && slug="grove-pr-${{ github.event.pull_request.number }}"

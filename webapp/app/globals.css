@@ -38,11 +38,28 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
+  /* Chrome surface (header + left rail + status bar) — one shared tone so the
+     persistent chrome reads as a single frame around the content canvas. */
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  /* Elevated surface above card (raised wells, the composer hero). */
+  --color-elevated: hsl(var(--elevated));
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+  --radius-xl: calc(var(--radius) + 4px);
 
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /*
+   * Typography. Geist Sans/Mono are wired via next/font in app/fonts.ts and
+   * exposed as --font-geist-sans / --font-geist-mono on <html>. --font-terminal
+   * resolves to the JetBrains Mono Nerd Font (--font-jetbrains-nerd, #92) when
+   * present, else falls back to Geist Mono — so terminal surfaces opt in via
+   * the `font-terminal` utility without dragging the Nerd Font into UI chrome.
+   */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-terminal: var(--font-jetbrains-nerd), var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --animate-grove-pulse: grove-pulse 1s steps(2, end) infinite;
 
@@ -69,26 +86,41 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
+    /* Light theme — a calm, low-glare slate-neutral system. The canvas is a
+       soft off-white so white `card` panels lift off it; chrome sits a hair
+       cooler. Hue 220 (cool slate) holds across the whole neutral ramp so
+       there is no muddy warmth, and lightness steps are wide enough to read as
+       distinct elevation tiers. Foreground is deep slate (not pure black) for
+       comfortable long-form contrast. Terracotta `--primary` is deepened to
+       hold AA against white. Semantic --status/--agent/--ref vars below are
+       mirrored from Python and intentionally left untouched. */
+    --background: 220 24% 98%;
+    --foreground: 222 28% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
+    --card-foreground: 222 28% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 14 64% 60%;
+    --popover-foreground: 222 28% 11%;
+    --elevated: 0 0% 100%;
+    --primary: 14 72% 47%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 72% 50%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 14 64% 60%;
+    --secondary: 220 16% 93%;
+    --secondary-foreground: 222 22% 18%;
+    --muted: 220 18% 95%;
+    --muted-foreground: 220 9% 40%;
+    --accent: 220 17% 91%;
+    --accent-foreground: 222 22% 16%;
+    --destructive: 0 72% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 16% 87%;
+    --input: 220 16% 85%;
+    --ring: 14 72% 47%;
     --radius: 0.5rem;
+
+    /* Chrome (header · rail · status bar) — slightly off the canvas so the
+       persistent frame is legible without contrasting fills. */
+    --sidebar: 220 26% 96%;
+    --sidebar-foreground: 222 28% 11%;
+    --sidebar-border: 220 16% 87%;
 
     /* Status — light mode (mirrors STATUS_HEX_LIGHT in lib/grove/status-tokens.ts). */
     --status-active: #4d7c0f;
@@ -118,25 +150,40 @@
   }
 
   .dark {
-    --background: 60 4% 17%;
-    --foreground: 40 30% 98%;
-    --card: 60 4% 9%;
-    --card-foreground: 40 30% 98%;
-    --popover: 60 4% 9%;
-    --popover-foreground: 40 30% 98%;
-    --primary: 14 64% 60%;
+    /* Dark theme — "space black". A deep, cool near-black canvas (hue 224, very
+       low chroma) replaces the old warm-olive `hsl(60 4% 17%)` monotone that
+       read as dead grey. The neutral ramp climbs in clear lightness steps so
+       elevation is legible WITHOUT borrowing chroma: canvas 6 → chrome 8 →
+       card 10 → popover/elevated 12 → muted 13 → accent/secondary 16 →
+       border 18. Foreground is a cool off-white; `--primary` terracotta is
+       nudged a touch brighter so it still sings against the deeper canvas.
+       Semantic --status/--agent/--ref vars below stay canonical (Python). */
+    --background: 224 20% 6%;
+    --foreground: 210 24% 96%;
+    --card: 222 17% 10%;
+    --card-foreground: 210 24% 96%;
+    --popover: 222 17% 12%;
+    --popover-foreground: 210 24% 96%;
+    --elevated: 222 16% 13%;
+    --primary: 15 74% 61%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 60 3% 22%;
-    --secondary-foreground: 40 30% 98%;
-    --muted: 60 3% 22%;
-    --muted-foreground: 40 5% 70%;
-    --accent: 60 3% 22%;
-    --accent-foreground: 40 30% 98%;
-    --destructive: 0 75% 60%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 60 3% 28%;
-    --input: 60 3% 28%;
-    --ring: 14 64% 60%;
+    --secondary: 220 13% 16%;
+    --secondary-foreground: 210 22% 95%;
+    --muted: 222 14% 13%;
+    --muted-foreground: 216 14% 62%;
+    --accent: 220 13% 17%;
+    --accent-foreground: 210 24% 96%;
+    --destructive: 0 68% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 12% 18%;
+    --input: 220 12% 21%;
+    --ring: 15 74% 61%;
+
+    /* Chrome (header · rail · status bar) — one tone between canvas and card so
+       the persistent frame is unified and distinct from the content well. */
+    --sidebar: 224 18% 8%;
+    --sidebar-foreground: 210 24% 96%;
+    --sidebar-border: 220 12% 16%;
 
     /* Status — dark mode (canonical from grove/core/contracts/status_palette.py). */
     --status-active: #84cc16;
@@ -172,6 +219,8 @@
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     font-feature-settings: "rlig" 1, "calt" 1;
+    /* Geist reads a touch tight at dashboard density; 0.01em restores air. */
+    letter-spacing: 0.01em;
     overflow-x: hidden;
   }
 

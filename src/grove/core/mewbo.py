@@ -59,7 +59,9 @@ class MewboClient:
 
     # ─── session lifecycle ──────────────────────────────────────────────────
 
-    def create_session(self, *, cwd: str | None = None, title: str | None = None) -> str:
+    def create_session(
+        self, *, cwd: str | None = None, title: str | None = None, model: str | None = None
+    ) -> str:
         """Create a remote session; return the SERVER-minted session id.
 
         ``cwd`` anchors the session to an external worktree (top-level field,
@@ -67,10 +69,21 @@ class MewboClient:
         create the worktree first. The title is set with a follow-up PATCH
         (the create endpoint takes none) and is deliberately best-effort: a
         label must never fail an already-created session.
+
+        ``model`` (per-create model selection, #98) is forwarded on the create
+        body when set — the Mewbo equivalent of ``--model`` for the CLI kinds.
+        Unlike claude_code/codex it cannot ride a launch flag (mewbo runs the
+        model server-side), so the only place to forward it is session-create.
+        Provider boundary: the id is opaque — Grove forwards it verbatim and
+        never interprets it. If the server doesn't honor a ``model`` field it is
+        simply ignored (an extra create-body key is harmless), so this stays a
+        best-effort forward, never a hard dependency on a specific API shape.
         """
         body: dict[str, Any] = {}
         if cwd is not None:
             body["cwd"] = cwd
+        if model:
+            body["model"] = model
         payload = self._request("POST", "/api/sessions", json_body=body)
         session_id = payload.get("session_id")
         if not isinstance(session_id, str) or not session_id:

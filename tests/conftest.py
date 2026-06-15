@@ -14,6 +14,25 @@ from grove.core.config import GroveConfig
 from grove.core.errors import TmuxError
 from grove.core.tmux import AttachInstruction
 
+# ─── network side effects neutralized ───────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _offline_release_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may hit GitHub's releases API (#80).
+
+    Patches the module-level fetch seam so a default ``ReleaseChecker`` (the one
+    the daemon/TUI build with no injected ``fetcher``) reports "unknown" instead
+    of reaching the network. Tests that want a specific result inject a
+    ``fetcher`` directly, which bypasses this seam. Same discipline as the fake
+    tmux/git boundaries — real I/O never runs under pytest.
+    """
+    monkeypatch.setattr(
+        "grove.core.release.fetch_latest_release_tag",
+        lambda repo, *, installed="": None,
+    )
+
+
 # ─── on-disk paths redirected to a tmpdir ───────────────────────────────────
 
 
@@ -73,6 +92,9 @@ class FakeTmux:
         # (session_name, launch_decoration) — lets correlation tests assert the
         # `--session-id <uuid>` argv the manager threaded in from the adapter.
         self.launch_decorations: list[tuple[str, list[str]]] = []
+        # (session_name, env, env_unset) — lets #82 tests assert the manager
+        # threads the agent's hermetic launch env through to the layout.
+        self.launch_envs: list[tuple[str, dict[str, str], tuple[str, ...]]] = []
         self.init_calls: list[tuple[Path, dict[str, str]]] = []
         self.init_exit_code: int = 0  # tests can override
         self.init_stdout: str = ""  # written to log_path on each run
@@ -128,6 +150,7 @@ class FakeTmux:
         del worktree
         self.layouts.append((session_name, agent.name))
         self.launch_decorations.append((session_name, list(launch_decoration or [])))
+        self.launch_envs.append((session_name, dict(agent.env), tuple(agent.env_unset)))
         # Mirrors real `build_workspace_layout`: rename window 0 → shell,
         # add an `agent` window. Tests that want a session reorganized
         # externally (no `agent`, weirdly named windows, etc.) overwrite

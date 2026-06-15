@@ -58,6 +58,16 @@ class AgentAdapter(Protocol):
         """
         ...
 
+    def model_decoration(self, model: str) -> list[str]:
+        """Extra argv tokens that pin the model for this launch (Claude Code /
+        Codex → ``["--model", model]``). Empty for tools with no launch-time
+        model flag (mewbo selects server-side, the generic shell has no model),
+        so they fall back to the tool's own default. The provider-boundary rule:
+        Grove forwards the parameter as the tool's flag — it never interprets the
+        value.
+        """
+        ...
+
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         """Every transcript file for ``session_id`` (main thread first, then any
         sub-agent files), resolved under the agent's config dir for a session

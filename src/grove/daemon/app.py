@@ -31,6 +31,12 @@ from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView
+from grove.core.contracts.tickets import (
+    TicketProviderName,
+    TicketProviderView,
+    TicketRef,
+    TicketSelector,
+)
 from grove.core.contracts.views import (
     AttachInstructionView,
     CommitSummaryView,
@@ -49,10 +55,14 @@ from grove.core.errors import (
     GroveError,
     PaneNotFound,
     SteeringUnsupported,
+    TicketProviderError,
+    TicketProviderNotConfigured,
     WorkspaceNotFound,
     WorkspaceStateError,
 )
 from grove.core.manager import WorkspaceManager
+from grove.core.notifications import NotificationBroker
+from grove.core.release import ReleaseChecker, ReleaseStatus
 from grove.core.sessions import SessionExplorer, SessionListing
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon._pane_stream import _PaneStreamer
@@ -67,14 +77,16 @@ from grove.daemon.repos import RepoRegistry
 _POLL_INTERVAL_SECONDS = 2.0
 
 
-def _build_whoami(started_at: datetime) -> WhoamiView:
-    """Snapshot the daemon's identity + uptime.
+def _build_whoami(started_at: datetime, release: ReleaseStatus) -> WhoamiView:
+    """Snapshot the daemon's identity + uptime + release skew.
 
-    Pure-ish: reads stdlib state at call time (``socket.gethostname``,
-    ``getpass.getuser``, ``platform.*``), takes ``started_at`` as input
-    so tests can pin uptime deterministically. ``int(...)`` truncates
-    rather than rounds — uptime is a coarse signal, sub-second precision
-    is noise.
+    Pure: reads stdlib state at call time (``socket.gethostname``,
+    ``getpass.getuser``, ``platform.*``), takes ``started_at`` and the
+    pre-resolved ``release`` status as input so tests can pin both
+    deterministically. ``int(...)`` truncates rather than rounds — uptime is a
+    coarse signal, sub-second precision is noise. ``release`` is resolved off
+    the loop (executor) at the route edge; mapping it here keeps this builder
+    free of I/O.
     """
     now = datetime.now(UTC)
     return WhoamiView(
@@ -85,6 +97,8 @@ def _build_whoami(started_at: datetime) -> WhoamiView:
         user=getpass.getuser(),
         platform=platform.system().lower(),
         python_version=platform.python_version(),
+        latest_version=release.latest,
+        update_available=release.update_available,
     )
 
 
@@ -170,12 +184,18 @@ def build_app(  # noqa: PLR0915
     cfg: GroveConfig,
     store: JsonWorkspaceStore,
     auth_store: SessionStore | None = None,
+    notification_broker: NotificationBroker | None = None,
+    release_checker: ReleaseChecker | None = None,
 ) -> FastAPI:
     """Construct the daemon's FastAPI app.
 
     Tests call this directly; the CLI's ``serve`` calls it via uvicorn.
     ``auth_store`` is constructed from ``cfg.auth`` if not supplied — tests
     inject one with a fake clock when they need to control TTLs.
+    ``notification_broker`` is built from ``cfg.notifications`` if not supplied —
+    tests inject one with a capturing channel to assert the edge-trigger wiring.
+    ``release_checker`` defaults to a real GitHub-backed one — tests inject one
+    with a fake fetcher so ``/whoami`` never touches the network.
 
     The statement count grows linearly with route count (this is FastAPI's
     factory pattern); the function still has one job — register routes —
@@ -188,6 +208,10 @@ def build_app(  # noqa: PLR0915
     registry = RepoRegistry(cfg=cfg, store=store, config_loader=load_config)
     activity_service = ActivityService(registry=registry)
     sse_hub = _SseHub(activity_service)
+    if notification_broker is None:
+        notification_broker = NotificationBroker.from_config(cfg.notifications)
+    if release_checker is None:
+        release_checker = ReleaseChecker()
     if auth_store is None:
         auth_store = SessionStore(
             session_ttl=timedelta(seconds=cfg.auth.session_ttl_seconds),
@@ -213,6 +237,12 @@ def build_app(  # noqa: PLR0915
         # poll. The hub must bind the *running* loop so its cross-thread
         # ``call_soon_threadsafe`` targets the right one.
         sse_hub.start(asyncio.get_running_loop())
+        # Subscribe the notification broker to the SAME activity bus the SSE hub
+        # rides — a debounced edge-trigger, no new status computation (#70). Its
+        # dispatch worker keeps channel HTTP off the activity poll thread.
+        if notification_broker is not None:
+            notification_broker.bind(activity_service.subscribe)
+            app.state.notification_broker = notification_broker
         stop_event = asyncio.Event()
         poll_task = asyncio.create_task(
             _poll_loop(activity_service, _POLL_INTERVAL_SECONDS, stop_event)
@@ -224,12 +254,18 @@ def build_app(  # noqa: PLR0915
             poll_task.cancel()
             with suppress(asyncio.CancelledError):
                 await poll_task
+            if notification_broker is not None:
+                notification_broker.close()
             sse_hub.stop()
             activity_service.close()
 
     app = FastAPI(
         title="Grove daemon",
-        version="0.1.0",
+        # Derive from the package version so OpenAPI's ``info.version`` tracks
+        # ``grove.__version__`` (and ``pyproject``) instead of drifting on a
+        # hand-edited literal — the same single source ``/healthz`` + ``/whoami``
+        # report.
+        version=_GROVE_VERSION,
         lifespan=lifespan,
     )
 
@@ -265,6 +301,14 @@ def build_app(  # noqa: PLR0915
             # Agent-transcript sessions; the auth domain's `session_not_found`
             # (revoked bearer sessions) lives in the auth router.
             AgentSessionNotFound: (404, "agent_session_not_found"),
+            # Ticket providers (#7). NotConfigured is 404 — the named tracker
+            # simply isn't enabled for this repo (nothing went wrong on the
+            # wire). TicketProviderError is 502 — the upstream tracker API
+            # failed (transport, auth, malformed), which is not the client's
+            # fault. NotConfigured is a sibling of (not a subclass of)
+            # TicketProviderError, so order between them is immaterial.
+            TicketProviderNotConfigured: (404, "ticket_provider_not_configured"),
+            TicketProviderError: (502, "ticket_provider_error"),
         }
         for cls, (status, code) in code_map.items():
             if isinstance(exc, cls):
@@ -312,8 +356,15 @@ def build_app(  # noqa: PLR0915
 
         Distinct from ``/auth/sessions/me`` (caller session) — this
         endpoint describes the daemon process itself.
+
+        The release-skew check rides the executor: ``check()`` is cached for
+        hours, so this is a no-op cache read on all but the occasional refresh
+        tick — and a refresh's blocking GitHub GET runs off the event loop,
+        never stalling the handler (best-effort, like every other side effect).
         """
-        return _build_whoami(app.state.started_at)
+        loop = asyncio.get_running_loop()
+        release = await loop.run_in_executor(None, release_checker.check)
+        return _build_whoami(app.state.started_at, release)
 
     @app.get("/activity", response_model=DashboardSnapshotView, dependencies=auth_dep)
     async def activity() -> DashboardSnapshotView:
@@ -783,5 +834,111 @@ def build_app(  # noqa: PLR0915
             # of the daemon uses so clients see a consistent error shape.
             raise _grove_error_to_http(exc) from exc
         return list(branches)
+
+    @app.get(
+        "/tickets/providers",
+        response_model=list[TicketProviderView],
+        dependencies=auth_dep,
+    )
+    async def ticket_providers(repo: Annotated[Path, Query()]) -> list[TicketProviderView]:
+        """The repo's enabled ticket providers — the client's picker source (#7).
+
+        ``repo`` dispatches per-repo cascade like ``/branches``: a project
+        enables its tracker in ``<repo>/.grove/config.json``. Pure (no network);
+        each row's ``configured`` flag tells a client to gray out a provider that
+        is enabled but missing its token rather than offer a dead picker.
+        """
+        mgr = registry.get(repo)
+        return mgr.ticket_providers.provider_views()
+
+    @app.get(
+        "/tickets/assigned",
+        response_model=list[TicketRef],
+        dependencies=auth_dep,
+    )
+    async def tickets_assigned(
+        repo: Annotated[Path, Query()],
+        provider: TicketProviderName | None = None,
+        status: str | None = None,
+    ) -> list[TicketRef]:
+        """Tickets assigned to the authenticated user (#7).
+
+        With ``provider`` given, query exactly that tracker. Without it,
+        aggregate across every enabled provider, SKIPPING any whose credential
+        is absent (``configured`` is False) — so a half-configured repo still
+        returns its working providers' tickets instead of failing the whole
+        request on one unconfigured tracker. A configured provider whose API
+        call fails still surfaces its 502.
+        """
+        mgr = registry.get(repo)
+        try:
+            if provider is not None:
+                return mgr.ticket_providers.get(provider).list_assigned(status=status)
+            out: list[TicketRef] = []
+            for p in mgr.ticket_providers.providers():
+                if not p.configured:
+                    continue
+                out.extend(p.list_assigned(status=status))
+            return out
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/tickets/{provider}/{ticket_id}",
+        response_model=TicketRef,
+        dependencies=auth_dep,
+    )
+    async def get_ticket(
+        provider: TicketProviderName,
+        ticket_id: str,
+        repo: Annotated[Path, Query()],
+    ) -> TicketRef:
+        """Fetch one ticket by its canonical key (#7).
+
+        404 ``ticket_provider_not_configured`` when the named tracker isn't
+        enabled; 502 ``ticket_provider_error`` when the upstream API fails.
+        """
+        mgr = registry.get(repo)
+        try:
+            return mgr.ticket_providers.get(provider).get_ticket(ticket_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post(
+        "/workspaces/{ws_id}/tickets",
+        response_model=WorkspaceStateView,
+        dependencies=auth_dep,
+    )
+    async def attach_ticket(ws_id: str, body: TicketSelector) -> WorkspaceStateView:
+        """Manually associate a ticket with a workspace (#7).
+
+        Pure association (no network): the selector reuses the contract
+        ``TicketSelector`` as the body. Idempotent by ``(provider, id)`` in the
+        engine. Returns the updated workspace with its refreshed ``ticket_refs``.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            state = mgr.attach_ticket(ws_id, body)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return WorkspaceStateView.from_state(state)
+
+    @app.delete(
+        "/workspaces/{ws_id}/tickets/{provider}/{ticket_id}",
+        response_model=WorkspaceStateView,
+        dependencies=auth_dep,
+    )
+    async def detach_ticket(
+        ws_id: str,
+        provider: TicketProviderName,
+        ticket_id: str,
+    ) -> WorkspaceStateView:
+        """Remove a ticket association (#7). Idempotent — a missing ref is a no-op."""
+        mgr = _manager_for(ws_id)
+        try:
+            state = mgr.detach_ticket(ws_id, provider, ticket_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return WorkspaceStateView.from_state(state)
 
     return app

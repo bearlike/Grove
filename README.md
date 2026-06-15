@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Grove</h1>
-<p align="center"><em>The terminal workspace manager for AI coding agents. Run a forest of them in parallel, and watch from your phone when you step away.</em></p>
+<p align="center"><em>The terminal workspace manager for AI coding agents. Spin up a forest of isolated agent workspaces. Reach any of them asynchronously from your terminal, your browser, or another agent.</em></p>
 
 <p align="center">
   <a href="https://github.com/bearlike/Grove/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/bearlike/Grove/actions/workflows/ci.yml/badge.svg"></a>
@@ -13,109 +13,117 @@
 </p>
 
 <p align="center">
-  <img src="docs/img/mockups/tui-laptop-mockup.png" alt="Grove TUI on a MacBook: project-scoped workspaces with a live agent peek rail" height="320" />
-  &nbsp;&nbsp;&nbsp;
-  <img src="docs/img/mockups/webapp-phone-mockup.png" alt="Grove read-only web dashboard on a phone, showing the mobile workspace grid" height="320" />
+  <img src="docs/img/mockups/hero-laptop.gif" alt="Grove on a MacBook, swapping between the terminal UI and the web dashboard" height="316" />
+  &nbsp;&nbsp;
+  <img src="docs/img/mockups/webapp-phone-mockup.png" alt="Grove web dashboard on a phone, showing the workspace surface" height="316" />
 </p>
 <p align="center">
-  <sub>Grove in your terminal, and on your phone. Run agents in parallel from your desk, then watch them from anywhere.</sub>
+  <sub>Grove in the terminal and the browser, and on your phone. One agent, one worktree, one window.</sub>
 </p>
 
-## Overview
+## 🌳 Overview
 
-Grove is a terminal tool for running several AI coding agents at once, each in
-its own isolated **workspace**. A workspace is a dedicated git worktree on its
-own branch, paired with a tmux session and a window in the TUI. The rule is one
-agent, one worktree, one window.
+Grove runs several AI coding agents at once, each in its own isolated **workspace**: a dedicated git worktree on its own branch, paired with a tmux session and a window. The rule is one agent, one worktree, one window. Agents are productive in parallel but chaotic in the same folder, where they overwrite each other's files and collide on the same branch. Grove gives each one its own bench.
 
-This matters because agents are productive in parallel but chaotic in the same
-folder, where they overwrite each other's files and collide on the same branch.
-Grove gives each one its own space. That lets you run Claude Code on a feature,
-Codex on a failing test, OpenCode on a refactor, and Devin on a code review, all
-at the same time, and watch each one work live.
+Every workspace is reachable asynchronously, from the terminal TUI, the CLI, the web dashboard on any device, or another agent over [MCP](https://bearlike.github.io/Grove/latest/use-mcp/). The same isolated-workspace primitive backs human and agent orchestration alike. Through all of it your git history stays yours: Grove never commits, never pushes, and never touches a remote branch.
 
-Grove is unopinionated. Commit a `.grove/config.json` to set your team's shared
-defaults, the agent list, the worktree layout, and the setup script every
-workspace runs, and each developer can still override it locally without
-touching the shared file.
+## ✨ Features
 
-A read-only **web dashboard** ships alongside the TUI, so you can check on every
-agent from your phone while the daemon stays loopback-only behind a paired
-session. Through all of it your git history stays yours: Grove never commits,
-never pushes, and never touches a remote branch.
+<table>
+<tr>
+<td width="50%" valign="middle">
 
-## Features
+### Async access, any device
 
-- **Project-scoped sessions.** Run `grove` inside repo `A` and you only see workspaces for repo `A`. No mixing across projects.
-- **Configurable, not opinionated.** Worktree location, branch prefix, agent registry, init scripts, theme. Everything teams want to pin lives in `<repo>/.grove/config.json`. Six cascading layers (defaults → user → project → project-local → env → CLI) let teams enforce a baseline without taking the last word from individuals.
-- **Branch-aware lifecycle.** Create, pause (keep the branch, drop the worktree), resume, kill (deletes only branches Grove created, never touches remotes), respawn (recover an OFFLINE workspace whose tmux session vanished).
-- **Live activity peek.** A right-hand rail mirrors each agent's tmux pane four times per second and surfaces git position alongside it. It is best-effort and never blocks the TUI.
-- **Side-effects at the edges.** A clean engine (`grove.core`) with zero UI dependencies, plus a thin Textual TUI (`grove.tui`) and a read-only web dashboard (`webapp/`). The boundary is enforced by `import-linter` so every client reuses the engine unchanged.
+Reach the whole fleet over your network. A composer starts a workspace from a prompt, and the live, repo-grouped grid shows every agent. Pair a device once; the daemon stays loopback.
 
-<p align="center">
-  <img src="docs/img/screenshots/webapp-activity-wall.png" alt="Grove activity wall: a dense dashboard of every agent session with live terminal previews" height="360" />
-</p>
+[Docs →](https://bearlike.github.io/Grove/latest/use-webapp/)
 
-## Get started
+</td>
+<td width="50%">
+  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-home-grid.png" alt="Grove web dashboard: a composer over the repo-grouped grid of every agent's workspace" width="100%" /></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
 
-Grove needs `git` and `tmux`, and installs to your PATH as `grove` straight
-from the repo, no clone required. With [uv](https://docs.astral.sh/uv/):
+### Transcript and terminal, side by side
+
+A split view shows the agent's transcript next to its live terminal. Read the conversation, send a follow-up, and answer the agent's structured questions inline. Watch the work happen at the same time.
+
+[Docs →](https://bearlike.github.io/Grove/latest/use-webapp/#the-workspace-ide-shell)
+
+</td>
+<td width="50%">
+  <a href="https://bearlike.github.io/Grove/latest/use-webapp/#the-workspace-ide-shell"><img src="docs/img/screenshots/webapp-workspace-split.png" alt="A split view: the agent's transcript with a multiple-choice question on the left, the live terminal on the right" width="100%" /></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Drive Grove from any agent
+
+Grove ships an MCP server. Claude Code, Codex, OpenCode, and other orchestrators use its tools to create workspaces, dispatch tasks, send follow-ups, and steer the fleet. Your agents manage work at the scale of a whole project.
+
+[Docs →](https://bearlike.github.io/Grove/latest/use-mcp/)
+
+</td>
+<td width="50%">
+  <a href="https://bearlike.github.io/Grove/latest/use-mcp/"><img src="docs/img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" width="100%" /></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Terminal UI
+
+Grove is a terminal program first. Run `grove` in a repo to see only its workspaces. Create, attach, pause, and kill, each one keypress. A peek rail mirrors the selected agent's pane live, next to its git position.
+
+[Docs →](https://bearlike.github.io/Grove/latest/use-tui/)
+
+</td>
+<td width="50%">
+  <a href="https://bearlike.github.io/Grove/latest/use-tui/"><img src="docs/img/screenshots/tui-list.png" alt="The Grove TUI: a project-scoped workspace list with a live agent peek rail showing the summary, recent commits, and transcript" width="100%" /></a>
+</td>
+</tr>
+</table>
+
+**Also in the box:**
+
+- **[Branch-aware lifecycle](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/).** Create, pause, resume, respawn, and kill. Pause keeps the branch and drops the worktree. Kill deletes only branches Grove created, never remotes.
+- **[Configuration cascade](https://bearlike.github.io/Grove/latest/features-cascade/).** A committed `.grove/config.json` sets the team baseline. Six layers let each developer override locally without touching it.
+- **[Ticket providers](https://bearlike.github.io/Grove/latest/features-ticket-providers/).** Branch-aware Gitea, GitHub, and Linear context, surfaced next to the workspace.
+- **[Push notifications](https://bearlike.github.io/Grove/latest/features-notifications/).** Get pinged when an agent finishes a turn or needs you.
+
+## 🚀 Get started
+
+Grove needs `git` and `tmux`, and installs to your PATH as `grove` straight from the repo. With [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
-```
 
-No uv? `pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"`, or
-plain `pip install --user "grove[daemon] @ git+https://github.com/bearlike/Grove"`.
-
-Then launch it inside any git repo, and upgrade whenever you like:
-
-```bash
 cd path/to/your/repo
 grove config init        # scaffold .grove/config.json
 grove                    # launch the TUI
-uv tool upgrade grove    # update later (or: pipx upgrade grove)
+uv tool upgrade grove    # update later
 ```
 
-See [Get Started](https://bearlike.github.io/Grove/latest/getting-started/) for prerequisites and every install path.
-
-## Configuration
-
-Grove runs on sensible defaults, so it works the moment it is installed. To
-change them, two files layer on top of each other: a committed **project
-config** at `<repo>/.grove/config.json` (scaffold it with `grove config init`)
-and a personal **user config** at `${user_config_dir}/grove/config.json`. Where
-both set the same option, the project layer wins.
-
-> [!TIP]
-> The docs walk through writing them: [project setup](https://bearlike.github.io/Grove/latest/configure-project/),
-> [agents](https://bearlike.github.io/Grove/latest/configure-agents/),
-> [init scripts](https://bearlike.github.io/Grove/latest/configure-init-scripts/),
-> the [full reference](https://bearlike.github.io/Grove/latest/configure-reference/),
-> and the [six-layer cascade](https://bearlike.github.io/Grove/latest/features-cascade/).
+No uv? Use `pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"` or plain `pip install --user`. See [Get Started](https://bearlike.github.io/Grove/latest/getting-started/) for prerequisites and every install path.
 
 <details>
-<summary><b>Let an AI agent configure Grove for you</b></summary>
+<summary><b>🤖 Let an AI agent configure Grove for you</b></summary>
 
 <br>
 
-Configuration has a few layers and many knobs, so you do not have to write it by
-hand. Hand the prompt below to Claude Code, Codex, or any coding agent; it reads
-Grove's config skill and sets things up with you, verifying every field against
-your installed version.
+Configuration has a few layers and many knobs, so you do not have to write it by hand. Hand the prompt below to Claude Code, Codex, or any coding agent; it reads Grove's config skill and sets things up with you, verifying every field against your installed version.
 
 ```text
 Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
 ```
 
-The skill teaches the agent the six-layer cascade, the exact file locations, the
-full schema, common setups (dependency installs, secrets routing, test and
-deploy directories, MCP server configs), and how to verify against your
-installed Grove.
-
 </details>
 
-## Documentation
+## 📚 Documentation
 
 Full documentation lives at **<https://bearlike.github.io/Grove/latest/>**.
 
@@ -127,12 +135,11 @@ Full documentation lives at **<https://bearlike.github.io/Grove/latest/>**.
 | [Capabilities](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/) | Lifecycle, branch provenance, live activity, status semantics, configuration cascade. |
 | [Develop](https://bearlike.github.io/Grove/latest/develop-architecture/) | Architecture, public API, engineering principles, contributing, design system. |
 | [Troubleshooting](https://bearlike.github.io/Grove/latest/troubleshooting/) | Symptom → cause → fix for common failures. |
-| [Releases](https://github.com/bearlike/Grove/releases) | Release notes. |
 
-## Contributing
+## 🤝 Contributing
 
 Bugs and feature requests on the [issue tracker](https://github.com/bearlike/Grove/issues). For development setup, lint/test commands, and PR conventions, see the [contributing guide](https://bearlike.github.io/Grove/latest/develop-contributing/) and [`CLAUDE.md`](./CLAUDE.md).
 
-## License
+## 📄 License
 
 [MIT](./LICENSE) © Krishnakanth Alagiri.

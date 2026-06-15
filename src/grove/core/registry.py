@@ -66,10 +66,38 @@ class RepoRegistry:
         return mgr
 
     def known_roots(self) -> list[Path]:
-        """Repos that have at least one persisted workspace.
+        """Repos that exist, by union of two sources.
 
-        Used by ``GET /workspaces`` and the ``ActivityService`` to decide which
-        Managers to enumerate. Reads fresh from the store each call so newly
-        created repos appear without a restart.
+        The deduped union (``Path.resolve()`` collapses symlinks) of:
+        store-derived roots (every repo with ≥1 persisted workspace) and
+        config-declared roots (``cfg.projects``). The config arm is what keeps
+        an *empty* project visible — a freshly-added repo, or one whose
+        workspaces were all killed, has no store row but stays a known project.
+
+        This is the single place that decides "which repos exist", so every
+        downstream consumer (``GET /workspaces``, ``ActivityService``, the
+        pickers) inherits empty-project visibility with no further change. Reads
+        fresh from the store each call so newly created repos appear without a
+        restart.
         """
-        return self._store.list_repo_roots()
+        roots = {root.resolve() for root in self._store.list_repo_roots()}
+        roots.update(self._declared_roots())
+        return list(roots)
+
+    def _declared_roots(self) -> set[Path]:
+        """Config-declared project roots that are existing git repos.
+
+        Best-effort by contract: a ``cfg.projects`` entry that doesn't exist or
+        isn't a git repo is silently dropped (never fail config load or a
+        request). ``~`` is expanded and the path resolved at consume time — the
+        same symlink-collapse rule the store roots and Manager keys follow.
+        """
+        roots: set[Path] = set()
+        for raw in self._cfg.projects:
+            try:
+                resolved = Path(raw).expanduser().resolve()
+            except OSError:
+                continue
+            if (resolved / ".git").exists():
+                roots.add(resolved)
+        return roots

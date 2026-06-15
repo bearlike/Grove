@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "grove": {
+      "command": "grove-mcp",
+      "args": []
+    },
     "playwright": {
       "command": "npx",
       "args": ["@playwright/mcp@latest"]

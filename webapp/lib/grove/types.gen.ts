@@ -165,6 +165,11 @@ export interface paths {
          *
          *     Distinct from ``/auth/sessions/me`` (caller session) — this
          *     endpoint describes the daemon process itself.
+         *
+         *     The release-skew check rides the executor: ``check()`` is cached for
+         *     hours, so this is a no-op cache read on all but the occasional refresh
+         *     tick — and a refresh's blocking GitHub GET runs off the event loop,
+         *     never stalling the handler (best-effort, like every other side effect).
          */
         get: operations["whoami_whoami_get"];
         put?: never;
@@ -629,6 +634,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tickets/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticket Providers
+         * @description The repo's enabled ticket providers — the client's picker source (#7).
+         *
+         *     ``repo`` dispatches per-repo cascade like ``/branches``: a project
+         *     enables its tracker in ``<repo>/.grove/config.json``. Pure (no network);
+         *     each row's ``configured`` flag tells a client to gray out a provider that
+         *     is enabled but missing its token rather than offer a dead picker.
+         */
+        get: operations["ticket_providers_tickets_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tickets/assigned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tickets Assigned
+         * @description Tickets assigned to the authenticated user (#7).
+         *
+         *     With ``provider`` given, query exactly that tracker. Without it,
+         *     aggregate across every enabled provider, SKIPPING any whose credential
+         *     is absent (``configured`` is False) — so a half-configured repo still
+         *     returns its working providers' tickets instead of failing the whole
+         *     request on one unconfigured tracker. A configured provider whose API
+         *     call fails still surfaces its 502.
+         */
+        get: operations["tickets_assigned_tickets_assigned_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tickets/{provider}/{ticket_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ticket
+         * @description Fetch one ticket by its canonical key (#7).
+         *
+         *     404 ``ticket_provider_not_configured`` when the named tracker isn't
+         *     enabled; 502 ``ticket_provider_error`` when the upstream API fails.
+         */
+        get: operations["get_ticket_tickets__provider___ticket_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach Ticket
+         * @description Manually associate a ticket with a workspace (#7).
+         *
+         *     Pure association (no network): the selector reuses the contract
+         *     ``TicketSelector`` as the body. Idempotent by ``(provider, id)`` in the
+         *     engine. Returns the updated workspace with its refreshed ``ticket_refs``.
+         */
+        post: operations["attach_ticket_workspaces__ws_id__tickets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/tickets/{provider}/{ticket_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach Ticket
+         * @description Remove a ticket association (#7). Idempotent — a missing ref is a no-op.
+         */
+        delete: operations["detach_ticket_workspaces__ws_id__tickets__provider___ticket_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -682,6 +806,62 @@ export interface components {
             error_detail: string | null;
             /** Interpreted Status */
             interpreted_status?: string | null;
+        };
+        /**
+         * AgentQuestionOptionView
+         * @description Wire mirror of ``grove.core.agents.AgentQuestionOption``.
+         */
+        AgentQuestionOptionView: {
+            /** Label */
+            label: string;
+            /** Description */
+            description?: string | null;
+        };
+        /**
+         * AgentQuestionView
+         * @description Wire mirror of ``grove.core.agents.AgentQuestion`` (epic #74).
+         *
+         *     The structured payload a transcript renderer draws as a choice card. ``id``
+         *     /``group_id`` are the stable answer-back addresses a future write-path and
+         *     the #70 notifier key on, so they ride the wire even though the MVP renders
+         *     read-only.
+         */
+        AgentQuestionView: {
+            /** Id */
+            id: string;
+            /** Group Id */
+            group_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "single_select" | "multi_select" | "free_text" | "confirm";
+            /** Prompt */
+            prompt: string;
+            /** Header */
+            header?: string | null;
+            /**
+             * Options
+             * @default []
+             */
+            options: components["schemas"]["AgentQuestionOptionView"][];
+            /**
+             * Multiselect
+             * @default false
+             */
+            multiselect: boolean;
+            /**
+             * Answered
+             * @default false
+             */
+            answered: boolean;
+            /** Answer */
+            answer?: string | null;
+            /**
+             * Source Tool
+             * @default
+             */
+            source_tool: string;
         };
         /**
          * AgentSessionView
@@ -830,12 +1010,15 @@ export interface components {
             title: string;
             /** Description */
             description?: string | null;
+            /** Model */
+            model?: string | null;
             branch_plan?: components["schemas"]["BranchPlan"];
             /**
              * Skip Init
              * @default false
              */
             skip_init: boolean;
+            ticket?: components["schemas"]["TicketSelector"] | null;
             /** Initial Prompt */
             initial_prompt?: string | null;
             /** Repo Root */
@@ -898,15 +1081,19 @@ export interface components {
         /**
          * DigestEntryView
          * @description Wire mirror of ``grove.core.agents.DigestEntry`` (text capped).
+         *
+         *     ``question`` is set only for ``role=="question"`` — the structured choice
+         *     payload; every other role leaves it ``None`` and reads from ``text``.
          */
         DigestEntryView: {
             /**
              * Role
              * @enum {string}
              */
-            role: "user" | "assistant" | "tool" | "summary" | "status" | "notification";
+            role: "user" | "assistant" | "tool" | "summary" | "status" | "notification" | "question";
             /** Text */
             text: string;
+            question?: components["schemas"]["AgentQuestionView"] | null;
         };
         /**
          * ExistingLocalBranch
@@ -1187,6 +1374,79 @@ export interface components {
             revoked: boolean;
         };
         /**
+         * TicketProviderView
+         * @description One row of ``GET /tickets/providers`` — what a client may offer the user.
+         *
+         *     ``configured`` is the credentials-present signal: a provider can be
+         *     ``enabled`` in config yet have no token in the environment, in which case
+         *     list/get calls will fail — clients gray it out rather than offer a dead
+         *     picker. ``context`` is the human-readable scope (``owner/repo`` or a Linear
+         *     team key) so the UI can disambiguate two repos behind the same tracker.
+         */
+        TicketProviderView: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "linear" | "github" | "gitea";
+            /** Label */
+            label: string;
+            /** Configured */
+            configured: boolean;
+            /** Context */
+            context?: string | null;
+        };
+        /**
+         * TicketRef
+         * @description A provider-neutral pointer to one external ticket, plus cached display fields.
+         *
+         *     ``id`` is the *canonical key* the tracker links on — Linear's ``ENG-123``,
+         *     GitHub/Gitea's bare issue number ``42``. It is the only required payload
+         *     field; the rest are best-effort enrichment a client renders when present and
+         *     omits when not (``None``). ``ambiguous`` flags a branch that more than one
+         *     provider (or key) claimed — the association is uncertain and the UI should
+         *     say so, letting the user attach/detach to disambiguate.
+         */
+        TicketRef: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "linear" | "github" | "gitea";
+            /** Id */
+            id: string;
+            /** Title */
+            title?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Assignee */
+            assignee?: string | null;
+            /**
+             * Ambiguous
+             * @default false
+             */
+            ambiguous: boolean;
+        };
+        /**
+         * TicketSelector
+         * @description Minimal "which ticket" envelope — the create input and attach body.
+         *
+         *     One shape names a ticket everywhere: ``CreateWorkspaceRequest.ticket`` and
+         *     the ``POST /workspaces/{id}/tickets`` body both carry exactly this, so a
+         *     client never has to learn two ways to point at a ticket.
+         */
+        TicketSelector: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "linear" | "github" | "gitea";
+            /** Id */
+            id: string;
+        };
+        /**
          * TrackRemoteBranch
          * @description Track a remote branch by creating a fresh local tracking branch.
          *
@@ -1253,6 +1513,14 @@ export interface components {
          *     All fields are populated server-side from stdlib (``socket``,
          *     ``getpass``, ``platform``) and the lifespan-captured ``started_at``;
          *     the view itself is pure data with no engine coupling.
+         *
+         *     ``latest_version`` / ``update_available`` carry the daemon-side release-skew
+         *     check (#80): the latest GitHub release tag (bare, e.g. ``0.2.0``) and whether
+         *     it exceeds the installed ``version``. ``latest_version`` is ``None`` and
+         *     ``update_available`` ``False`` until a successful check (offline / first
+         *     call / error). Exposing it here lets the webapp render a "newer release"
+         *     footer hint WITHOUT polling GitHub from the browser — one daemon-side check,
+         *     cached for hours (see :mod:`grove.core.release`).
          */
         WhoamiView: {
             /** Version */
@@ -1272,6 +1540,13 @@ export interface components {
             platform: string;
             /** Python Version */
             python_version: string;
+            /** Latest Version */
+            latest_version?: string | null;
+            /**
+             * Update Available
+             * @default false
+             */
+            update_available: boolean;
         };
         /**
          * WorkspaceActivityView
@@ -1394,6 +1669,11 @@ export interface components {
             branch_provenance: components["schemas"]["BranchProvenance"];
             /** @default worktree */
             placement: components["schemas"]["Placement"];
+            /**
+             * Ticket Refs
+             * @default []
+             */
+            ticket_refs: components["schemas"]["TicketRef"][];
         };
         /**
          * WorkspaceStatus
@@ -2337,6 +2617,172 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BranchInfo"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ticket_providers_tickets_providers_get: {
+        parameters: {
+            query: {
+                repo: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketProviderView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tickets_assigned_tickets_assigned_get: {
+        parameters: {
+            query: {
+                repo: string;
+                provider?: ("linear" | "github" | "gitea") | null;
+                status?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketRef"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ticket_tickets__provider___ticket_id__get: {
+        parameters: {
+            query: {
+                repo: string;
+            };
+            header?: never;
+            path: {
+                provider: "linear" | "github" | "gitea";
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketRef"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_ticket_workspaces__ws_id__tickets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketSelector"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detach_ticket_workspaces__ws_id__tickets__provider___ticket_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+                provider: "linear" | "github" | "gitea";
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceStateView"];
                 };
             };
             /** @description Validation Error */

@@ -20,6 +20,7 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceStatus
+from grove.tui._status import status_color
 from grove.tui.app import GroveApp
 from grove.tui.widgets.status import StatusBar
 from tests.conftest import FakeTmux
@@ -98,6 +99,51 @@ async def test_orphaned_workspace_sets_attention_class(
         await pilot.pause()
         bar = app.screen.query_one(StatusBar)
         assert bar.has_class("-attention"), "ORPHANED workspace should set -attention class"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+# ─── newer-release indicator (#80) ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_update_indicator_absent_by_default(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """No nudge until the release worker reports one — the chip must be absent."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        bar = app.screen.query_one(StatusBar)
+        assert bar.update_available is False
+        assert "⇡" not in _plain(bar)
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_update_indicator_renders_amber_versioned_chip(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """update_available → ⇡ + version, painted in the ORPHANED 'work to pull' amber."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        bar = app.screen.query_one(StatusBar)
+        bar.update_available = True
+        bar.latest_version = "0.2.0"
+        await pilot.pause()
+        rendered = bar.render()
+        assert isinstance(rendered, Text)
+        assert "⇡ v0.2.0" in rendered.plain
+        amber = status_color(WorkspaceStatus.ORPHANED, dark=bar.app.current_theme.dark)
+        assert any(
+            span.style is not None and amber in str(span.style) for span in rendered.spans
+        ), f"update chip should carry the amber hex {amber}: {rendered.spans!r}"
         await pilot.press("q")
         await pilot.pause()
 

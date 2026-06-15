@@ -28,14 +28,18 @@ class FakeMewboClient:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str | None, str | None]] = []
+        self.models: list[str | None] = []  # #98: per-create model forwarded to create
         self.messages: list[tuple[str, str]] = []
         self.fail = False
         self.fail_message = False  # #48: initial-prompt delivery fails, create must not
 
-    def create_session(self, *, cwd: str | None = None, title: str | None = None) -> str:
+    def create_session(
+        self, *, cwd: str | None = None, title: str | None = None, model: str | None = None
+    ) -> str:
         if self.fail:
             raise MewboError("mewbo api is down")
         self.calls.append((cwd, title))
+        self.models.append(model)
         return f"mewbo-session-{len(self.calls)}"
 
     def send_message(self, session_id: str, text: str) -> None:
@@ -102,6 +106,25 @@ def test_create_persists_server_minted_id_anchored_to_worktree(
     assert fake_tmux.launch_decorations[-1] == (state.tmux_session, [])
     # Round-trips through the store.
     assert manager.get(state.id).agent_session_id == "mewbo-session-1"
+
+
+def test_create_forwards_per_create_model_to_remote_session(
+    manager: WorkspaceManager, fake_mewbo: FakeMewboClient
+) -> None:
+    # #98: a per-create model selection reaches mewbo through session-create —
+    # mewbo has no launch `--model` flag (the model is server-side), so this is
+    # the one place the choice can be forwarded. Provider boundary: verbatim.
+    manager.create(
+        CreateWorkspaceRequest(agent_name="mewbo", title="pick a model", model="claude-opus-4-8")
+    )
+    assert fake_mewbo.models == ["claude-opus-4-8"]
+
+
+def test_create_without_model_forwards_none(
+    manager: WorkspaceManager, fake_mewbo: FakeMewboClient
+) -> None:
+    manager.create(CreateWorkspaceRequest(agent_name="mewbo", title="default model"))
+    assert fake_mewbo.models == [None]
 
 
 def test_create_failure_is_loud_and_rolls_back(

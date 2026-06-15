@@ -29,8 +29,9 @@ from grove.core.agents import get_adapter
 from grove.core.agents.hook import ClaudeHook
 from grove.core.config import AgentSpec, GroveConfig, load_config
 from grove.core.contracts.branch_info import BranchInfo
-from grove.core.contracts.branch_plan import BranchMode, ResolvedBranch
+from grove.core.contracts.branch_plan import AutoBranch, BranchMode, ResolvedBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.tickets import TicketRef, TicketSelector
 from grove.core.errors import (
     AgentSessionNotFound,
     BranchAlreadyCheckedOut,
@@ -45,6 +46,7 @@ from grove.core.errors import (
 from grove.core.git import GitRepo
 from grove.core.mewbo import MewboClient
 from grove.core.store import JsonWorkspaceStore
+from grove.core.tickets import TicketProviderRegistry
 from grove.core.tmux import AttachInstruction
 from grove.core.workspace import (
     LIVE_STATUSES,
@@ -124,6 +126,7 @@ class WorkspaceManager:
         cfg: GroveConfig,
         store: JsonWorkspaceStore,
         mewbo_client: MewboClient | None = None,
+        ticket_registry: TicketProviderRegistry | None = None,
     ) -> None:
         self._repo_root = repo_root
         self._cfg = cfg
@@ -131,6 +134,9 @@ class WorkspaceManager:
         # Injected for tests (DI at the I/O boundary); production passes None
         # and the first mewbo launch builds one from cfg.mewbo.
         self._mewbo_client = mewbo_client
+        # Lazily built from cfg.tickets on first access; injectable for tests so
+        # an httpx.MockTransport / fake env reaches every provider.
+        self._ticket_registry = ticket_registry
         self._git = GitRepo(repo_root)
         self._subs: list[Callable[[WorkspaceEvent], None]] = []
         # Last reconciled status per workspace ID — drift events fire only
@@ -151,6 +157,18 @@ class WorkspaceManager:
     @property
     def store(self) -> JsonWorkspaceStore:
         return self._store
+
+    @property
+    def ticket_providers(self) -> TicketProviderRegistry:
+        """The repo's enabled ticket providers, built once from ``cfg.tickets``.
+
+        The single surface both the engine (pure branch parse/format, used by
+        ``create``/``attach_ticket``) and the daemon's ``/tickets`` routes
+        (network list/get) share — no client re-implements parsing or linking.
+        """
+        if self._ticket_registry is None:
+            self._ticket_registry = TicketProviderRegistry(self._cfg.tickets)
+        return self._ticket_registry
 
     def subscribe(self, callback: Callable[[WorkspaceEvent], None]) -> Callable[[], None]:
         """Register a sync callback. Returns an unsubscribe handle."""
@@ -184,6 +202,23 @@ class WorkspaceManager:
     def get(self, workspace_id: str) -> WorkspaceState:
         return self._store.get(workspace_id)
 
+    def _apply_ticket_branch(
+        self, resolved: ResolvedBranch, request: CreateWorkspaceRequest
+    ) -> ResolvedBranch:
+        """Rewrite an auto branch to carry the ticket's canonical key, if asked.
+
+        When the caller names a ticket AND lets Grove generate the branch
+        (``AutoBranch``), the name becomes ``{branch_prefix}{key}-{slug}`` so the
+        tracker links PRs/commits. The provider must be enabled — raises
+        ``TicketProviderNotConfigured`` here, before any side effect. A
+        user-named / checkout / root plan is returned untouched; the ticket is
+        still associated later via the branch re-parse.
+        """
+        if request.ticket is None or not isinstance(request.branch_plan, AutoBranch):
+            return resolved
+        stem = self.ticket_providers.format_branch_name(request.ticket, request.title)
+        return _dc_replace(resolved, name=f"{self._cfg.worktree.branch_prefix}{stem}")
+
     def create(self, request: CreateWorkspaceRequest) -> WorkspaceState:  # noqa: PLR0915
         """Spin up a fresh workspace from a validated client request.
 
@@ -209,6 +244,7 @@ class WorkspaceManager:
 
         ts = WorkspaceIdentity.timestamp()
         resolved = request.branch_plan.resolve(self._cfg, request.title, ts)
+        resolved = self._apply_ticket_branch(resolved, request)
         self._validate_branch_plan(resolved)
 
         session = WorkspaceIdentity.session_name(self._cfg, request.title, ts)
@@ -234,6 +270,11 @@ class WorkspaceManager:
         # Description normalizes empty string → None so the wire and disk
         # values agree on a single representation of "no description".
         description = (request.description or "").strip() or None
+        # Branch name is the source of truth for ticket association: re-parse the
+        # FINAL branch (ticket-aware auto, user-named, or an adopted checkout)
+        # through every enabled provider. >1 match → each ref ambiguous. Pure, no
+        # network — enrichment is the daemon's on-demand job.
+        ticket_refs = self.ticket_providers.parse_workspace_refs(branch)
         state = WorkspaceState(
             id=WorkspaceIdentity.new_id(),
             title=request.title,
@@ -251,6 +292,7 @@ class WorkspaceManager:
             placement=resolved.placement,
             agent_session_id=None,  # minted after the worktree exists, below
             agent_kind=agent.kind,
+            ticket_refs=ticket_refs,
         )
         # Persist before side effects so a crash leaves a recoverable record.
         self._store.save(state)
@@ -328,7 +370,7 @@ class WorkspaceManager:
         # loud and transactional, exactly like a fail_fast init.
         try:
             agent_session_id = self._mint_agent_session_id(
-                agent, worktree=worktree, title=request.title
+                agent, worktree=worktree, title=request.title, model=request.model
             )
         except MewboError as exc:
             self._rollback_create(state)
@@ -342,7 +384,10 @@ class WorkspaceManager:
         # delivered after the workspace is persisted (below), so it isn't passed
         # here (mewbo's decoration is empty anyway).
         launch_decoration = self._compose_launch(
-            agent, agent_session_id, initial_prompt=request.initial_prompt
+            agent,
+            agent_session_id,
+            initial_prompt=request.initial_prompt,
+            model=request.model,
         )
 
         try:
@@ -722,6 +767,45 @@ class WorkspaceManager:
         )
         return new_state
 
+    def attach_ticket(self, workspace_id: str, selector: TicketSelector) -> WorkspaceState:
+        """Manually associate a ticket with a workspace (the branch-parse override).
+
+        Idempotent by ``(provider, id)``: re-attaching the same ticket is a
+        no-op. The ref is stored bare (provider + id) — display enrichment
+        (title/status) is the daemon's on-demand fetch, never persisted here, so
+        attach stays pure and offline-safe. Permitted in any status except
+        ORPHANED (same gate as ``update`` — a doomed record gains nothing).
+        """
+        persisted = self._store.get(workspace_id)
+        ensure_can_update(self._reconcile_status(persisted))
+        if any(
+            r.provider == selector.provider and r.id == selector.id for r in persisted.ticket_refs
+        ):
+            return persisted
+        new_refs = [*persisted.ticket_refs, TicketRef(provider=selector.provider, id=selector.id)]
+        new_state = _replace(persisted, updated_at=_utcnow(), ticket_refs=new_refs)
+        self._store.save(new_state)
+        self._emit(
+            "updated",
+            new_state.id,
+            {"ticket_attached": f"{selector.provider}:{selector.id}"},
+        )
+        return new_state
+
+    def detach_ticket(self, workspace_id: str, provider: str, ticket_id: str) -> WorkspaceState:
+        """Remove a ticket association. Idempotent — a missing ref is a no-op."""
+        persisted = self._store.get(workspace_id)
+        ensure_can_update(self._reconcile_status(persisted))
+        new_refs = [
+            r for r in persisted.ticket_refs if not (r.provider == provider and r.id == ticket_id)
+        ]
+        if len(new_refs) == len(persisted.ticket_refs):
+            return persisted
+        new_state = _replace(persisted, updated_at=_utcnow(), ticket_refs=new_refs)
+        self._store.save(new_state)
+        self._emit("updated", new_state.id, {"ticket_detached": f"{provider}:{ticket_id}"})
+        return new_state
+
     def attach(self, workspace_id: str) -> AttachInstruction:
         state = self._reconcile_status(self._store.get(workspace_id))
         ensure_can_attach(state)
@@ -1003,7 +1087,9 @@ class WorkspaceManager:
             get_adapter(kind).locate_transcripts(Path(state.worktree_path), state.agent_session_id)
         )
 
-    def _mint_agent_session_id(self, agent: AgentSpec, *, worktree: Path, title: str) -> str | None:
+    def _mint_agent_session_id(
+        self, agent: AgentSpec, *, worktree: Path, title: str, model: str | None = None
+    ) -> str | None:
         """Mint the session id for a NEW agent run — the single fork create()
         and respawn() share so the verbs can't drift; resume() deliberately
         skips it (continue = keep the persisted id; mewbo re-engagement is the
@@ -1023,7 +1109,10 @@ class WorkspaceManager:
         and the caller treats it like a fail_fast init (loud, transactional).
         """
         if agent.kind == "mewbo":
-            return self._mewbo().create_session(cwd=str(worktree), title=title)
+            # `model` (create-only, #98) forwards to the remote session-create —
+            # mewbo has no launch `--model` flag (the model is server-side), so
+            # this is the one place a per-create model choice can reach it.
+            return self._mewbo().create_session(cwd=str(worktree), title=title, model=model)
         session_id = WorkspaceIdentity.new_session_id()
         return session_id if get_adapter(agent.kind).launch_decoration(session_id) else None
 
@@ -1039,6 +1128,7 @@ class WorkspaceManager:
         session_id: str | None,
         *,
         initial_prompt: str | None = None,
+        model: str | None = None,
     ) -> _Argv:
         """Full argv appended to the agent command at launch, for a known session id.
 
@@ -1050,6 +1140,12 @@ class WorkspaceManager:
         agent or a legacy record with no session id. Centralizes the composition so
         create/resume/respawn can't drift.
 
+        `model` (create-only, #96) appends the adapter's model flag
+        (`--model <id>` for claude_code / codex; `[]` for mewbo / generic) so a
+        per-create model choice reaches the tool — forwarded verbatim, never
+        interpreted (the provider boundary). It rides even when `session_id` is
+        None (codex mints no id but still honors `--model`).
+
         `initial_prompt` (create-only, #48) rides the launch as a trailing
         POSITIONAL arg on a claude_code argv (`claude … "<prompt>"` boots already
         working on it — race-free, unlike post-boot pane typing). It is appended
@@ -1059,14 +1155,23 @@ class WorkspaceManager:
         generic shell has no prompt concept, and mewbo carries `[]` here and is
         re-engaged through its API instead (manager `create()`).
         """
-        if session_id is None:
-            return []
-        decoration = get_adapter(agent.kind).launch_decoration(session_id)
-        if decoration and agent.kind == "claude_code" and self._cfg.hooks.enabled:
-            settings = self._ensure_hook_settings()
-            if settings is not None:
-                decoration = [*decoration, "--settings", str(settings)]
-        if decoration and agent.kind == "claude_code" and initial_prompt:
+        adapter = get_adapter(agent.kind)
+        decoration: _Argv = []
+        if session_id is not None:
+            decoration = adapter.launch_decoration(session_id)
+            if decoration and agent.kind == "claude_code" and self._cfg.hooks.enabled:
+                settings = self._ensure_hook_settings()
+                if settings is not None:
+                    decoration = [*decoration, "--settings", str(settings)]
+        # `model` (#96) rides the launch INDEPENDENTLY of session correlation:
+        # Codex mints no id (empty `launch_decoration`) yet still honors
+        # `--model`, so it's appended whether or not a session id exists. Adapters
+        # with no launch-time model flag (mewbo, generic) return [] — a no-op.
+        if model:
+            decoration = [*decoration, *adapter.model_decoration(model)]
+        # `initial_prompt` stays the trailing POSITIONAL, claude_code only, after
+        # every flag (incl. --model) — same race-free launch path as before.
+        if agent.kind == "claude_code" and session_id is not None and initial_prompt:
             decoration = [*decoration, initial_prompt]
         return decoration
 

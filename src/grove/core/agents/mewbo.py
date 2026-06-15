@@ -476,6 +476,12 @@ class MewboAdapter:
         del session_id
         return []
 
+    def model_decoration(self, model: str) -> list[str]:
+        # No launch-time CLI: the model is a server-side concern selected when
+        # the remote session is created, so there is no flag to decorate here.
+        del model
+        return []
+
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         # Remote sessions have no local backing file — empty by design (the
         # deliberately filesystem-shaped method; see the protocol docstring).

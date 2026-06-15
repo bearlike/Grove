@@ -1,18 +1,22 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { agentStateGlyph, agentStateLabel } from "@/lib/grove/agent-state-tokens";
+import { AgentStateMark } from "@/components/shared/state-mark";
+import { agentStateLabel } from "@/lib/grove/agent-state-tokens";
 import type { AgentActivityState } from "@/lib/grove/types";
 
 /**
- * Agent-state pill — the card's one state badge on the agent axis. Mirrors
- * StatusBadge's contract: the state hue lights only the glyph while the label
- * stays foreground text, so color is never the only signal (a11y) and label
- * contrast holds AA on both themes. BLOCKED reads "action required" and is the
- * loudest treatment on the wall (filled amber tint + accent border): it is the
- * one state where the agent provably burns wall-clock until a human answers.
+ * Agent-state pill — the card's one state badge on the agent axis. Composes the
+ * canonical `AgentStateMark` (the one glyph/color system) so the state reads the
+ * same here as everywhere else: the hue lights only the glyph, the label stays
+ * neutral foreground-muted text (color is never the only signal — a11y).
  *
- * Test seam: `data-testid="agent-state-badge"` + `data-state` + aria-label,
- * with the visible label on `data-testid="agent-state-label"`.
+ * Quiet-chrome (issue #96 deliverable D): every state wears the SAME neutral pill
+ * — no filled-amber `blocked` treatment. Attention is carried on the card (left
+ * accent bar / dot), not by shouting from this badge. `blocked` still reads
+ * "action required" in words; the loudness is gone, the meaning isn't.
+ *
+ * Test seam: `data-testid="agent-state-badge"` + `data-state` + aria-label, the
+ * visible label on `data-testid="agent-state-label"`, first child = the glyph.
  */
 export function AgentStateBadge({
   state,
@@ -21,8 +25,7 @@ export function AgentStateBadge({
   state: AgentActivityState;
   className?: string;
 }) {
-  const blocked = state === "blocked";
-  const label = blocked ? "action required" : agentStateLabel(state);
+  const label = state === "blocked" ? "action required" : agentStateLabel(state);
   return (
     <Badge
       variant="outline"
@@ -30,25 +33,11 @@ export function AgentStateBadge({
       data-state={state}
       aria-label={`agent state: ${label}`}
       className={cn(
-        "shrink-0 gap-1 whitespace-nowrap rounded-full px-2 py-0 text-[10px] font-medium uppercase tracking-wide text-foreground",
-        blocked
-          ? "border-[var(--agent-blocked)] bg-[var(--agent-blocked)]/15 font-semibold"
-          : "bg-muted/60",
+        "shrink-0 gap-1 whitespace-nowrap rounded-full border-transparent bg-muted/40 px-1.5 py-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground",
         className,
       )}
-      // `?? unknown` fallback: a streamed delta can carry a state this client's
-      // enum predates; an unset var would otherwise render an invisible glyph.
-      style={{ ["--agent-c" as string]: `var(--agent-${state}, var(--agent-unknown))` }}
     >
-      <span
-        aria-hidden
-        className={cn(
-          "font-mono leading-none text-[var(--agent-c)]",
-          state === "working" && "animate-grove-pulse motion-reduce:animate-none",
-        )}
-      >
-        {agentStateGlyph(state)}
-      </span>
+      <AgentStateMark state={state} />
       <span data-testid="agent-state-label">{label}</span>
     </Badge>
   );

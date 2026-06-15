@@ -114,6 +114,11 @@ def build_workspace_layout(
     transcript correlation deterministic. It is shell-quoted and appended to the
     command. The decoration is never hard-coded here: tmux.py is the side-effect
     surface, the adapter owns *what* the tokens are.
+
+    The pane's env is made hermetic before the command runs (issue #82): a pane
+    inherits the tmux server env (which inherited the daemon's), so `agent.env_unset`
+    is `unset` first to drop any leaked ambient value, then `agent.env` is exported.
+    Unset-before-export means a key in both ends up exported — `env` wins.
     """
     server = _server()
     sessions = server.sessions.filter(session_name=session_name)
@@ -142,8 +147,12 @@ def build_workspace_layout(
     if pane is None:
         raise TmuxError("agent window has no pane")
 
-    # Export agent-specific env in the pane before launching the command,
-    # so we don't need agent stdout sniffing or external env-injection.
+    # Make the pane's profile hermetic BEFORE the command inherits the ambient
+    # value: unset the leaked vars first, then export agent-specific env — so we
+    # need no agent stdout sniffing or external env-injection. Unset-before-export
+    # means a key in both `env_unset` and `env` ends up exported (#82).
+    for key in agent.env_unset:
+        pane.send_keys(f"unset {key}", enter=True, suppress_history=True)
     for key, value in agent.env.items():
         pane.send_keys(f"export {key}={_shell_quote(value)}", enter=True, suppress_history=True)
 

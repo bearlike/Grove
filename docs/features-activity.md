@@ -16,8 +16,8 @@ Grove tracks agents on two time scales, and gives each its own surface.
 - **Live activity** is the present tense. What is each agent doing at
   this moment? The Activity Dashboard shows it, across every project.
 - **Session history** is the past tense. What did the agent do, and
-  what did you ask for? `grove sessions` and the web dashboard's
-  per-project Sessions section replay it.
+  what did you ask for? `grove sessions` and the per-workspace
+  transcript on the web dashboard's detail page replay it.
 
 Both are read-only by construction. Grove reads transcripts and git
 state from disk to build these views. It never edits a past session;
@@ -26,33 +26,33 @@ the live agent, not a rewrite of the record.
 
 ## The Activity Dashboard
 
-Press `d` in the TUI, or open `/activity` in the
-[web dashboard](use-webapp.md). Either way you get the same wall: every
-agent session across every repository the daemon knows about, on one
-attention-first grid that puts the agents needing you at the very top.
+Press `d` in the TUI, or open the [web dashboard](use-webapp.md) home.
+Either way you get the same wall: every agent session across every
+repository the daemon knows about, on one attention-first surface that
+puts the agents needing you at the very top.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-activity-wall.png" alt="The Activity Dashboard in the web dashboard: a flat grid of agent session cards across projects, each with a project chip, and one live terminal pane focused on the side" /></div>
-  <figcaption class="ms-shot__body">The wall in the browser. One flat grid, a project chip on each card, one live pane. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-focused-pane.png" alt="The web dashboard's unified surface with a working agent's Live toggle flipped, one focused terminal pane mirroring that agent above the repo-grouped grid of workspace cards" /></div>
+  <figcaption class="ms-shot__body">The wall in the browser, now the one unified home surface. A project chip on each card and one live pane. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
 </figure>
 
-In the browser the wall is one flat grid rather than project bands, so
-it packs with cards from the very top. Each card carries a project chip
-to keep its origin legible. The grid streams live from the daemon over
-SSE (server-sent events), so a state change tweens into place within a
-second, no manual refresh; a poll fallback covers a dropped stream, and
-the corner shows whether the feed is *live* or *polling*. One
-consolidated filter narrows the wall by project, by agent state, or to
-just the ones that need attention, and your choices persist in the
-browser.
+In the browser this wall is the home surface itself. The live grid and
+the old standalone activity page merged into one place (#89), so
+`/activity` now just redirects home. Cards group by repository, each with
+a project chip to keep its origin legible. The grid streams live from the
+daemon over SSE (server-sent events), so a state change tweens into place
+within a second, no manual refresh; a poll fallback covers a dropped
+stream. One consolidated filter in the scope rail narrows the wall by
+project, by agent state, or to just the ones that need attention, and
+your choices persist in the browser.
 
 Each card carries the agent and its state, the workspace title and
 project, the agent's own one-line summary of what it is doing right now,
 a compact turns-tools-tokens metrics line, and the last commit with its
 relative time. A working card offers a *Live* toggle: flip it and a
-single focused pane mirrors that agent's real terminal on the side,
-colors and all, streamed over SSE. One live pane at a time, so the page
-stays cheap on a phone.
+single focused pane mirrors that agent's real terminal inline above the
+grid, colors and all, streamed over SSE. One live pane at a time, so the
+surface stays cheap on any device.
 
 In the TUI the same wall groups tiles by project and lets the active
 tiles grow a live tail in place: quiet tiles stay compact, and a tile
@@ -156,10 +156,10 @@ grove sessions dump 7b3f2c1a       # the raw transcript records
 The full command reference, with filters for agent, workspace, and
 time window, lives on the [CLI page](use-cli.md#grove-sessions).
 
-In the web dashboard, each repository tab on the home grid carries a
-collapsible Sessions section. It lists every session across that repo's
-worktrees newest first, and expanding a row loads the conversation
-inline as turns.
+In the web dashboard, open a workspace and its detail page replays the
+conversation as a transcript: your prompts, the agent's replies, and the
+tool calls grouped into collapsible runs, the browser twin of
+`grove sessions show`.
 
 Grove also labels where each session came from. Sessions Grove launched
 are tagged as Grove's, because Grove handed the agent its session id at
@@ -171,8 +171,8 @@ not start it.
 
 - [TUI tour](use-tui.md): the dashboard screen, its keys, and where
   agent state appears on the list.
-- [Web dashboard](use-webapp.md): the `/activity` wall and the
-  per-project Sessions section in the browser.
+- [Web dashboard](use-webapp.md): the unified live grid, the focused
+  pane, and the per-workspace transcript in the browser.
 - [CLI](use-cli.md#grove-sessions): `grove sessions list`, `show`, and `dump`.
 - [Agents](configure-agents.md): declaring an agent's `kind`.
 - [Status semantics](features-status.md): workspace status, the other

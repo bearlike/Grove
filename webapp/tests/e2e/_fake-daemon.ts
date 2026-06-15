@@ -88,6 +88,8 @@ export function startFakeDaemon(port: number): Promise<Server> {
         user: "tester",
         platform: "linux",
         python_version: "3.12.0",
+        latest_version: null,
+        update_available: false,
       });
     });
     app.get("/openapi.json", (_req, res) => {
@@ -506,6 +508,34 @@ function buildTurns(ws: (typeof FIXTURE_WORKSPACES)[number]) {
           text: "Background task completed: Explore\nThe webapp has a BFF proxy, a home grid, an activity wall, and a detail page.",
         },
         { role: "assistant", text: `Survey landed. ${"unbroken-token-".repeat(25)}end` },
+      ],
+    },
+    // A structured agent question (epic #74): the agent paused to ask, and the
+    // transcript renders it as a read-only choice card. `text` is the digest
+    // fallback; the structured payload rides `question`.
+    {
+      user_text: "which path should we take?",
+      started_at: ws.updated_at,
+      entries: [
+        {
+          role: "question",
+          text: "Which migration strategy?",
+          question: {
+            id: "q-1",
+            group_id: "g-1",
+            kind: "single_select",
+            prompt: "Which migration strategy?",
+            header: "Decision needed",
+            options: [
+              { label: "Big-bang cutover", description: "Faster, riskier" },
+              { label: "Incremental", description: "Slower, safer" },
+            ],
+            multiselect: false,
+            answered: false,
+            answer: null,
+            source_tool: "AskUserQuestion",
+          },
+        },
       ],
     },
     // Filler so the transcript overflows its viewport in e2e — the

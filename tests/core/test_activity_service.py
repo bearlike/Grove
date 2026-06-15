@@ -826,3 +826,19 @@ def test_dirty_files_best_effort_zero_when_worktree_gone(
 
     row = service.snapshot().projects[0].workspaces[0]
     assert row.dirty_files == 0
+
+
+def test_snapshot_includes_config_declared_empty_project(
+    fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A config-declared repo with zero workspaces surfaces as a ProjectGroup, so
+    the webapp new-workspace dialog (which reads `/activity`) can target it (#95)."""
+    empty_repo = _init_repo(tmp_path / "empty")
+    cfg = GroveConfig.model_validate({"projects": [str(empty_repo)]})
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    service = ActivityService(registry=RepoRegistry(cfg=cfg, store=store))
+
+    snap = service.snapshot()
+    by_root = {g.repo_root: g for g in snap.projects}
+    assert str(empty_repo) in by_root
+    assert by_root[str(empty_repo)].workspaces == ()

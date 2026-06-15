@@ -59,6 +59,7 @@ from loguru import logger
 from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
+    AgentQuestion,
     DigestEntry,
     OrderedDigest,
     SessionSummary,
@@ -381,6 +382,61 @@ class _RolloutLine:
         joined = "\n".join(p for p in parts if p)
         return joined or None
 
+    @property
+    def is_function_call(self) -> bool:
+        """A ``function_call`` specifically (not ``tool_search_call``).
+
+        The narrower gate question extraction uses: only a ``function_call``
+        carries a ``call_id`` + a JSON-string ``arguments`` an MCP-bridged
+        question tool fills. A ``tool_search_call`` has neither, so it never
+        reaches ``from_tool_call``.
+        """
+        return self.record_type == "response_item" and self.payload_type == "function_call"
+
+    @property
+    def call_id(self) -> str | None:
+        """The ``call_id`` correlating a ``function_call`` with its output."""
+        value = self._payload.get("call_id")
+        return value if isinstance(value, str) and value else None
+
+    def parsed_arguments(self) -> dict[str, Any]:
+        """A ``function_call``'s ``arguments`` as a dict.
+
+        Codex serializes ``arguments`` as a JSON STRING (verified on-host); a
+        ``tool_search_call`` already carries a dict. Either is accepted; a parse
+        failure or a non-object yields ``{}`` — best-effort like the rest of the
+        parser, so a junk payload drops the question, never raises.
+        """
+        args = self._payload.get("arguments")
+        if isinstance(args, dict):
+            return args
+        if isinstance(args, str):
+            try:
+                parsed = json.loads(args)
+            except (json.JSONDecodeError, ValueError):
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    @property
+    def is_function_call_output(self) -> bool:
+        return self.record_type == "response_item" and self.payload_type == "function_call_output"
+
+    def function_call_output(self) -> tuple[str, str] | None:
+        """``(call_id, output)`` for a ``function_call_output`` line, or ``None``.
+
+        Feeds the ``call_id → output`` map that resolves a question entry to its
+        answer text. ``output`` is coerced to ``str`` defensively (it is a string
+        on-host, but a junk line must not break the map build).
+        """
+        if not self.is_function_call_output:
+            return None
+        cid = self.call_id
+        if cid is None:
+            return None
+        output = self._payload.get("output")
+        return (cid, output if isinstance(output, str) else "")
+
     def tool_name(self) -> str:
         """The tool a call invokes — ``function_call.name`` or the search query."""
         payload = self._payload
@@ -583,6 +639,7 @@ class _RolloutParser:
         head, or Codex's leading developer/preamble messages) collect under a
         leading turn with an empty ``user_text`` rather than being dropped.
         """
+        answered = self._answered_outputs()
         turns: list[SessionTurn] = []
         entries: list[DigestEntry] = []
         # ``current`` is the open turn's ``(user_text, started_at)`` — boxed so the
@@ -614,7 +671,8 @@ class _RolloutParser:
                 if text.strip():
                     _add(DigestEntry("assistant", text), line.timestamp)
             elif line.is_tool_call:
-                _add(DigestEntry("tool", line.tool_name()), line.timestamp)
+                for entry in self._tool_entries(line, answered):
+                    _add(entry, line.timestamp)
             elif line.is_reasoning:
                 # Black box unless a readable summary exists — never the opaque
                 # encrypted_content.
@@ -701,6 +759,42 @@ class _RolloutParser:
                 return _truncate(line.message_text(), _TASK_TEXT_CAP)
         return None
 
+    @staticmethod
+    def _tool_entries(line: _RolloutLine, answered: dict[str, str]) -> tuple[DigestEntry, ...]:
+        """A tool call → its rendered entries: structured ``question`` rows when
+        the call is a question-shaped ``function_call`` (an MCP-bridged
+        ask-the-human tool, e.g. ``AskUserQuestion``), else one plain ``tool``
+        entry.
+
+        Question extraction is gated to ``function_call`` only — a
+        ``tool_search_call`` has no ``call_id`` and ``from_tool_call`` returns
+        ``()`` for it anyway. A resolved question is stamped with its matching
+        ``function_call_output`` text (``answered``) at the group level.
+        """
+        if line.is_function_call:
+            cid = line.call_id
+            questions = AgentQuestion.from_tool_call(
+                line.tool_name(), line.parsed_arguments(), cid or ""
+            )
+            if questions:
+                answer = answered.get(cid) if cid is not None else None
+                resolved = (q.resolved(answer) for q in questions) if cid in answered else questions
+                return tuple(DigestEntry("question", q.prompt, question=q) for q in resolved)
+        return (DigestEntry("tool", line.tool_name()),)
+
+    def _answered_outputs(self) -> dict[str, str]:
+        """``call_id → output`` for every ``function_call_output`` line.
+
+        Pre-scanned so a question entry can be stamped with its answer text in
+        one pass regardless of the output's position relative to the call.
+        """
+        answered: dict[str, str] = {}
+        for line in self._lines:
+            pair = line.function_call_output()
+            if pair is not None:
+                answered[pair[0]] = pair[1]
+        return answered
+
 
 class CodexAdapter:
     """Introspect OpenAI Codex CLI sessions (a filesystem :class:`AgentAdapter`).
@@ -726,6 +820,15 @@ class CodexAdapter:
         """
         del session_id
         return []
+
+    def model_decoration(self, model: str) -> list[str]:
+        """``--model <id>`` — Codex CLI's per-launch model selector (#96).
+
+        Independent of correlation: Codex mints no session id, but it still
+        honors ``--model`` at launch, so this rides the command even though
+        ``launch_decoration`` is empty.
+        """
+        return ["--model", model]
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         try:

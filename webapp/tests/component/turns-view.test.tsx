@@ -63,6 +63,59 @@ const DETAIL: SessionDetailView = {
         { role: "status", text: "tests green" },
       ],
     },
+    // A structured agent question (epic #74), unanswered: renders as a
+    // read-only choice card with its prompt + both option labels + pending.
+    {
+      user_text: "pick a strategy",
+      started_at: "2026-06-10T12:00:00Z",
+      entries: [
+        {
+          role: "question",
+          text: "Which migration strategy?",
+          question: {
+            id: "q-1",
+            group_id: "g-1",
+            kind: "single_select",
+            prompt: "Which migration strategy?",
+            header: "Decision needed",
+            options: [
+              { label: "Big-bang cutover", description: "Faster, riskier" },
+              { label: "Incremental", description: "Slower, safer" },
+            ],
+            multiselect: false,
+            answered: false,
+            answer: null,
+            source_tool: "AskUserQuestion",
+          },
+        },
+      ],
+    },
+    // An answered question: renders the chosen answer behind a ✓ check.
+    {
+      user_text: "and the deploy window?",
+      started_at: "2026-06-10T13:00:00Z",
+      entries: [
+        {
+          role: "question",
+          text: "When should we deploy?",
+          question: {
+            id: "q-2",
+            group_id: "g-1",
+            kind: "single_select",
+            prompt: "When should we deploy?",
+            header: null,
+            options: [
+              { label: "Now", description: null },
+              { label: "Off-hours", description: null },
+            ],
+            multiselect: false,
+            answered: true,
+            answer: "Off-hours",
+            source_tool: "AskUserQuestion",
+          },
+        },
+      ],
+    },
   ],
 };
 
@@ -96,7 +149,7 @@ describe("TurnsView", () => {
       "/api/grove/workspaces/w1/sessions/s1/turns?last=100",
       expect.objectContaining({ method: "GET" }),
     );
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(5);
     // Wire order preserved: oldest turn first, newest last.
     expect(rows[1]).toHaveTextContent("build the panel");
     expect(rows[2]).toHaveTextContent("run the tests");
@@ -141,7 +194,9 @@ describe("TurnsView", () => {
       .getAllByTestId("turn-entry")
       .filter((e) => e.dataset.role === "tool");
     expect(tools).toHaveLength(2);
-    expect(tools[0]).toHaveTextContent("⚒");
+    // The tool concept is the shared Wrench glyph (one per concept) — a lucide
+    // icon renders as an inline <svg>, replacing the old ⚒ text marker.
+    expect(tools[0].querySelector("svg")).not.toBeNull();
     expect(tools[0]).toHaveTextContent("Edit sessions-panel.tsx");
     expect(tools[1]).toHaveTextContent("Bash npm test");
     expect(tools[0].className).toContain("font-mono");
@@ -175,7 +230,7 @@ describe("TurnsView", () => {
     const labels = screen.getAllByTestId("role-label");
     const you = labels.filter((l) => l.dataset.roleLabel === "you");
     const agent = labels.filter((l) => l.dataset.roleLabel === "agent");
-    expect(you).toHaveLength(3); // two ❯ prompts + one digest user entry
+    expect(you).toHaveLength(5); // four ❯ prompts + one digest user entry
     expect(agent).toHaveLength(1); // one assistant entry
     expect(you[0].textContent).toBe("you");
     expect(agent[0].textContent).toBe("agent");
@@ -192,6 +247,56 @@ describe("TurnsView", () => {
     const entries = screen.getAllByTestId("turn-entry");
     expect(entries.find((e) => e.dataset.role === "assistant")).toBeDefined();
     expect(entries.find((e) => e.dataset.role === "user")).toBeDefined();
+  });
+
+  it("renders an unanswered question as a read-only card: prompt + both options + pending", async () => {
+    stubFetch(DETAIL);
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    await screen.findAllByTestId("turn-row");
+    const cards = screen.getAllByTestId("question-card");
+    // Two questions in the fixture: the unanswered one is pending.
+    const pending = cards.find((c) => c.dataset.answered === "false")!;
+    expect(pending).toBeDefined();
+    expect(pending).toHaveTextContent("Which migration strategy?");
+
+    const options = pending.querySelectorAll('[data-testid="question-option"]');
+    expect(options).toHaveLength(2);
+    expect(options[0]).toHaveTextContent("Big-bang cutover");
+    expect(options[0]).toHaveTextContent("Faster, riskier");
+    expect(options[1]).toHaveTextContent("Incremental");
+
+    // Read-only: options are a static list, never interactive controls.
+    expect(pending.querySelector("button")).toBeNull();
+    expect(pending.querySelector("input")).toBeNull();
+
+    expect(pending.querySelector('[data-testid="question-pending"]')).toHaveTextContent(
+      "awaiting answer",
+    );
+    expect(pending.querySelector('[data-testid="question-answer"]')).toBeNull();
+  });
+
+  it("renders an answered question with its answer and a check, no pending note", async () => {
+    stubFetch(DETAIL);
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    await screen.findAllByTestId("turn-row");
+    const cards = screen.getAllByTestId("question-card");
+    const answered = cards.find((c) => c.dataset.answered === "true")!;
+    expect(answered).toBeDefined();
+    expect(answered).toHaveTextContent("When should we deploy?");
+
+    const answer = answered.querySelector('[data-testid="question-answer"]')!;
+    expect(answer).toHaveTextContent("Off-hours");
+    // The ✓ check is the answered cue — a lucide icon is an inline <svg>.
+    expect(answer.querySelector("svg")).not.toBeNull();
+    expect(answered.querySelector('[data-testid="question-pending"]')).toBeNull();
+
+    // The `turn-entry` test hook survives, tagged with the question role.
+    const questionEntries = screen
+      .getAllByTestId("turn-entry")
+      .filter((e) => e.dataset.role === "question");
+    expect(questionEntries).toHaveLength(2);
   });
 
   it("shows the error state when the turns fetch fails", async () => {

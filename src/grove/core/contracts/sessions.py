@@ -22,8 +22,15 @@ from pydantic import BaseModel, ConfigDict
 from grove.core.contracts.activity import AgentActivityView
 
 if TYPE_CHECKING:
-    from grove.core.agents import DigestEntry, SessionTurn
+    from grove.core.agents import AgentQuestion, DigestEntry, SessionTurn
     from grove.core.sessions import SessionListing
+
+# The question-kind set mirrors ``grove.core.agents.AgentQuestionKind``. Duplicated
+# here, not imported, for the same reason ``DigestEntry.role`` is duplicated below:
+# a runtime ``contracts → agents`` import drags the httpx-heavy adapter layer into
+# every contracts import (the engine dataclasses ride ``TYPE_CHECKING`` only). The
+# webapp's codegen drift-check is the wire DRY anchor across the boundary.
+AgentQuestionKind = Literal["single_select", "multi_select", "free_text", "confirm"]
 
 # Per-entry ceiling so one mega-turn can't ship a multi-MB JSON body. Matches
 # the CLI's `show` presentation cap; the trailing ellipsis is the signal that
@@ -35,17 +42,75 @@ def _truncate(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[: cap - 1].rstrip() + "…"
 
 
-class DigestEntryView(BaseModel):
-    """Wire mirror of ``grove.core.agents.DigestEntry`` (text capped)."""
+class AgentQuestionOptionView(BaseModel):
+    """Wire mirror of ``grove.core.agents.AgentQuestionOption``."""
 
     model_config = ConfigDict(frozen=True)
 
-    role: Literal["user", "assistant", "tool", "summary", "status", "notification"]
+    label: str
+    description: str | None = None
+
+
+class AgentQuestionView(BaseModel):
+    """Wire mirror of ``grove.core.agents.AgentQuestion`` (epic #74).
+
+    The structured payload a transcript renderer draws as a choice card. ``id``
+    /``group_id`` are the stable answer-back addresses a future write-path and
+    the #70 notifier key on, so they ride the wire even though the MVP renders
+    read-only.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    group_id: str
+    kind: AgentQuestionKind
+    prompt: str
+    header: str | None = None
+    options: list[AgentQuestionOptionView] = []
+    multiselect: bool = False
+    answered: bool = False
+    answer: str | None = None
+    source_tool: str = ""
+
+    @classmethod
+    def from_question(cls, q: AgentQuestion) -> AgentQuestionView:
+        return cls(
+            id=q.id,
+            group_id=q.group_id,
+            kind=q.kind,
+            prompt=_truncate(q.prompt, _ENTRY_TEXT_CAP),
+            header=q.header,
+            options=[
+                AgentQuestionOptionView(label=o.label, description=o.description) for o in q.options
+            ],
+            multiselect=q.multiselect,
+            answered=q.answered,
+            answer=q.answer,
+            source_tool=q.source_tool,
+        )
+
+
+class DigestEntryView(BaseModel):
+    """Wire mirror of ``grove.core.agents.DigestEntry`` (text capped).
+
+    ``question`` is set only for ``role=="question"`` — the structured choice
+    payload; every other role leaves it ``None`` and reads from ``text``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    role: Literal["user", "assistant", "tool", "summary", "status", "notification", "question"]
     text: str
+    question: AgentQuestionView | None = None
 
     @classmethod
     def from_entry(cls, e: DigestEntry) -> DigestEntryView:
-        return cls(role=e.role, text=_truncate(e.text, _ENTRY_TEXT_CAP))
+        return cls(
+            role=e.role,
+            text=_truncate(e.text, _ENTRY_TEXT_CAP),
+            question=AgentQuestionView.from_question(e.question) if e.question else None,
+        )
 
 
 class SessionTurnView(BaseModel):

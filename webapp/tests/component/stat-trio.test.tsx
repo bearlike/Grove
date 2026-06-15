@@ -17,6 +17,13 @@ function expectColor(el: Element, hex: string) {
   expect(style).toContain(rgb);
 }
 
+// The polarity hue rides the value numeral (the first child of the stat slot),
+// keeping the unit label hard-muted — color appears only where a count means
+// something. So colour assertions target that inner numeral span.
+function valueSpan(testid: string): Element {
+  return screen.getByTestId(testid).firstElementChild as Element;
+}
+
 describe("StatTrio", () => {
   it("renders all three stats with values", () => {
     r(<StatTrio ahead={3} behind={1} dirty={2} />);
@@ -25,19 +32,27 @@ describe("StatTrio", () => {
     expect(screen.getByTestId("stat-dirty").textContent).toContain("2");
   });
 
+  it("uses middot separators, not vertical Separator pipes", () => {
+    r(<StatTrio ahead={1} behind={0} dirty={0} />);
+    // The shadcn Separator renders role="none"/data-orientation; the redesign
+    // replaced it with plain `·` glyphs, so none should be present.
+    expect(screen.getByTestId("stat-trio").querySelector("[data-orientation]")).toBeNull();
+    expect(screen.getByTestId("stat-trio").textContent).toContain("·");
+  });
+
   it("zero values render in muted color", () => {
     r(<StatTrio ahead={0} behind={0} dirty={0} />);
-    expectColor(screen.getByTestId("stat-ahead"), "#96938c");
+    expectColor(valueSpan("stat-ahead"), "#96938c");
   });
 
   it("nonzero ahead renders in ref-add green", () => {
     r(<StatTrio ahead={5} behind={0} dirty={0} />);
-    expectColor(screen.getByTestId("stat-ahead"), "#99d199");
+    expectColor(valueSpan("stat-ahead"), "#99d199");
   });
 
   it("nonzero behind / dirty render in amber", () => {
     r(<StatTrio ahead={0} behind={2} dirty={4} />);
-    expectColor(screen.getByTestId("stat-behind"), "#b8860b");
-    expectColor(screen.getByTestId("stat-dirty"), "#b8860b");
+    expectColor(valueSpan("stat-behind"), "#b8860b");
+    expectColor(valueSpan("stat-dirty"), "#b8860b");
   });
 });

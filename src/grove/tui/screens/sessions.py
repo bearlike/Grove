@@ -38,7 +38,7 @@ from grove.tui._status import (
     chrome_color,
     ref_color,
 )
-from grove.tui._turns import ENTRY_TEXT_CAP, append_turn_body, truncate
+from grove.tui._turns import ENTRY_TEXT_CAP, TranscriptBuilder, truncate
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
 
 # Same trim the workspace card / `grove sessions` CLI use: row labels stay
@@ -201,6 +201,10 @@ class SessionsScreen(Screen[None]):
         # "N tool calls" row; `t` expands them. Screen-wide, not per-session
         # — the user's "show me the plumbing" intent outlives one highlight.
         self._expand_tools = False
+        # Plain projection of the rendered turns panel — the test seam. The
+        # panel itself holds a Rich Group (Markdown bodies + Text chrome),
+        # which has no `.plain`, so the screen tracks it as the builder emits.
+        self._turns_plain = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -251,14 +255,14 @@ class SessionsScreen(Screen[None]):
         if listing is None:
             return
         dark = self.app.current_theme.dark
-        self.query_one("#turns-body", Static).update(
-            _render_turns(
-                listing,
-                self._turns(listing),
-                dark=dark,
-                expand_tools=self._expand_tools,
-            )
+        builder = _render_turns(
+            listing,
+            self._turns(listing),
+            dark=dark,
+            expand_tools=self._expand_tools,
         )
+        self._turns_plain = builder.plain
+        self.query_one("#turns-body", Static).update(builder.renderable)
         # The newest exchange is what the user came for — land at the tail
         # (the CLI's oldest-first order is preserved; we just scroll past it).
         panel = self.query_one("#history-panel", VerticalScroll)
@@ -288,13 +292,18 @@ class SessionsScreen(Screen[None]):
         self.query_one(SessionList).populate(listings, dark=self.app.current_theme.dark)
         self.set_class(not listings, "-empty")
         if not listings:
+            self._turns_plain = ""
             self.query_one("#turns-body", Static).update("")
 
     @property
     def turns_text(self) -> str:
-        """Plain rendered turns panel — the test seam."""
-        content = self.query_one("#turns-body", Static).content
-        return content.plain if isinstance(content, Text) else str(content)
+        """Plain projection of the rendered turns panel — the test seam.
+
+        The panel holds a Rich `Group` (Markdown bodies + Text chrome), not a
+        `Text`, so the plain text is tracked as the builder emits it rather
+        than read back off the Static.
+        """
+        return self._turns_plain
 
 
 # ─── pure render helpers (the test seams) ────────────────────────────────────
@@ -346,38 +355,40 @@ def _render_turns(
     *,
     dark: bool,
     expand_tools: bool = False,
-) -> Text:
+) -> TranscriptBuilder:
     """The highlighted session's conversation, oldest first.
 
     Mirrors the `grove sessions show` shape: a header line, then per turn a
-    muted divider and the shared turn body (`_turns.append_turn_body` — the
-    single implementation the peek rail's transcript tab also renders
-    through). ``expand_tools`` toggles between the grouped "N tool calls"
-    rows (default) and the individual ⚒ lines.
+    muted divider and the shared turn body. The body is built by
+    :class:`TranscriptBuilder` — the single implementation the peek rail's
+    transcript tab also drives — so markdown rendering and tool grouping
+    can't drift; this screen only adds the header + dividers as chrome.
+    ``expand_tools`` toggles between the grouped "N tool calls" rows
+    (default) and the individual ⚒ lines.
     """
     summary = listing.summary
     muted = chrome_color("muted", dark=dark)
-    text = Text()
-    text.append(summary.session_id[:8], style="bold")
-    text.append(" · ", style=muted)
-    text.append(summary.adapter_kind, style=f"bold {ref_color('info', dark=dark)}")
+    builder = TranscriptBuilder(dark=dark, expand_tools=expand_tools)
+    header = Text()
+    header.append(summary.session_id[:8], style="bold")
+    header.append(" · ", style=muted)
+    header.append(summary.adapter_kind, style=f"bold {ref_color('info', dark=dark)}")
     if summary.git_branch:
-        text.append(" · ", style=muted)
-        text.append(summary.git_branch, style=f"bold {ref_color('branch', dark=dark)}")
+        header.append(" · ", style=muted)
+        header.append(summary.git_branch, style=f"bold {ref_color('branch', dark=dark)}")
+    builder.line(header)
     if summary.title:
-        text.append("\n")
-        text.append(truncate(summary.title, ENTRY_TEXT_CAP))
+        builder.line(Text(truncate(summary.title, ENTRY_TEXT_CAP)))
     if not turns:
-        text.append("\n\n")
-        text.append("(no turns recorded)", style=muted)
-        return text
+        builder.gap()
+        builder.line(Text("(no turns recorded)", style=muted))
+        return builder
     if len(turns) == _MAX_TURNS:
-        text.append("\n")
-        text.append(f"showing the most recent {_MAX_TURNS} turns", style=muted)
+        builder.line(Text(f"showing the most recent {_MAX_TURNS} turns", style=muted))
     for index, turn in enumerate(turns, start=1):
         when = turn.started_at.isoformat(timespec="seconds") if turn.started_at else ""
-        text.append("\n\n")
-        text.append(f"── turn {index} {when}".rstrip(), style=muted)
-        text.append("\n")
-        append_turn_body(text, turn, dark=dark, expand_tools=expand_tools)
-    return text
+        builder.gap()
+        builder.line(Text(f"── turn {index} {when}".rstrip(), style=muted))
+        builder.gap()
+        builder.add_turn(turn)
+    return builder

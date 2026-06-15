@@ -437,6 +437,25 @@ def test_create_session_sends_cwd_api_key_and_best_effort_title(
     assert title.url.path == "/api/sessions/remote-123/title"
 
 
+def test_create_session_forwards_model_in_body_when_set() -> None:
+    # #98: a per-create model rides the create body (mewbo's only forward point).
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"session_id": "remote-9"})
+
+    client = MewboClient(MewboConfig(), transport=httpx.MockTransport(handler))
+    assert client.create_session(cwd="/tmp/wt", model="claude-opus-4-8") == "remote-9"
+    body = seen[0].content
+    assert b'"model": "claude-opus-4-8"' in body or b'"model":"claude-opus-4-8"' in body
+
+    # Omitted when unset — no stray null model key on the wire.
+    seen.clear()
+    client.create_session(cwd="/tmp/wt")
+    assert b'"model"' not in seen[0].content
+
+
 def test_create_session_without_id_in_response_raises() -> None:
     client = MewboClient(MewboConfig(), transport=_transport(create={"unexpected": True}))
     with pytest.raises(MewboError, match="session_id"):

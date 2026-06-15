@@ -357,7 +357,159 @@ def test_unanswered_ask_user_question_reads_blocked(
     assert adapter.parse_activity(cwd, sid).state is AgentActivityState.WORKING
 
     (turn,) = adapter.read_turns(cwd, sid)
-    assert ("tool", "AskUserQuestion: Merge or rebase?") in [(e.role, e.text) for e in turn.entries]
+    # The question now renders as a structured ``question`` entry, answered by
+    # the tool_result that followed (the same result that advanced the tail).
+    questions = [e for e in turn.entries if e.role == "question"]
+    assert len(questions) == 1
+    assert questions[0].text == "Merge or rebase?"
+    assert questions[0].question is not None
+    assert questions[0].question.answered is True
+    assert questions[0].question.answer == "Merge"
+
+
+# ─── structured AgentQuestion entries in turns (epic #74) ───────────────────
+
+
+def test_ask_user_question_batch_emits_question_entries(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A batched AskUserQuestion (N questions in one tool_use) renders N
+    ``role="question"`` rows — one per question — carrying the normalized
+    structured payload (kind/options/header/multiselect), sharing the call's
+    ``group_id`` and addressed ``{id}#0`` / ``{id}#1``. Unanswered until a
+    matching tool_result lands."""
+    sid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    cwd = Path("/home/kk/work/ask-batch")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"set it up"}}'
+    )
+    question_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion",'
+        '"input":{"questions":['
+        '{"question":"Merge or rebase?","header":"Strategy","multiSelect":false,'
+        '"options":[{"label":"Merge","description":"keep both histories"},'
+        '{"label":"Rebase","description":"linear history"}]},'
+        '{"question":"Which checks?","header":"CI","multiSelect":true,'
+        '"options":[{"label":"lint"},{"label":"tests"}]}'
+        "]}}]}}"
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, question_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    questions = [e for e in turn.entries if e.role == "question"]
+    assert len(questions) == 2
+
+    first, second = questions
+    assert first.text == "Merge or rebase?"
+    assert first.question is not None
+    assert first.question.id == "q1#0"
+    assert first.question.group_id == "q1"
+    assert first.question.kind == "single_select"
+    assert first.question.header == "Strategy"
+    assert first.question.multiselect is False
+    assert first.question.answered is False
+    assert [(o.label, o.description) for o in first.question.options] == [
+        ("Merge", "keep both histories"),
+        ("Rebase", "linear history"),
+    ]
+
+    assert second.question is not None
+    assert second.question.id == "q1#1"
+    assert second.question.group_id == "q1"  # same batch
+    assert second.question.kind == "multi_select"
+    assert second.question.header == "CI"
+    assert second.question.multiselect is True
+    assert second.question.answered is False
+
+
+def test_question_entries_resolve_once_answered(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Once a tool_result with the matching tool_use_id arrives, every question
+    in that batch renders ``answered=True`` with the result content as the
+    ``answer`` (group-level resolution, no per-question split)."""
+    sid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    cwd = Path("/home/kk/work/ask-answered")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"set it up"}}'
+    )
+    question_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion",'
+        '"input":{"questions":[{"question":"Merge or rebase?"}]}}]}}'
+    )
+    answered = (
+        '{"type":"user","uuid":"t1","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"isSidechain":false,"message":{"role":"user",'
+        '"content":[{"type":"tool_result","tool_use_id":"q1","content":"Merge"}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, question_line, answered])
+
+    questions = [
+        e for turn in adapter.read_turns(cwd, sid) for e in turn.entries if e.role == "question"
+    ]
+    assert len(questions) == 1
+    assert questions[0].question is not None
+    assert questions[0].question.answered is True
+    assert questions[0].question.answer == "Merge"
+
+
+def test_exit_plan_mode_renders_one_confirm_question(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """ExitPlanMode is a plan-approval gate → a single ``role="question"``
+    entry, ``kind="confirm"``, prompt == the plan text."""
+    sid = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    cwd = Path("/home/kk/work/plan")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"plan it"}}'
+    )
+    plan_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"p1","name":"ExitPlanMode",'
+        '"input":{"plan":"Step 1: refactor. Step 2: ship."}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, plan_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    questions = [e for e in turn.entries if e.role == "question"]
+    assert len(questions) == 1
+    assert questions[0].text == "Step 1: refactor. Step 2: ship."
+    assert questions[0].question is not None
+    assert questions[0].question.kind == "confirm"
+    assert questions[0].question.prompt == "Step 1: refactor. Step 2: ship."
+
+
+def test_regular_tool_still_renders_as_tool(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
+    """A non-question tool_use (Bash) keeps the existing ``role="tool"`` entry —
+    only the question tools route to the structured question entry."""
+    sid = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+    cwd = Path("/home/kk/work/regular")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"run it"}}'
+    )
+    bash_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, bash_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    assert [(e.role, e.text) for e in turn.entries] == [("tool", "Bash")]
+    assert all(e.role != "question" for e in turn.entries)
 
 
 def test_missing_session_yields_unknown(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:

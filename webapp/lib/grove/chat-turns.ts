@@ -1,4 +1,4 @@
-import type { DigestEntryView, SessionTurnView } from "./types";
+import type { AgentQuestionView, DigestEntryView, SessionTurnView } from "./types";
 
 /**
  * Pure mapper from the wire's session turns to chat-panel render items —
@@ -25,6 +25,7 @@ export type ChatItem =
   | { kind: "tools"; calls: ToolCall[] }
   | { kind: "note"; tone: "summary" | "status"; text: string }
   | { kind: "notification"; summary: string; detail: string }
+  | { kind: "question"; question: AgentQuestionView }
   | { kind: "continuation" };
 
 export function chatItemsFromTurns(turns: SessionTurnView[]): ChatItem[] {
@@ -53,6 +54,12 @@ export function chatItemsFromTurns(turns: SessionTurnView[]): ChatItem[] {
 }
 
 function itemFromEntry(entry: DigestEntryView): ChatItem | null {
+  // A "question" entry carries its render payload in `question`, not `text`
+  // (the prompt may be empty for a bare confirm), so it's handled before the
+  // text-empty guard below that drops blank entries of every other role.
+  if (entry.role === "question") {
+    return entry.question ? { kind: "question", question: entry.question } : null;
+  }
   if (!entry.text) return null;
   switch (entry.role) {
     case "user":

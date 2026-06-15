@@ -1,73 +1,23 @@
 import type {
   AgentActivityState,
   DashboardSnapshotView,
-  ProjectGroupView,
   WorkspaceActivityView,
 } from "./types";
-import { ATTENTION_STATES } from "./agent-state-tokens";
 import { activityRank } from "./activity-tier";
 
 // Wall-presentation policy: which workspaces show, in what order, under what
-// label. Pure functions over a snapshot — the stream contract + reducer that
-// PRODUCE the snapshot live in `activity-stream.ts`; keep the two concerns
+// repo section. Pure functions over a snapshot — the stream contract + reducer
+// that PRODUCE the snapshot live in `activity-stream.ts`; keep the two concerns
 // apart so transport changes never touch presentation policy and vice versa.
-
-export type Lens = "all" | "attention" | "active";
-
-/** Lens cycle order. "all" is first: the dashboard's job is to show everything. */
-export const LENSES: readonly Lens[] = ["all", "attention", "active"] as const;
-
-export const LENS_LABEL: Record<Lens, string> = {
-  all: "All",
-  attention: "Needs attention",
-  active: "Active",
-};
-
-const ACTIVE_LENS_STATES = new Set(["starting", "working", "waiting", "blocked"]);
-
-/** Does one workspace pass the given lens? Mirrors the TUI's `_passes_lens`. */
-export function passesLens(w: WorkspaceActivityView, lens: Lens): boolean {
-  if (lens === "all") return true;
-  if (lens === "attention") return w.needs_attention;
-  const primary = w.sessions[0]?.activity;
-  return primary != null && ACTIVE_LENS_STATES.has(primary.state);
-}
-
-/** Project groups with each group's workspaces filtered by the lens; empties dropped. */
-export function groupsForLens(
-  snapshot: DashboardSnapshotView,
-  lens: Lens,
-): ProjectGroupView[] {
-  return snapshot.projects
-    .map((g) => ({ ...g, workspaces: g.workspaces.filter((w) => passesLens(w, lens)) }))
-    .filter((g) => g.workspaces.length > 0);
-}
-
-/** True when an activity wants the human — used by the card accent. */
-export function wantsAttention(state: string): boolean {
-  return ATTENTION_STATES.has(state as never);
-}
-
-// ─── Consolidated dashboard filter (projects × agent-states × attention) ─────
 //
-// One filter replaces the three lens tabs. Stored as the set of things to HIDE,
-// so the empty default shows everything AND a state/project that appears later
-// is visible by default — a deselected item is an explicit choice, never a stale
-// snapshot of "what existed when I opened the menu".
+// The view *intent* (scope / hidden states / attention-only / query) lives in
+// the Zustand `ui-store`; this module is the pure selector that turns that
+// intent + the server snapshot into the repo-grouped grid the page renders.
 
-export interface DashboardFilterState {
-  hiddenProjects: ReadonlySet<string>; // repo_root
-  hiddenStates: ReadonlySet<AgentActivityState>;
-  attentionOnly: boolean;
-}
-
-export function emptyFilter(): DashboardFilterState {
-  return { hiddenProjects: new Set(), hiddenStates: new Set(), attentionOnly: false };
-}
-
-export function activeFilterCount(f: DashboardFilterState): number {
-  return f.hiddenProjects.size + f.hiddenStates.size + (f.attentionOnly ? 1 : 0);
-}
+// ─── Facets (sidebar input — FROZEN signature) ───────────────────────────────
+//
+// The sidebar agent imports `computeFacets`; its return shape is a contract.
+// Project + agent-state distribution of the whole snapshot, with live counts.
 
 /** The single agent-state a workspace filters/labels by (no session → "unknown"). */
 export function displayState(w: WorkspaceActivityView): AgentActivityState {
@@ -92,7 +42,7 @@ export interface DashboardFacets {
   total: number;
 }
 
-/** Project + agent-state distribution of the whole snapshot — feeds the filter menu (live counts). */
+/** Project + agent-state distribution of the whole snapshot — feeds the sidebar (live counts). */
 export function computeFacets(snapshot: DashboardSnapshotView): DashboardFacets {
   const projects = snapshot.projects.map((g) => ({
     repo_root: g.repo_root,
@@ -116,31 +66,13 @@ export function computeFacets(snapshot: DashboardSnapshotView): DashboardFacets 
   return { projects, states, attention, total };
 }
 
-/** Apply the filter to a snapshot → project groups (empties dropped). */
-export function filterSnapshot(
-  snapshot: DashboardSnapshotView,
-  f: DashboardFilterState,
-): ProjectGroupView[] {
-  return snapshot.projects
-    .filter((g) => !f.hiddenProjects.has(g.repo_root))
-    .map((g) => ({
-      ...g,
-      workspaces: g.workspaces.filter(
-        (w) => !f.hiddenStates.has(displayState(w)) && (!f.attentionOnly || w.needs_attention),
-      ),
-    }))
-    .filter((g) => g.workspaces.length > 0);
-}
-
-// ─── Attention-first wall order ──────────────────────────────────────────────
+// ─── Attention-first ordering ────────────────────────────────────────────────
 //
-// The wall is glanceable only if what NEEDS YOU sits at the very top, across
-// every project. The rank itself lives with the tier policy (`activityRank`
-// in activity-tier.ts: attention=0 < active=1 < dormant=2, with the tmux
-// fallback for session-less workspaces) so a card's sort position and its
-// dim/highlight treatment can never drift apart. Project grouping is dropped
-// here on purpose — group bands would pin an action-required card below a
-// quieter project's rows; identity rides each card as a chip instead.
+// A section is glanceable only if what NEEDS YOU sits at its top. The rank
+// itself lives with the tier policy (`activityRank` in activity-tier.ts:
+// attention=0 < active=1 < dormant=2, with the tmux fallback for session-less
+// workspaces) so a card's sort position and its dim/highlight treatment can
+// never drift apart.
 
 function workspaceRank(w: WorkspaceActivityView): number {
   // null primary → activityRank takes the tmux/workspace-status fallback.
@@ -162,22 +94,64 @@ export function compareByAttention(
   return b.observed_at.localeCompare(a.observed_at);
 }
 
-/** One card on the flat wall: the workspace plus its project identity chip. */
-export interface WallEntry {
-  workspace: WorkspaceActivityView;
-  repo_root: string;
-  repo_name: string;
+// ─── The grid selector (store intent → repo-grouped sections) ────────────────
+//
+// The single selector the grid consumes. View intent is the set of things to
+// HIDE plus an optional repo scope and a free-text query, so the empty default
+// shows everything AND a state/repo that appears later is visible by default.
+
+/** The view intent the grid filters by — the relevant slice of the ui-store. */
+export interface GridView {
+  /** Repo scope: null = all repos, else the `repo_root` to narrow to. */
+  scopeRepo: string | null;
+  /** Agent-states to HIDE (empty = show all). */
+  hiddenStates: readonly AgentActivityState[];
+  /** Keep only workspaces that want the human. */
+  attentionOnly: boolean;
+  /** Free-text match over title + branch (case-insensitive; empty = no filter). */
+  query: string;
 }
 
-/** Flatten filtered groups into one attention-first card list for the wall. */
-export function flattenByAttention(groups: readonly ProjectGroupView[]): WallEntry[] {
-  return groups
-    .flatMap((g) =>
-      g.workspaces.map((workspace) => ({
-        workspace,
-        repo_root: g.repo_root,
-        repo_name: g.repo_name,
-      })),
-    )
-    .sort((a, b) => compareByAttention(a.workspace, b.workspace));
+/** One repo section of the grid: the repo identity + its (filtered, sorted) cards. */
+export interface RepoSection {
+  repo_root: string;
+  repo_name: string;
+  workspaces: WorkspaceActivityView[];
+}
+
+function matchesQuery(w: WorkspaceActivityView, needle: string): boolean {
+  if (needle === "") return true;
+  const q = needle.toLowerCase();
+  return (
+    w.state.title.toLowerCase().includes(q) || w.state.branch.toLowerCase().includes(q)
+  );
+}
+
+/**
+ * Turn the server snapshot + the store's view intent into repo-grouped sections,
+ * in snapshot order (the engine sorts roots), each section attention-first.
+ * Empty sections are dropped; with a `scopeRepo` set, only that repo survives.
+ * Pure — the grid renders exactly what this returns, the page owns no policy.
+ */
+export function selectSections(
+  snapshot: DashboardSnapshotView,
+  view: GridView,
+): RepoSection[] {
+  const hidden = new Set(view.hiddenStates);
+  const query = view.query.trim();
+  return snapshot.projects
+    .filter((g) => view.scopeRepo == null || g.repo_root === view.scopeRepo)
+    .map((g) => ({
+      repo_root: g.repo_root,
+      repo_name: g.repo_name,
+      workspaces: g.workspaces
+        .filter(
+          (w) =>
+            !hidden.has(displayState(w)) &&
+            (!view.attentionOnly || w.needs_attention) &&
+            matchesQuery(w, query),
+        )
+        .sort(compareByAttention),
+    }))
+    .filter((s) => s.workspaces.length > 0);
 }

@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, WrenchIcon } from "lucide-react";
 import { RoleLabel } from "@/components/shared/role-label";
+import { QuestionCard } from "@/components/workspace/question-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSessionTurns } from "@/lib/grove/hooks";
@@ -17,7 +18,7 @@ import type { DigestEntryView, SessionTurnView } from "@/lib/grove/types";
  * session's head — rendered as a quiet "continued session" marker, not an
  * empty prompt. Consecutive tool entries collapse into one "N tool calls"
  * disclosure row (collapsed by default) so a long Read/Bash/Edit run doesn't
- * spam the digest; expanding reveals the individual ⚒ rows.
+ * spam the digest; expanding reveals the individual Wrench-marked rows.
  *
  * The `max-h-96` cap is deliberately ON the leaf here, unlike PeekSnapshot /
  * CommitList: this is an inline expansion inside a list, not a viewport-fill
@@ -127,6 +128,17 @@ function TurnRow({ turn }: { turn: SessionTurnView }) {
  * `you` clay — the convention shared with the TUI); summary/status rows are
  * commentary, not speech, so they stay unlabeled. */
 function EntryRow({ entry }: { entry: DigestEntryView }) {
+  // A structured question renders as a read-only choice card, not a text row —
+  // routed here like the tool group is routed (and the `data-role` test hook is
+  // preserved on its wrapper). A question entry missing its payload degrades to
+  // the quiet text path below (render-hardening: never throw on the wire).
+  if (entry.role === "question" && entry.question) {
+    return (
+      <div data-testid="turn-entry" data-role="question" className="pl-4">
+        <QuestionCard question={entry.question} />
+      </div>
+    );
+  }
   return (
     <p
       data-testid="turn-entry"
@@ -152,7 +164,8 @@ function EntryRow({ entry }: { entry: DigestEntryView }) {
 /**
  * One collapsed "N tool calls" row for a consecutive run — same disclosure
  * conventions as `components/ai-elements/tool.tsx` (local `open`, chevron,
- * `aria-expanded`, conditional mount), in the digest's quiet ⚒ mono style.
+ * Wrench glyph, `aria-expanded`, conditional mount), in the digest's quiet
+ * mono style.
  */
 function ToolGroupRow({ entries }: { entries: DigestEntryView[] }) {
   const [open, setOpen] = useState(false);
@@ -165,7 +178,7 @@ function ToolGroupRow({ entries }: { entries: DigestEntryView[] }) {
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          "flex w-fit items-center gap-1 rounded-sm text-left font-mono text-xs text-muted-foreground",
+          "flex w-fit items-center gap-1.5 rounded-sm text-left font-mono text-xs text-muted-foreground",
           "transition-colors hover:text-foreground",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         )}
@@ -174,9 +187,9 @@ function ToolGroupRow({ entries }: { entries: DigestEntryView[] }) {
           aria-hidden
           className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")}
         />
-        <span aria-hidden className="select-none">
-          ⚒{" "}
-        </span>
+        {/* One Wrench per tool concept — same glyph the Tool / ToolGroup blocks
+            carry, so a tool run reads the same in the digest and the chat. */}
+        <WrenchIcon aria-hidden className="size-3 shrink-0" />
         {label}
       </button>
       {open &&
@@ -185,12 +198,10 @@ function ToolGroupRow({ entries }: { entries: DigestEntryView[] }) {
             key={j}
             data-testid="turn-entry"
             data-role="tool"
-            className="break-words pl-4 font-mono text-xs text-muted-foreground"
+            className="flex items-start gap-1.5 break-words pl-4 font-mono text-xs text-muted-foreground"
           >
-            <span aria-hidden className="select-none">
-              ⚒{" "}
-            </span>
-            {entry.text}
+            <WrenchIcon aria-hidden className="mt-0.5 size-3 shrink-0" />
+            <span className="min-w-0 break-words">{entry.text}</span>
           </p>
         ))}
     </div>

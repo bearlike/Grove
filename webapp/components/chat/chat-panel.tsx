@@ -18,6 +18,7 @@ import {
 import { Response } from "@/components/ai-elements/response";
 import { ToolGroup } from "@/components/ai-elements/tool";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { QuestionCard } from "@/components/workspace/question-card";
 import { RoleLabel } from "@/components/shared/role-label";
 import { Button } from "@/components/ui/button";
 import { chatItemsFromTurns, type ChatItem } from "@/lib/grove/chat-turns";
@@ -39,8 +40,8 @@ import {
  *
  * Test seams: `chat-panel`, `chat-message` + `data-role` (each carrying a
  * `role-label` speaker tag), `tool-group`, `chat-tool` (inside an expanded
- * group), `chat-notification`, `chat-composer`, `chat-interrupt`,
- * `chat-notice`.
+ * group), `chat-notification`, `chat-question` (a read-only #74 choice card),
+ * `chat-composer`, `chat-interrupt`, `chat-notice`.
  */
 export function ChatPanel({ workspaceId }: { workspaceId: string }) {
   // Self-wrapped boundary: a malformed streamed turn degrades to one
@@ -200,6 +201,15 @@ function ChatItemRow({ item }: { item: ChatItem }) {
       // (no bubble) and not run commentary (not a note): a quiet labeled row,
       // the subagent's full result behind a disclosure.
       return <NotificationRow summary={item.summary} detail={item.detail} />;
+    case "question":
+      // The agent paused to ask the human — a read-only choice card (epic #74).
+      // Options are a static list, not interactive controls (answer-back is a
+      // future write-path). Wrapped to carry the chat-message-adjacent seam.
+      return (
+        <div data-testid="chat-question" className="w-full min-w-0">
+          <QuestionCard question={item.question} />
+        </div>
+      );
     case "continuation":
       return <p className="text-center text-xs italic text-muted-foreground">continued session</p>;
   }

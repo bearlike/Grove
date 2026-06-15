@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.views import (
     AttachInstructionView,
     CommitSummaryView,
@@ -138,3 +139,26 @@ def test_attach_instruction_view_round_trip() -> None:
     view = AttachInstructionView.from_instruction(ai)
     reloaded = AttachInstructionView.model_validate_json(view.model_dump_json())
     assert reloaded == view
+
+
+# ─── ticket_refs on the wire (#7) ────────────────────────────────────────────
+
+
+def test_workspace_state_view_ticket_refs_default_empty() -> None:
+    view = WorkspaceStateView.from_state(_fake_state())
+    assert view.ticket_refs == []
+
+
+def test_workspace_state_view_carries_ticket_refs() -> None:
+    state = _fake_state()
+    state.ticket_refs = [
+        TicketRef(provider="linear", id="ENG-123", title="Add login", ambiguous=False),
+        TicketRef(provider="gitea", id="5", ambiguous=True),
+    ]
+    view = WorkspaceStateView.from_state(state)
+    assert [(r.provider, r.id, r.ambiguous) for r in view.ticket_refs] == [
+        ("linear", "ENG-123", False),
+        ("gitea", "5", True),
+    ]
+    reloaded = WorkspaceStateView.model_validate_json(view.model_dump_json())
+    assert reloaded.ticket_refs == view.ticket_refs

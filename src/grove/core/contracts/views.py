@@ -19,6 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from grove.core.contracts.tickets import TicketRef
 from grove.core.tmux import AttachInstruction
 from grove.core.workspace import (
     BranchProvenance,
@@ -54,6 +55,7 @@ class WorkspaceStateView(BaseModel):
     init_duration_ms: int | None = None
     branch_provenance: BranchProvenance = BranchProvenance.GROVE_CREATED
     placement: Placement = Placement.WORKTREE
+    ticket_refs: list[TicketRef] = []
 
     @classmethod
     def from_state(cls, s: WorkspaceState) -> WorkspaceStateView:
@@ -76,6 +78,9 @@ class WorkspaceStateView(BaseModel):
             init_duration_ms=s.init_duration_ms,
             branch_provenance=s.branch_provenance,
             placement=s.placement,
+            # TicketRef is frozen/immutable; the list is copied so the view can
+            # never alias and mutate the engine record's refs.
+            ticket_refs=list(s.ticket_refs),
         )
 
 
@@ -191,6 +196,14 @@ class WhoamiView(BaseModel):
     All fields are populated server-side from stdlib (``socket``,
     ``getpass``, ``platform``) and the lifespan-captured ``started_at``;
     the view itself is pure data with no engine coupling.
+
+    ``latest_version`` / ``update_available`` carry the daemon-side release-skew
+    check (#80): the latest GitHub release tag (bare, e.g. ``0.2.0``) and whether
+    it exceeds the installed ``version``. ``latest_version`` is ``None`` and
+    ``update_available`` ``False`` until a successful check (offline / first
+    call / error). Exposing it here lets the webapp render a "newer release"
+    footer hint WITHOUT polling GitHub from the browser — one daemon-side check,
+    cached for hours (see :mod:`grove.core.release`).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -202,6 +215,8 @@ class WhoamiView(BaseModel):
     user: str
     platform: str
     python_version: str
+    latest_version: str | None = None
+    update_available: bool = False
 
 
 __all__ = [

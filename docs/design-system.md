@@ -904,12 +904,16 @@ Right-side rail. A summary card stacked above a tabbed preview inside a
   - **`transcript` tab** (`#card-transcript` inside a `VerticalScroll`)
     — a digest of the selected workspace's primary session's recent
     turns (last 20), rendered by the same `_turns.py` implementation
-    the sessions browser uses: bold clay `you ❯` prompt label,
-    `agent ⏺` rows (label bold agent-cyan via the `info` ref slot,
-    reply text default fg), tool runs ALWAYS grouped into one muted
-    `⚒ N tool calls` row — the rail digest never lists individual
-    calls. Scrolls to the tail on update (the newest exchange is the
-    glance target).
+    (`TranscriptBuilder`) the sessions browser uses. Each turn is a
+    speaker label on its own line — bold clay `you ❯`, bold agent-cyan
+    `agent ⏺` (the `info` ref slot) — with the message body rendered
+    BELOW it as **Markdown** (headings, lists, fenced code with a
+    polarity-matched code theme, inline emphasis), so agent prose reads
+    as formatted text, not raw markup. A blank line separates each
+    entry and each turn — the transcript breathes rather than running
+    together. Tool runs ALWAYS group into one muted `⚒ N tool calls`
+    row — the rail digest never lists individual calls. Scrolls to the
+    tail on update (the newest exchange is the glance target).
   - **`terminal` tab** (`#card-pane`) — the live tmux pane mirror.
     Captured SGR background codes from `tmux capture-pane` are stripped
     before render (`_strip_pane_bgcolors`) so the card's `$surface`
@@ -1735,11 +1739,22 @@ linkability.
 
 ## 12. Activity dashboard (webapp)
 
-The webapp's `/activity` wall (`webapp/app/activity/`,
-`webapp/components/dashboard/`) shares the TUI's tokens (status §4.3,
-agent-state §4.8) but has its own layout contract. Its one job is
-**glanceability without interaction**: a wall you read in five seconds
-from across the room. Four principles, in priority order:
+The webapp collapsed to **one unified workspace surface** at `/`
+(`webapp/app/(shell)/page.tsx`, `webapp/components/workspace/`): the old
+separate home grid and activity wall were near-duplicates over the same
+stream, so they merged into a single attention-sorted flat grid of one
+`WorkspaceCard` (`/activity` now just redirects to `/`). It shares the
+TUI's tokens (status §4.3, agent-state §4.8) but has its own layout
+contract. Its one job is **glanceability without interaction**: a wall
+you read in five seconds from across the room.
+
+The redesign is **compact, quiet-chrome shadcn**: Geist Sans/Mono
+self-hosted via next/font, a dense type scale (11px section labels →
+13px rows → 14px body), neutral graphite surfaces with saturated hue
+reserved for state only, and the brand terracotta held back for the
+logo + primary CTA. Webapp engineering detail (and the per-component
+typography/density tables) lives in `webapp/CLAUDE.md`. Four principles,
+in priority order:
 
 1. **Attention-first ordering.** One flat wall, no project bands. Cards
    self-sort: action-required (blocked / waiting / error) first, then
@@ -1770,9 +1785,8 @@ from across the room. Four principles, in priority order:
    `prefers-reduced-motion`; label contrast stays AA by lighting only
    the glyph with the state hue (the StatusBadge rule, §"webapp/CLAUDE.md").
 
-Webapp engineering detail stays in `webapp/CLAUDE.md`; this section
-pins only the dashboard's design language so future work stays
-consistent.
+This section pins only the surface's design language so future work
+stays consistent; the engineering detail stays in `webapp/CLAUDE.md`.
 
 ---
 

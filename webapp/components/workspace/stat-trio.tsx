@@ -1,6 +1,5 @@
 "use client";
 import { useTheme } from "next-themes";
-import { Separator } from "@/components/ui/separator";
 import { statColor } from "@/lib/grove/status-tokens";
 import { cn } from "@/lib/utils";
 
@@ -12,10 +11,13 @@ interface Props {
 }
 
 /**
- * Compact stat triplet. Vertical-stacked number + label, separated by
- * shadcn Separator (vertical) so dividers come from the design system.
- * Polarity-aware coloring is delegated to `statColor`; the component
- * stays presentational.
+ * Compact diff-stat triplet (issue #96 deliverable C: pipes → middots). Three
+ * inline `value AHEAD · value BEHIND · value DIRTY` stats, middot-separated to
+ * match the rest of the card's quiet meta texture (the old vertical Separator
+ * "pipes" read as loud chrome on a demoted footer line). The numerals carry the
+ * polarity hue (`statColor` — green ahead, amber behind/dirty, muted at zero);
+ * the unit labels stay hard-muted so color appears only where a count means
+ * something. Presentational: all color policy is delegated to `statColor`.
  */
 export function StatTrio({ ahead, behind, dirty, className }: Props) {
   const { resolvedTheme } = useTheme();
@@ -23,14 +25,22 @@ export function StatTrio({ ahead, behind, dirty, className }: Props) {
   return (
     <div
       data-testid="stat-trio"
-      className={cn("flex items-stretch gap-3", className)}
+      className={cn("flex items-center gap-1.5 text-muted-foreground", className)}
     >
       <Stat label="ahead" value={ahead} color={statColor("ahead", ahead, dark)} />
-      <Separator orientation="vertical" className="h-auto" />
+      <Middot />
       <Stat label="behind" value={behind} color={statColor("behind", behind, dark)} />
-      <Separator orientation="vertical" className="h-auto" />
+      <Middot />
       <Stat label="dirty" value={dirty} color={statColor("dirty", dirty, dark)} />
     </div>
+  );
+}
+
+function Middot() {
+  return (
+    <span aria-hidden className="select-none text-muted-foreground/40">
+      ·
+    </span>
   );
 }
 
@@ -44,11 +54,11 @@ function Stat({
   color: string;
 }) {
   return (
-    <div data-testid={`stat-${label}`} className="flex flex-col" style={{ color }}>
-      <span className="text-base font-semibold tabular-nums leading-none">{value}</span>
-      <span className="mt-0.5 text-[10px] uppercase tracking-wider opacity-90">
-        {label}
+    <span data-testid={`stat-${label}`} className="inline-flex items-baseline gap-1">
+      <span className="text-xs font-semibold tabular-nums leading-none" style={{ color }}>
+        {value}
       </span>
-    </div>
+      <span className="text-[10px] uppercase tracking-wider">{label}</span>
+    </span>
   );
 }

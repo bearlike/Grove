@@ -46,6 +46,47 @@ class MewboError(GroveError):
     """
 
 
+# ─── ticket provider errors (raised by grove.core.tickets) ──────────────────
+
+
+class TicketProviderError(GroveError):
+    """A ticket-tracker API call failed (transport, auth, or malformed response).
+
+    The one exception type the ``HttpTicketProvider`` subclasses raise — httpx
+    exceptions never leak past that boundary, mirroring :class:`MewboError`. Maps
+    to a 502 at the daemon edge (the failure is upstream, not the client's).
+    """
+
+
+class TicketProviderNotConfigured(GroveError):
+    """A provider was named (attach / create-from-ticket / get) but isn't enabled.
+
+    Distinct from :class:`TicketProviderError`: nothing went wrong on the wire —
+    the requested tracker simply isn't turned on for this repo. Maps to 404.
+    """
+
+
+# ─── notification errors (raised by grove.core.notifications) ───────────────
+
+
+class NotificationError(GroveError):
+    """A notification channel failed to deliver (transport, auth, bad response).
+
+    Channels (``GotifyNotificationChannel``, ``WebhookNotificationChannel``)
+    narrow every httpx failure to a subclass of this; the broker's best-effort
+    guard catches it, logs a structured per-channel outcome, and never re-raises
+    into the activity path. Subclassed per channel so logs name the sink.
+    """
+
+
+class GotifyError(NotificationError):
+    """A Gotify ``POST /message`` failed."""
+
+
+class WebhookError(NotificationError):
+    """A generic-webhook ``POST`` failed."""
+
+
 # ─── steering errors (raised by WorkspaceManager.send_message / interrupt) ──
 
 

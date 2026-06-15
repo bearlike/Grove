@@ -28,6 +28,11 @@ class GenericAdapter:
         del session_id
         return []
 
+    def model_decoration(self, model: str) -> list[str]:
+        # A bare shell has no model concept — ignore the request, run as named.
+        del model
+        return []
+
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         del cwd, session_id
         return []

@@ -4,11 +4,17 @@
 // daemon + `next start` against the synthetic demo fleet and hands this
 // script the base URL plus the sandbox env. The script pairs a headless
 // browser through the real /login flow (approving with `grove auth approve`
-// under the sandbox env), then captures the dashboard, the workspace IDE
-// shell, the sessions drill-down, and the activity wall.
+// under the sandbox env), then captures the composer-first unified surface,
+// the composer's create affordance, a live focused pane, and the workspace
+// IDE shell (transcript + terminal).
 //
 // Everything here is fictional (the acme-api / acme-web fleet). Nothing
 // touches the real daemon or real repos.
+//
+// Shot set tracks the post-#94/#96/#99 redesign: `/activity` folded into `/`
+// (#89), create is the always-present Composer (#96), and the home is ONE
+// composer-first surface. There is no create dialog, no sessions drill-down,
+// and no standalone activity wall to capture anymore.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -39,21 +45,37 @@ const sandboxEnv = {
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
 };
 
-const shot = (page, label, opts = {}) =>
-  page.screenshot({ path: path.join(OUT, `${label}.png`), ...opts });
+const shot = (target, label, opts = {}) =>
+  target.screenshot({ path: path.join(OUT, `${label}.png`), ...opts });
 
 async function settle(page, ms = 900) {
   await page.waitForTimeout(ms);
 }
 
+// Force the space-black DARK theme on every capture. next-themes defaults to
+// `system` (so headless Chrome's light preference would otherwise win): emulate
+// a dark color scheme AND pin its localStorage key so first paint is already
+// dark with no light→dark flip.
+async function forceDark(ctx) {
+  await ctx.addInitScript(() => {
+    try {
+      localStorage.setItem("theme", "dark");
+    } catch {
+      /* storage may be unavailable pre-navigation; colorScheme still applies */
+    }
+  });
+}
+
 async function main() {
   const browser = await chromium.launch({ headless: true });
 
-  // ── Phase 1: pairing on a phone-sized viewport ───────────────────────
+  // ── Phase 1: pairing on a phone-sized viewport (login is unchanged) ───
   const pairCtx = await browser.newContext({
     viewport: { width: 480, height: 860 },
     deviceScaleFactor: 2,
+    colorScheme: "dark",
   });
+  await forceDark(pairCtx);
   const page = await pairCtx.newPage();
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
 
@@ -93,37 +115,52 @@ async function main() {
     storageState: STORAGE,
     viewport: { width: 1366, height: 900 },
     deviceScaleFactor: 2,
+    colorScheme: "dark",
   });
+  await forceDark(ctx);
   const d = await ctx.newPage();
 
-  // Home grid (the list surface rides an SSE stream, so never wait for
-  // networkidle — wait for real content instead).
+  // The unified composer-first home (the list rides an SSE stream, so never
+  // wait for networkidle — wait for real content instead): the always-present
+  // composer hero plus the repo-grouped workspace grid.
   await d.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await d.getByTestId("composer-prompt").waitFor({ timeout: 20_000 });
   await d.getByTestId("workspace-card").first().waitFor({ timeout: 20_000 });
   await settle(d);
   await shot(d, "webapp-home-grid");
 
-  // Create-workspace dialog.
-  await d.getByTestId("create-workspace-button").click();
-  await d.getByTestId("create-dialog").waitFor();
-  await settle(d, 600);
-  await shot(d, "webapp-create-dialog");
-  await d.keyboard.press("Escape");
-  await settle(d, 300);
-
-  // Sessions drill-down: switch to the acme-api tab, expand its Sessions
-  // section, expand one session into its turns.
+  // The composer as the create surface: type a task and reveal the advanced
+  // context chips (repo · base · branch mode), then clip just the composer.
   try {
-    await d.getByRole("tab", { name: /acme-api/ }).click();
-    await settle(d, 400);
-    await d.getByTestId("project-sessions-toggle").first().click();
-    await d.getByTestId("session-row").first().waitFor({ timeout: 10_000 });
-    await d.getByTestId("session-row").first().click();
-    await d.getByTestId("turns-view").first().waitFor({ timeout: 10_000 });
-    await settle(d, 600);
-    await shot(d, "webapp-workspace-sessions");
+    const prompt = d.getByTestId("composer-prompt");
+    await prompt.click();
+    await prompt.fill("Add OAuth device-flow login to the API");
+    const advanced = d.getByTestId("composer-advanced-toggle");
+    if (await advanced.count()) {
+      await advanced.first().click();
+    }
+    await settle(d, 500);
+    const composer = d.getByRole("region", { name: "Create a workspace" });
+    await shot(composer, "webapp-composer");
+    // Clear the draft so it can't leak into later captures.
+    await prompt.fill("");
+    await settle(d, 200);
   } catch (err) {
-    console.error("sessions drill-down failed:", err.message);
+    console.error("composer capture failed:", err.message);
+  }
+
+  // A live focused pane on the home surface: click a working card's Live
+  // toggle (WORKING-gated — the fleet's auth-refactor session is working).
+  try {
+    const liveToggle = d.getByTestId("live-toggle").first();
+    await liveToggle.waitFor({ timeout: 10_000 });
+    await liveToggle.click();
+    await d.getByTestId("focused-pane").waitFor({ timeout: 10_000 });
+    await d.evaluate(() => window.scrollTo(0, 0));
+    await settle(d, 1000);
+    await shot(d, "webapp-focused-pane");
+  } catch (err) {
+    console.error("focused-pane capture failed:", err.message);
   }
 
   // Workspace detail (the IDE shell). Pick the live auth-refactor session.
@@ -141,24 +178,33 @@ async function main() {
     await settle(d, 1000);
     await shot(d, "webapp-workspace-detail");
 
-    // Terminal tab (live pane).
+    // Terminal tab (the polled live pane).
     try {
       await d.getByTestId("tab-terminal").click();
       await d.getByTestId("terminal-pane").waitFor({ timeout: 10_000 });
+      await d.getByTestId("peek-snapshot").first().waitFor({ timeout: 10_000 }).catch(() => {});
       await settle(d, 1200);
       await shot(d, "webapp-workspace-terminal");
     } catch (err) {
       console.error("terminal tab failed:", err.message);
     }
+
+    // Split view (lg only): transcript + terminal side by side, scrolled to the
+    // structured question card so the shot shows both the split AND a question.
+    try {
+      await d.getByTestId("view-split").click();
+      await d.getByTestId("chat-panel").waitFor({ timeout: 10_000 });
+      await d.getByTestId("terminal-pane").waitFor({ timeout: 10_000 });
+      await d.getByTestId("question-card").first().scrollIntoViewIfNeeded({ timeout: 5_000 })
+        .catch(() => {});
+      await settle(d, 1000);
+      await shot(d, "webapp-workspace-split");
+    } catch (err) {
+      console.error("split view failed:", err.message);
+    }
   } else {
     console.error("no workspace found for the detail capture");
   }
-
-  // Activity wall.
-  await d.goto(`${BASE}/activity`, { waitUntil: "domcontentloaded" });
-  await d.getByTestId("session-card").first().waitFor({ timeout: 20_000 });
-  await settle(d, 1000);
-  await shot(d, "webapp-activity-wall");
 
   await ctx.close();
 
@@ -167,9 +213,12 @@ async function main() {
     storageState: STORAGE,
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 3,
+    colorScheme: "dark",
   });
+  await forceDark(mob);
   const m = await mob.newPage();
   await m.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await m.getByTestId("composer-prompt").waitFor({ timeout: 20_000 });
   await m.getByTestId("workspace-card").first().waitFor({ timeout: 20_000 });
   await settle(m);
   await shot(m, "webapp-home-mobile");

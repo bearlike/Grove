@@ -21,6 +21,7 @@ click) picks; ``escape`` cancels. The current repo floats to the top, tagged.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -53,21 +54,34 @@ class RepoChoice:
     is_current: bool
 
     @classmethod
-    def group(cls, states: list[WorkspaceState], *, current: Path) -> list[RepoChoice]:
+    def group(
+        cls,
+        states: list[WorkspaceState],
+        *,
+        current: Path,
+        known: Iterable[Path] = (),
+    ) -> list[RepoChoice]:
         """Group persisted states by ``repo_root`` into per-repo choices.
 
         Pure: the caller does the (cheap) ``store.load_all()`` read and hands the
         states in. ``repo_root`` is already a resolved string on every record, so
         ``Path`` of it is canonical; ``current`` is resolved here to match. The
         current repo is always present even with zero workspaces, so the user can
-        always see — and stay on — where they are. Sorted current-first, then by
-        name, so the chooser reads predictably.
+        always see — and stay on — where they are.
+
+        ``known`` is the registry's ``known_roots()`` union (store-derived plus
+        config-declared). Every entry is seeded at count 0 so a config-declared
+        *empty* project lists alongside the current-repo special case — without
+        it, only repos with persisted workspaces would appear (#95). Sorted
+        current-first, then by name, so the chooser reads predictably.
         """
         current_resolved = current.resolve()
         counts: dict[Path, int] = {}
         for state in states:
             root = Path(state.repo_root)
             counts[root] = counts.get(root, 0) + 1
+        for root in known:
+            counts.setdefault(root.resolve(), 0)
         counts.setdefault(current_resolved, 0)
         choices = [
             cls(repo_root=root, name=root.name, count=count, is_current=root == current_resolved)

@@ -14,8 +14,12 @@ export default defineConfig({
     exclude: ["tests/e2e/**", "node_modules/**", ".next/**"],
   },
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "."),
-    },
+    alias: [
+      // `@/app/fonts` pulls `next/font/local` (a build-time transform Vitest
+      // can't resolve), so swap it for a class-string stub. Must precede the
+      // generic `@` alias — Vite matches alias entries in order.
+      { find: /^@\/app\/fonts$/, replacement: path.resolve(__dirname, "tests/_helpers/fonts-stub.ts") },
+      { find: "@", replacement: path.resolve(__dirname, ".") },
+    ],
   },
 });

@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +43,7 @@ from loguru import logger
 from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
+    AgentQuestion,
     DigestEntry,
     OrderedDigest,
     SessionSummary,
@@ -75,11 +76,6 @@ _NON_HUMAN_MARKERS: tuple[str, ...] = (
 # The harness tools that spawn a sub-agent. ``Task`` is the pre-2.1 name of the
 # same tool; both appear in transcripts depending on the Claude Code version.
 _SUBAGENT_TOOLS = frozenset({"Agent", "Task"})
-
-# Tools whose pending call means "the agent is waiting on the human": an open
-# question or a plan-approval gate. An assistant tail holding one of these with
-# no tool_result yet is BLOCKED (action required), not WORKING.
-_INPUT_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
 # Sentinel model id Claude Code writes for interrupts / synthetic lines; never a
 # real model and never counted toward token usage or the displayed model.
@@ -439,10 +435,16 @@ class _Record:
     def tool_use_count(self) -> int:
         return sum(1 for b in self._content_blocks() if b.get("type") == "tool_use")
 
-    def turn_entries(self) -> list[DigestEntry]:
-        """This assistant record's content in block order — text and tool calls
-        interleaved exactly as they appeared, full text (the `sessions show`
-        view, unlike the digest's truncated skeleton)."""
+    def turn_entries(self, answered: Mapping[str, str | None]) -> list[DigestEntry]:
+        """This assistant record's content in block order — text, tool calls, and
+        structured questions interleaved exactly as they appeared, full text (the
+        `sessions show` view, unlike the digest's truncated skeleton).
+
+        A question tool (``AskUserQuestion`` / ``ExitPlanMode``) normalizes to one
+        ``question`` entry per question (a batch yields N, in order), each carrying
+        the structured :class:`AgentQuestion`. ``answered`` maps a resolved
+        group_id → its result text, so an answered question renders stamped; any
+        other tool keeps its single ``tool`` entry."""
         entries: list[DigestEntry] = []
         for block in self._content_blocks():
             kind = block.get("type")
@@ -451,15 +453,28 @@ class _Record:
                 if isinstance(text, str) and text.strip():
                     entries.append(DigestEntry("assistant", text))
             elif kind == "tool_use" and block.get("name"):
-                entries.append(DigestEntry("tool", self._tool_text(block)))
+                name = str(block.get("name"))
+                if AgentQuestion.recognizes(name):
+                    # ``id or ""`` not ``str(id)``: an id-less block must yield a
+                    # group_id that simply never matches the answered map, never
+                    # the literal string ``"None"`` (same guard as tool_result_ids).
+                    for q in AgentQuestion.from_tool_call(
+                        name, block.get("input"), str(block.get("id") or "")
+                    ):
+                        resolved = q.resolved(answered[q.group_id]) if q.group_id in answered else q
+                        entries.append(DigestEntry("question", resolved.prompt, question=resolved))
+                else:
+                    entries.append(DigestEntry("tool", self._tool_text(block)))
         return entries
 
     @staticmethod
     def _tool_text(block: dict[str, Any]) -> str:
         """One tool call as a display line — bare name for most tools, but the
-        spawn/ask tools carry the detail clients need to show *what* was
-        spawned or asked (the sub-agent fleet and pending questions were
-        invisible as bare ``Agent`` / ``AskUserQuestion`` rows)."""
+        spawn tools carry the detail clients need to show *what* was spawned (the
+        sub-agent fleet was invisible as bare ``Agent`` rows). Question tools
+        (``AskUserQuestion`` / ``ExitPlanMode``) never reach here — ``turn_entries``
+        routes them to a structured ``question`` entry before falling back to
+        this tool render."""
         name = str(block.get("name"))
         inp = block.get("input")
         if not isinstance(inp, dict):
@@ -469,12 +484,6 @@ class _Record:
             description = inp.get("description") or ""
             label = f"{name}({agent_type})"
             return f"{label}: {description}" if description else label
-        if name == "AskUserQuestion":
-            questions = inp.get("questions")
-            if isinstance(questions, list) and questions:
-                first = questions[0]
-                if isinstance(first, dict) and isinstance(first.get("question"), str):
-                    return f"{name}: {first['question']}"
         return name
 
     def tool_names(self) -> list[str]:
@@ -506,6 +515,37 @@ class _Record:
             for b in self._content_blocks()
             if b.get("type") == "tool_result" and b.get("tool_use_id")
         ]
+
+    def tool_results(self) -> list[tuple[str, str | None]]:
+        """``(tool_use_id, content-as-text)`` per tool_result this record carries.
+
+        The answer-back side of :meth:`tool_result_ids` — the parser builds the
+        group_id → answer map from these to stamp a resolved question. Content is
+        normalized best-effort to a string (a bare ``str`` passes through; a list
+        of blocks joins its ``text`` blocks; anything else → ``None``), so a
+        non-text result resolves the question without inventing a body."""
+        out: list[tuple[str, str | None]] = []
+        for b in self._content_blocks():
+            if b.get("type") != "tool_result" or not b.get("tool_use_id"):
+                continue
+            out.append((str(b.get("tool_use_id")), self._result_text(b.get("content"))))
+        return out
+
+    @staticmethod
+    def _result_text(content: Any) -> str | None:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                blk.get("text", "")
+                for blk in content
+                if isinstance(blk, dict)
+                and blk.get("type") == "text"
+                and isinstance(blk.get("text"), str)
+            ]
+            joined = "\n".join(p for p in parts if p)
+            return joined or None
+        return None
 
     @property
     def usage_tokens(self) -> tuple[int, int]:
@@ -729,6 +769,13 @@ class _TranscriptParser:
         """
         turns: list[SessionTurn] = []
         entries: list[DigestEntry] = []
+        # Pre-scan every record's tool_results so a question entry can render
+        # resolved no matter where its answer landed in the file (a tool_result
+        # is a forward reference — it always follows the question's tool_use).
+        answered: dict[str, str | None] = {}
+        for rec in self._records:
+            for tool_use_id, result in rec.tool_results():
+                answered[tool_use_id] = result
 
         def _flush(user_text: str, started_at: datetime | None) -> None:
             turns.append(
@@ -750,7 +797,7 @@ class _TranscriptParser:
                 if current is None and not entries and rec.timestamp is not None:
                     # Leading continuation block inherits the first reply's time.
                     current = ("", rec.timestamp)
-                entries.extend(rec.turn_entries())
+                entries.extend(rec.turn_entries(answered))
         if current is not None or entries:
             _flush(*(current or ("", None)))
 
@@ -822,7 +869,7 @@ class _TranscriptParser:
         # action-required, not "working": the question/plan-approval prompt is
         # the one transcript-visible BLOCKED signal (permission prompts need the
         # hook sidecar — they never reach the JSONL).
-        if any(name in _INPUT_TOOLS for name in tail.tool_names()):
+        if any(AgentQuestion.recognizes(name) for name in tail.tool_names()):
             return AgentActivityState.BLOCKED
         return AgentActivityState.WORKING
 
@@ -846,6 +893,10 @@ class ClaudeCodeAdapter:
     def launch_decoration(self, session_id: str) -> list[str]:
         """``--session-id <uuid>`` — what makes correlation deterministic (#13)."""
         return ["--session-id", session_id]
+
+    def model_decoration(self, model: str) -> list[str]:
+        """``--model <id>`` — Claude Code's per-launch model selector (#96)."""
+        return ["--model", model]
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         try:

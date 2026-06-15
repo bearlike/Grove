@@ -14,6 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from grove.core.contracts.branch_plan import AutoBranch, BranchPlan
+from grove.core.contracts.tickets import TicketSelector
 
 
 class CreateWorkspaceRequest(BaseModel):
@@ -41,6 +42,15 @@ class CreateWorkspaceRequest(BaseModel):
     treated equivalent to ``None`` by the engine; no separate "cleared"
     state on the wire."""
 
+    model: str | None = Field(default=None, max_length=200)
+    """Optional model id for this create only, forwarded to the agent tool as its
+    model argument at launch (``claude --model <id>`` / ``codex --model <id>``).
+    ``None`` (the default) lets the tool pick its own default — Grove never
+    second-guesses the model, it only forwards the parameter (the provider
+    boundary). The token is opaque (a known id or a custom string); the tool
+    validates it. Kinds with no launch-time model flag (mewbo, generic) ignore
+    it. Create-time only, like ``skip_init`` — never persisted or re-applied."""
+
     branch_plan: BranchPlan = Field(default_factory=AutoBranch)
     """How the workspace's branch and placement are sourced. See
     ``grove.core.contracts.branch_plan`` for the five variants — four produce a
@@ -53,6 +63,15 @@ class CreateWorkspaceRequest(BaseModel):
     it can be unwanted or unsafe in the repo root, and some worktrees simply
     don't need it. Records ``InitStatus.SKIPPED``. Does not persist — it is a
     create-time decision, never re-applied on resume/respawn."""
+
+    ticket: TicketSelector | None = None
+    """Optional ticket to associate at create. When set alongside an
+    ``AutoBranch`` plan, the generated branch becomes ticket-aware
+    (``{branch_prefix}{provider-formatted key + slug}``), so the tracker links
+    PRs/commits automatically. The provider must be enabled or create fails
+    before any side effect. Regardless of this field, the *final* branch name is
+    re-parsed through the providers to derive ``ticket_refs`` — so a non-auto
+    branch that already carries a key is associated too."""
 
     initial_prompt: str | None = Field(default=None, max_length=10_000)
     """The agent's first task, delivered race-free as the session boots so the

@@ -23,9 +23,9 @@ describe("CommitList", () => {
     expect(screen.getByText(/no commits in this workspace yet/i)).toBeInTheDocument();
   });
 
-  it("shows the commit count and full subject for each row", () => {
+  it("shows the count and the parsed subject (muted type tag + clean text)", () => {
     const list = [
-      commit({ sha: "aaaaaaa", subject: "feat: scaffold" }),
+      commit({ sha: "aaaaaaa", subject: "✨ feat: scaffold" }),
       commit({ sha: "bbbbbbb", subject: "test: cover the new abstraction" }),
       commit({
         sha: "ccccccc",
@@ -37,9 +37,11 @@ describe("CommitList", () => {
     expect(list_).toBeInTheDocument();
     // count + label live in adjacent spans so match the parent paragraph.
     expect(list_.textContent).toMatch(/3\s*commits since fork/);
-    expect(screen.getByText("feat: scaffold")).toBeInTheDocument();
+    // The conventional type surfaces as its own muted tag; the gitmoji is stripped.
+    expect(screen.getByText("scaffold")).toBeInTheDocument();
+    expect(list_.textContent).not.toContain("✨");
     expect(
-      screen.getByText("fix: long subject that should not be truncated visually"),
+      screen.getByText("long subject that should not be truncated visually"),
     ).toBeInTheDocument();
     expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
   });

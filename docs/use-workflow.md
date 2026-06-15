@@ -148,13 +148,14 @@ forward.
   [Activity Dashboard](features-activity.md) and let the waiting and
   blocked agents come to you. The wall shows both axes at once: the
   workspace status and each agent's live activity state.
-- **Watch from your phone.** The same wall is at `/activity` in the
-  [web dashboard](use-webapp.md) when you step away from the desk. The
-  focused pane streams live over SSE, so you can watch an agent work in
-  real time, and the web UI now does more than watch: you can create a
-  workspace, steer a running agent, and run the full lifecycle from the
-  browser. The daemon stays loopback-only behind a paired session, so
-  the phone reaches it through that paired link, not an open port.
+- **Reach the fleet asynchronously.** The same wall is the home surface
+  of the [web dashboard](use-webapp.md), reachable from any device on
+  your network. The focused pane streams live over SSE, so you can watch
+  an agent work in real time, and the web UI does more than watch: you
+  can create a workspace, steer a running agent, and run the full
+  lifecycle from the browser. The daemon stays loopback-only behind a
+  paired session, so a device reaches it through that paired link, not an
+  open port.
 - **One agent, one shell.** Spawn an agent workspace and a `shell`
   workspace pointed at the same branch (use *Existing local* in the
   create modal). The agent makes changes; the shell side runs `make

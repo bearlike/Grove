@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/workspace/status-badge";
 import { PlacementBadge } from "@/components/workspace/placement-badge";
 import { AgentStateBadge } from "@/components/dashboard/agent-state-badge";
+import { AgentStateMark } from "@/components/shared/state-mark";
 import { BranchSummary } from "@/components/workspace/branch-summary";
 import { WorkspaceActions } from "@/components/workspace/workspace-actions";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,12 @@ import type { CommitSummaryView, WorkspacePeekView } from "@/lib/grove/types";
  * branch summary into a popover. It replaces the old standing identity + summary
  * cards; collapsing them here is what frees the page's full width for the agent
  * surface.
+ *
+ * Layering (issue #90): this band is the HEADER STRIP of the detail panel — the
+ * top of the same lifted `bg-card` well that holds the transcript — so identity
+ * and transcript read as one bordered card. It carries the panel's top rounding
+ * (`rounded-t-lg`), a `border-b` divider, and the subtle-well `bg-muted/40`
+ * surface that sits one tier above the canvas and below the card body.
  *
  * The live state badge is the agent axis (`AgentStateBadge`) whenever a session
  * exists, falling back to the workspace `StatusBadge` only when there is none —
@@ -47,7 +54,7 @@ export function ContextBar({
   return (
     <section
       data-testid="context-bar"
-      className="flex shrink-0 flex-col gap-2.5 border-b border-border bg-card/40 px-4 py-3"
+      className="flex shrink-0 flex-col gap-2.5 rounded-t-lg border-b border-border bg-muted/40 px-4 py-3"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <Button asChild variant="ghost" size="icon-sm" className="shrink-0">
@@ -56,7 +63,7 @@ export function ContextBar({
           </Link>
         </Button>
         <h1
-          className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight sm:text-lg"
+          className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight sm:text-base"
           title={s.description ?? s.title}
         >
           {s.title}
@@ -112,17 +119,15 @@ export function ContextBar({
           aria-atomic="true"
           className={cn(
             "ml-auto inline-flex min-w-0 max-w-full items-center gap-2 rounded-full px-2.5 py-1 sm:max-w-[26rem]",
-            live.taskLine && "border border-primary/20 bg-primary/5",
+            // Neutral well — the state hue rides only the unified glyph, never
+            // the chrome (color discipline: terracotta is the `you` label + the
+            // composer CTA, nothing here).
+            live.taskLine && "border border-border bg-muted/40",
           )}
         >
           {live.taskLine && (
             <>
-              {live.isWorking && (
-                <Loader2
-                  aria-hidden
-                  className="size-3 shrink-0 text-primary motion-safe:animate-spin"
-                />
-              )}
+              <AgentStateMark state={live.state} className="shrink-0 text-xs" />
               <span className="min-w-0 truncate font-mono text-[11px] text-foreground">
                 {live.taskLine}
               </span>

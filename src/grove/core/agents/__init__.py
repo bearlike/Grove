@@ -15,8 +15,12 @@ from __future__ import annotations
 from grove.core.agents.base import AgentAdapter
 from grove.core.agents.model import (
     ATTENTION_STATES,
+    QUESTION_TOOL_NAMES,
     AgentActivity,
     AgentActivityState,
+    AgentQuestion,
+    AgentQuestionKind,
+    AgentQuestionOption,
     AgentSession,
     DigestEntry,
     OrderedDigest,
@@ -28,9 +32,13 @@ from grove.core.agents.registry import all_adapters, get_adapter
 
 __all__ = [
     "ATTENTION_STATES",
+    "QUESTION_TOOL_NAMES",
     "AgentActivity",
     "AgentActivityState",
     "AgentAdapter",
+    "AgentQuestion",
+    "AgentQuestionKind",
+    "AgentQuestionOption",
     "AgentSession",
     "DigestEntry",
     "OrderedDigest",

@@ -31,6 +31,7 @@ const sheetVariants = cva(
       side: {
         bottom: "inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-xl",
         right: "inset-y-0 right-0 h-full w-3/4 sm:max-w-md",
+        left: "inset-y-0 left-0 h-full w-3/4 sm:max-w-sm",
       },
     },
     defaultVariants: { side: "bottom" },

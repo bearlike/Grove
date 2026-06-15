@@ -130,6 +130,49 @@ def test_create_shell_ignores_initial_prompt(
     assert _last_decoration(fake_tmux, state.tmux_session) == []
 
 
+# ─── #96 model rides the launch argv (--model) ───────────────────────────────
+
+
+def test_create_claude_appends_model_flag(manager: WorkspaceManager, fake_tmux: FakeTmux) -> None:
+    """A per-create model forwards to ``claude --model <id>`` after --session-id."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="task", model="opus"))
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+        "--model",
+        "opus",
+    ]
+
+
+def test_create_claude_model_precedes_initial_prompt_positional(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """The prompt stays the trailing positional — --model is a flag, so it comes
+    before the prompt token."""
+    state = manager.create(
+        CreateWorkspaceRequest(
+            agent_name="claude", title="task", model="claude-opus-4-8", initial_prompt="do X"
+        )
+    )
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+        "--model",
+        "claude-opus-4-8",
+        "do X",
+    ]
+
+
+def test_create_shell_ignores_model(manager: WorkspaceManager, fake_tmux: FakeTmux) -> None:
+    """A generic shell has no launch-time model flag — the model is dropped, the
+    decoration stays empty."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="shell", title="plain", model="opus"))
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == []
+
+
 # ─── persistence / legacy ───────────────────────────────────────────────────
 
 

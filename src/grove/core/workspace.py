@@ -13,9 +13,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from grove.core.config import AgentKind, GroveConfig, expand_template
 from grove.core.errors import WorkspaceStateError
+
+if TYPE_CHECKING:
+    # Imported for the annotation only. `ticket_refs` defaults to an empty list,
+    # so no `TicketRef` symbol is needed at runtime — and with postponed
+    # annotations (`from __future__ import annotations`) the `list[TicketRef]`
+    # hint is never evaluated. This keeps the engine dataclass on the
+    # depended-upon side of the import arrow (contracts import workspace, never
+    # the reverse) — the same one-directional trick `contracts/activity.py`
+    # uses to reference engine dataclasses without a cycle.
+    from grove.core.contracts.tickets import TicketRef
 
 
 class WorkspaceStatus(StrEnum):
@@ -163,6 +174,14 @@ class WorkspaceState:
     # config). Defaults to None so legacy records load without migration — the
     # ActivityService falls back to a config lookup when it's None.
     agent_kind: AgentKind | None = None
+    # External tickets associated with this workspace. The branch name is the
+    # source of truth: create() and the existing-branch attach path derive these
+    # by parsing the final branch through the configured providers (>1 match →
+    # each ref `ambiguous=True`); a manual attach/detach overrides. Pydantic
+    # `TicketRef` (it crosses the wire on every workspace view), serialized
+    # explicitly by the store. Defaults to an empty list so legacy records load
+    # without migration — the branch_provenance/placement precedent.
+    ticket_refs: list[TicketRef] = field(default_factory=list)
 
 
 @dataclass(slots=True, frozen=True)

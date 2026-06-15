@@ -47,6 +47,7 @@ from textual.widgets import ListItem, Static
 
 from grove.core import InitStatus, WorkspaceState, WorkspaceStatus
 from grove.core.agents import AgentActivityState
+from grove.core.contracts.tickets import TicketRef
 from grove.core.workspace import Placement
 from grove.tui._status import (
     active_pulse,
@@ -64,6 +65,25 @@ from grove.tui._status import (
 # Title is trimmed if it exceeds this — keeps line 1 from wrapping on
 # narrow terminals. Matches the trim PeekRail uses for commit subjects.
 _TITLE_TRIM = 48
+
+# Per-provider compact-pill prefix. Linear ids already carry their team
+# prefix (ENG-123) so they read as-is; GitHub / Gitea issues are bare
+# numbers and need a provider tag to disambiguate. Defined once here so the
+# card row and the peek-rail detail render the exact same pill text (DRY).
+_TICKET_PILL_PREFIX: dict[str, str] = {"github": "GH#", "gitea": "GTEA#"}
+
+
+def ticket_pill(ref: TicketRef) -> str:
+    """Compact per-provider pill text for one ticket — the shared formatter.
+
+    Linear → the id verbatim (``ENG-123``); GitHub → ``GH#<id>``; Gitea →
+    ``GTEA#<id>``. An ``ambiguous`` ref (a branch-inferred match that more
+    than one provider/key claimed) gets a trailing ``?`` so it reads as
+    tentative. Both the card row and the peek-rail detail call this so the
+    two surfaces can never drift in how a ticket reads.
+    """
+    text = f"{_TICKET_PILL_PREFIX.get(ref.provider, '')}{ref.id}"
+    return f"{text}?" if ref.ambiguous else text
 
 
 class WorkspaceCard(ListItem):
@@ -305,6 +325,17 @@ def _render_card(
     text.append("  ")
     text.append("· ", style=muted_hex)
     text.append(status_label(state.status), style=f"bold {s_color}")
+    # Ticket pills: one compact segment per associated ticket, right after the
+    # status label. Each takes the agent-info hue (`ref_color('info')`, cyan)
+    # — the established "auxiliary metadata" slot — so a ticket reads as a
+    # quiet reference accent rather than competing with the lifecycle status.
+    # Empty `ticket_refs` renders nothing (no placeholder, no stray separator).
+    if state.ticket_refs:
+        ticket_hex = ref_color("info", dark=dark)
+        for ref in state.ticket_refs:
+            text.append("  ")
+            text.append("· ", style=muted_hex)
+            text.append(ticket_pill(ref), style=f"bold {ticket_hex}")
     # Root tag: a muted "root" marks a workspace that runs in the repo root
     # (no dedicated worktree). Muted + lowercase keeps it as a quiet
     # qualifier — the lifecycle status stays the line's loudest token, the

@@ -8,8 +8,8 @@ export function ThemeToggle() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  // Reserve the same footprint pre-mount so the header doesn't shift.
-  if (!mounted) return <span aria-hidden className="inline-block h-9 w-9" />;
+  // Reserve the same footprint pre-mount so the header doesn't shift (icon-sm = h-8 w-8).
+  if (!mounted) return <span aria-hidden className="inline-block size-8" />;
   const isDark = (resolvedTheme ?? theme) === "dark";
   return (
     <Button

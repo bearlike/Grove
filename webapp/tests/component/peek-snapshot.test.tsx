@@ -15,8 +15,11 @@ describe("PeekSnapshot", () => {
     expect(pre.dataset.takenAt).toBe("2026-05-09T00:00:00Z");
   });
 
-  it("uses monospace font", () => {
+  it("uses the terminal (Nerd Font) face on the <pre>", () => {
+    // `font-terminal` maps to --font-terminal (→ JetBrains Mono Nerd Font, #92)
+    // so the powerline/icon glyphs render; the Nerd Font `.variable` is scoped
+    // to this terminal subtree, never <html>.
     render(<PeekSnapshot snapshot="x" takenAt={null} />);
-    expect(screen.getByTestId("peek-snapshot").className).toMatch(/font-mono/);
+    expect(screen.getByTestId("peek-snapshot").className).toMatch(/font-terminal/);
   });
 });

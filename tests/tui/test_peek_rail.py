@@ -29,6 +29,7 @@ from grove.core import (
 from grove.core.agents import AgentActivity, AgentActivityState, DigestEntry, SessionTurn
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.tickets import TicketRef
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.tui._status import agent_state_color, chrome_color, ref_color, status_color
@@ -41,6 +42,7 @@ from grove.tui.widgets.peek_rail import (
     _render_pane_body,
     _render_peek,
     _render_workspace,
+    _ticket_block,
 )
 from tests.conftest import FakeTmux
 
@@ -85,6 +87,73 @@ def _stub_state(**overrides: object) -> WorkspaceState:
     }
     base.update(overrides)
     return WorkspaceState(**base)  # type: ignore[arg-type]
+
+
+# ─── ticket block ────────────────────────────────────────────────────────────
+
+
+def test_ticket_block_empty_refs_is_empty_text() -> None:
+    """No associated tickets → an empty ``Text`` so the rail ships no
+    placeholder line."""
+    block = _ticket_block([], dark=True)
+    assert block.plain == ""
+    assert block.spans == []
+
+
+def test_ticket_block_renders_pill_title_status_assignee_and_url() -> None:
+    """Each ref shows the compact pill, the title, muted-labelled status +
+    assignee, and the url — one line per ref."""
+    block = _ticket_block(
+        [
+            TicketRef(
+                provider="linear",
+                id="ENG-123",
+                title="Wire the provider layer",
+                status="In Progress",
+                assignee="krishna",
+                url="https://linear.app/x/ENG-123",
+            ),
+            TicketRef(provider="github", id="42", title="Bug: crash on boot"),
+        ],
+        dark=True,
+    )
+    body = block.plain
+    assert "ENG-123" in body
+    assert "Wire the provider layer" in body
+    assert "status" in body and "In Progress" in body
+    assert "assignee" in body and "krishna" in body
+    assert "https://linear.app/x/ENG-123" in body
+    # Second ref renders its pill + title even with no status/assignee/url.
+    assert "GH#42" in body
+    assert "Bug: crash on boot" in body
+    # One body line per ref: each pill heads its own line.
+    pill_lines = [ln for ln in body.splitlines() if ln.startswith(("ENG-123", "GH#42"))]
+    assert len(pill_lines) == 2
+
+
+def test_ticket_block_ambiguous_pill_is_suffixed() -> None:
+    """An ambiguous branch-inferred ref reads as tentative via a trailing `?`."""
+    block = _ticket_block([TicketRef(provider="github", id="42", ambiguous=True)], dark=True)
+    assert "GH#42?" in block.plain
+
+
+def test_render_workspace_includes_ticket_block() -> None:
+    """The ticket block is wired into the workspace card composition, so a
+    peek whose state carries refs surfaces them in the rail body."""
+    peek = WorkspacePeek(
+        state=_stub_state(ticket_refs=[TicketRef(provider="gitea", id="5", title="Add docs")]),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    body = _render_workspace(peek, dark=True).plain
+    assert "GTEA#5" in body
+    assert "Add docs" in body
 
 
 # ─── pure rendering ──────────────────────────────────────────────────────────
@@ -1140,14 +1209,15 @@ async def test_transcript_tab_is_default_and_renders_grouped_digest(
         tabs = rail.query_one("#peek-tabs", TabbedContent)
         assert tabs.active == "tab-transcript"
         assert not tabs.has_class("-hidden")
-        content = rail.query_one("#card-transcript", Static).content
-        plain = content.plain if isinstance(content, Text) else str(content)
+        # The transcript Static now holds a Rich Group (Markdown bodies +
+        # Text chrome), so read the plain projection through the body_text
+        # seam rather than off the Static's renderable.
+        plain = rail.body_text
         assert "fix the parser" in plain
-        assert "⏺ patched it" in plain
+        assert "agent ⏺" in plain  # the speaker label is its own line …
+        assert "patched it" in plain  # … above the markdown reply body
         assert "⚒ 2 tool calls" in plain
         assert "Edit parser.py" not in plain  # individual calls never listed
-        # The digest is part of the body_text test seam too.
-        assert "2 tool calls" in rail.body_text
         await pilot.press("q")
         await pilot.pause()
 

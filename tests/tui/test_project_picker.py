@@ -98,6 +98,27 @@ def test_group_includes_current_even_with_zero_workspaces(tmp_path: Path) -> Non
     assert by_name["bravo"].is_current is True
 
 
+def test_group_includes_declared_known_root_with_zero_workspaces(tmp_path: Path) -> None:
+    """A `known` root (registry union, e.g. config-declared) with no workspaces
+    still lists — empty projects stay visible in the switcher (#95)."""
+    repo_a = tmp_path / "alpha"
+    declared = (tmp_path / "delta").resolve()
+    choices = RepoChoice.group([_state(repo_a, "a1")], current=repo_a, known=[declared])
+    by_name = {c.name: c for c in choices}
+    assert "delta" in by_name
+    assert by_name["delta"].count == 0
+    assert by_name["delta"].is_current is False
+
+
+def test_group_dedupes_known_root_against_store_and_current(tmp_path: Path) -> None:
+    """A root that is store-derived AND in `known` appears once with its count."""
+    repo_a = tmp_path / "alpha"
+    choices = RepoChoice.group([_state(repo_a, "a1")], current=repo_a, known=[repo_a.resolve()])
+    alphas = [c for c in choices if c.name == "alpha"]
+    assert len(alphas) == 1
+    assert alphas[0].count == 1
+
+
 def test_group_sorts_current_first_then_by_name(tmp_path: Path) -> None:
     repo_a = tmp_path / "alpha"
     repo_b = tmp_path / "bravo"

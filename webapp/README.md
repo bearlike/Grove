@@ -60,7 +60,7 @@ The generated file at `lib/grove/types.gen.ts` is committed; the shim at `lib/gr
 
 | Layer | Command | What it covers |
 |---|---|---|
-| Unit + component | `npm test` | Class-atomic data layer (`GroveClient`, `RepoFacet`, `WorkspaceCardModel`), status tokens (incl. drift test against the Python source), components (StatusBadge, StatTrio, WorkspaceCard, PeekSnapshot). |
+| Unit + component | `npm test` | Class-atomic data layer (`GroveClient`, `RepoFacet`, `AgentLiveStatus`), status tokens (incl. drift test against the Python source), components (StatusBadge, StatTrio, WorkspaceCard, PeekSnapshot). |
 | E2E (hermetic) | `npm run test:e2e` | Playwright + Express fake daemon replaying fixtures. Mobile (Pixel 5) + desktop (1280×900) projects. |
 | E2E (live) | `npm run test:e2e:live` | Same specs against a real local daemon on `127.0.0.1:7421`. |
 
@@ -83,7 +83,7 @@ Each class answers one question, owns its own state, and exposes behavior over t
 
 - `GroveClient`: what does the daemon return?
 - `RepoFacet`: what's in this repo?
-- `WorkspaceCardModel`: what does this card show?
+- `AgentLiveStatus`: what is this workspace's agent doing right now (task / metrics / state)?
 - `status-tokens.ts`: single TS source for status hex / glyph / label / polarity-aware stat color. Drift-tested against `grove.core.contracts.status_palette`.
 
 ## Read-only by design

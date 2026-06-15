@@ -36,3 +36,9 @@ export type SessionSummaryView = components["schemas"]["SessionSummaryView"];
 export type SessionDetailView = components["schemas"]["SessionDetailView"];
 export type SessionTurnView = components["schemas"]["SessionTurnView"];
 export type DigestEntryView = components["schemas"]["DigestEntryView"];
+
+// Structured agent question carried on a `DigestEntryView` of role "question"
+// (epic #74) — rendered read-only as a choice card; options are a static list,
+// not interactive controls (answer-back is future).
+export type AgentQuestionView = components["schemas"]["AgentQuestionView"];
+export type AgentQuestionOptionView = components["schemas"]["AgentQuestionOptionView"];

@@ -8,8 +8,9 @@ title: Grove
   <p class="ms-hero__lede">
     Run several coding agents at once. Each gets its own git worktree and tmux session, scoped to one
     repo. They share nothing, so they never collide. Spin a session up, watch the agent work, then tear
-    it down. Every step is a single keypress. Step away from your desk, and the web dashboard keeps every
-    agent in view from your phone, where you can steer or stop any of them.
+    it down. Every step is a single keypress. Each workspace is reachable asynchronously, from the
+    terminal, the browser on any device, or another agent over MCP, so you can create, steer, or stop
+    any of them from wherever you are.
   </p>
   <div class="ms-cta-row">
     <a class="ms-btn ms-btn--primary" href="getting-started/">Install &amp; first workspace</a>
@@ -19,9 +20,9 @@ title: Grove
 </div>
 
 <div class="ms-devices">
-  <img class="no-border" src="img/mockups/tui-laptop-mockup.png" alt="Grove TUI on a MacBook: project-scoped workspaces with a live agent peek rail" />
-  <img class="no-border" src="img/mockups/webapp-phone-mockup.png" alt="Grove web dashboard on a phone, showing the mobile workspace grid" />
-  <p class="ms-devices__caption">Grove in your terminal, and on your phone. Run agents in parallel from your desk, then watch them from anywhere.</p>
+  <img class="no-border" src="img/mockups/hero-laptop.gif" alt="Grove on a MacBook, swapping between the terminal UI and the web dashboard" />
+  <img class="no-border" src="img/mockups/webapp-phone-mockup.png" alt="Grove web dashboard on a phone, showing the composer-first workspace surface" />
+  <p class="ms-devices__caption">Grove in your terminal and in the browser. Run agents in parallel, each in its own workspace, and reach any of them asynchronously from anywhere.</p>
 </div>
 
 ## What is Grove? { .ms-h2-icon data-icon="target" }
@@ -89,10 +90,12 @@ default, with room for personal overrides.
 Teams put this to work in familiar ways. They run an agent per feature branch. They pit Claude against
 Aider on the same task and compare the results. They pause a long refactor and pick it up days later.
 
-When others need to watch the fleet, point the web dashboard at the daemon. It shows the same status and
-live output as the TUI, in any browser or on a phone. You can create a workspace, steer an agent, and
-pause or kill it from there too. Pair a device once to grant it access, and the daemon stays on
-loopback behind that handshake.
+When you need the fleet beyond the terminal, point the web dashboard at the daemon for async access from
+any device on the network. It shows the same status and live output as the TUI, and you can create a
+workspace, steer an agent, and pause or kill it from there too. Pair a device once to grant it access,
+and the daemon stays on loopback behind that handshake. Workspaces are not only yours to drive: through
+Grove's [MCP server](use-mcp.md) an agent can spawn and steer workspaces of its own, the same isolated
+workspace primitive behind both human and agent orchestration.
 
 ## Explore the docs { .ms-h2-icon data-icon="book" }
 

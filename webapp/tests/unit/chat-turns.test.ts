@@ -202,4 +202,35 @@ describe("chatItemsFromTurns", () => {
   it("empty input maps to no items", () => {
     expect(chatItemsFromTurns([])).toEqual([]);
   });
+
+  it("maps a question entry to a question item carrying the structured payload", () => {
+    const question = {
+      id: "q-1",
+      group_id: "g-1",
+      kind: "single_select" as const,
+      prompt: "Which migration strategy?",
+      header: "Decision needed",
+      options: [
+        { label: "Big-bang cutover", description: "Faster, riskier" },
+        { label: "Incremental", description: null },
+      ],
+      multiselect: false,
+      answered: false,
+      answer: null,
+      source_tool: "AskUserQuestion",
+    };
+    const items = chatItemsFromTurns([
+      turn("pick one", [{ role: "question", text: "Which migration strategy?", question }]),
+    ]);
+    expect(items[1]).toEqual({ kind: "question", question });
+  });
+
+  it("a question entry with no payload is dropped (render-hardening, not a throw)", () => {
+    // The text-empty guard never runs for a question role (its prompt may be
+    // empty); a payload-less question is the only drop case.
+    const items = chatItemsFromTurns([
+      turn("go", [{ role: "question", text: "orphaned" }]),
+    ]);
+    expect(items).toEqual([{ kind: "message", role: "user", text: "go" }]);
+  });
 });

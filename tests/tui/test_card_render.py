@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 from grove.core import InitStatus, WorkspaceState, WorkspaceStatus
 from grove.core.agents import AgentActivityState
+from grove.core.contracts.tickets import TicketRef
 from grove.tui._status import (
     ACTIVE_PULSE_FRAMES,
     active_pulse,
@@ -28,7 +29,7 @@ from grove.tui._status import (
     ref_color,
     status_color,
 )
-from grove.tui.widgets.card import _render_card
+from grove.tui.widgets.card import _render_card, ticket_pill
 
 _NOW = datetime(2026, 5, 6, 12, 0, tzinfo=UTC)
 
@@ -425,6 +426,73 @@ def test_render_card_agent_state_none_is_byte_identical_to_legacy_render() -> No
         # And no agent-state token leaks into the agent-less render.
         for label in ("working", "waiting", "blocked", "starting"):
             assert label not in legacy.plain
+
+
+# ─── ticket pills ────────────────────────────────────────────────────────────
+
+
+def test_ticket_pill_formats_per_provider() -> None:
+    """The shared formatter renders the compact per-provider convention:
+    Linear verbatim, GitHub / Gitea prefixed, ambiguous gets a trailing `?`."""
+    assert ticket_pill(TicketRef(provider="linear", id="ENG-123")) == "ENG-123"
+    assert ticket_pill(TicketRef(provider="github", id="42")) == "GH#42"
+    assert ticket_pill(TicketRef(provider="gitea", id="5")) == "GTEA#5"
+    assert ticket_pill(TicketRef(provider="github", id="42", ambiguous=True)) == "GH#42?"
+
+
+def test_render_card_renders_ticket_pills() -> None:
+    """Each ticket ref shows its compact pill on line 2 next to the status
+    label — Linear verbatim, GitHub / Gitea prefixed, ambiguous suffixed."""
+    body = _render_card(
+        _state(
+            ticket_refs=[
+                TicketRef(provider="linear", id="ENG-123"),
+                TicketRef(provider="github", id="42"),
+                TicketRef(provider="gitea", id="5"),
+                TicketRef(provider="github", id="42", ambiguous=True),
+            ]
+        ),
+        dark=True,
+        now=_NOW,
+    ).plain
+    assert "ENG-123" in body
+    assert "GH#42" in body
+    assert "GTEA#5" in body
+    assert "GH#42?" in body
+
+
+def test_render_card_ticket_pill_uses_info_hex() -> None:
+    """Ticket pills ride the agent-info cyan (the auxiliary-metadata slot),
+    never an inline literal hex — same accessor every other accent uses."""
+    text = _render_card(
+        _state(ticket_refs=[TicketRef(provider="linear", id="ENG-7")]),
+        dark=True,
+        now=_NOW,
+    )
+    info_hex = ref_color("info", dark=True).lower()
+    found = False
+    for start, end, style in text.spans:
+        if text.plain[start:end] == "ENG-7":
+            style_str = str(style).lower()
+            if "bold" in style_str and info_hex in style_str:
+                found = True
+                break
+    assert found, (
+        f"ticket pill span 'ENG-7' should be 'bold {info_hex}'; spans seen: "
+        f"{[(text.plain[s:e], str(st)) for s, e, st in text.spans]}"
+    )
+
+
+def test_render_card_empty_ticket_refs_renders_no_pill() -> None:
+    """No tickets → no pill text and no stray trailing separator beyond the
+    legacy line-2 segments. Pinned against a placeholder creeping in."""
+    legacy = _render_card(_state(), dark=True, now=_NOW)
+    explicit = _render_card(_state(ticket_refs=[]), dark=True, now=_NOW)
+    # Empty refs must be byte-identical (and span-identical) to the default.
+    assert legacy.plain == explicit.plain
+    assert legacy.spans == explicit.spans
+    for token in ("ENG-", "GH#", "GTEA#"):
+        assert token not in explicit.plain
 
 
 def test_render_card_init_failed_badge_styled_bold_error() -> None:

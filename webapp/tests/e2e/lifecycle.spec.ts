@@ -6,54 +6,89 @@ import { test, expect, type Page } from "@playwright/test";
 // via page.route, so they never mutate the one shared fake daemon other specs
 // read from.
 
-test.describe("create workspace", () => {
-  test("opens from the header and submits an auto branch plan", async ({ page }) => {
+test.describe("create workspace (composer-first)", () => {
+  // The composer at the top of `/` IS the create surface (#96): type → Enter.
+  // Title auto-derives from the first prompt line; the full prompt rides as the
+  // initial_prompt. Agent + repo default from the first known project.
+
+  async function waitReady(page: import("@playwright/test").Page) {
+    // Defaults (repo → agent) resolve async; the send control enables once the
+    // draft is valid, so wait on it before submitting.
+    await expect(page.getByTestId("composer-send")).toBeEnabled();
+  }
+
+  test("type → Enter submits an auto branch plan", async ({ page }) => {
     await page.goto("/");
-    await page.getByTestId("create-workspace-button").click();
-    const dialog = page.getByTestId("create-dialog");
-    await expect(dialog).toBeVisible();
-    // Repo defaults to the first known project; agent defaults to claude.
-    await expect(dialog.getByTestId("create-repo")).toHaveValue("/repos/Grove");
-    await expect(dialog.getByTestId("create-agent")).toHaveValue("claude");
-    await dialog.getByTestId("create-title").fill("new feature");
+    await page.getByTestId("composer-prompt").fill("new feature");
+    await waitReady(page);
 
     const reqPromise = page.waitForRequest(
       (r) => r.url().endsWith("/api/grove/workspaces") && r.method() === "POST",
     );
-    await dialog.getByTestId("create-submit").click();
+    await page.getByTestId("composer-prompt").press("Enter");
     const body = (await reqPromise).postDataJSON();
     expect(body).toMatchObject({
       agent_name: "claude",
       title: "new feature",
       repo_root: "/repos/Grove",
       branch_plan: { kind: "auto" },
+      initial_prompt: "new feature",
     });
-    await expect(dialog).toBeHidden();
   });
 
-  test("builds a new-named branch plan from the branch mode", async ({ page }) => {
+  test("a selected model rides the request as model", async ({ page }) => {
     await page.goto("/");
-    await page.getByTestId("create-workspace-button").click();
-    const dialog = page.getByTestId("create-dialog");
-    await dialog.getByTestId("create-title").fill("named branch");
-    await dialog.getByTestId("create-mode").selectOption("new_named");
-    await dialog.getByTestId("create-new-name").fill("feature/x");
+    await page.getByTestId("composer-model").click();
+    await page.getByRole("menuitem", { name: "Sonnet 4.6", exact: true }).click();
+    await page.getByTestId("composer-prompt").fill("with a model");
+    await waitReady(page);
 
     const reqPromise = page.waitForRequest(
       (r) => r.url().endsWith("/api/grove/workspaces") && r.method() === "POST",
     );
-    await dialog.getByTestId("create-submit").click();
+    await page.getByTestId("composer-prompt").press("Enter");
+    const body = (await reqPromise).postDataJSON();
+    expect(body).toMatchObject({ title: "with a model", model: "claude-sonnet-4-6" });
+  });
+
+  test("a custom model id rides the request", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("composer-model").click();
+    await page.getByTestId("composer-model-custom").fill("my-custom-model");
+    await page.getByTestId("composer-model-custom").press("Enter");
+    await page.getByTestId("composer-prompt").fill("custom model run");
+    await waitReady(page);
+
+    const reqPromise = page.waitForRequest(
+      (r) => r.url().endsWith("/api/grove/workspaces") && r.method() === "POST",
+    );
+    await page.getByTestId("composer-prompt").press("Enter");
+    const body = (await reqPromise).postDataJSON();
+    expect(body.model).toBe("my-custom-model");
+  });
+
+  test("Advanced builds a new-named branch plan", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("composer-advanced-toggle").click();
+    await page.getByTestId("create-mode").selectOption("new_named");
+    await page.getByTestId("create-new-name").fill("feature/x");
+    await page.getByTestId("composer-prompt").fill("named branch");
+    await waitReady(page);
+
+    const reqPromise = page.waitForRequest(
+      (r) => r.url().endsWith("/api/grove/workspaces") && r.method() === "POST",
+    );
+    await page.getByTestId("composer-prompt").press("Enter");
     const body = (await reqPromise).postDataJSON();
     expect(body.branch_plan).toMatchObject({ kind: "new_named", name: "feature/x" });
   });
 
-  test("root mode auto-checks skip-init and explains itself", async ({ page }) => {
+  test("Advanced root mode auto-checks skip-init and explains itself", async ({ page }) => {
     await page.goto("/");
-    await page.getByTestId("create-workspace-button").click();
-    const dialog = page.getByTestId("create-dialog");
-    await dialog.getByTestId("create-mode").selectOption("root");
-    await expect(dialog.getByTestId("create-skip-init")).toBeChecked();
-    await expect(dialog.getByTestId("create-root-note")).toBeVisible();
+    await page.getByTestId("composer-advanced-toggle").click();
+    await page.getByTestId("create-mode").selectOption("root");
+    await expect(page.getByTestId("create-skip-init")).toBeChecked();
+    await expect(page.getByTestId("create-root-note")).toBeVisible();
   });
 });
 

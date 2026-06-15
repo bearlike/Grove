@@ -18,7 +18,7 @@ const buttonVariants = cva(
   // base — applied to every variant. Focus ring uses ring-ring (resolves
   // via @theme to the brand color), offset by ring-offset-background so
   // it reads on every surface. Subtle 200 ms color/elevation transition.
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -35,12 +35,21 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
       },
+      // Dense chrome (xs / icon-xs, h-7) keeps a tighter 14px glyph; everything
+      // sm and up holds the 16px glyph. Sizing the svg per size — not once in
+      // the base — is what lets the compact toolbar controls read correctly.
+      // Compact-first scale (denser than stock shadcn): the chrome reads tight
+      // and information-dense. xs/icon-xs (h-7) for toolbar chrome, the default
+      // drops to h-9 so the primary control isn't bulky, lg (h-10) for the rare
+      // emphasis case. SVG sizes per-size so a 16px glyph never swamps h-7.
       size: {
-        sm: "h-8 px-3 text-xs",
-        default: "h-10 px-4",
-        lg: "h-11 px-6 text-base",
-        icon: "h-10 w-10",
-        "icon-sm": "h-9 w-9",
+        xs: "h-7 gap-1.5 px-2 text-xs [&_svg]:size-3.5",
+        sm: "h-8 px-3 text-xs [&_svg]:size-4",
+        default: "h-9 px-4 [&_svg]:size-4",
+        lg: "h-10 px-6 text-sm [&_svg]:size-4",
+        icon: "h-9 w-9 [&_svg]:size-4",
+        "icon-sm": "h-8 w-8 [&_svg]:size-4",
+        "icon-xs": "h-7 w-7 [&_svg]:size-3.5",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

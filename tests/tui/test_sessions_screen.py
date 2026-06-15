@@ -186,7 +186,9 @@ async def test_rows_render_and_first_session_turns_show(
         assert "❯" in text  # noqa: RUF001 — the CLI's deliberate prompt glyph
         assert "⚒ 1 tool call" in text
         assert "Edit parser.py" not in text
-        assert "⏺ patched it" in text
+        # The agent speaker label sits on its own line above the markdown reply.
+        assert "agent ⏺" in text
+        assert "patched it" in text
 
 
 async def test_highlight_change_loads_turns_for_next_session(

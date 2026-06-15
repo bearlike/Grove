@@ -2,6 +2,7 @@
 
 import { PeekSnapshot } from "@/components/workspace/peek-snapshot";
 import { RelativeTime } from "@/components/shared/relative-time";
+import { JetBrainsMonoNerd } from "@/app/fonts";
 import { cn } from "@/lib/utils";
 
 /**
@@ -35,7 +36,16 @@ export function TerminalPane({
         // corners crisp WITHOUT becoming a scroll container, so Playwright's
         // scrollIntoView can't get trapped here (the scroll-trap lesson). The
         // PeekSnapshot inside owns the real scroll viewport.
-        "flex min-h-0 min-w-0 flex-1 flex-col overflow-clip rounded-md border border-border bg-card",
+        //
+        // This is the one intentionally-DEEPER surface (#92): `bg-background`
+        // is the canvas tier, which reads as an inset well against the
+        // detail-panel's `bg-card` around it — a terminal-emulator feel,
+        // distinct from the transcript's `bg-card` panel. The Nerd Font
+        // (`JetBrainsMonoNerd.variable`) is scoped to THIS subtree so
+        // `font-terminal` on the inner `<pre>` resolves the powerline/icon
+        // glyphs without dragging the face into app chrome (never on <html>).
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-clip rounded-md border border-border bg-background",
+        JetBrainsMonoNerd.variable,
         className,
       )}
     >
@@ -62,7 +72,7 @@ export function TerminalPane({
       <PeekSnapshot
         snapshot={snapshot}
         takenAt={takenAt}
-        className="flex-1 rounded-none border-0 bg-card"
+        className="flex-1 rounded-none border-0 bg-background"
       />
     </div>
   );

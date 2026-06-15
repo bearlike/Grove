@@ -23,6 +23,8 @@ function renderStatusBar({
     user: string;
     platform: string;
     python_version: string;
+    latest_version?: string | null;
+    update_available?: boolean;
   };
 }) {
   const qc = new QueryClient({
@@ -128,5 +130,46 @@ describe("StatusBar", () => {
     // of visibility).
     const trigger = screen.getByTestId("daemon-status");
     expect(trigger).toBeInTheDocument();
+  });
+
+  it("shows a newer-release link when whoami.update_available is set (#80)", () => {
+    renderStatusBar({
+      workspaces: [],
+      whoami: {
+        version: "0.1.0",
+        started_at: new Date().toISOString(),
+        uptime_seconds: 0,
+        host: "h",
+        user: "u",
+        platform: "linux",
+        python_version: "3.12.7",
+        latest_version: "0.2.0",
+        update_available: true,
+      },
+    });
+    const link = screen.getByTestId("update-available");
+    expect(link).toHaveTextContent("v0.2.0");
+    expect(link).toHaveAttribute(
+      "href",
+      "https://github.com/bearlike/Grove/releases/latest",
+    );
+  });
+
+  it("hides the newer-release link when no update is available", () => {
+    renderStatusBar({
+      workspaces: [],
+      whoami: {
+        version: "0.2.0",
+        started_at: new Date().toISOString(),
+        uptime_seconds: 0,
+        host: "h",
+        user: "u",
+        platform: "linux",
+        python_version: "3.12.7",
+        latest_version: "0.2.0",
+        update_available: false,
+      },
+    });
+    expect(screen.queryByTestId("update-available")).toBeNull();
   });
 });

@@ -57,6 +57,7 @@ _GLYPH_BRANCH: Final = "⎇"
 _GLYPH_FILTER: Final = "⌕"
 _GLYPH_SELECT: Final = "›"  # noqa: RUF001
 _GLYPH_DIVIDER: Final = "│"
+_GLYPH_UPDATE: Final = "⇡"  # newer release available — "there's something to pull"
 
 # Order in which count chips appear. Computed/persisted statuses both
 # in the list — RUNNING is rare post-reconciliation but mapped so a
@@ -124,6 +125,11 @@ class StatusBar(Widget):
     # by the count chips (counts read as steady reference data — pulsing
     # `● 3` would suggest the count itself is changing). 0 = resting frame.
     pulse_frame: reactive[int] = reactive(0)
+    # Newer-release nudge (#80), fed by the list screen's release-check worker.
+    # An empty `latest_version` renders the chip as a bare "⇡ update"; the
+    # version is shown when known. Both default to "no nudge".
+    update_available: reactive[bool] = reactive(False)
+    latest_version: reactive[str] = reactive("")
 
     def __init__(self, repo_root: Path) -> None:
         super().__init__()
@@ -168,6 +174,12 @@ class StatusBar(Widget):
         self.refresh()
 
     def watch_repo(self, _value: str) -> None:
+        self.refresh()
+
+    def watch_update_available(self, _value: bool) -> None:
+        self.refresh()
+
+    def watch_latest_version(self, _value: str) -> None:
         self.refresh()
 
     def watch_pulse_frame(self, _value: int) -> None:
@@ -250,7 +262,20 @@ class StatusBar(Widget):
         text = Text()
         if tier == "narrow":
             return text
+        if self.update_available:
+            # Amber "work to pull" hue — the same semantic the peek rail uses for
+            # `behind`/`dirty`; a newer release is literally something to pull.
+            # Quiet by design: one short chip, no background, never blinks.
+            amber = status_color(WorkspaceStatus.ORPHANED, dark=dark)
+            label = (
+                f"{_GLYPH_UPDATE} v{self.latest_version}"
+                if self.latest_version
+                else f"{_GLYPH_UPDATE} update"
+            )
+            text.append(label, style=f"bold {amber}")
         if self.filter_query:
+            if text.cell_len:
+                text.append("   ")
             query = _truncate(self.filter_query, _FILTER_TRIM)
             text.append(f'{_GLYPH_FILTER} "{query}"', style="bold underline")
         if tier == "wide":
