@@ -166,6 +166,7 @@ class ProjectGroupView(BaseModel):
 
     repo_root: str
     repo_name: str
+    cwd: str
     workspaces: list[WorkspaceActivityView]
 
     @classmethod
@@ -173,6 +174,7 @@ class ProjectGroupView(BaseModel):
         return cls(
             repo_root=g.repo_root,
             repo_name=g.repo_name,
+            cwd=g.cwd,
             workspaces=[WorkspaceActivityView.from_activity(w) for w in g.workspaces],
         )
 

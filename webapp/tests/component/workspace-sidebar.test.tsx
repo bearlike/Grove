@@ -31,8 +31,8 @@ function buildSnapshot(): DashboardSnapshotView {
   const all = [...grove, ...site];
   return {
     projects: [
-      { repo_root: "/repos/Grove", repo_name: "Grove", workspaces: grove },
-      { repo_root: "/repos/website", repo_name: "website", workspaces: site },
+      { repo_root: "/repos/Grove", repo_name: "Grove", cwd: "/repos/Grove", workspaces: grove },
+      { repo_root: "/repos/website", repo_name: "website", cwd: "/repos/website", workspaces: site },
     ],
     generated_at: "2026-06-01T00:00:00Z",
     total_workspaces: all.length,

@@ -57,21 +57,37 @@ into one click. The lifecycle action buttons live in that same bar (more on thos
 
 Under the context bar sits the agent surface, with two tabs.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace-detail.png" alt="The workspace detail page: a context bar with title, state badge, and lifecycle buttons over the Transcript tab showing the agent conversation and a steer composer" /></div>
-  <figcaption class="ms-shot__body">The workspace IDE shell. The context bar carries identity, the live state, and the lifecycle buttons; the Transcript tab holds the conversation and the steer composer.</figcaption>
-</figure>
+<div class="swiper ms-shots">
+  <div class="swiper-wrapper">
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/webapp-workspace-detail.png" alt="The workspace detail page: a context bar with title, state badge, and lifecycle buttons over the Transcript tab showing the agent conversation and a steer composer">
+        <figcaption>Transcript tab. The context bar carries identity, state, and lifecycle buttons; below it the conversation, tool calls, and the steer composer.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/webapp-workspace-terminal.png" alt="The workspace detail page on its Terminal tab, mirroring the agent's live tmux pane with a live-capture badge">
+        <figcaption>Terminal tab. The agent's tmux pane mirrored in near real time, colors and box-drawing intact, with a live-capture badge.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/webapp-workspace-split.png" alt="A split view: the agent's transcript on the left, the live terminal on the right, with a resizable divider between them">
+        <figcaption>Split view. Drag the handle to set the ratio. The transcript and the terminal stay live side by side.</figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="swiper-pagination"></div>
+  <div class="swiper-button-prev"></div>
+  <div class="swiper-button-next"></div>
+</div>
 
 The **Transcript** tab is a real chat panel. It shows the conversation as it unfolds: your messages and
 the agent's replies, tool calls grouped into collapsible runs, and background notifications. A composer
 sits at the bottom. Type into it ("Steer the agent...") and your message goes straight to the running
 agent as a follow-up, the same as typing into the terminal, just from the browser. While the agent is
 working, an Interrupt button appears next to the composer so you can stop it mid-turn.
-
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace-terminal.png" alt="The workspace detail page on its Terminal tab, mirroring the agent's live tmux pane with a live-capture badge" /></div>
-  <figcaption class="ms-shot__body">The Terminal tab. The agent's tmux pane mirrored in near real time, colors and box-drawing intact, with a live-capture badge.</figcaption>
-</figure>
 
 The **Terminal** tab mirrors the agent's live tmux pane, with real colors and box-drawing intact. It
 refreshes itself every couple of seconds and carries a live-capture badge, so the pane tracks the
@@ -124,6 +140,11 @@ Open <http://127.0.0.1:3000> on the same machine. The web app binds `0.0.0.0`, s
 on the same network reaches it at `http://<machine-ip>:3000`. If the daemon runs on a different host or
 port, point the web app at it with `GROVE_DAEMON_URL` in `webapp/.env.local`. The first time a new
 device connects, it has to [pair](use-auth.md) with the host.
+
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home-mobile.png" alt="The Grove web dashboard on a mobile screen, showing the workspace grid and scope rail" /></div>
+  <figcaption class="ms-shot__body">The dashboard on a phone. The full workspace grid, scope rail, and live state are there. No terminal required.</figcaption>
+</figure>
 
 Editing the dashboard's own code is a separate, contributor task. The development server, the wire-type
 codegen, and the test suites live in the

@@ -70,7 +70,7 @@ The footer adapts to the selected row. Global keys stay on the left.
 Selection keys sit on the right, and the ones that do not apply to the
 row's current status render dimmed. A PAUSED row dims attach and pause,
 an OFFLINE row lights respawn, an ORPHANED row leaves only kill. The
-availability rule lives in one function in `screens/list.py`, so the
+availability rule lives in one function in [`src/grove/tui/screens/list.py`](repo:src/grove/tui/screens/list.py), so the
 footer never drifts from what is actually runnable.
 
 <figure class="ms-shot">
@@ -204,11 +204,6 @@ are metadata only. The worktree directory and tmux session keep their
 original names, so attached clients and your muscle memory are never
 disrupted.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-edit-modal.svg" alt="Edit workspace modal with title and description fields" /></div>
-  <figcaption class="ms-shot__body">Edit modal. Title and description are metadata; the worktree path and session name stay fixed.</figcaption>
-</figure>
-
 ### Kill confirmation
 
 `k` opens a confirm modal that doubles as a branch-deletion toggle. The
@@ -217,30 +212,47 @@ GROVE_CREATED defaults to "delete the branch". USER_ATTACHED defaults to
 "keep the branch". You can flip either way. Grove never touches remote
 branches. Remote deletion requires `git push --delete` from your shell.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-kill-confirm.svg" alt="Kill confirm modal" /></div>
-  <figcaption class="ms-shot__body">Kill confirm. The checkbox default reflects whether Grove created the branch.</figcaption>
-</figure>
-
 ### Pause confirmation
 
 `p` opens a smaller confirm modal that names the branch retained and warns
 when there are uncommitted changes that would block the pause.
-
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-pause-confirm.svg" alt="Pause confirm modal" /></div>
-  <figcaption class="ms-shot__body">Pause confirm. Grove refuses to pause a dirty worktree. Commit or stash first.</figcaption>
-</figure>
 
 ### Help
 
 `?` opens a read-only key reference grouped by zone. Press any key to
 dismiss.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-help.svg" alt="Help modal" /></div>
-  <figcaption class="ms-shot__body">Help modal. Pulled from the same <code>DEFAULT_BINDINGS</code> tuple the contextual footer reads.</figcaption>
-</figure>
+<div class="swiper ms-shots">
+  <div class="swiper-wrapper">
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-edit-modal.svg" alt="Edit workspace modal with title and description fields">
+        <figcaption>Edit modal (<code>e</code>). Title and description are metadata; the worktree path and session name stay fixed.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-kill-confirm.svg" alt="Kill confirm modal">
+        <figcaption>Kill confirm (<code>k</code>). The checkbox default reflects whether Grove created the branch.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-pause-confirm.svg" alt="Pause confirm modal">
+        <figcaption>Pause confirm (<code>p</code>). Grove refuses to pause a dirty worktree. Commit or stash first.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-help.svg" alt="Help modal">
+        <figcaption>Help modal (<code>?</code>). Pulled from the same <code>DEFAULT_BINDINGS</code> tuple the contextual footer reads.</figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="swiper-pagination"></div>
+  <div class="swiper-button-prev"></div>
+  <div class="swiper-button-next"></div>
+</div>
 
 ### Pairing
 

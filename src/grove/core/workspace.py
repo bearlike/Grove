@@ -158,6 +158,13 @@ class WorkspaceState:
     # the branch_provenance precedent, no migration. Read by every lifecycle
     # method to gate the worktree side effects; never mutated after create().
     placement: Placement = Placement.WORKTREE
+    # Where the agent session starts, relative to the worktree root (#101). A
+    # POSIX relative path (e.g. "homelab", "services/api") or "" for the worktree
+    # root itself — the historical shape. The worktree and branch always anchor
+    # at the repo root; this only moves the agent's cwd into a nested *project*
+    # subdir, so several subdirs of one repo can be distinct projects. Defaults
+    # to "" so legacy records load without migration (the placement precedent).
+    project_subpath: str = ""
     # The agent session id Grove minted at launch (Claude Code's --session-id),
     # or None for a generic/shell agent it doesn't introspect. This is the
     # deterministic correlation key: Grove launched the agent with it, so it
@@ -182,6 +189,18 @@ class WorkspaceState:
     # explicitly by the store. Defaults to an empty list so legacy records load
     # without migration — the branch_provenance/placement precedent.
     ticket_refs: list[TicketRef] = field(default_factory=list)
+
+    @property
+    def agent_cwd(self) -> Path:
+        """Absolute directory the agent session runs in: ``worktree / subpath``.
+
+        The single source of truth for "where the agent starts", reused by
+        every session-(re)creation path (resume/respawn) so they can't drift on
+        the nested-cwd rule (#101). ``project_subpath == ""`` collapses to the
+        worktree root — the historical behavior.
+        """
+        base = Path(self.worktree_path)
+        return base / self.project_subpath if self.project_subpath else base
 
 
 @dataclass(slots=True, frozen=True)

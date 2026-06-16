@@ -62,7 +62,7 @@ resolve to the same answer.
 ## Pane-target resolution
 
 The terminal tab needs to know which tmux pane to capture. The policy
-lives in `WorkspaceManager.pane_target(workspace_id)`:
+lives in [`WorkspaceManager.pane_target`](repo:src/grove/core/manager.py) (`workspace_id`):
 
 1. The configured `agent_window_name` (default `agent`) if it exists.
 2. The first non-`shell` window otherwise.

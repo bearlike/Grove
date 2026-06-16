@@ -90,6 +90,16 @@ class CreateWorkspaceRequest(BaseModel):
     can dispatch to the right ``WorkspaceManager`` — its handler returns
     422 when missing."""
 
+    project_cwd: Path | None = None
+    """Absolute path the agent session should start in — a nested *project*
+    directory inside the repo (#101). ``None`` (the default) starts the agent at
+    the worktree root, the historical behavior. When set it must be the repo
+    root or a subdirectory of it; the engine derives the subpath relative to the
+    repo root and starts the agent in the matching subdir of the worktree. The
+    git worktree and branch are **always** anchored at the repo root regardless
+    — this field separates "where the agent works" from "where the worktree
+    lives", letting several subdirs of one repo be distinct projects."""
+
 
 class UpdateWorkspaceRequest(BaseModel):
     """Payload for ``WorkspaceManager.update()`` — partial metadata edit.

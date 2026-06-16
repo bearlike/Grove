@@ -131,8 +131,8 @@ is the only path forward.
 ## Side effects live at the edges
 
 Grove's manager reads no config file directly and shells out to nothing.
-Two modules carry every side effect. `grove/core/git.py` wraps the five
-`git` subcommands the lifecycle needs. `grove/core/tmux.py` wraps
+Two modules carry every side effect. [`src/grove/core/git.py`](repo:src/grove/core/git.py) wraps the five
+`git` subcommands the lifecycle needs. [`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py) wraps
 `libtmux`. Everything else (branch resolution, cascade merging, state
 reconciliation, init-outcome capture) is pure logic that runs against
 in-memory data.

@@ -186,6 +186,10 @@ class JsonWorkspaceStore:
                 data.get("branch_provenance", BranchProvenance.GROVE_CREATED.value)
             ),
             placement=Placement(data.get("placement", Placement.WORKTREE.value)),
+            # `.get()` — absent on records written before nested-project cwd
+            # existed (#101); "" means the agent starts at the worktree root,
+            # the historical shape.
+            project_subpath=data.get("project_subpath", ""),
             # `.get()` — absent on records written before agent-session tracking
             # existed; legacy workspaces simply track no session.
             agent_session_id=data.get("agent_session_id"),

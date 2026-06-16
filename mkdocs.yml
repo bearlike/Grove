@@ -25,6 +25,8 @@ theme:
   versions_root: Grove
   show_version_switcher: true
   show_build_info: true
+  carousel: true
+  code_refs: {}
 
   nav_icons:
     Home: lucide:house

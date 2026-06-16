@@ -132,10 +132,18 @@ class WorkspaceActivity:
 
 @dataclass(slots=True, frozen=True)
 class ProjectGroup:
-    """All of one repo's workspace rows, the dashboard's default grouping."""
+    """One project's workspace rows, the dashboard's default grouping.
+
+    ``repo_root`` is the git repo that anchors the worktrees; ``cwd`` is the
+    project's working directory. For a top-level repo ``cwd == repo_root``; for a
+    nested project (#101) ``cwd`` is a subdirectory, so several groups can share
+    one ``repo_root`` and are distinguished by ``cwd``. ``repo_name`` stays the
+    repo's basename; clients show ``cwd`` (or its tail) to disambiguate siblings.
+    """
 
     repo_root: str
     repo_name: str
+    cwd: str
     workspaces: tuple[WorkspaceActivity, ...]
 
 
@@ -221,12 +229,51 @@ class ActivityService:
         peek rail already follows.
         """
         self._ensure_bridged()
+        # One group per known *project* (#101). Several nested projects can share
+        # one repo root — and thus one Manager — so workspaces are listed once per
+        # repo and split into groups by their persisted ``project_subpath``. A
+        # workspace whose subpath matches no declared project still gets its own
+        # implied group (no row is ever dropped); every declared project appears
+        # even when empty (the #95 visibility contract, carried per-project).
+        seeded: dict[Path, dict[str, Path]] = {}  # repo_root → {subpath: project_cwd}
+        for project in self._registry.known_projects():
+            root = project.repo_root.resolve()
+            sub = self._subpath(root, project.cwd)
+            seeded.setdefault(root, {})[sub] = project.cwd
         groups: list[ProjectGroup] = []
-        for root in sorted(self._registry.known_roots()):
+        for root, declared in seeded.items():
             mgr = self._registry.get(root)
-            rows = tuple(self._workspace_activity(mgr, state) for state in mgr.list())
-            groups.append(ProjectGroup(repo_root=str(root), repo_name=root.name, workspaces=rows))
+            cwds = dict(declared)  # subpath → project cwd (seeds empty groups)
+            rows_by_sub: dict[str, list[WorkspaceActivity]] = {sub: [] for sub in cwds}
+            for state in mgr.list():
+                sub = state.project_subpath
+                cwds.setdefault(sub, root / sub if sub else root)
+                rows_by_sub.setdefault(sub, []).append(self._workspace_activity(mgr, state))
+            for sub, cwd in cwds.items():
+                groups.append(
+                    ProjectGroup(
+                        repo_root=str(root),
+                        repo_name=root.name,
+                        cwd=str(cwd),
+                        workspaces=tuple(rows_by_sub.get(sub, [])),
+                    )
+                )
+        groups.sort(key=lambda g: g.cwd)
         return DashboardSnapshot(projects=tuple(groups), generated_at=_utcnow())
+
+    @staticmethod
+    def _subpath(repo_root: Path, cwd: Path) -> str:
+        """POSIX subpath of ``cwd`` under ``repo_root`` ("" when they're equal).
+
+        Mirrors ``WorkspaceManager._project_subpath`` so a declared project's cwd
+        keys the same group its workspaces (whose ``project_subpath`` the manager
+        derived the same way) land in."""
+        try:
+            rel = cwd.resolve().relative_to(repo_root)
+        except ValueError:
+            return ""
+        posix = rel.as_posix()
+        return "" if posix == "." else posix
 
     # ─── delta bus ─────────────────────────────────────────────────────────
 

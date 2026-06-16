@@ -14,27 +14,38 @@ Step one happens on the device. The browser suggests a label from its user agent
 "MacBook". Edit it to something you will recognize, then request pairing. The daemon records the request
 and returns a code.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-pair-device.png" alt="Web dashboard pairing screen with a device-name field" /></div>
-  <figcaption class="ms-shot__body">On the device. Name it, then request pairing.</figcaption>
-</figure>
-
 Step two also happens on the device. The browser shows an eight-character code in the form `XXXX-XXXX`
 and starts polling. This code is your proof. You compare it against what the host shows before you
 approve.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-pair-code.png" alt="Web dashboard showing the pairing code to confirm on the host" /></div>
-  <figcaption class="ms-shot__body">On the device. The code to confirm on the host. It expires after five minutes.</figcaption>
-</figure>
-
 Step three happens on the host. Confirm the matching code on the machine that runs the daemon. The
 moment you approve, the browser's next poll picks up its session and redirects into the dashboard.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-pair-approve.svg" alt="Grove TUI pairing modal prompting to approve a new device" /></div>
-  <figcaption class="ms-shot__body">On the host. The TUI pops this modal on its own. Approve with <code>a</code>, deny with <code>d</code>.</figcaption>
-</figure>
+<div class="swiper ms-shots">
+  <div class="swiper-wrapper">
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/webapp-pair-device.png" alt="Web dashboard pairing screen with a device-name field">
+        <figcaption>Step 1 — on the device. Name it, then request pairing.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/webapp-pair-code.png" alt="Web dashboard showing the pairing code to confirm on the host">
+        <figcaption>Step 2 — on the device. The eight-character code to confirm on the host. It expires after five minutes.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-pair-approve.svg" alt="Grove TUI pairing modal prompting to approve a new device">
+        <figcaption>Step 3 — on the host. The TUI pops this modal on its own. Approve with <code>a</code>, deny with <code>d</code>.</figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="swiper-pagination"></div>
+  <div class="swiper-button-prev"></div>
+  <div class="swiper-button-next"></div>
+</div>
 
 ## Approving on the host
 

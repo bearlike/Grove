@@ -219,6 +219,27 @@ class WorkspaceManager:
         stem = self.ticket_providers.format_branch_name(request.ticket, request.title)
         return _dc_replace(resolved, name=f"{self._cfg.worktree.branch_prefix}{stem}")
 
+    def _project_subpath(self, project_cwd: Path | None) -> str:
+        """Resolve a requested agent cwd to a POSIX subpath under the repo root.
+
+        ``None`` → ``""`` (agent starts at the worktree root, the historical
+        shape). Otherwise the path must be the repo root or a descendant of it;
+        anything else is a loud ``GroveError`` raised before any side effect.
+        Both sides are ``resolve()``d (the registry keys ``repo_root`` that way),
+        so a symlinked or relative ``project_cwd`` still maps correctly (#101).
+        """
+        if project_cwd is None:
+            return ""
+        resolved = project_cwd.expanduser().resolve()
+        try:
+            rel = resolved.relative_to(self._repo_root)
+        except ValueError:
+            raise GroveError(
+                f"project cwd {resolved} is not within repo root {self._repo_root}"
+            ) from None
+        posix = rel.as_posix()
+        return "" if posix == "." else posix
+
     def create(self, request: CreateWorkspaceRequest) -> WorkspaceState:  # noqa: PLR0915
         """Spin up a fresh workspace from a validated client request.
 
@@ -260,6 +281,13 @@ class WorkspaceManager:
                 self._cfg, self._repo_root, request.title, ts
             )
             branch = resolved.name
+        # Agent cwd vs worktree placement (#101): the worktree (above) and branch
+        # always anchor at the repo root; `project_cwd` only moves where the
+        # AGENT session starts, into a nested subdir of that worktree. Validated
+        # against the repo root before any side effect — an out-of-repo cwd is a
+        # loud error here, leaving no rollback work.
+        subpath = self._project_subpath(request.project_cwd)
+        agent_cwd = worktree / subpath if subpath else worktree
         now = _utcnow()
         # `base_branch` on the persisted record drives the peek's
         # ahead/behind/diff math. For NEW plans it's the explicit base;
@@ -290,6 +318,7 @@ class WorkspaceManager:
             description=description,
             branch_provenance=resolved.provenance,
             placement=resolved.placement,
+            project_subpath=subpath,
             agent_session_id=None,  # minted after the worktree exists, below
             agent_kind=agent.kind,
             ticket_refs=ticket_refs,
@@ -370,7 +399,7 @@ class WorkspaceManager:
         # loud and transactional, exactly like a fail_fast init.
         try:
             agent_session_id = self._mint_agent_session_id(
-                agent, worktree=worktree, title=request.title, model=request.model
+                agent, worktree=agent_cwd, title=request.title, model=request.model
             )
         except MewboError as exc:
             self._rollback_create(state)
@@ -393,13 +422,13 @@ class WorkspaceManager:
         try:
             tmux.create_session(
                 session,
-                cwd=worktree,
+                cwd=agent_cwd,
                 history_limit=self._cfg.tmux.history_limit,
             )
             tmux.build_workspace_layout(
                 session,
                 cfg=self._cfg,
-                worktree=worktree,
+                worktree=agent_cwd,
                 agent=agent,
                 launch_decoration=launch_decoration,
             )
@@ -602,13 +631,13 @@ class WorkspaceManager:
         try:
             tmux.create_session(
                 state.tmux_session,
-                cwd=worktree,
+                cwd=state.agent_cwd,
                 history_limit=self._cfg.tmux.history_limit,
             )
             tmux.build_workspace_layout(
                 state.tmux_session,
                 cfg=self._cfg,
-                worktree=worktree,
+                worktree=state.agent_cwd,
                 agent=agent,
                 launch_decoration=launch_decoration,
             )
@@ -930,7 +959,7 @@ class WorkspaceManager:
         if state.agent_session_id:
             try:
                 respawn_session_id = self._mint_agent_session_id(
-                    agent, worktree=worktree, title=state.title
+                    agent, worktree=state.agent_cwd, title=state.title
                 )
             except MewboError as exc:
                 self._emit("error", state.id, {"phase": "respawn.agent_session", "error": str(exc)})
@@ -962,13 +991,13 @@ class WorkspaceManager:
         try:
             tmux.create_session(
                 state.tmux_session,
-                cwd=worktree,
+                cwd=state.agent_cwd,
                 history_limit=self._cfg.tmux.history_limit,
             )
             tmux.build_workspace_layout(
                 state.tmux_session,
                 cfg=self._cfg,
-                worktree=worktree,
+                worktree=state.agent_cwd,
                 agent=agent,
                 launch_decoration=launch_decoration,
             )

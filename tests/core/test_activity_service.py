@@ -842,3 +842,35 @@ def test_snapshot_includes_config_declared_empty_project(
     by_root = {g.repo_root: g for g in snap.projects}
     assert str(empty_repo) in by_root
     assert by_root[str(empty_repo)].workspaces == ()
+
+
+def test_snapshot_groups_nested_projects_distinctly(fake_tmux: FakeTmux, tmp_path: Path) -> None:
+    """Two declared subdirs of one repo each surface as a distinct ProjectGroup,
+    with each workspace attributed to its cwd group while sharing the repo (#101)."""
+    repo = _init_repo(tmp_path / "mono")
+    homelab = repo / "homelab"
+    homelab.mkdir()
+    (homelab / ".keep").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "homelab", "--no-verify"], cwd=repo, check=True, capture_output=True
+    )
+
+    cfg = GroveConfig.model_validate(
+        {"tmux": {"session_prefix": "test-"}, "projects": [str(repo), str(homelab)]}
+    )
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    registry = RepoRegistry(cfg=cfg, store=store)
+    service = ActivityService(registry=registry)
+    mgr = registry.get(repo)
+    mgr.create(CreateWorkspaceRequest(agent_name="shell", title="root-task"))
+    mgr.create(CreateWorkspaceRequest(agent_name="shell", title="nested-task", project_cwd=homelab))
+
+    snap = service.snapshot()
+
+    by_cwd = {g.cwd: g for g in snap.projects}
+    assert set(by_cwd) == {str(repo.resolve()), str(homelab.resolve())}
+    # Both anchor at the same repo root; the workspaces split by cwd.
+    assert all(g.repo_root == str(repo.resolve()) for g in snap.projects)
+    assert [w.state.title for w in by_cwd[str(repo.resolve())].workspaces] == ["root-task"]
+    assert [w.state.title for w in by_cwd[str(homelab.resolve())].workspaces] == ["nested-task"]

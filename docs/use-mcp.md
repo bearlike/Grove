@@ -60,6 +60,11 @@ claude mcp add grove -- grove-mcp
 
 Every response is structured JSON with explicit status fields and stable workspace ids, so a calling agent never has to parse prose to learn what happened.
 
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" /></div>
+  <figcaption class="ms-shot__body">The Grove MCP tools as seen from Claude Code. Create, list, peek, pause, resume, kill, and steer workspaces through a single connected server.</figcaption>
+</figure>
+
 ## Using Grove from Mewbo
 
 Mewbo can adopt Grove as its durable workspace backend over this server: Mewbo's hypervisor calls the tools above, Grove remains the system of record for worktrees, branches, sessions, and lifecycle state. The division of responsibility is deliberate. Grove owns the workspace control plane; Mewbo owns scheduling, skills, and conversation. Point Mewbo's MCP pool at the `mcp.json` entry shown above and it discovers the tool surface automatically.

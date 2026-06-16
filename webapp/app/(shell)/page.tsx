@@ -41,7 +41,7 @@ export default function HomePage() {
 
   return (
     <div className="flex w-full flex-1 flex-col gap-5 p-4 pb-[env(safe-area-inset-bottom)]">
-      {/* Hero: a faint brand watermark over the always-present composer. */}
+      {/* Hero: the brand mark anchoring the always-present composer. */}
       <div className="mx-auto flex w-full max-w-3xl flex-col items-center gap-3 pt-4 sm:pt-8">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -50,7 +50,7 @@ export default function HomePage() {
           aria-hidden
           width={48}
           height={48}
-          className="pointer-events-none size-12 opacity-20 select-none"
+          className="pointer-events-none size-12 opacity-90 select-none"
         />
         <Composer />
       </div>

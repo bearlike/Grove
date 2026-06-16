@@ -24,8 +24,8 @@ function multi(): DashboardSnapshotView {
   const noSession = { ...workspace("c", "idle"), sessions: [] as never[] };
   return {
     projects: [
-      { repo_root: "/r1", repo_name: "r1", workspaces: [workspace("a", "working"), workspace("b", "waiting")] },
-      { repo_root: "/r2", repo_name: "r2", workspaces: [noSession] },
+      { repo_root: "/r1", repo_name: "r1", cwd: "/r1", workspaces: [workspace("a", "working"), workspace("b", "waiting")] },
+      { repo_root: "/r2", repo_name: "r2", cwd: "/r2", workspaces: [noSession] },
     ],
     generated_at: "2026-06-01T00:00:00Z",
     total_workspaces: 3,

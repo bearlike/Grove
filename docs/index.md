@@ -25,43 +25,48 @@ title: Grove
   <p class="ms-devices__caption">Grove in your terminal and in the browser. Run agents in parallel, each in its own workspace, and reach any of them asynchronously from anywhere.</p>
 </div>
 
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="img/screenshots/tui-list.png" alt="The Grove TUI: a project-scoped workspace list with a live agent peek rail showing the summary, recent commits, and transcript" /></div>
+  <figcaption class="ms-shot__body">The terminal UI. A workspace list on the left, a live agent peek rail on the right. Every agent, one glance.</figcaption>
+</figure>
+
 ## What is Grove? { .ms-h2-icon data-icon="target" }
 
-You get the most out of coding agents when you run several at once. One drafts a feature. Another
-chases a flaky test. A third rewrites the docs. Run them in the same folder, though, and they fight
-over the same files and the same branch.
+Agents are productive in parallel but chaotic in the same folder. They overwrite each other's files,
+collide on the same branch, and lose track of where they are. Grove gives each one its own bench.
 
-Grove gives each agent a space of its own. Think of a workspace as a private workbench. The agent gets
-its own branch, its own copy of the code, and its own terminal to work at. Nothing on one bench spills
-onto the next. The rule is simple: one agent, one worktree, one window.
+A workspace is a dedicated git worktree on its own branch, paired with a tmux session and a window.
+One agent, one worktree, one window. Nothing on one bench spills onto the next.
 
-Launch `grove` inside a repository and you see only that repository's workspaces. From there you
-create, attach, steer, pause, resume, and kill them, and each action is a single keypress. A rail on the
-right mirrors whatever the selected agent is doing. Press one key to jump to another repo without
-leaving the screen.
+Every workspace is reachable asynchronously from your terminal, your browser on any device, or another
+agent over MCP. The same isolated-workspace primitive backs human and agent orchestration alike. Grove
+tends the worktrees and the sessions. Your git history stays yours. Grove never commits, never pushes,
+and never touches a remote branch.
 
-Grove tends the worktrees and the sessions. Your git history stays yours. Grove never commits, never
-pushes, and never touches a remote branch.
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="img/screenshots/webapp-home-grid.png" alt="Grove web dashboard: a composer hero at the top for starting a workspace, the repo-grouped workspace cards below, a scope rail on the left, and the daemon status bar along the bottom" /></div>
+  <figcaption class="ms-shot__body">The Grove web dashboard. Workspace cards are grouped by repository, the composer sits at the top, and the daemon status bar runs along the bottom.</figcaption>
+</figure>
 
 ## What you get { .ms-h2-icon data-icon="grid" }
 
 <div class="ms-grid ms-grid--4">
-  <div class="ms-card">
-    <span class="ms-card__title">Isolated workspaces</span>
-    <p class="ms-card__body">One worktree and one tmux session per agent. Each works at its own bench, so they never touch each other's files.</p>
-  </div>
-  <div class="ms-card">
-    <span class="ms-card__title">One-key lifecycle</span>
-    <p class="ms-card__body">Create, attach, pause, resume, and kill. Each is one keypress. Pause frees the worktree but keeps the branch, so you can return later.</p>
-  </div>
-  <div class="ms-card">
-    <span class="ms-card__title">Know who needs you</span>
-    <p class="ms-card__body">A side rail mirrors the selected agent's terminal. One keypress opens the Activity Dashboard: every agent, every project, with the waiting and blocked ones front and center.</p>
-  </div>
-  <div class="ms-card">
-    <span class="ms-card__title">Bring your own agent</span>
-    <p class="ms-card__body">Claude Code, Codex, Aider, a remote Mewbo session, or a plain shell. Anything on your <code>$PATH</code> runs in its own window.</p>
-  </div>
+  <a class="ms-card" href="use-webapp/">
+    <span class="ms-card__title">Async access, any device</span>
+    <p class="ms-card__body">A composer starts a workspace from a prompt. A live, repo-grouped grid shows every agent. Pair a device once; the daemon stays loopback.</p>
+  </a>
+  <a class="ms-card" href="use-webapp/#the-workspace-ide-shell">
+    <span class="ms-card__title">Transcript and terminal</span>
+    <p class="ms-card__body">A split view shows the agent's conversation next to its live terminal. Read the transcript, send a follow-up, and answer structured questions inline.</p>
+  </a>
+  <a class="ms-card" href="use-mcp/">
+    <span class="ms-card__title">Drive Grove from any agent</span>
+    <p class="ms-card__body">Grove ships an MCP server. Claude Code, Codex, and other orchestrators use its tools to create workspaces, dispatch tasks, and steer the fleet.</p>
+  </a>
+  <a class="ms-card" href="use-tui/">
+    <span class="ms-card__title">Terminal first</span>
+    <p class="ms-card__body">Run <code>grove</code> in a repo to see only its workspaces. Create, attach, pause, and kill, each one keypress. A peek rail mirrors the selected agent's pane live.</p>
+  </a>
 </div>
 
 ## Install { .ms-h2-icon data-icon="plug" }

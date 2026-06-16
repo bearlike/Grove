@@ -16,11 +16,28 @@ re-exports it for back-compat.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from grove.core.config import GroveConfig
+from grove.core.git import detect_root
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
+
+
+@dataclass(frozen=True, slots=True)
+class Project:
+    """A listable project: an agent working directory plus the git repo that
+    anchors its worktrees (#101).
+
+    For a top-level repo, ``cwd == repo_root``. For a nested project, ``cwd`` is
+    a subdirectory of the repo and ``repo_root`` is the enclosing repo — distinct
+    projects can therefore share one ``repo_root`` (one Manager, one worktree
+    family) while differing only in where the agent session starts.
+    """
+
+    repo_root: Path
+    cwd: Path
 
 
 class RepoRegistry:
@@ -81,23 +98,60 @@ class RepoRegistry:
         restart.
         """
         roots = {root.resolve() for root in self._store.list_repo_roots()}
-        roots.update(self._declared_roots())
+        roots.update(p.repo_root for p in self._declared_projects())
         return list(roots)
 
-    def _declared_roots(self) -> set[Path]:
-        """Config-declared project roots that are existing git repos.
+    def known_projects(self) -> list[Project]:
+        """Listable projects, by union of two sources — the listing seam (#101).
+
+        Where ``known_roots()`` answers "which *repos* exist" (the Manager-dispatch
+        + repo-validation seam), this answers "which *projects* should a client
+        offer", which is a superset: a single repo can expose several nested
+        subdirectory projects. The deduped (by ``cwd``) union of:
+
+        - store-derived repo roots, each as a repo-level ``Project`` (``cwd ==
+          repo_root``) — the empty-project-visibility arm (#95) carried forward;
+        - config-declared projects, each ``Project(repo_root=<enclosing repo>,
+          cwd=<declared path>)`` so a declared *subdirectory* lists distinctly
+          while still anchoring its worktrees at the true repo root.
+
+        Reads fresh from the store each call (new repos appear without a restart),
+        the same contract ``known_roots()`` holds.
+        """
+        by_cwd: dict[Path, Project] = {}
+        for root in self._store.list_repo_roots():
+            resolved = root.resolve()
+            by_cwd.setdefault(resolved, Project(repo_root=resolved, cwd=resolved))
+        for project in self._declared_projects():
+            by_cwd.setdefault(project.cwd, project)
+        return list(by_cwd.values())
+
+    def _declared_projects(self) -> list[Project]:
+        """Config-declared projects resolved to ``(enclosing repo root, cwd)``.
 
         Best-effort by contract: a ``cfg.projects`` entry that doesn't exist or
-        isn't a git repo is silently dropped (never fail config load or a
-        request). ``~`` is expanded and the path resolved at consume time — the
-        same symlink-collapse rule the store roots and Manager keys follow.
+        isn't inside a git repo is silently dropped (never fail config load or a
+        request). ``~`` is expanded and paths ``resolve()``d at consume time —
+        the same symlink-collapse rule store roots and Manager keys follow.
+
+        The common case — an entry that IS a repo root — is decided by a cheap
+        ``.git`` stat (the hot-path discipline #95 established) and yields
+        ``cwd == repo_root``. Only an entry that ISN'T itself a repo root pays one
+        ``git rev-parse`` to find its enclosing repo, which is what lets a nested
+        subdirectory surface as a distinct project anchored at the real root.
         """
-        roots: set[Path] = set()
+        projects: list[Project] = []
         for raw in self._cfg.projects:
             try:
                 resolved = Path(raw).expanduser().resolve()
             except OSError:
                 continue
+            if not resolved.exists():
+                continue
             if (resolved / ".git").exists():
-                roots.add(resolved)
-        return roots
+                projects.append(Project(repo_root=resolved, cwd=resolved))
+                continue
+            root = detect_root(resolved)
+            if root is not None:
+                projects.append(Project(repo_root=root, cwd=resolved))
+        return projects

@@ -71,7 +71,7 @@ export function workspace(
 /** One-project snapshot wrapping the given workspaces, counts derived. */
 export function snapshot(...ws: WorkspaceActivityView[]): DashboardSnapshotView {
   return {
-    projects: [{ repo_root: "/r", repo_name: "r", workspaces: ws }],
+    projects: [{ repo_root: "/r", repo_name: "r", cwd: "/r", workspaces: ws }],
     generated_at: "2026-06-01T00:00:00Z",
     total_workspaces: ws.length,
     needs_attention: ws.filter((w) => w.needs_attention).length,

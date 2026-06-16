@@ -54,7 +54,7 @@ code. Not Textual, not Rich, not Typer, not Click, and nothing inside
 
 ## The boundaries, enforced
 
-`pyproject.toml` configures `import-linter` with four contracts:
+[`pyproject.toml`](repo:pyproject.toml) configures `import-linter` with four contracts:
 
 - **Core has no UI dependencies.** `grove.core` may not import
   `textual`, `rich`, `typer`, `click`, or `grove.tui`.
@@ -76,10 +76,10 @@ fails the lint job.
 
 ## Side effects at the edges
 
-Side effects live in dedicated modules. `grove/core/git.py` carries
+Side effects live in dedicated modules. [`src/grove/core/git.py`](repo:src/grove/core/git.py) carries
 everything git-shaped (worktree add and remove, branch delete, status,
-log). `grove/core/tmux.py` carries everything tmux-shaped (session
-create, capture-pane, list-windows, switch-client). `grove/core/mewbo.py`
+log). [`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py) carries everything tmux-shaped (session
+create, capture-pane, list-windows, switch-client). [`src/grove/core/mewbo.py`](repo:src/grove/core/mewbo.py)
 carries the Mewbo REST I/O for remote sessions, the HTTP sibling of the
 other two.
 

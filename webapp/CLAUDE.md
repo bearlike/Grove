@@ -221,7 +221,7 @@ The unified glyph/color system is `AgentStateMark` (`components/shared/state-mar
 
 ### Favicons & brand mark
 
-The Grove logo (`docs/logos/grove-logo.png`, the terracotta 8-node mark) is the brand anchor: the header brand `img` (`public/grove-logo.png`), the faint composer watermark, and all icons. Icons are generated from it into `public/` (regenerate with PIL when the logo changes): `favicon.ico` (transparent 16/32/48), `icon-192.png`/`icon-512.png` (maskable — solid `#2d2d2b` safe-zone bg, referenced by `manifest.webmanifest`), `apple-touch-icon.png` (180). `app/layout.tsx` `metadata.icons` wires the favicon + apple touch icon; the manifest wires the PWA icons.
+The Grove logo (`docs/logos/grove-logo.png`, the terracotta 8-node mark) is the brand anchor: the header brand `img` (`public/grove-logo.png`), the composer hero mark, and all icons. Icons are generated from it into `public/` (regenerate with PIL when the logo changes): `favicon.ico` (transparent 16/32/48), `icon-192.png`/`icon-512.png` (maskable — solid `#2d2d2b` safe-zone bg, referenced by `manifest.webmanifest`), `apple-touch-icon.png` (180). `app/layout.tsx` `metadata.icons` wires the favicon + apple touch icon; the manifest wires the PWA icons.
 
 ## Testing pyramid
 

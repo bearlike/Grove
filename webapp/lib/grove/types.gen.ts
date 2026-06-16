@@ -1023,6 +1023,8 @@ export interface components {
             initial_prompt?: string | null;
             /** Repo Root */
             repo_root?: string | null;
+            /** Project Cwd */
+            project_cwd?: string | null;
         };
         /**
          * DashboardEvent
@@ -1243,6 +1245,8 @@ export interface components {
             repo_root: string;
             /** Repo Name */
             repo_name: string;
+            /** Cwd */
+            cwd: string;
             /** Workspaces */
             workspaces: components["schemas"]["WorkspaceActivityView"][];
         };

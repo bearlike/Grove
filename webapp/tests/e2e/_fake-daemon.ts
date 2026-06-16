@@ -564,6 +564,7 @@ function buildActivitySnapshot() {
   const projects = [...byRepo.entries()].map(([repo_root, workspaces]) => ({
     repo_root,
     repo_name: repo_root.split("/").pop() ?? repo_root,
+    cwd: repo_root,
     workspaces,
   }));
   const all = projects.flatMap((p) => p.workspaces);

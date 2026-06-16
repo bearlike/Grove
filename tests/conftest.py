@@ -89,6 +89,12 @@ class FakeTmux:
     def __init__(self) -> None:
         self.sessions: set[str] = set()
         self.layouts: list[tuple[str, str]] = []  # (session_name, agent_name)
+        # session_name → cwd the session was created in, and → worktree the
+        # layout windows were rooted in. Lets nested-cwd tests assert the agent
+        # session starts in the project subdir while the worktree/branch anchor
+        # at the repo root (issue #101).
+        self.session_cwds: dict[str, Path] = {}
+        self.layout_worktrees: dict[str, Path] = {}
         # (session_name, launch_decoration) — lets correlation tests assert the
         # `--session-id <uuid>` argv the manager threaded in from the adapter.
         self.launch_decorations: list[tuple[str, list[str]]] = []
@@ -126,9 +132,10 @@ class FakeTmux:
         return name in self.sessions
 
     def create_session(self, name: str, cwd: Path, *, history_limit: int = 50_000) -> None:
-        del cwd, history_limit
+        del history_limit
         if name in self.sessions:
             raise TmuxError(f"session already exists: {name}")
+        self.session_cwds[name] = cwd
         self.sessions.add(name)
         # Real tmux always creates one initial window. build_workspace_layout
         # below renames it; until then the placeholder mirrors that state.
@@ -147,7 +154,7 @@ class FakeTmux:
         agent: Any,
         launch_decoration: list[str] | None = None,
     ) -> None:
-        del worktree
+        self.layout_worktrees[session_name] = worktree
         self.layouts.append((session_name, agent.name))
         self.launch_decorations.append((session_name, list(launch_decoration or [])))
         self.launch_envs.append((session_name, dict(agent.env), tuple(agent.env_unset)))
