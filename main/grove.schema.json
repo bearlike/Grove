@@ -1,0 +1,604 @@
+{
+  "$defs": {
+    "AgentSpec": {
+      "additionalProperties": false,
+      "description": "One selectable agent in the new-workspace picker.",
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Env",
+          "type": "object"
+        },
+        "env_unset": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Env Unset",
+          "type": "array"
+        },
+        "kind": {
+          "default": "generic",
+          "enum": [
+            "claude_code",
+            "codex",
+            "generic",
+            "mewbo"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ],
+      "title": "AgentSpec",
+      "type": "object"
+    },
+    "AuthConfig": {
+      "additionalProperties": false,
+      "description": "Daemon HTTP authentication knobs.\n\nThe handshake-based pairing flow gates every HTTP entry point on a valid\nbearer token (no loopback bypass; see CLAUDE.md). ``enabled = false`` is\na test-only escape hatch; production daemons leave it ``true``.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "pair_init_per_minute": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Pair Init Per Minute",
+          "type": "integer"
+        },
+        "pair_poll_per_minute": {
+          "default": 60,
+          "minimum": 1,
+          "title": "Pair Poll Per Minute",
+          "type": "integer"
+        },
+        "pairing_ttl_seconds": {
+          "default": 300,
+          "minimum": 30,
+          "title": "Pairing Ttl Seconds",
+          "type": "integer"
+        },
+        "session_ttl_seconds": {
+          "default": 2592000,
+          "minimum": 60,
+          "title": "Session Ttl Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "AuthConfig",
+      "type": "object"
+    },
+    "GitHubTicketConfig": {
+      "additionalProperties": false,
+      "description": "GitHub Issues provider settings (``provider: \"github\"``).\n\n``base_url`` defaults to the public REST API; point it at a GitHub\nEnterprise ``/api/v3`` root to use Enterprise. Same secret-free\n``token_env`` + optional ``branch_prefix`` contract as the Gitea provider.",
+      "properties": {
+        "base_url": {
+          "default": "https://api.github.com",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "branch_prefix": {
+          "default": "",
+          "title": "Branch Prefix",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repo"
+        },
+        "token_env": {
+          "default": "GROVE_GITHUB_TOKEN",
+          "title": "Token Env",
+          "type": "string"
+        }
+      },
+      "title": "GitHubTicketConfig",
+      "type": "object"
+    },
+    "GiteaTicketConfig": {
+      "additionalProperties": false,
+      "description": "Gitea Issues provider settings (``provider: \"gitea\"``).\n\nSecret-free like every config layer: ``token_env`` is the NAME of the\nenvironment variable holding the API token, never the token itself, so a\ncommitted ``.grove/config.json`` stays publishable. ``base_url`` is the\ninstance root (the provider appends ``/api/v1``). ``branch_prefix`` is an\noptional extra keyword prepended when formatting a branch (e.g. ``\"gtea-\"``\n\u2192 ``gtea-123-slug``); empty means the bare numeric form ``123-slug``. The\nparser recognizes the bare numeric leading segment, the built-in keywords,\nand this configured prefix \u2014 mechanism, not policy.",
+      "properties": {
+        "base_url": {
+          "default": "https://gitea.com",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "branch_prefix": {
+          "default": "",
+          "title": "Branch Prefix",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repo"
+        },
+        "token_env": {
+          "default": "GROVE_GITEA_TOKEN",
+          "title": "Token Env",
+          "type": "string"
+        }
+      },
+      "title": "GiteaTicketConfig",
+      "type": "object"
+    },
+    "GotifyChannelConfig": {
+      "additionalProperties": false,
+      "description": "Gotify push channel (#70's first channel).\n\n``server_url`` is the Gotify base (e.g. ``https://gotify.example.com``);\n``token_env`` is the NAME of the env var holding the application token, never\nthe token itself \u2014 committed config stays secret-free, exactly like\n``mewbo.api_key_env``.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "priority": {
+          "default": 5,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "server_url": {
+          "default": "",
+          "title": "Server Url",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 5.0,
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "token_env": {
+          "default": "GROVE_GOTIFY_TOKEN",
+          "title": "Token Env",
+          "type": "string"
+        }
+      },
+      "title": "GotifyChannelConfig",
+      "type": "object"
+    },
+    "HooksConfig": {
+      "additionalProperties": false,
+      "description": "Opt-in Grove-managed Claude Code status hooks (#18).\n\nWhen ``enabled``, Grove launches ``claude_code`` agents with\n``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact\nlifecycle status (``WORKING`` / ``WAITING`` / ``BLOCKED`` / ``IDLE``) into a\nper-session sidecar that the Activity Dashboard prefers over polled status \u2014\ngiving precise *blocked-on-a-permission-prompt* that polling can't see. Off\nby default (mechanism, not policy); the user's own ``.claude/settings.json``\nis never touched, so uninstalling is just flipping this back to ``false``.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "HooksConfig",
+      "type": "object"
+    },
+    "InitScriptConfig": {
+      "additionalProperties": false,
+      "description": "Optional setup script run in its own tmux window before the agent starts.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "fail_fast": {
+          "default": true,
+          "title": "Fail Fast",
+          "type": "boolean"
+        },
+        "inline": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inline"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "run_on_resume": {
+          "default": false,
+          "title": "Run On Resume",
+          "type": "boolean"
+        },
+        "shell": {
+          "default": "bash",
+          "enum": [
+            "bash",
+            "sh",
+            "zsh"
+          ],
+          "title": "Shell",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 300,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "InitScriptConfig",
+      "type": "object"
+    },
+    "LinearTicketConfig": {
+      "additionalProperties": false,
+      "description": "Linear provider settings (``provider: \"linear\"``).\n\nLinear keys are alphanumeric (``ENG-123``), so there is no numeric\n``branch_prefix`` \u2014 the team key IS the discriminator. ``team_key`` scopes\nboth branch parsing (only ``{team_key}-N`` keys are claimed) and the\n``get_ticket`` lookup; leave it unset to match any uppercase key on parse.",
+      "properties": {
+        "base_url": {
+          "default": "https://api.linear.app/graphql",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "team_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Team Key"
+        },
+        "token_env": {
+          "default": "GROVE_LINEAR_TOKEN",
+          "title": "Token Env",
+          "type": "string"
+        }
+      },
+      "title": "LinearTicketConfig",
+      "type": "object"
+    },
+    "MewboConfig": {
+      "additionalProperties": false,
+      "description": "Connection settings for the Mewbo orchestrator (``kind: \"mewbo\"`` agents).\n\n#35 registers the kind with a stub adapter; the REST-backed implementation\n(#36) reads these to reach the Mewbo API.",
+      "properties": {
+        "api_key_env": {
+          "default": "MEWBO_API_KEY",
+          "title": "Api Key Env",
+          "type": "string"
+        },
+        "base_url": {
+          "default": "http://127.0.0.1:5125",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 10.0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "title": "MewboConfig",
+      "type": "object"
+    },
+    "NotificationsConfig": {
+      "additionalProperties": false,
+      "description": "Push notifications on agent-state edges (#70). Off by default.\n\nThe broker fires a debounced rising edge into one of the ``on`` states \u2014\n``waiting`` (turn finished), ``blocked`` (awaiting input), ``error`` \u2014 and\nfans out to every enabled channel. ``deep_link_base_url`` is the webapp base\n(e.g. ``https://grove.example.com``); a notification deep-links to\n``{base}/w/{id}`` so tapping it opens that workspace. Mechanism, not policy:\nevery value cascades like the rest of the config.",
+      "properties": {
+        "debounce_seconds": {
+          "default": 30.0,
+          "minimum": 0,
+          "title": "Debounce Seconds",
+          "type": "number"
+        },
+        "deep_link_base_url": {
+          "default": "",
+          "title": "Deep Link Base Url",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "gotify": {
+          "$ref": "#/$defs/GotifyChannelConfig"
+        },
+        "on": {
+          "items": {
+            "enum": [
+              "waiting",
+              "blocked",
+              "error",
+              "idle"
+            ],
+            "type": "string"
+          },
+          "title": "On",
+          "type": "array"
+        },
+        "webhook": {
+          "$ref": "#/$defs/WebhookChannelConfig"
+        }
+      },
+      "title": "NotificationsConfig",
+      "type": "object"
+    },
+    "TicketsConfig": {
+      "additionalProperties": false,
+      "description": "External ticket-tracker integration, one submodel per MVP provider.\n\nEach provider is independently ``enabled`` and configured. All three stay\noff by default (mechanism, not policy): a repo opts in by enabling the\ntracker its branches reference. Credentials never live here \u2014 only the NAME\nof the env var holding each token.",
+      "properties": {
+        "gitea": {
+          "$ref": "#/$defs/GiteaTicketConfig"
+        },
+        "github": {
+          "$ref": "#/$defs/GitHubTicketConfig"
+        },
+        "linear": {
+          "$ref": "#/$defs/LinearTicketConfig"
+        }
+      },
+      "title": "TicketsConfig",
+      "type": "object"
+    },
+    "TmuxConfig": {
+      "additionalProperties": false,
+      "description": "tmux session/window naming and behavior.",
+      "properties": {
+        "activity_threshold_seconds": {
+          "default": 30,
+          "minimum": 1,
+          "title": "Activity Threshold Seconds",
+          "type": "integer"
+        },
+        "agent_window_name": {
+          "default": "agent",
+          "title": "Agent Window Name",
+          "type": "string"
+        },
+        "history_limit": {
+          "default": 50000,
+          "title": "History Limit",
+          "type": "integer"
+        },
+        "init_window_name": {
+          "default": "init",
+          "title": "Init Window Name",
+          "type": "string"
+        },
+        "peek_history_lines": {
+          "default": 500,
+          "minimum": 1,
+          "title": "Peek History Lines",
+          "type": "integer"
+        },
+        "peek_pane_refresh_seconds": {
+          "default": 0.25,
+          "title": "Peek Pane Refresh Seconds",
+          "type": "number"
+        },
+        "peek_stats_refresh_seconds": {
+          "default": 3.0,
+          "title": "Peek Stats Refresh Seconds",
+          "type": "number"
+        },
+        "session_prefix": {
+          "default": "grove-",
+          "title": "Session Prefix",
+          "type": "string"
+        },
+        "shell_window_name": {
+          "default": "shell",
+          "title": "Shell Window Name",
+          "type": "string"
+        }
+      },
+      "title": "TmuxConfig",
+      "type": "object"
+    },
+    "UIConfig": {
+      "additionalProperties": false,
+      "description": "Client-facing UI knobs. The TUI consumes these; core ignores them.",
+      "properties": {
+        "keybindings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Keybindings",
+          "type": "object"
+        },
+        "theme": {
+          "default": "auto",
+          "title": "Theme",
+          "type": "string"
+        }
+      },
+      "title": "UIConfig",
+      "type": "object"
+    },
+    "WebhookChannelConfig": {
+      "additionalProperties": false,
+      "description": "Generic JSON webhook channel \u2014 the \"mechanism, not policy\" sink.\n\nPOSTs the notification as JSON to ``url``. ntfy's JSON-publish API works\ndirectly: set ``topic`` and point ``url`` at the ntfy base. ``token_env`` (a\nNAME, never the secret) adds a ``Bearer`` header when set.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "timeout_seconds": {
+          "default": 5.0,
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "token_env": {
+          "default": "",
+          "title": "Token Env",
+          "type": "string"
+        },
+        "topic": {
+          "default": "",
+          "title": "Topic",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "title": "WebhookChannelConfig",
+      "type": "object"
+    },
+    "WorktreeConfig": {
+      "additionalProperties": false,
+      "description": "Where worktrees live and how branches are named.",
+      "properties": {
+        "branch_prefix": {
+          "default": "grove/",
+          "title": "Branch Prefix",
+          "type": "string"
+        },
+        "root_template": {
+          "default": "${repo}/.worktrees",
+          "title": "Root Template",
+          "type": "string"
+        }
+      },
+      "title": "WorktreeConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Merged, validated configuration. Built once per `load_config` call.",
+  "properties": {
+    "$schema": {
+      "default": "",
+      "title": "$Schema",
+      "type": "string"
+    },
+    "agents": {
+      "items": {
+        "$ref": "#/$defs/AgentSpec"
+      },
+      "title": "Agents",
+      "type": "array"
+    },
+    "auth": {
+      "$ref": "#/$defs/AuthConfig"
+    },
+    "hooks": {
+      "$ref": "#/$defs/HooksConfig"
+    },
+    "init_script": {
+      "$ref": "#/$defs/InitScriptConfig"
+    },
+    "mewbo": {
+      "$ref": "#/$defs/MewboConfig"
+    },
+    "notifications": {
+      "$ref": "#/$defs/NotificationsConfig"
+    },
+    "projects": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Projects",
+      "type": "array"
+    },
+    "tickets": {
+      "$ref": "#/$defs/TicketsConfig"
+    },
+    "tmux": {
+      "$ref": "#/$defs/TmuxConfig"
+    },
+    "ui": {
+      "$ref": "#/$defs/UIConfig"
+    },
+    "worktree": {
+      "$ref": "#/$defs/WorktreeConfig"
+    }
+  },
+  "title": "GroveConfig",
+  "type": "object"
+}
