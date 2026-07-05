@@ -19,6 +19,14 @@ fewer dependency than the last, so reach for whichever tool you already have.
 The `[daemon]` extra pulls in the web dashboard backend; drop it for a
 TUI-only install.
 
+!!! warning "Install from the repo, never by bare name"
+    The name `grove` on PyPI belongs to an unrelated log-collection
+    framework. A bare `uv tool install grove` (or `pipx install grove`,
+    `pip install grove`) installs that package, and running it fails with
+    `Failed to initialise configuration handler`. Always use the full
+    `grove[daemon] @ git+...` form shown below. See
+    [Troubleshooting](troubleshooting.md) if you already hit this.
+
 === "uv (recommended)"
 
     Fewest steps. [uv](https://docs.astral.sh/uv/) installs Grove in its own
@@ -126,7 +134,9 @@ grove debug            # prints the resolved config + state paths
 grove ls               # JSON list of this repo's workspaces
 ```
 
-Set `GROVE_DEBUG=1` to enable verbose loguru output on stderr.
+Set `GROVE_DEBUG=1` to enable verbose loguru output on stderr. On a first
+run this includes one `initialized <path>` line per directory Grove
+creates, so you can see exactly what landed where.
 
 ## Next steps
 

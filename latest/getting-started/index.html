@@ -1257,6 +1257,15 @@ repo, so you can invoke it by name from anywhere. Each tab below needs one
 fewer dependency than the last, so reach for whichever tool you already have.
 The <code>[daemon]</code> extra pulls in the web dashboard backend; drop it for a
 TUI-only install.</p>
+<div class="admonition warning">
+<p class="admonition-title">Install from the repo, never by bare name</p>
+<p>The name <code>grove</code> on PyPI belongs to an unrelated log-collection
+framework. A bare <code>uv tool install grove</code> (or <code>pipx install grove</code>,
+<code>pip install grove</code>) installs that package, and running it fails with
+<code>Failed to initialise configuration handler</code>. Always use the full
+<code>grove[daemon] @ git+...</code> form shown below. See
+<a href="../troubleshooting/">Troubleshooting</a> if you already hit this.</p>
+</div>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">uv (recommended)</label><label for="__tabbed_1_2">pipx</label><label for="__tabbed_1_3">pip</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
@@ -1344,7 +1353,9 @@ between ACTIVE and IDLE on its own.</p>
 grove<span class="w"> </span>debug<span class="w">            </span><span class="c1"># prints the resolved config + state paths</span>
 grove<span class="w"> </span>ls<span class="w">               </span><span class="c1"># JSON list of this repo&#39;s workspaces</span>
 </code></pre></div>
-<p>Set <code>GROVE_DEBUG=1</code> to enable verbose loguru output on stderr.</p>
+<p>Set <code>GROVE_DEBUG=1</code> to enable verbose loguru output on stderr. On a first
+run this includes one <code>initialized &lt;path&gt;</code> line per directory Grove
+creates, so you can see exactly what landed where.</p>
 <h2 id="next-steps">Next steps</h2>
 <ul>
 <li><a href="../use-tui/">TUI tour</a> walks through every screen, keybinding, and modal.</li>

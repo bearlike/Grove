@@ -1227,6 +1227,22 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <p>Common failures, their causes, and the fix.</p>
+<h2 id="fresh-install-crashes-with-failed-to-initialise-configuration-handler">Fresh install crashes with <code>Failed to initialise configuration handler</code></h2>
+<p><strong>Symptom.</strong> Right after installing, <code>grove</code> exits with a CRITICAL log
+line such as <code>Failed to initialise configuration handler ...
+GROVE_CONFIG_LOCAL_FILE_PATH field required</code>, and the traceback mentions
+<code>grove/entrypoints/base.py</code>.</p>
+<p><strong>Cause.</strong> You installed the wrong product. The name <code>grove</code> on PyPI
+belongs to an unrelated log-collection framework, so a bare
+<code>uv tool install grove</code> (or <code>pipx install grove</code>, <code>pip install grove</code>)
+pulls that package instead of this one. Grove is not published on PyPI
+and installs straight from the repo.</p>
+<p><strong>Fix.</strong> Uninstall the imposter, then install from the repo:</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>tool<span class="w"> </span>uninstall<span class="w"> </span>grove
+uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;grove[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
+</code></pre></div>
+<p>Verify with <code>grove version</code> (it prints <code>grove &lt;version&gt;</code>) and
+<code>grove debug</code> (it prints the config and state paths Grove will use).</p>
 <h2 id="tmux-not-found"><code>tmux</code> not found</h2>
 <p><strong>Symptom.</strong> <code>TmuxError: tmux binary not found on PATH</code>, or the TUI
 refuses to launch with a clear error.</p>
@@ -2302,6 +2318,14 @@ without provisioning WSL2 just for that.</p>
         
         
         <div class="mewbo-toc__list">
+            
+            <a href="#fresh-install-crashes-with-failed-to-initialise-configuration-handler"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#fresh-install-crashes-with-failed-to-initialise-configuration-handler');">
+                Fresh install crashes with Failed to initialise configuration handler
+            </a>
+            
             
             <a href="#tmux-not-found"
                 class="mewbo-toc__link"
