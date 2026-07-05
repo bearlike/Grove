@@ -1,11 +1,13 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDownIcon, WrenchIcon } from "lucide-react";
 import { RoleLabel } from "@/components/shared/role-label";
-import { QuestionCard } from "@/components/workspace/question-card";
+import { PendingQuestionCard, QuestionCard } from "@/components/workspace/question-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSessionTurns } from "@/lib/grove/hooks";
+import { useActivityStream, useAnswerQuestion, useSessionTurns } from "@/lib/grove/hooks";
+import { livePendingQuestions } from "@/lib/grove/live-question";
+import { refusalNotice } from "@/lib/grove/steering-notice";
 import { cn } from "@/lib/utils";
 import type { DigestEntryView, SessionTurnView } from "@/lib/grove/types";
 
@@ -20,13 +22,20 @@ import type { DigestEntryView, SessionTurnView } from "@/lib/grove/types";
  * disclosure row (collapsed by default) so a long Read/Bash/Edit run doesn't
  * spam the digest; expanding reveals the individual Wrench-marked rows.
  *
+ * A LIVE pending `AskUserQuestion` (Gitea #111) is sourced independently from
+ * the SSE activity stream, not from these turns — `/turns` cannot see it
+ * while pending (research-findings.md) — so it renders below whatever the
+ * turns fetch produced (loading/error/empty/rendered), in every branch below.
+ *
  * The `max-h-96` cap is deliberately ON the leaf here, unlike PeekSnapshot /
  * CommitList: this is an inline expansion inside a list, not a viewport-fill
  * panel — unbounded height would shove every later session row off-screen.
  *
  * Test seam: `data-testid="turns-view"`, `"turn-row"`, per-entry
- * `"turn-entry"` + `data-role`, `"tool-group"` for a collapsed tool run, and
- * `"role-label"` + `data-role-label` on the IRC-style speaker labels.
+ * `"turn-entry"` + `data-role`, `"tool-group"` for a collapsed tool run,
+ * `"role-label"` + `data-role-label` on the IRC-style speaker labels, and
+ * `"turns-live-question"` wrapping the live pending card (read-only #74 OR
+ * the interactive `pending-question-card`).
  */
 export function TurnsView({
   workspaceId,
@@ -37,38 +46,81 @@ export function TurnsView({
 }) {
   const { data, isLoading, isError } = useSessionTurns(workspaceId, sessionId);
 
+  const { snapshot } = useActivityStream();
+  const liveQuestions = livePendingQuestions(snapshot, workspaceId, sessionId);
+  const answerQuestion = useAnswerQuestion(workspaceId);
+  const [answerNotice, setAnswerNotice] = useState<string | null>(null);
+  // Every question in a group shares one group_id, so the first is a stable
+  // key — a new pending group starts with a clean error slate.
+  const liveGroupId = liveQuestions[0]?.group_id ?? null;
+  useEffect(() => {
+    setAnswerNotice(null);
+    answerQuestion.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveGroupId]);
+
+  const liveCard = liveQuestions.length > 0 && (
+    <div data-testid="turns-live-question" className="pl-4">
+      <PendingQuestionCard
+        questions={liveQuestions}
+        submitting={answerQuestion.isPending || answerQuestion.isSuccess}
+        error={answerNotice}
+        onSubmit={(answers) => {
+          if (!liveGroupId) return;
+          setAnswerNotice(null);
+          answerQuestion.mutate(
+            { sessionId, toolUseId: liveGroupId, answers },
+            { onError: (err) => setAnswerNotice(refusalNotice(err, "answer")) },
+          );
+        }}
+      />
+    </div>
+  );
+
   if (isError) {
     return (
-      <p className="py-2 text-sm text-muted-foreground" data-testid="turns-view">
-        couldn&apos;t load turns
-      </p>
+      <>
+        <p className="py-2 text-sm text-muted-foreground" data-testid="turns-view">
+          couldn&apos;t load turns
+        </p>
+        {liveCard}
+      </>
     );
   }
   if (isLoading || !data) {
     return (
-      <div className="flex flex-col gap-2 py-2" data-testid="turns-view">
-        <Skeleton className="h-4 w-2/3" />
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-5/6" />
-      </div>
+      <>
+        <div className="flex flex-col gap-2 py-2" data-testid="turns-view">
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-5/6" />
+        </div>
+        {liveCard}
+      </>
     );
   }
   if (data.turns.length === 0) {
     return (
-      <p className="py-2 text-sm italic text-muted-foreground" data-testid="turns-view">
-        no turns recorded
-      </p>
+      <>
+        <p className="py-2 text-sm italic text-muted-foreground" data-testid="turns-view">
+          no turns recorded
+        </p>
+        {liveCard}
+      </>
     );
   }
 
   return (
-    <ScrollArea className="min-h-0 max-h-96 pr-3" data-testid="turns-view">
-      <ol className="flex flex-col gap-3 py-2">
-        {data.turns.map((turn, i) => (
-          <TurnRow key={`${turn.started_at ?? "t"}-${i}`} turn={turn} />
-        ))}
-      </ol>
-    </ScrollArea>
+    <>
+      <ScrollArea className="min-h-0 max-h-96 pr-3" data-testid="turns-view">
+        <ol className="flex flex-col gap-3 py-2">
+          {data.turns.map((turn, i) => (
+            <TurnRow key={`${turn.started_at ?? "t"}-${i}`} turn={turn} />
+          ))}
+        </ol>
+      </ScrollArea>
+      {liveCard}
+    </>
   );
 }
 

@@ -615,6 +615,7 @@ class _RolloutParser:
             tokens_in=events.tokens_in,
             tokens_out=events.tokens_out,
             last_event_at=last_event_at,
+            started_at=self.created_at(),
         )
 
     def digest(self) -> OrderedDigest:

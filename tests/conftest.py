@@ -124,9 +124,16 @@ class FakeTmux:
         # (target, text) per send_text call — steering tests assert both the
         # resolved pane target and that refusal paths never inject at all.
         self.sent_texts: list[tuple[str, str]] = []
+        # (target, ops) per send_keys call — question-answer tests assert the
+        # keystroke op list the Claude adapter built landed at the resolved pane,
+        # and that refusal paths never reach the injection seam at all.
+        self.sent_keys: list[tuple[str, list[Any]]] = []
 
     def send_text(self, target: str, text: str) -> None:
         self.sent_texts.append((target, text))
+
+    def send_keys(self, target: str, ops: Any) -> None:
+        self.sent_keys.append((target, list(ops)))
 
     def has_session(self, name: str) -> bool:
         return name in self.sessions
@@ -213,6 +220,7 @@ def fake_tmux(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTmux]:
     monkeypatch.setattr(tmux_mod, "run_init_script", fake.run_init_script)
     monkeypatch.setattr(tmux_mod, "capture_pane_snapshot", fake.capture_pane_snapshot)
     monkeypatch.setattr(tmux_mod, "send_text", fake.send_text)
+    monkeypatch.setattr(tmux_mod, "send_keys", fake.send_keys)
     monkeypatch.setattr(tmux_mod, "list_windows", fake.list_windows)
     monkeypatch.setattr(tmux_mod, "pane_activity_seconds_ago", fake.pane_activity_seconds_ago)
     monkeypatch.setattr(tmux_mod, "attach_instruction", fake.attach_instruction)

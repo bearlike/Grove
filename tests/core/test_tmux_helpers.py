@@ -405,6 +405,75 @@ def test_send_text_wraps_subprocess_errors(
         tmux.send_text("sess:agent", "hello")
 
 
+# ─── send_keys (#109) ────────────────────────────────────────────────────────
+
+
+def test_send_keys_dispatches_literal_runs_and_named_keys(
+    fake_run: list[list[str]],
+) -> None:
+    """Pin the per-op argv: a ``SendKey`` is a bare key name, a ``str`` is a
+    literal ``-l --`` run. The dispatch order is load-bearing — a StrEnum IS a
+    str, so a literal-first check would type "Tab"/"Enter" instead of pressing
+    them. This is the exact op list the Claude adapter builds for a batch.
+    """
+    tmux.send_keys(
+        "sess:agent",
+        ["2", "1", "3", tmux.SendKey.TAB, tmux.SendKey.ENTER],
+    )
+
+    assert fake_run == [
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "2"],
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "1"],
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "3"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Tab"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+    ]
+
+
+def test_send_keys_types_free_text_literally(fake_run: list[list[str]]) -> None:
+    """A free-text run is sent with ``-l --`` so its content is typed verbatim,
+    never interpreted as key names (a value like "Enter" would submit)."""
+    tmux.send_keys("sess:agent", ["3", "Enter please", tmux.SendKey.ENTER])
+
+    assert fake_run == [
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "3"],
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "Enter please"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+    ]
+
+
+def test_send_keys_raises_when_tmux_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: None)
+
+    with pytest.raises(TmuxError):
+        tmux.send_keys("sess:agent", [tmux.SendKey.ENTER])
+
+
+def test_send_keys_raises_on_nonzero_exit_and_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Steering fails LOUDLY and stops at the first failed op — no further keys
+    land in whatever pane is there."""
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: Any) -> Any:
+        calls.append(argv)
+
+        class _R:
+            returncode = 1
+            stdout = ""
+            stderr = "no such pane"
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    with pytest.raises(TmuxError, match="no such pane"):
+        tmux.send_keys("ghost:agent", ["1", tmux.SendKey.ENTER])
+    assert len(calls) == 1  # stopped after the failed first op
+
+
 # ─── build_workspace_layout — the hermetic launch env (#82) ──────────────────
 
 

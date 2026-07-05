@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TurnsView } from "@/components/workspace/turns-view";
-import type { SessionDetailView } from "@/lib/grove/types";
+import { snapshot, workspace } from "@/tests/_helpers/activity-fixtures";
+import type { AgentQuestionView, SessionDetailView } from "@/lib/grove/types";
 
 const DETAIL: SessionDetailView = {
   session: {
@@ -35,6 +36,7 @@ const DETAIL: SessionDetailView = {
       last_event_at: null,
       needs_attention: false,
       error_detail: null,
+      questions: [],
     },
   },
   turns: [
@@ -128,6 +130,59 @@ function stubFetch(detail: SessionDetailView) {
   );
   vi.stubGlobal("fetch", mock);
   return mock;
+}
+
+const QUESTION: AgentQuestionView = {
+  id: "toolu_1#0",
+  group_id: "toolu_1",
+  kind: "single_select",
+  prompt: "Which migration strategy?",
+  header: "Decision needed",
+  options: [
+    { label: "Big-bang cutover", description: "Faster, riskier" },
+    { label: "Incremental", description: "Slower, safer" },
+  ],
+  multiselect: false,
+  answered: false,
+  answer: null,
+  source_tool: "AskUserQuestion",
+};
+
+/** The shared `workspace()` fixture derives `session_id` from the workspace
+ * id (`s-${id}`); TurnsView's own tests use `sessionId="s1"` directly, so the
+ * one session_id is overridden to match after building. */
+function snapshotWithQuestions(questions: AgentQuestionView[]) {
+  const ws = workspace("w1", questions.length > 0 ? "blocked" : "working", undefined, questions);
+  ws.sessions[0].session.session_id = "s1";
+  return snapshot(ws);
+}
+
+/** Routes `/turns`, the `/activity` poll (jsdom has no `EventSource`, so
+ * `useActivityStream` falls back to it — this is how TurnsView is meant to
+ * learn about a live pending question group), and the answer POST. */
+function stubFetchWithActivity(
+  detail: SessionDetailView,
+  questions: AgentQuestionView[],
+  answerResponse: Response = new Response(null, { status: 204 }),
+) {
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  const answerCalls: unknown[] = [];
+  const mock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("/question-answer")) {
+      answerCalls.push(init?.body ? JSON.parse(String(init.body)) : undefined);
+      return answerResponse;
+    }
+    if (u.includes("/turns")) return json(detail);
+    if (u.includes("/activity")) return json(snapshotWithQuestions(questions));
+    throw new Error(`unexpected fetch ${u}`);
+  });
+  vi.stubGlobal("fetch", mock);
+  return { mock, answerCalls };
 }
 
 function r(node: React.ReactNode) {
@@ -304,5 +359,155 @@ describe("TurnsView", () => {
     r(<TurnsView workspaceId="w1" sessionId="s1" />);
 
     expect(await screen.findByText("couldn't load turns")).toBeInTheDocument();
+  });
+
+  it("renders a live pending question from the activity stream alongside the loaded turns", async () => {
+    stubFetchWithActivity(DETAIL, [QUESTION]);
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    await screen.findAllByTestId("turn-row");
+    const live = await screen.findByTestId("turns-live-question");
+    expect(live).toHaveTextContent("Which migration strategy?");
+    expect(live.querySelectorAll('[data-testid="question-option-button"]')).toHaveLength(2);
+  });
+
+  it("answering the live question POSTs the plan to /question-answer", async () => {
+    const { answerCalls } = stubFetchWithActivity(DETAIL, [QUESTION]);
+    const user = userEvent.setup();
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    const live = await screen.findByTestId("turns-live-question");
+    const buttons = live.querySelectorAll('[data-testid="question-option-button"]');
+    await user.click(buttons[0]);
+
+    await waitFor(() => expect(answerCalls).toHaveLength(1));
+    expect(answerCalls[0]).toEqual({
+      session_id: "s1",
+      tool_use_id: "toolu_1",
+      answers: [{ selected_indexes: [0] }],
+    });
+  });
+
+  it("a genuine multi-question batch renders as one group and answers all, then one submit", async () => {
+    const TOPPINGS: AgentQuestionView = {
+      id: "toolu_1#1",
+      group_id: "toolu_1",
+      kind: "multi_select",
+      prompt: "Toppings?",
+      header: null,
+      options: [
+        { label: "Cheese", description: null },
+        { label: "Mushrooms", description: null },
+      ],
+      multiselect: true,
+      answered: false,
+      answer: null,
+      source_tool: "AskUserQuestion",
+    };
+    const { answerCalls } = stubFetchWithActivity(DETAIL, [QUESTION, TOPPINGS]);
+    const user = userEvent.setup();
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    const live = await screen.findByTestId("turns-live-question");
+    expect(live).toHaveTextContent("Which migration strategy?");
+    expect(live).toHaveTextContent("Toppings?");
+    expect(screen.getAllByTestId("pending-question-card")).toHaveLength(1);
+
+    const optionButtons = live.querySelectorAll('[data-testid="question-option-button"]');
+    await user.click(optionButtons[0]);
+    const checkboxes = live.querySelectorAll('[data-testid="question-checkbox"]');
+    await user.click(checkboxes[1]);
+    expect(answerCalls).toHaveLength(0);
+
+    await user.click(screen.getByTestId("question-submit"));
+    await waitFor(() => expect(answerCalls).toHaveLength(1));
+    expect(answerCalls[0]).toEqual({
+      session_id: "s1",
+      tool_use_id: "toolu_1",
+      answers: [{ selected_indexes: [0] }, { selected_indexes: [1] }],
+    });
+  });
+
+  it("does not render a live question row when the activity stream has none pending", async () => {
+    stubFetchWithActivity(DETAIL, []);
+    r(<TurnsView workspaceId="w1" sessionId="s1" />);
+
+    await screen.findAllByTestId("turn-row");
+    expect(screen.queryByTestId("turns-live-question")).toBeNull();
+  });
+
+  it("latches disabled controls after a resolved 204 until a NEW question group arrives (#111)", async () => {
+    const NEXT_QUESTION: AgentQuestionView = {
+      id: "toolu_2#0",
+      group_id: "toolu_2",
+      kind: "single_select",
+      prompt: "Ship now?",
+      header: null,
+      options: [{ label: "Yes", description: null }, { label: "No", description: null }],
+      multiselect: false,
+      answered: false,
+      answer: null,
+      source_tool: "AskUserQuestion",
+    };
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const answerCalls: unknown[] = [];
+    let answered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/question-answer")) {
+          answerCalls.push(init?.body ? JSON.parse(String(init.body)) : undefined);
+          answered = true;
+          return new Response(null, { status: 204 });
+        }
+        if (u.includes("/turns")) return json(DETAIL);
+        // The activity poll reports the ORIGINAL group until the next read —
+        // the window the latch must survive without silently re-enabling.
+        if (u.includes("/activity")) {
+          return json(snapshotWithQuestions([answered ? NEXT_QUESTION : QUESTION]));
+        }
+        throw new Error(`unexpected fetch ${u}`);
+      }),
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={qc}>
+        <TurnsView workspaceId="w1" sessionId="s1" />
+      </QueryClientProvider>,
+    );
+
+    const live = await screen.findByTestId("turns-live-question");
+    const buttons = live.querySelectorAll('[data-testid="question-option-button"]');
+    await user.click(buttons[0]); // lone single-select auto-submits
+    await waitFor(() => expect(answerCalls).toHaveLength(1));
+
+    // The 204 resolved (isPending cleared), but the stream hasn't reported a
+    // new group yet — controls must stay disabled (isSuccess latches
+    // `submitting`), not silently re-enable for a beat.
+    await waitFor(() => {
+      const stillLive = screen.getByTestId("turns-live-question");
+      const stillButtons = stillLive.querySelectorAll('[data-testid="question-option-button"]');
+      expect(stillButtons[0]).toBeDisabled();
+    });
+
+    // Force the next activity read (mirrors the real poll noticing the group
+    // resolved and moving to the next one) — the effect resets the mutation
+    // on `liveGroupId` change, so the NEW group's controls come back enabled.
+    await qc.invalidateQueries({ queryKey: ["activity"] });
+
+    await waitFor(
+      () => {
+        const fresh = screen.getByTestId("turns-live-question");
+        expect(fresh).toHaveTextContent("Ship now?");
+        expect(fresh.querySelectorAll('[data-testid="question-option-button"]')[0]).not.toBeDisabled();
+      },
+      { timeout: 3000 },
+    );
   });
 });

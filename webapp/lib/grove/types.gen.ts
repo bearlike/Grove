@@ -396,6 +396,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/question-answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer Question
+         * @description Answer a pending AskUserQuestion by driving the agent's TUI (#109).
+         *
+         *     Dispatch semantics — 204 the instant the keystrokes are sent; the
+         *     resolution arrives later on the activity stream (the sidecar clears and
+         *     the transcript flushes). Refusals ride the typed-error envelope: 404
+         *     ``workspace_not_found``, 409 ``question_not_pending`` (stale/absent
+         *     ``tool_use_id``) / ``pane_not_found``, 422 ``question_answer_invalid``
+         *     (plan doesn't fit the captured questions). The wire model rejects a
+         *     structurally-malformed body (422) before the handler runs.
+         */
+        post: operations["answer_question_workspaces__ws_id__question_answer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/attach": {
         parameters: {
             query?: never;
@@ -806,6 +834,11 @@ export interface components {
             error_detail: string | null;
             /** Interpreted Status */
             interpreted_status?: string | null;
+            /**
+             * Questions
+             * @default []
+             */
+            questions: components["schemas"]["AgentQuestionView"][];
         };
         /**
          * AgentQuestionOptionView
@@ -822,9 +855,9 @@ export interface components {
          * @description Wire mirror of ``grove.core.agents.AgentQuestion`` (epic #74).
          *
          *     The structured payload a transcript renderer draws as a choice card. ``id``
-         *     /``group_id`` are the stable answer-back addresses a future write-path and
-         *     the #70 notifier key on, so they ride the wire even though the MVP renders
-         *     read-only.
+         *     /``group_id`` are the stable answer-back addresses a client keys on — for the
+         *     live pending question (#109), ``group_id`` is the ``tool_use_id`` the answer
+         *     POST must carry back.
          */
         AgentQuestionView: {
             /** Id */
@@ -1249,6 +1282,42 @@ export interface components {
             cwd: string;
             /** Workspaces */
             workspaces: components["schemas"]["WorkspaceActivityView"][];
+        };
+        /**
+         * QuestionAnswerItem
+         * @description One question's answer: chosen option indexes XOR free text — exactly one (#109).
+         *
+         *     ``selected_indexes`` picks predefined options (0-based, in option order);
+         *     ``text`` is a free-text ("Type something.") answer. No ``kind`` discriminator:
+         *     a client sends exactly one key, so a ``model_validator`` enforces the XOR
+         *     rather than a tagged union (a tag the webapp form does not carry). The
+         *     single-vs-multi and free-text-only-on-single-select rules can't be checked
+         *     here (they need the question) — the manager checks them against the captured
+         *     payload.
+         */
+        QuestionAnswerItem: {
+            /** Selected Indexes */
+            selected_indexes?: number[] | null;
+            /** Text */
+            text?: string | null;
+        };
+        /**
+         * QuestionAnswerRequest
+         * @description POST body for driving a pending ``AskUserQuestion`` to resolution (#109).
+         *
+         *     ``tool_use_id`` is the group answer-back address captured at ask-time; the
+         *     daemon requires it to still match the standing capture (409 on a stale id).
+         *     ``answers`` is one item per question, in the captured order; the manager
+         *     validates length + per-question kind rules against the captured payload
+         *     (422), then the Claude adapter maps them to deterministic keystrokes.
+         */
+        QuestionAnswerRequest: {
+            /** Session Id */
+            session_id: string;
+            /** Tool Use Id */
+            tool_use_id: string;
+            /** Answers */
+            answers: components["schemas"]["QuestionAnswerItem"][];
         };
         /**
          * RootBranch
@@ -2298,6 +2367,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    answer_question_workspaces__ws_id__question_answer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuestionAnswerRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {

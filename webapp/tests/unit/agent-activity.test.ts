@@ -18,6 +18,7 @@ function activity(patch: Partial<AgentActivityView> = {}): AgentActivityView {
     last_event_at: null,
     needs_attention: false,
     error_detail: null,
+    questions: [],
     interpreted_status: null,
     ...patch,
   };

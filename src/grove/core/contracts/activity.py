@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, ConfigDict
 
 from grove.core.agents import AgentActivityState
+from grove.core.contracts.questions import AgentQuestionView
 from grove.core.contracts.views import CommitSummaryView, WorkspacePaneView, WorkspaceStateView
 
 if TYPE_CHECKING:
@@ -81,6 +82,14 @@ class AgentActivityView(BaseModel):
     error_detail: str | None
     # Reserved for the future external-LLM interpreter (#20); always None today.
     interpreted_status: str | None = None
+    # The questions the agent is asking RIGHT NOW (#109), captured live from the
+    # hook sidecar and cross-checked against the transcript before they ship. One
+    # AskUserQuestion call carries up to four questions answered atomically with
+    # one POST, so the whole group rides together (ordered as asked); empty ⇒
+    # nothing pending. Defaults to [] so a pre-existing client deserializes
+    # unchanged (additive wire evolution). It rides the live activity stream so a
+    # client renders an answer affordance the instant the questions appear.
+    questions: list[AgentQuestionView] = []
 
     @classmethod
     def from_activity(cls, a: AgentActivity) -> AgentActivityView:
@@ -100,6 +109,7 @@ class AgentActivityView(BaseModel):
             needs_attention=a.needs_attention,
             error_detail=a.error_detail,
             interpreted_status=a.interpreted_status,
+            questions=[AgentQuestionView.from_question(q) for q in a.questions],
         )
 
 

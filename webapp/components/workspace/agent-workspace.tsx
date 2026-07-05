@@ -194,7 +194,7 @@ function ViewToggle({
       onClick={onClick}
       className={cn(
         "inline-flex size-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+        active ? "bg-card text-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >
       {children}

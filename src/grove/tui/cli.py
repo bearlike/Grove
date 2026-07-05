@@ -59,7 +59,7 @@ def main(ctx: typer.Context) -> None:
     from grove.tui.app import GroveApp  # noqa: PLC0415
 
     try:
-        manager = build(Path.cwd())
+        manager = build()
     except GroveError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
@@ -73,7 +73,7 @@ def main(ctx: typer.Context) -> None:
 def list_workspaces() -> None:
     """Print this repo's workspaces as JSON."""
     try:
-        manager = build(Path.cwd())
+        manager = build()
     except GroveError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
@@ -145,7 +145,7 @@ def config_init(
             "enabled": False,
         },
     }
-    target.parent.mkdir(parents=True, exist_ok=True)
+    paths.ensure_dir(target.parent)
     target.write_text(json.dumps(stub, indent=2) + "\n", encoding="utf-8", newline="\n")
     typer.echo(f"wrote {target}")
     typer.echo(f"schema:  {schema_path}")

@@ -15,7 +15,9 @@ import shlex
 import shutil
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import libtmux
@@ -23,8 +25,31 @@ from libtmux.constants import OptionScope
 from libtmux.server import Server
 from loguru import logger
 
+from grove.core import paths
 from grove.core.config import AgentSpec, GroveConfig, InitScriptConfig
 from grove.core.errors import TmuxError
+
+
+class SendKey(StrEnum):
+    """The closed vocabulary of named keys :func:`send_keys` can emit.
+
+    Values are tmux key names, passed to ``send-keys`` WITHOUT ``-l`` so tmux
+    interprets them as keypresses — a literal ``-l`` "Enter" would type five
+    characters, not submit. Deliberately tiny: Tab / Enter / Escape are all an
+    interactive selector (Claude Code's ``AskUserQuestion`` dialog) needs to
+    navigate, submit, and cancel. Widening it is a conscious act, not a typo.
+    """
+
+    TAB = "Tab"
+    ENTER = "Enter"
+    ESCAPE = "Escape"
+
+
+# One step for :func:`send_keys`: a named key, or a literal text run (``str``)
+# typed verbatim via ``-l --``. ``SendKey`` subclasses ``str`` (it is a StrEnum),
+# so callers MUST test ``isinstance(op, SendKey)`` before treating an op as
+# literal text — the dispatch in ``send_keys`` does exactly that, in that order.
+SendOp = SendKey | str
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +245,7 @@ def run_init_script(
         logger.warning("init stderr:\n{}", result.stderr.strip())
     if log_path is not None:
         try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
+            paths.ensure_dir(log_path.parent)
             log_path.write_text(
                 f"$ {' '.join(cmd)}\n--- stdout ---\n{result.stdout}"
                 f"--- stderr ---\n{result.stderr}",
@@ -307,6 +332,51 @@ def send_text(target: str, text: str) -> None:
         ["tmux", "send-keys", "-t", target, "-l", "--", text],
         ["tmux", "send-keys", "-t", target, "Enter"],
     ):
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=False,
+                timeout=5,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            raise TmuxError(f"send-keys to {target} failed: {exc}") from exc
+        if result.returncode != 0:
+            raise TmuxError(
+                f"send-keys to {target} exited {result.returncode}: {result.stderr.strip()}"
+            )
+
+
+def send_keys(target: str, ops: Sequence[SendOp]) -> None:
+    """Drive an interactive TUI at `target` with an ordered op sequence.
+
+    The narrow sibling of :func:`send_text` for tools whose UI is a keystroke
+    protocol rather than a text box (Claude Code's ``AskUserQuestion`` selector).
+    Each op is dispatched as its own ``send-keys`` call, in order:
+
+    * a :class:`SendKey` (Tab/Enter/Escape) is sent by NAME — no ``-l`` — so tmux
+      injects the keypress;
+    * anything else is a literal text run, sent with ``-l --`` so tmux types it
+      verbatim (a digit that selects an option, the characters of a free-text
+      answer). ``--`` ends option parsing so a run starting with ``-`` can't be
+      read as a flag.
+
+    Mechanism only — this module knows nothing of questions or grammars; the
+    Claude adapter builds the op list, the manager resolves which pane. Like
+    :func:`send_text`, failures raise ``TmuxError`` (a steer that silently
+    vanished is worse than one that failed loudly). Best-effort ordering is NOT
+    attempted: ops are sent as fast as subprocess spawns allow, so a TUI still
+    painting can drop a keystroke — that residual race is the caller's to own.
+    """
+    if shutil.which("tmux") is None:
+        raise TmuxError("tmux not found on PATH — on Windows, run Grove inside WSL2")
+    for op in ops:
+        if isinstance(op, SendKey):
+            argv = ["tmux", "send-keys", "-t", target, op.value]
+        else:
+            argv = ["tmux", "send-keys", "-t", target, "-l", "--", op]
         try:
             result = subprocess.run(
                 argv,

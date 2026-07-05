@@ -29,6 +29,7 @@ from grove.core.config import GroveConfig, load_config
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
+from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView
 from grove.core.contracts.tickets import (
@@ -54,6 +55,8 @@ from grove.core.errors import (
     BranchNotFound,
     GroveError,
     PaneNotFound,
+    QuestionAnswerInvalid,
+    QuestionNotPending,
     SteeringUnsupported,
     TicketProviderError,
     TicketProviderNotConfigured,
@@ -298,6 +301,14 @@ def build_app(  # noqa: PLR0915
             # exactly the false promise a 409 would make.
             PaneNotFound: (409, "pane_not_found"),
             SteeringUnsupported: (501, "steering_unsupported"),
+            # Live-question answering (#109). QuestionNotPending is 409, like the
+            # state errors: the request was well-formed, the live question just
+            # moved on (answered in the terminal, or superseded) — the client
+            # drops its pending card. QuestionAnswerInvalid is 422: the plan is
+            # malformed for the captured questions (bad length/index/kind), which
+            # no state change fixes.
+            QuestionNotPending: (409, "question_not_pending"),
+            QuestionAnswerInvalid: (422, "question_answer_invalid"),
             # Agent-transcript sessions; the auth domain's `session_not_found`
             # (revoked bearer sessions) lives in the auth router.
             AgentSessionNotFound: (404, "agent_session_not_found"),
@@ -553,6 +564,24 @@ def build_app(  # noqa: PLR0915
         mgr = _manager_for(ws_id)
         try:
             mgr.interrupt(ws_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post("/workspaces/{ws_id}/question-answer", status_code=204, dependencies=auth_dep)
+    async def answer_question(ws_id: str, body: QuestionAnswerRequest) -> None:
+        """Answer a pending AskUserQuestion by driving the agent's TUI (#109).
+
+        Dispatch semantics — 204 the instant the keystrokes are sent; the
+        resolution arrives later on the activity stream (the sidecar clears and
+        the transcript flushes). Refusals ride the typed-error envelope: 404
+        ``workspace_not_found``, 409 ``question_not_pending`` (stale/absent
+        ``tool_use_id``) / ``pane_not_found``, 422 ``question_answer_invalid``
+        (plan doesn't fit the captured questions). The wire model rejects a
+        structurally-malformed body (422) before the handler runs.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            mgr.answer_question(ws_id, body)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
 

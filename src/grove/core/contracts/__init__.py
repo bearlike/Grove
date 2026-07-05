@@ -40,10 +40,14 @@ from grove.core.contracts.branch_plan import (
     RootBranch,
     TrackRemoteBranch,
 )
-from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
-from grove.core.contracts.sessions import (
+from grove.core.contracts.questions import (
     AgentQuestionOptionView,
     AgentQuestionView,
+    QuestionAnswerItem,
+    QuestionAnswerRequest,
+)
+from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
+from grove.core.contracts.sessions import (
     DigestEntryView,
     SessionDetailView,
     SessionSummaryView,
@@ -85,6 +89,8 @@ __all__ = [
     "PairResultView",
     "PairingChallengeView",
     "ProjectGroupView",
+    "QuestionAnswerItem",
+    "QuestionAnswerRequest",
     "RootBranch",
     "SessionActivityView",
     "SessionDetailView",

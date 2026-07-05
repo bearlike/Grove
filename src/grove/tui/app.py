@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from textual.app import App
 
 from grove.core import WorkspaceManager, build
@@ -43,7 +41,7 @@ class GroveApp(App[None]):
 
     def on_mount(self) -> None:
         if self._manager is None:
-            self._manager = build(Path.cwd())
+            self._manager = build()
         register_themes(self, themes_dir=user_themes_dir())
         try:
             self.theme = resolve_theme_name(

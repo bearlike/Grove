@@ -110,6 +110,9 @@ uv tool upgrade grove    # update later
 
 No uv? Use `pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"` or plain `pip install --user`. See [Get Started](https://bearlike.github.io/Grove/latest/getting-started/) for prerequisites and every install path.
 
+> [!IMPORTANT]
+> Always install with the full `@ git+...` form above. The name `grove` on PyPI belongs to an unrelated package, so a bare `uv tool install grove` installs the wrong product.
+
 <details>
 <summary><b>🤖 Let an AI agent configure Grove for you</b></summary>
 

@@ -202,6 +202,36 @@ class WorkspaceState:
         base = Path(self.worktree_path)
         return base / self.project_subpath if self.project_subpath else base
 
+    def adopts_session(self, born_at: datetime | None) -> bool:
+        """Whether a *discovered* (non-minted) session born at ``born_at`` belongs here.
+
+        A workspace's cwd can hold agent transcripts written before the
+        workspace ever existed — most commonly ROOT placement, where the cwd
+        is the shared repo root and every prior root-level session lives in
+        the same directory. Treating "newest transcript in the cwd" as a
+        proxy for "this workspace's session" (the pre-fix bug) then presents a
+        stale, unrelated transcript as if a brand-new workspace already had a
+        conversation. The correct test is birth, not recency: a session
+        belongs to this workspace only if its first record postdates (or is
+        concurrent with) this workspace's own ``created_at`` — mtime keeps
+        advancing on an old file that merely gets touched or re-read, but a
+        transcript's birth is immutable. Used by both discovery-adoption sites
+        (`ActivityService.sessions_for`, `SessionExplorer.for_workspace`); a
+        session Grove itself minted and launched never calls this — it is
+        unconditionally this workspace's, born or not.
+
+        ``born_at is None`` (birth unknown — e.g. an unreadable or empty
+        transcript) never adopts: an unproven birth can't be shown to postdate
+        creation. A tz-naive ``born_at`` is coerced to UTC defensively so a
+        malformed timestamp degrades the comparison rather than raising on the
+        poll path (the peek/best-effort discipline).
+        """
+        if born_at is None:
+            return False
+        if born_at.tzinfo is None:
+            born_at = born_at.replace(tzinfo=UTC)
+        return born_at >= self.created_at
+
 
 @dataclass(slots=True, frozen=True)
 class CommitSummary:

@@ -467,7 +467,7 @@ class SessionStore:
         return {"challenges": challenges, "sessions": sessions}
 
     def _save(self, data: _StoreData) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        paths.ensure_dir(self._path.parent)
         payload = {
             "version": _FILE_VERSION,
             "challenges": [self._encode_challenge(c) for c in data["challenges"]],

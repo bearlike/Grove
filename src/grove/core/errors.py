@@ -109,6 +109,32 @@ class SteeringUnsupported(GroveError):
     """
 
 
+# ─── live-question answering (raised by WorkspaceManager.answer_question) ────
+
+
+class QuestionNotPending(GroveError):
+    """No pending question matches the answer request (#109).
+
+    Either the session's sidecar carries no captured question, or its
+    ``tool_use_id`` no longer matches the one being answered — the human
+    already resolved it in the terminal, or a newer question superseded it.
+    State-shaped (maps to 409): the request was well-formed, the live target
+    just moved on. The message names which case.
+    """
+
+
+class QuestionAnswerInvalid(GroveError):
+    """The answer plan doesn't fit the captured question payload (#109).
+
+    Raised when the per-question kind rules fail against the *captured*
+    questions (wrong number of answers, an out-of-range option index, a
+    free-text answer on a multiSelect, an unsupported question kind). Maps to
+    422 — the plan itself is malformed for these questions, not a state
+    conflict. Structural shape (exactly one of indexes/text, non-blank text)
+    is caught earlier by the wire model's own validation.
+    """
+
+
 # ─── branch validation errors (raised by WorkspaceManager.create) ───────────
 
 

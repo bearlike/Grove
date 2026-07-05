@@ -1,21 +1,44 @@
 import type {
   AgentActivityState,
+  AgentActivityView,
+  AgentQuestionView,
   DashboardSnapshotView,
   WorkspaceActivityView,
 } from "@/lib/grove/types";
 
 /**
  * Wire-shaped `WorkspaceActivityView` builder shared by the unit tests that
- * exercise the stream reducer and the wall-presentation policy. Attention is
- * derived from the agent state the same way the daemon does (waiting / blocked
- * / error want the human).
+ * exercise the stream reducer, the wall-presentation policy, and the live
+ * pending-question lookup (Gitea #111). `questions` is additive on the
+ * per-session `AgentActivityView` (now in `types.gen.ts`). A list, ordered
+ * as asked (empty = nothing pending); a real `AskUserQuestion` batch can hold
+ * more than one. Attention is derived from the agent state the same way the
+ * daemon does (waiting / blocked / error want the human).
  */
 export function workspace(
   id: string,
   state: AgentActivityState,
   observed_at = "2026-06-01T00:00:00Z",
+  questions: AgentQuestionView[] = [],
 ): WorkspaceActivityView {
   const attention = state === "waiting" || state === "blocked" || state === "error";
+  const activity: AgentActivityView = {
+    state,
+    title: null,
+    current_task: null,
+    human_turns: 0,
+    assistant_replies: 0,
+    replies_per_turn: [],
+    tool_calls: 0,
+    active_subagents: 0,
+    model: null,
+    tokens_in: 0,
+    tokens_out: 0,
+    last_event_at: null,
+    needs_attention: attention,
+    error_detail: null,
+    questions,
+  };
   return {
     state: {
       id,
@@ -40,22 +63,7 @@ export function workspace(
           provenance: "grove_launched",
           tmux_window: "agent",
         },
-        activity: {
-          state,
-          title: null,
-          current_task: null,
-          human_turns: 0,
-          assistant_replies: 0,
-          replies_per_turn: [],
-          tool_calls: 0,
-          active_subagents: 0,
-          model: null,
-          tokens_in: 0,
-          tokens_out: 0,
-          last_event_at: null,
-          needs_attention: attention,
-          error_detail: null,
-        },
+        activity,
       },
     ],
     base_ahead: 0,

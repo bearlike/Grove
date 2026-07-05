@@ -27,6 +27,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from grove.core import paths
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.errors import GitError
 from grove.core.workspace import CommitSummary
@@ -97,7 +98,7 @@ class GitRepo:
         """
         if bool(new_branch) == bool(existing_branch):
             raise ValueError("specify exactly one of new_branch or existing_branch")
-        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.ensure_dir(worktree_path.parent)
         if new_branch:
             cmd = ["git", "worktree", "add", "-b", new_branch, str(worktree_path), base]
         else:

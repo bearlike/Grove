@@ -63,6 +63,7 @@ function activity(
           last_event_at: null,
           needs_attention: attention,
           error_detail: null,
+          questions: [],
           ...actOver,
         },
       },

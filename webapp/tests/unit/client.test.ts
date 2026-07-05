@@ -160,6 +160,79 @@ describe("GroveClient", () => {
     });
   });
 
+  it("answerQuestion POSTs session_id/tool_use_id/answers and maps 409 to a typed error", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ detail: { error: "question_not_pending", message: "stale" } }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = GroveClient.default();
+    await expect(
+      client.answerQuestion("w1", "s1", "toolu_1", [{ selected_indexes: [0] }]),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/grove/workspaces/w1/question-answer",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          session_id: "s1",
+          tool_use_id: "toolu_1",
+          answers: [{ selected_indexes: [0] }],
+        }),
+      }),
+    );
+
+    await expect(
+      client.answerQuestion("w1", "s1", "toolu_1", [{ text: "Kiwi" }]),
+    ).rejects.toMatchObject({
+      name: "GroveProtocolError",
+      code: "question_not_pending",
+      status: 409,
+    });
+  });
+
+  it("FastAPI validation 422 (a detail LIST, not the daemon envelope) becomes a readable typed error", async () => {
+    const errBody = {
+      detail: [
+        {
+          type: "string_too_long",
+          loc: ["body", "title"],
+          msg: "String should have at most 120 characters",
+          ctx: { max_length: 120 },
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(errBody), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const client = GroveClient.default();
+    await expect(
+      client.createWorkspace({
+        agent_name: "claude",
+        title: "x",
+        skip_init: false,
+      } as never),
+    ).rejects.toMatchObject({
+      name: "GroveProtocolError",
+      code: "validation_error",
+      status: 422,
+      message: "title: String should have at most 120 characters",
+    });
+  });
+
   it("non-JSON error body still produces a typed error with default code", async () => {
     vi.stubGlobal(
       "fetch",

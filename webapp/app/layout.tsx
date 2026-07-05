@@ -25,9 +25,12 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  // Browser-chrome tint. A meta value can't read a CSS var, so these are the one
+  // place a canvas hex is unavoidable — kept in lock-step with the `--background`
+  // tokens in globals.css (dark hsl(224 20% 6%), light hsl(220 24% 98%)).
   themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#2d2d2b" },
-    { media: "(prefers-color-scheme: light)", color: "#faf9f5" },
+    { media: "(prefers-color-scheme: dark)", color: "#0c0e14" },
+    { media: "(prefers-color-scheme: light)", color: "#f9fafb" },
   ],
 };
 

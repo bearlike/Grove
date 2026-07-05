@@ -25,11 +25,13 @@ from typing import Literal
 from loguru import logger
 
 from grove.core import paths, tmux
-from grove.core.agents import get_adapter
-from grove.core.agents.hook import ClaudeHook
+from grove.core.agents import AgentQuestion, AnswerSelection, get_adapter
+from grove.core.agents.claude_code import ClaudeCodeAdapter
+from grove.core.agents.hook import ClaudeHook, PendingQuestion
 from grove.core.config import AgentSpec, GroveConfig, load_config
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import AutoBranch, BranchMode, ResolvedBranch
+from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import TicketRef, TicketSelector
 from grove.core.errors import (
@@ -40,6 +42,8 @@ from grove.core.errors import (
     GroveError,
     MewboError,
     PaneNotFound,
+    QuestionAnswerInvalid,
+    QuestionNotPending,
     SteeringUnsupported,
     WorkspaceStateError,
 )
@@ -80,6 +84,7 @@ EventKindStr = Literal[
     "killed",
     "updated",
     "message_sent",
+    "question_answered",
     "error",
     "offline_detected",
     "orphaned_detected",
@@ -920,6 +925,86 @@ class WorkspaceManager:
         else:
             self._mewbo().interrupt(session_id)
 
+    def answer_question(self, workspace_id: str, request: QuestionAnswerRequest) -> None:
+        """Drive a pending ``AskUserQuestion`` to resolution by keystroke (#109).
+
+        Dispatch semantics, like ``send_message``: this returns as soon as the
+        keystrokes are sent — the resolution (the ``tool_result``) lands later and
+        streams via the transcript + the PostToolUse sidecar clear. Gates, in
+        order: the workspace must exist (``WorkspaceNotFound`` → 404);
+        ``session_id`` must be the session Grove minted for this workspace's pane
+        (``QuestionNotPending`` → 409, else a foreign or cross-workspace
+        session_id could steer keystrokes into the wrong pane); a captured
+        question for ``session_id`` must still match ``tool_use_id``
+        (``QuestionNotPending`` → 409, the human may have answered in the
+        terminal); the plan must fit the captured questions (``QuestionAnswerInvalid``
+        → 422); a pane must resolve (``PaneNotFound`` → 409).
+
+        The capture is re-checked immediately before the send to *shrink* — never
+        close — the terminal race: if the human answers between our check and our
+        keystrokes, the extra keys land in the freshly-reset composer as harmless
+        literal text, never as a second answer to a question that is gone. The
+        keystroke grammar itself lives in the Claude adapter (the provider
+        boundary); the manager only orchestrates and maps errors.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        if request.session_id != state.agent_session_id:
+            raise QuestionNotPending(
+                f"session {request.session_id!r} is not the agent session bound to "
+                f"workspace {state.id}'s pane (expected {state.agent_session_id!r})"
+            )
+        pending = self._pending_capture(request.session_id, request.tool_use_id)
+        questions = AgentQuestion.from_tool_call(
+            pending.tool_name, pending.tool_input, pending.tool_use_id
+        )
+        selections = [
+            AnswerSelection(indexes=tuple(a.selected_indexes or ()), text=a.text)
+            for a in request.answers
+        ]
+        try:
+            ops = ClaudeCodeAdapter.build_answer_keys(questions, selections)
+        except ValueError as exc:
+            raise QuestionAnswerInvalid(str(exc)) from exc
+        target = self._pane_target(state)
+        if target is None:
+            raise PaneNotFound(
+                f"no tmux pane resolved for workspace {state.id} "
+                f"(session {state.tmux_session!r} reports no windows)"
+            )
+        # Re-check the capture right before the send to shrink the terminal race.
+        self._pending_capture(request.session_id, request.tool_use_id)
+        tmux.send_keys(target, ops)
+        self._emit(
+            "question_answered",
+            state.id,
+            {
+                "target": target,
+                "tool_use_id": pending.tool_use_id,
+                "answers": str(len(selections)),
+            },
+        )
+
+    def _pending_capture(self, session_id: str, tool_use_id: str) -> PendingQuestion:
+        """The standing captured question for ``session_id``, or raise (#109).
+
+        Reads the hook sidecar and requires a captured question whose
+        ``tool_use_id`` still matches. Raises ``QuestionNotPending`` with a reason
+        that distinguishes *absent* (nothing captured — already answered/cleared)
+        from *stale* (a different question is now pending)."""
+        record = ClaudeHook.read(session_id, sidecar_dir=paths.agent_sidecar_dir())
+        pending = record.question if record is not None else None
+        if pending is None:
+            raise QuestionNotPending(
+                f"no pending question for session {session_id!r} "
+                "(already answered, cancelled, or never asked)"
+            )
+        if pending.tool_use_id != tool_use_id:
+            raise QuestionNotPending(
+                f"pending question for session {session_id!r} is {pending.tool_use_id!r}, "
+                f"not the requested {tool_use_id!r} (already answered or superseded)"
+            )
+        return pending
+
     def respawn(self, workspace_id: str) -> WorkspaceState:
         """Recreate the tmux session for an OFFLINE workspace.
 
@@ -1213,7 +1298,7 @@ class WorkspaceManager:
         """
         path = paths.agent_hooks_settings_path()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            paths.ensure_dir(path.parent)
             path.write_text(json.dumps(ClaudeHook.settings(), indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("could not write hook settings; launching without push status: {}", exc)
@@ -1441,7 +1526,14 @@ def build(
     cli_overrides: dict[str, object] | None = None,
     store: JsonWorkspaceStore | None = None,
 ) -> WorkspaceManager:
-    """Build a manager bound to `repo_root` (or the cwd's repo if not given)."""
+    """Build a manager bound to `repo_root` (or the cwd's repo if not given).
+
+    With no ``repo_root``, binds to the cwd repo's MAIN worktree root — the
+    key the workspace store uses. From inside a *linked* worktree,
+    ``detect_root`` returns that worktree's own root, and a manager keyed by
+    it would list zero workspaces (the #51 bug). The rule lives here so every
+    cwd-bound caller (CLI verbs, ``grove ls``, the TUI entry) inherits it.
+    """
     resolved: Path
     if repo_root is None:
         detected = GitRepo.detect_root(Path.cwd())
@@ -1450,7 +1542,7 @@ def build(
                 "Grove must be run from inside a git repository "
                 "(no repo found at or above the current directory)."
             )
-        resolved = detected
+        resolved = GitRepo(detected).worktree_paths()[0]
     else:
         resolved = repo_root
     cfg = load_config(resolved, cli_overrides=cli_overrides)

@@ -462,10 +462,18 @@ def load_config(
 ) -> GroveConfig:
     """Resolve the full cascade and return a validated GroveConfig.
 
-    Layers (last wins): pydantic defaults → user JSON → project JSON →
+    Layers (last wins): built-in defaults → user JSON → project JSON →
     project-local JSON → GROVE_* env vars → caller-supplied CLI overrides.
     """
-    layers: list[dict[str, Any]] = []
+    layers: list[dict[str, Any]] = [
+        # The built-in agents are literally layer 0 of the cascade, so the
+        # `agents` merge-by-name REFINES them instead of replacing the
+        # roster: a config that redeclares `claude` keeps kind="claude_code"
+        # (the merge contract `_merge_agents` documents), and a scaffolded
+        # project config never silently hides codex/shell (#105). Every
+        # other field's default already survives via the Pydantic model.
+        {"agents": [a.model_dump(mode="json") for a in _default_agents()]},
+    ]
 
     user_path = paths.user_config_path()
     if user_path.exists():
@@ -517,7 +525,7 @@ def write_schema(target: Path | None = None) -> Path:
     Returns the path written to.
     """
     target = target or paths.user_schema_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    paths.ensure_dir(target.parent)
     text = dump_schema_json()
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8", newline="\n")
@@ -596,7 +604,14 @@ def _parse_env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
 
     Double-underscore separates nesting depth; field names lowercase.
     Values stay strings; Pydantic coerces on validation.
+
+    Only keys whose top-level segment is a real GroveConfig field are
+    consumed. GROVE_* is a shared namespace — GROVE_DEBUG, the provider
+    token vars config itself names (GROVE_GITEA_TOKEN, ...), the installer
+    knobs — and the strict model would otherwise hard-fail every config
+    load the moment any of them is exported (#105).
     """
+    known_fields = GroveConfig.model_fields.keys()
     result: dict[str, Any] = {}
     for key, raw in env.items():
         if not key.startswith("GROVE_"):
@@ -606,6 +621,9 @@ def _parse_env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
             continue
         parts = [p.lower() for p in suffix.split("__") if p]
         if not parts:
+            continue
+        if parts[0] not in known_fields:
+            logger.debug("ignoring non-config env var {}", key)
             continue
         cursor: dict[str, Any] = result
         for part in parts[:-1]:

@@ -1,3 +1,4 @@
+import type { QuestionInteraction } from "./question-plan";
 import type { AgentQuestionView, DigestEntryView, SessionTurnView } from "./types";
 
 /**
@@ -25,7 +26,14 @@ export type ChatItem =
   | { kind: "tools"; calls: ToolCall[] }
   | { kind: "note"; tone: "summary" | "status"; text: string }
   | { kind: "notification"; summary: string; detail: string }
+  // One historical entry from `/turns` — always read-only (epic #74).
   | { kind: "question"; question: AgentQuestionView }
+  // The LIVE pending question GROUP (Gitea #111), appended by the chat panel
+  // / turns view — never by `chatItemsFromTurns` below, which stays a pure
+  // mapper over historical turns. `questions` is every question sharing one
+  // `group_id`, answered atomically in one submit (a real `AskUserQuestion`
+  // batch can carry more than one — research-findings.md's Color/Toppings case).
+  | { kind: "pending-questions"; questions: AgentQuestionView[]; interactive: QuestionInteraction }
   | { kind: "continuation" };
 
 export function chatItemsFromTurns(turns: SessionTurnView[]): ChatItem[] {

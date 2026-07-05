@@ -21,11 +21,23 @@ from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
+from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
 from tests.conftest import FakeTmux
+
+
+def _iso(dt: datetime) -> str:
+    """A transcript-record timestamp string for a given birth instant.
+
+    Several fixtures below need a session born *after* the workspace's own
+    ``created_at`` (real wall-clock time at test run) to pass the created_at
+    adoption gate (`WorkspaceState.adopts_session`) — a timestamp hard-coded to
+    a fixed past date would predate it and get filtered as stale.
+    """
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 def _init_repo(path: Path) -> Path:
@@ -416,6 +428,135 @@ def test_sidecar_overrides_polled_state(
     assert primary.state is AgentActivityState.BLOCKED
 
 
+# ─── #109 live pending question ──────────────────────────────────────────────
+
+
+def _ask_capture(sidecar_dir: Path, session_id: str | None, *, now: datetime) -> None:
+    ClaudeHook.record_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": session_id,
+            "tool_name": "AskUserQuestion",
+            "tool_use_id": "toolu_1",
+            "tool_input": {
+                "questions": [
+                    {
+                        "question": "Pick a color",
+                        "header": "Color",
+                        "multiSelect": False,
+                        "options": [{"label": "Blue"}, {"label": "Green"}],
+                    }
+                ]
+            },
+        },
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=now,
+    )
+
+
+def test_live_question_surfaces_on_activity_view(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A question captured at ask-time rides the activity view immediately —
+    before Claude Code flushes anything to the transcript (#109)."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="q"))
+    _ask_capture(sidecar_dir, state.agent_session_id, now=datetime.now(tz=UTC))
+
+    primary = service.snapshot().projects[0].workspaces[0].primary
+    assert primary is not None
+    assert len(primary.questions) == 1
+    q = primary.questions[0]
+    assert q.prompt == "Pick a color"
+    assert q.group_id == "toolu_1"  # the answer-back tool_use_id
+    assert [o.label for o in q.options] == ["Blue", "Green"]
+
+
+def test_live_question_surfaces_whole_batch_in_order(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One AskUserQuestion call carries up to four questions answered atomically,
+    so the whole group rides together, ordered as asked (#109 contract)."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="q"))
+    ClaudeHook.record_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": state.agent_session_id,
+            "tool_name": "AskUserQuestion",
+            "tool_use_id": "toolu_1",
+            "tool_input": {
+                "questions": [
+                    {"question": "Color?", "options": [{"label": "Blue"}]},
+                    {"question": "Toppings?", "multiSelect": True, "options": [{"label": "A"}]},
+                ]
+            },
+        },
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=datetime.now(tz=UTC),
+    )
+
+    primary = service.snapshot().projects[0].workspaces[0].primary
+    assert primary is not None
+    assert [q.prompt for q in primary.questions] == ["Color?", "Toppings?"]
+    # Same batch → shared group_id (the answer-back tool_use_id); distinct ids.
+    assert {q.group_id for q in primary.questions} == {"toolu_1"}
+    assert [q.id for q in primary.questions] == ["toolu_1#0", "toolu_1#1"]
+
+
+def test_live_question_suppressed_once_transcript_resolves_it(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Once the transcript carries the resolving tool_result for the captured
+    tool_use_id (the flush after an answer/cancel), the pending question is not
+    exposed — even though the sidecar still holds the capture."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="q"))
+    # Capture asked at 10:00:00; the transcript then flushes the tool_use + its
+    # resolving tool_result at 10:00:05/06 (after the ask) — so the cross-check
+    # fires and finds the resolution.
+    _ask_capture(
+        sidecar_dir, state.agent_session_id, now=datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)
+    )
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(Path(state.worktree_path))
+    folder.mkdir(parents=True)
+    (folder / f"{state.agent_session_id}.jsonl").write_text(
+        '{"type":"assistant","uuid":"a1","requestId":"r1","timestamp":"2026-06-01T10:00:05.000Z",'
+        '"isSidechain":false,"message":{"id":"m1","role":"assistant","stop_reason":"tool_use",'
+        '"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use",'
+        '"id":"toolu_1","name":"AskUserQuestion","input":{"questions":[{"question":"Pick a color",'
+        '"options":[{"label":"Blue"}]}]}}]}}\n'
+        '{"type":"user","uuid":"u2","timestamp":"2026-06-01T10:00:06.000Z","isSidechain":false,'
+        '"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1",'
+        '"content":"Your questions have been answered"}]}}\n',
+        encoding="utf-8",
+    )
+
+    primary = service.snapshot().projects[0].workspaces[0].primary
+    assert primary is not None
+    assert primary.questions == ()
+
+
 def test_sidecar_superseded_by_newer_transcript(
     env: tuple[ActivityService, RepoRegistry],
     monkeypatch: pytest.MonkeyPatch,
@@ -641,9 +782,10 @@ def test_null_session_id_recovered_by_discovery(
 
     folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
     folder.mkdir(parents=True)
+    born = _iso(state.created_at + timedelta(seconds=1))
     (folder / "11111111-1111-4111-8111-111111111111.jsonl").write_text(
         f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
-        '"timestamp":"2026-06-01T10:00:00.000Z","isSidechain":false,'
+        f'"timestamp":"{born}","isSidechain":false,'
         '"message":{"role":"user","content":"recover me"}}\n',
         encoding="utf-8",
     )
@@ -679,9 +821,10 @@ def test_unmaterialized_minted_id_yields_primary_to_discovered_session(
     live_sid = "deadbeef-0000-4000-8000-000000000000"
     folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
     folder.mkdir(parents=True)
+    born = _iso(state.created_at + timedelta(seconds=1))
     (folder / f"{live_sid}.jsonl").write_text(
         f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
-        '"timestamp":"2026-06-01T10:00:00.000Z","isSidechain":false,'
+        f'"timestamp":"{born}","isSidechain":false,'
         '"message":{"role":"user","content":"the live session"}}\n',
         encoding="utf-8",
     )
@@ -741,9 +884,10 @@ def test_persisted_agent_kind_resolves_when_name_absent_from_config(
 
     folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
     folder.mkdir(parents=True)
+    born = _iso(state.created_at + timedelta(seconds=1))
     (folder / "abcdef00-0000-4000-8000-000000000000.jsonl").write_text(
         f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
-        '"timestamp":"2026-06-01T10:00:00.000Z","isSidechain":false,'
+        f'"timestamp":"{born}","isSidechain":false,'
         '"message":{"role":"user","content":"scoped session"}}\n',
         encoding="utf-8",
     )
@@ -760,8 +904,9 @@ def test_null_id_discovery_adopts_single_most_recent(
     tmp_path: Path,
 ) -> None:
     """With no minted id and several transcripts for the worktree, exactly one
-    session (the most recently active) is surfaced — never the worktree's whole
-    history. Discovery orders newest-first; the null-id path adopts only [:1]."""
+    session (the most recently active, among those adopted) is surfaced —
+    never the worktree's whole history. Discovery orders newest-first; the
+    null-id path walks that order for the first one `adopts_session` accepts."""
     service, registry = env
     cfg_home = tmp_path / "claude"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
@@ -774,12 +919,13 @@ def test_null_id_discovery_adopts_single_most_recent(
 
     folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
     folder.mkdir(parents=True)
+    born = _iso(state.created_at + timedelta(seconds=1))
     newest = "33333333-3333-4333-8333-333333333333"
     for sid, mtime in (("22222222-2222-4222-8222-222222222222", 1000), (newest, 2000)):
         path = folder / f"{sid}.jsonl"
         path.write_text(
             f'{{"type":"user","uuid":"u-{sid[:4]}","cwd":"{worktree}",'
-            '"timestamp":"2026-06-01T10:00:00.000Z","isSidechain":false,'
+            f'"timestamp":"{born}","isSidechain":false,'
             f'"message":{{"role":"user","content":"task {sid[:4]}"}}}}\n',
             encoding="utf-8",
         )
@@ -788,6 +934,47 @@ def test_null_id_discovery_adopts_single_most_recent(
     row = service.snapshot().projects[0].workspaces[0]
     assert len(row.sessions) == 1
     assert row.sessions[0].session.session_id == newest
+
+
+def test_root_workspace_never_promotes_stale_repo_root_session_to_primary(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The bug report's exact shape: a ROOT-placement workspace's cwd IS the
+    shared repo root, which may already hold a much older session's transcript
+    from before this workspace existed. The dashboard must not present that
+    stale transcript as this brand-new workspace's live session (honest
+    STARTING instead) — it still rides along as a non-primary member so it
+    isn't silently dropped from the fingerprint."""
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+
+    stale_sid = "88888888-8888-4888-8888-888888888888"
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(repo)
+    folder.mkdir(parents=True)
+    path = folder / f"{stale_sid}.jsonl"
+    path.write_text(
+        f'{{"type":"user","uuid":"u","cwd":"{repo}",'
+        '"timestamp":"2020-01-01T00:00:00.000Z","isSidechain":false,'
+        '"message":{"role":"user","content":"leftover from a prior life"}}\n',
+        encoding="utf-8",
+    )
+    os.utime(path, (99_999_999, 99_999_999))  # newest mtime around — the bug's trigger
+
+    state = registry.get(repo).create(
+        CreateWorkspaceRequest(agent_name="claude", title="fresh root", branch_plan=RootBranch())
+    )
+    assert Path(state.worktree_path).resolve() == repo.resolve()
+
+    row = service.snapshot().projects[0].workspaces[0]
+    assert row.primary is not None
+    assert row.primary.state is AgentActivityState.STARTING
+    assert row.primary.current_task != "leftover from a prior life"
+    assert row.sessions[0].session.session_id != stale_sid
 
 
 # ─── dirty_files (uncommitted churn streams before any commit) ───────────────

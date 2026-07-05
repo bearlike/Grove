@@ -79,6 +79,58 @@ def test_parse_env_nested_two_levels() -> None:
     assert out == {"init_script": {"timeout_seconds": "60"}}
 
 
+def test_parse_env_ignores_non_config_grove_vars() -> None:
+    """GROVE_* is a shared namespace; only real config fields are consumed (#105).
+
+    GROVE_DEBUG (the documented debug switch) and the provider token vars
+    config itself names must never reach the strict model — they used to
+    hard-fail every config load with extra_forbidden.
+    """
+    out = _parse_env_overrides(
+        {
+            "GROVE_DEBUG": "1",
+            "GROVE_GITEA_TOKEN": "tok",
+            "GROVE_GITHUB_TOKEN": "tok",
+            "GROVE_INSTALL_SPEC": "grove @ file:///src",
+            "GROVE_UI__THEME": "grove-dark",
+        }
+    )
+    assert out == {"ui": {"theme": "grove-dark"}}
+
+
+def test_load_config_survives_grove_debug_env(tmp_state_dir: Path, tmp_repo: Path) -> None:
+    del tmp_state_dir  # fixture used for its path-redirect side effect
+    cfg = load_config(tmp_repo, env={"GROVE_DEBUG": "1", "GROVE_GITEA_TOKEN": "tok"})
+    assert cfg.worktree.root_template  # defaults intact, no ConfigError
+
+
+def test_project_agents_refine_builtins_instead_of_replacing(
+    tmp_state_dir: Path, tmp_repo: Path
+) -> None:
+    """Built-in agents are layer 0 of the cascade (#105).
+
+    A project config that redeclares `claude` (the `grove config init`
+    scaffold's shape) must refine the built-in — keeping kind="claude_code"
+    per the `_merge_agents` contract — and must NOT hide codex/shell.
+    Before the fix the scaffold roster replaced the built-ins wholesale, so
+    the documented first-run flow (`config init` → create with `shell`)
+    failed with "unknown agent" and claude lost dashboard tracking.
+    """
+    del tmp_state_dir
+    project = paths_mod.project_config_path(tmp_repo)
+    project.parent.mkdir(parents=True, exist_ok=True)
+    project.write_text(
+        json.dumps({"agents": [{"name": "claude", "command": "my-claude"}]}),
+        encoding="utf-8",
+    )
+    cfg = load_config(tmp_repo, env={})
+    assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
+    claude = cfg.find_agent("claude")
+    assert claude is not None
+    assert claude.command == "my-claude"  # the override wins field-by-field
+    assert claude.kind == "claude_code"  # inherited from the built-in base
+
+
 # ─── load_config end-to-end ─────────────────────────────────────────────────
 
 

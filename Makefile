@@ -82,12 +82,16 @@ test-all: test integration  ## Run every test we have
 
 # ─── build artifacts ────────────────────────────────────────────────────────
 
-.PHONY: build clean uvx-smoke
+.PHONY: build clean uvx-smoke install-smoke
 build:  ## Build sdist + wheel into $(DIST)/  (PyPI-ready)
 	$(UV) build
 
 uvx-smoke:  ## Verify the package works under uvx from the local checkout
 	$(UV) tool run --from . --no-cache grove version
+
+install-smoke:  ## Clean-install + first-run smoke test in a fresh Ubuntu container (needs docker)
+	docker build -t grove-install-smoke packaging/docker
+	docker run --rm -v "$(CURDIR):/src:ro" -e GROVE_INSTALL_SPEC grove-install-smoke bash /src/packaging/docker/smoke.sh
 
 clean:  ## Remove build artifacts and caches
 	rm -rf $(DIST) $(BUILD) *.egg-info
@@ -176,7 +180,7 @@ _WEBAPP_INSTALL_DEP := $(if $(WITH_WEBAPP),_systemd-install-webapp,)
 # Precondition: required binaries discoverable. Run before any install/enable.
 _systemd-precheck:
 	@if [ -z "$(GROVE_BIN)" ]; then \
-	  echo "✗ grove binary not on PATH. Install first: 'curl -fsSL https://raw.githubusercontent.com/bearlike/Grove/main/install.sh | bash'" >&2; \
+	  echo "✗ grove binary not on PATH. Install first: 'curl -fsSL https://raw.githubusercontent.com/bearlike/Grove/current/install.sh | bash'" >&2; \
 	  exit 1; \
 	fi
 	@echo "✓ grove: $(GROVE_BIN)"

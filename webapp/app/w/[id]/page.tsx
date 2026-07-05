@@ -70,7 +70,7 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
         {data && (
           <div
             data-testid="detail-panel"
-            className="m-3 flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-card shadow-sm lg:m-4"
+            className="m-3 flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-card lg:m-4"
           >
             <ContextBar
               peek={data}

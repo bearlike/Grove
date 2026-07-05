@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BellIcon, ChevronDownIcon, SquareIcon } from "lucide-react";
 import {
   Conversation,
@@ -18,13 +18,16 @@ import {
 import { Response } from "@/components/ai-elements/response";
 import { ToolGroup } from "@/components/ai-elements/tool";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { QuestionCard } from "@/components/workspace/question-card";
+import { PendingQuestionCard, QuestionCard } from "@/components/workspace/question-card";
 import { RoleLabel } from "@/components/shared/role-label";
 import { Button } from "@/components/ui/button";
 import { chatItemsFromTurns, type ChatItem } from "@/lib/grove/chat-turns";
+import { livePendingQuestions } from "@/lib/grove/live-question";
 import { cn } from "@/lib/utils";
-import { GroveProtocolError } from "@/lib/grove/client";
+import { refusalNotice } from "@/lib/grove/steering-notice";
 import {
+  useActivityStream,
+  useAnswerQuestion,
   useInterrupt,
   useSendMessage,
   useSessionTurns,
@@ -38,10 +41,19 @@ import {
  * interrupt. Heaviest leaf on the page (streamdown) — the page loads it via
  * `next/dynamic`, so always import this module lazily.
  *
+ * A LIVE pending `AskUserQuestion` GROUP (Gitea #111) is sourced from the SSE
+ * activity stream, not `/turns` — the tool call never reaches the transcript
+ * until it's answered (research-findings.md), so the fetch-on-demand digest
+ * can't see it while pending. It renders as one more `pending-questions` chat
+ * item, appended after whatever `/turns` has, with `interactive` controls
+ * wired to `useAnswerQuestion`; once the daemon's PostToolUse hook resolves
+ * it, the stream's `questions` goes empty and the synthetic item disappears.
+ *
  * Test seams: `chat-panel`, `chat-message` + `data-role` (each carrying a
  * `role-label` speaker tag), `tool-group`, `chat-tool` (inside an expanded
- * group), `chat-notification`, `chat-question` (a read-only #74 choice card),
- * `chat-composer`, `chat-interrupt`, `chat-notice`.
+ * group), `chat-notification`, `chat-question` (read-only #74 card OR the
+ * live interactive `pending-question-card`), `chat-composer`,
+ * `chat-interrupt`, `chat-notice`.
  */
 export function ChatPanel({ workspaceId }: { workspaceId: string }) {
   // Self-wrapped boundary: a malformed streamed turn degrades to one
@@ -68,10 +80,42 @@ function ChatPanelInner({ workspaceId }: { workspaceId: string }) {
   const send = useSendMessage(workspaceId, sessionId);
   const interrupt = useInterrupt(workspaceId);
 
+  const { snapshot } = useActivityStream();
+  const liveQuestions = livePendingQuestions(snapshot, workspaceId, sessionId);
+  const answerQuestion = useAnswerQuestion(workspaceId);
+  const [questionNotice, setQuestionNotice] = useState<string | null>(null);
+  // A new pending group (a different tool_use_id) starts with a clean slate —
+  // a stale error from the PREVIOUS group must not bleed onto it. Every
+  // question in a group shares one group_id, so the first is a stable key.
+  const liveGroupId = liveQuestions[0]?.group_id ?? null;
+  useEffect(() => {
+    setQuestionNotice(null);
+    answerQuestion.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveGroupId]);
+
   const [text, setText] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
 
   const items = chatItemsFromTurns(detail?.turns ?? []);
+  if (liveQuestions.length > 0) {
+    items.push({
+      kind: "pending-questions",
+      questions: liveQuestions,
+      interactive: {
+        submitting: answerQuestion.isPending || answerQuestion.isSuccess,
+        error: questionNotice,
+        onSubmit: (answers) => {
+          if (!sessionId || !liveGroupId) return;
+          setQuestionNotice(null);
+          answerQuestion.mutate(
+            { sessionId, toolUseId: liveGroupId, answers },
+            { onError: (err) => setQuestionNotice(refusalNotice(err, "answer")) },
+          );
+        },
+      },
+    });
+  }
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -203,11 +247,24 @@ function ChatItemRow({ item }: { item: ChatItem }) {
       return <NotificationRow summary={item.summary} detail={item.detail} />;
     case "question":
       // The agent paused to ask the human — a read-only choice card (epic #74).
-      // Options are a static list, not interactive controls (answer-back is a
-      // future write-path). Wrapped to carry the chat-message-adjacent seam.
+      // Options are a static list, not interactive controls. Wrapped to carry
+      // the chat-message-adjacent seam.
       return (
         <div data-testid="chat-question" className="w-full min-w-0">
           <QuestionCard question={item.question} />
+        </div>
+      );
+    case "pending-questions":
+      // The LIVE pending question GROUP (Gitea #111) — answerable, sourced
+      // from the activity stream rather than this historical turns list.
+      return (
+        <div data-testid="chat-question" className="w-full min-w-0">
+          <PendingQuestionCard
+            questions={item.questions}
+            onSubmit={item.interactive.onSubmit}
+            submitting={item.interactive.submitting}
+            error={item.interactive.error}
+          />
         </div>
       );
     case "continuation":
@@ -254,14 +311,4 @@ function NotificationRow({ summary, detail }: { summary: string; detail: string 
       )}
     </div>
   );
-}
-
-/** Map a steering failure to a quiet inline notice — refusals are expected. */
-function refusalNotice(err: unknown, verb: "send" | "interrupt"): string {
-  if (err instanceof GroveProtocolError && (err.status === 409 || err.status === 501)) {
-    // The daemon's typed refusal (agent not running / adapter can't steer).
-    return `Steering unavailable — ${err.message}`;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  return `Could not ${verb === "send" ? "send the message" : "interrupt the agent"} — ${message}`;
 }

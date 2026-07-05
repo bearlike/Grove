@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -49,13 +49,25 @@ def _state(ws_id: str, repo_root: str, *, session_id: str | None = None) -> Work
     )
 
 
-def _write_transcript(claude_home: Path, sid: str, cwd: str, *, mtime: int, prompt: str) -> None:
+def _write_transcript(
+    claude_home: Path,
+    sid: str,
+    cwd: str,
+    *,
+    mtime: int,
+    prompt: str,
+    born_at: datetime | None = None,
+) -> None:
+    """``born_at`` is the session's birth (first-record timestamp), distinct
+    from ``mtime`` — needed by a discovered (non-minted) listing to pass the
+    created_at adoption gate (`WorkspaceState.adopts_session`)."""
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(Path(cwd))
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{sid}.jsonl"
+    born = born_at.isoformat().replace("+00:00", "Z") if born_at else "2026-06-09T08:00:00.000Z"
     path.write_text(
         '{"type":"mode","mode":"normal"}\n'
-        f'{{"type":"user","uuid":"h-{sid[:4]}","timestamp":"2026-06-09T08:00:00.000Z",'
+        f'{{"type":"user","uuid":"h-{sid[:4]}","timestamp":"{born}",'
         f'"isSidechain":false,"cwd":"{cwd}","gitBranch":"main",'
         f'"message":{{"role":"user","content":"{prompt}"}}}}\n',
         encoding="utf-8",
@@ -79,7 +91,17 @@ def client(tmp_state_dir: Path, claude_home: Path) -> Iterator[TestClient]:
     state = _state("a1", str(repo_root), session_id=MINTED_SID)
     store.save(state)
     _write_transcript(claude_home, MINTED_SID, state.worktree_path, mtime=2_000, prompt="minted")
-    _write_transcript(claude_home, HAND_SID, state.worktree_path, mtime=3_000, prompt="by hand")
+    _write_transcript(
+        claude_home,
+        HAND_SID,
+        state.worktree_path,
+        mtime=3_000,
+        prompt="by hand",
+        # A discovered (fs_discovered) listing must be born at/after the
+        # workspace's created_at to pass `WorkspaceState.adopts_session` —
+        # the minted listing needs no such stamp, it is never gated.
+        born_at=state.created_at + timedelta(seconds=1),
+    )
     # Hand-staged at the repo root: no workspace owns that cwd → attribution None.
     _write_transcript(claude_home, ROOT_SID, str(repo_root), mtime=4_000, prompt="root staged")
     app = build_app(cfg=daemon_test_config(), store=store)

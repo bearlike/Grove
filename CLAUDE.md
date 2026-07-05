@@ -41,7 +41,7 @@ When you own a Gitea issue end-to-end, drive it to a merged PR on this loop. Bia
 | `src/grove/tui/` | Textual terminal UI | [tui/CLAUDE.md](src/grove/tui/CLAUDE.md) + [design-system.md](docs/design-system.md) |
 | `webapp/` | read-only Next.js dashboard | [webapp/CLAUDE.md](webapp/CLAUDE.md) |
 | `docs/` | published mkdocs site | [docs/CLAUDE.md](docs/CLAUDE.md) |
-| `packaging/` | systemd-user service units | [packaging/CLAUDE.md](packaging/CLAUDE.md) |
+| `packaging/` | systemd-user service units + clean-install smoke | [packaging/CLAUDE.md](packaging/CLAUDE.md) |
 | `tests/` | pytest suite + CI/lint gotchas | [tests/CLAUDE.md](tests/CLAUDE.md) |
 
 Side-effect surfaces live in dedicated modules only (`core/git.py`, `core/tmux.py`, `core/mewbo.py` for the Mewbo REST API); everything else is pure. The package root (`__init__.py` re-exports) is the contract; modules below it are internal even without an underscore.
@@ -65,7 +65,7 @@ Working memory is **distributed and recursive**: every component owns a nested `
 ├─ src/grove/tui/CLAUDE.md             Textual TUI   (+ docs/design-system.md = visual contract)
 ├─ webapp/CLAUDE.md                    read-only Next.js dashboard
 ├─ docs/CLAUDE.md                      published mkdocs site
-├─ packaging/CLAUDE.md                 systemd-user service units
+├─ packaging/CLAUDE.md                 systemd-user service units + clean-install smoke
 └─ tests/CLAUDE.md                     test conventions · CI/lint gotchas
 ```
 

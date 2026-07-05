@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GroveClient } from "./client";
 import { applyDashboardEvent, snapshotHasWorkspace } from "./activity-stream";
+import type { QuestionAnswerItem } from "./question-plan";
 import type {
   AgentSummaryView,
   BranchInfo,
@@ -175,6 +176,29 @@ export function useSendMessage(workspaceId: string, sessionId: string | null) {
 export function useInterrupt(workspaceId: string) {
   return useMutation({
     mutationFn: () => client.interrupt(workspaceId),
+  });
+}
+
+/**
+ * Answer a live pending `AskUserQuestion` — POST
+ * `/workspaces/{id}/question-answer`, 204 dispatched. Mirrors
+ * `useSendMessage`/`useInterrupt`: no optimistic cache write, because there is
+ * no query this hook owns — the question's resolution rides the SSE-carried
+ * `questions` list emptying (`useActivityStream`), not a refetch here. The
+ * caller wires the 409/422 refusal to an inline notice and degrades the card
+ * to read-only pending (root CLAUDE.md: side effects at the edges).
+ */
+export function useAnswerQuestion(workspaceId: string) {
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      toolUseId,
+      answers,
+    }: {
+      sessionId: string;
+      toolUseId: string;
+      answers: QuestionAnswerItem[];
+    }) => client.answerQuestion(workspaceId, sessionId, toolUseId, answers),
   });
 }
 

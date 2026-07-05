@@ -40,12 +40,35 @@ const Response = dynamic(
   },
 );
 
-/** Title = the first non-empty line of the prompt, trimmed. The full prompt is
- *  the initial task (a single-line prompt is acceptably both). */
-function firstLine(prompt: string): string {
+// Wire cap on `CreateWorkspaceRequest.title` (Pydantic `max_length=120` in
+// src/grove/core/contracts/requests.py) — mirrored here since the webapp has
+// no import path into the engine's contract; keep the two in sync by hand.
+const TITLE_MAX_LENGTH = 120;
+const TITLE_ELLIPSIS = "…";
+// How close to the cut a space must be to count as a "nearby" word boundary —
+// far enough back and snapping there would throw away most of the line.
+const TITLE_WORD_BOUNDARY_WINDOW = 20;
+
+/** Bound a title to the wire cap, preferring a nearby word boundary over a mid-
+ *  word hard cut. Client-side completeness only — the engine owns real
+ *  validation; this just avoids a guaranteed 422 on a naturally long line. */
+function truncateTitle(line: string): string {
+  if (line.length <= TITLE_MAX_LENGTH) return line;
+  const cut = TITLE_MAX_LENGTH - TITLE_ELLIPSIS.length;
+  const slice = line.slice(0, cut);
+  const boundary = slice.lastIndexOf(" ");
+  const body = boundary >= cut - TITLE_WORD_BOUNDARY_WINDOW ? slice.slice(0, boundary) : slice;
+  return `${body}${TITLE_ELLIPSIS}`;
+}
+
+/** Title = the first non-empty line of the prompt, trimmed and bounded to the
+ *  wire cap. The full prompt still rides untruncated as `initial_prompt` — a
+ *  naturally-typed prompt soft-wraps with no hard newline, so without this
+ *  bound the entire prompt becomes the (over-long) title. */
+export function deriveTitle(prompt: string): string {
   for (const line of prompt.split("\n")) {
     const t = line.trim();
-    if (t.length > 0) return t;
+    if (t.length > 0) return truncateTitle(t);
   }
   return "";
 }
@@ -126,7 +149,7 @@ export function Composer() {
   // the "slightly animate into an expanded state" the brief asked for.
   const expanded = focused || composer.prompt.trim().length > 0;
 
-  const title = firstLine(composer.prompt);
+  const title = deriveTitle(composer.prompt);
   const canSubmit =
     title.length > 0 &&
     Boolean(composer.repoRoot) &&
@@ -183,8 +206,8 @@ export function Composer() {
     <section aria-label="Create a workspace" className="mx-auto w-full max-w-3xl">
       <Card
         className={cn(
-          "rounded-xl bg-card p-3 transition-[box-shadow,border-color,transform] duration-200",
-          expanded ? "border-border shadow-md" : "border-border/70 shadow-sm",
+          "rounded-xl bg-card p-3 transition-[border-color,transform] duration-200",
+          expanded ? "border-border" : "border-border/70",
         )}
       >
         <textarea
@@ -240,7 +263,7 @@ export function Composer() {
               disabled={!canSubmit || create.isPending}
               onClick={submit}
               className={cn(
-                "inline-flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm",
+                "inline-flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground",
                 "transition-colors duration-200 hover:bg-primary/90 active:bg-primary/95",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                 "disabled:pointer-events-none disabled:opacity-50",

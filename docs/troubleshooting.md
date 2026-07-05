@@ -2,6 +2,29 @@
 
 Common failures, their causes, and the fix.
 
+## Fresh install crashes with `Failed to initialise configuration handler`
+
+**Symptom.** Right after installing, `grove` exits with a CRITICAL log
+line such as `Failed to initialise configuration handler ...
+GROVE_CONFIG_LOCAL_FILE_PATH field required`, and the traceback mentions
+`grove/entrypoints/base.py`.
+
+**Cause.** You installed the wrong product. The name `grove` on PyPI
+belongs to an unrelated log-collection framework, so a bare
+`uv tool install grove` (or `pipx install grove`, `pip install grove`)
+pulls that package instead of this one. Grove is not published on PyPI
+and installs straight from the repo.
+
+**Fix.** Uninstall the imposter, then install from the repo:
+
+```bash
+uv tool uninstall grove
+uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
+```
+
+Verify with `grove version` (it prints `grove <version>`) and
+`grove debug` (it prints the config and state paths Grove will use).
+
 ## `tmux` not found
 
 **Symptom.** `TmuxError: tmux binary not found on PATH`, or the TUI

@@ -215,6 +215,22 @@ class AgentQuestion:
 
 
 @dataclass(slots=True, frozen=True)
+class AnswerSelection:
+    """One question's validated answer, in-process IR (never crosses a wire).
+
+    The provider-neutral input a keystroke builder consumes: ``indexes`` picks
+    predefined options (0-based, in option order), ``text`` is a free-text
+    answer. Exactly one is meaningful per question — the wire model
+    (``contracts.questions``) enforces the XOR before this is built; this dataclass
+    just carries the validated choice from the manager to the adapter. Kept next
+    to :class:`AgentQuestion` because the two are the builder's paired inputs.
+    """
+
+    indexes: tuple[int, ...] = ()
+    text: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class DigestEntry:
     """One line of an :class:`OrderedDigest`: a role tag plus a short summary.
 
@@ -291,6 +307,15 @@ class AgentActivity:
     tokens_in: int = 0
     tokens_out: int = 0
     last_event_at: datetime | None = None
+    # When the session was BORN (its first record's timestamp) — distinct from
+    # ``last_event_at``. This is what a workspace's created_at is compared
+    # against to decide whether a *discovered* (non-minted) session actually
+    # belongs to it (`WorkspaceState.adopts_session`, see grove.core.CLAUDE.md)
+    # — mtime keeps advancing on a stale file that merely gets touched, but
+    # birth is immutable. Populated by the filesystem adapters that already
+    # compute it for `SessionSummary.created_at` (claude_code, codex); remote
+    # (mewbo) and generic adapters leave it ``None`` (never discovery-adopted).
+    started_at: datetime | None = None
     error_detail: str | None = None
     # Reserved seam for the future external-LLM task interpreter (#20). The
     # adapter's `transcript_digest()` produces the compact, tool_result-stripped
@@ -299,6 +324,15 @@ class AgentActivity:
     # wired in the MVP — the field reserves the dashboard space so adding the
     # interpreter later needs no contract change (YAGNI: seam now, call later).
     interpreted_status: str | None = None
+    # The questions the agent is asking RIGHT NOW, captured live from the hook
+    # sidecar before Claude Code flushes them to the transcript (#109). A single
+    # ``AskUserQuestion`` call carries up to four questions answered atomically,
+    # so the whole group rides together, ordered as asked; empty when nothing is
+    # pending. Populated ONLY by the ``ActivityService`` sidecar seam (the
+    # transcript parser leaves it empty) — it carries the pending ask onto the
+    # live activity stream so a client can render an answer affordance the instant
+    # the question appears, instead of only after the terminal resolved it.
+    questions: tuple[AgentQuestion, ...] = ()
 
     @property
     def needs_attention(self) -> bool:

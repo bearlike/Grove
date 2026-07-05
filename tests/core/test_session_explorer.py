@@ -9,17 +9,20 @@ annotation, filters, and unique-prefix resolution.
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.config import GroveConfig
+from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.errors import GroveError, WorkspaceNotFound
 from grove.core.manager import WorkspaceManager
 from grove.core.sessions import SessionExplorer
 from grove.core.store import JsonWorkspaceStore
+from grove.core.workspace import Placement
 from tests.conftest import FakeTmux
 
 ROOT_SID = "11111111-1111-4111-8111-111111111111"
@@ -47,13 +50,27 @@ def claude_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return cfg
 
 
-def _write_transcript(claude_home: Path, sid: str, cwd: Path, *, mtime: int, prompt: str) -> Path:
+def _write_transcript(
+    claude_home: Path,
+    sid: str,
+    cwd: Path,
+    *,
+    mtime: int,
+    prompt: str,
+    born_at: datetime | None = None,
+) -> Path:
+    """``born_at`` is the session's birth (first-record timestamp) — distinct
+    from ``mtime``, the file's last-touched time. Most callers don't care and
+    take the fixed default; a test exercising the created_at adoption gate
+    (`WorkspaceState.adopts_session`) passes one relative to the workspace's
+    own ``created_at``."""
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{sid}.jsonl"
+    born = born_at.isoformat().replace("+00:00", "Z") if born_at else "2026-06-09T08:00:00.000Z"
     path.write_text(
         '{"type":"mode","mode":"normal"}\n'
-        f'{{"type":"user","uuid":"h-{sid[:4]}","timestamp":"2026-06-09T08:00:00.000Z",'
+        f'{{"type":"user","uuid":"h-{sid[:4]}","timestamp":"{born}",'
         f'"isSidechain":false,"cwd":"{cwd}","gitBranch":"main",'
         f'"message":{{"role":"user","content":"{prompt}"}}}}\n',
         encoding="utf-8",
@@ -152,21 +169,80 @@ def test_for_workspace_scopes_to_one_directory(
 ) -> None:
     """`for_workspace` is the bounded per-request scan: only the workspace's own
     cwd, newest-first, provenance by minted-id equality — a root-level session
-    must not leak in."""
+    must not leak in. A discovered session also has to pass the created_at
+    adoption gate: born-after-create leads by mtime as before; a stale
+    transcript born before the workspace existed (a leftover from whatever
+    used to occupy this cwd) is filtered out even though it has the newest
+    mtime of all — the exact shape of the stale-cwd adoption bug."""
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="scoped"))
     assert state.agent_session_id is not None
     worktree = Path(state.worktree_path)
-    _write_transcript(claude_home, state.agent_session_id, worktree, mtime=2_000, prompt="mine")
-    _write_transcript(claude_home, TREE_SID, worktree, mtime=3_000, prompt="hand-started here")
+    after_create = state.created_at + timedelta(seconds=1)
+    _write_transcript(
+        claude_home,
+        state.agent_session_id,
+        worktree,
+        mtime=2_000,
+        prompt="mine",
+        born_at=after_create,
+    )
+    _write_transcript(
+        claude_home,
+        TREE_SID,
+        worktree,
+        mtime=3_000,
+        prompt="hand-started here",
+        born_at=after_create,
+    )
+    stale_sid = "44444444-4444-4444-8444-444444444444"
+    _write_transcript(
+        claude_home,
+        stale_sid,
+        worktree,
+        mtime=5_000,  # newest mtime of all — would wrongly lead without the gate
+        prompt="stale leftover",
+        born_at=state.created_at - timedelta(days=1),
+    )
     _write_transcript(claude_home, ROOT_SID, tmp_repo, mtime=4_000, prompt="root noise")
 
     listings = SessionExplorer(manager).for_workspace(state.id)
 
-    assert [ls.summary.session_id for ls in listings] == [TREE_SID, state.agent_session_id]
+    ids = [ls.summary.session_id for ls in listings]
+    assert ids == [TREE_SID, state.agent_session_id]
+    assert stale_sid not in ids
     by_id = {ls.summary.session_id: ls for ls in listings}
     assert by_id[state.agent_session_id].provenance == "grove_launched"
     assert by_id[TREE_SID].provenance == "fs_discovered"
     assert all(ls.workspace_id == state.id for ls in listings)
+
+
+def test_for_workspace_root_placement_ignores_stale_repo_root_transcript(
+    manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
+) -> None:
+    """The bug report's exact shape: a ROOT-placement workspace's cwd IS the
+    repo root, which may already hold transcripts from whatever previously
+    lived there. A fresh ROOT workspace must not present that stale, older
+    session as its own — even though it is the only (and thus "newest")
+    session in the cwd."""
+    stale_sid = "77777777-7777-4777-8777-777777777777"
+    _write_transcript(
+        claude_home,
+        stale_sid,
+        tmp_repo,
+        mtime=1_000,
+        prompt="a much older session",
+        born_at=datetime(2020, 1, 1, tzinfo=UTC),
+    )
+
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="fresh root", branch_plan=RootBranch())
+    )
+    assert state.placement is Placement.ROOT
+    assert Path(state.worktree_path).resolve() == tmp_repo.resolve()
+
+    listings = SessionExplorer(manager).for_workspace(state.id)
+
+    assert stale_sid not in [ls.summary.session_id for ls in listings]
 
 
 def test_for_workspace_unknown_id_raises(manager: WorkspaceManager) -> None:

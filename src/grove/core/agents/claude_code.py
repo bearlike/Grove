@@ -44,11 +44,13 @@ from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
     AgentQuestion,
+    AnswerSelection,
     DigestEntry,
     OrderedDigest,
     SessionSummary,
     SessionTurn,
 )
+from grove.core.tmux import SendKey, SendOp
 
 # Markers that flag a ``type:"user"`` line as machinery, not a human turn:
 # slash-command echoes, bash tool I/O, the post-compaction caveat banner, and
@@ -738,6 +740,7 @@ class _TranscriptParser:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             last_event_at=last_event_at,
+            started_at=self.created_at(),
         )
 
     def digest(self) -> OrderedDigest:
@@ -879,6 +882,20 @@ def _truncate(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[: cap - 1].rstrip() + "…"
 
 
+def _digit_for(index: int, q: AgentQuestion) -> str:
+    """The option digit (1-based) for a 0-based option ``index``, range-checked.
+
+    The TUI numbers predefined options from 1; ``build_answer_keys`` types these.
+    Raises ``ValueError`` for an index outside the question's real options so a
+    bad plan is rejected (422) rather than driving a wrong or out-of-bounds key.
+    """
+    if not 0 <= index < len(q.options):
+        raise ValueError(
+            f"option index {index} out of range for a question with {len(q.options)} option(s)"
+        )
+    return str(index + 1)
+
+
 class ClaudeCodeAdapter:
     """Introspect Claude Code sessions (the first concrete :class:`AgentAdapter`).
 
@@ -950,6 +967,69 @@ class ClaudeCodeAdapter:
     def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
         records = self._read(self.locate_transcripts(cwd, session_id))
         return _TranscriptParser(records).digest()
+
+    # ── answer driver (#109) ────────────────────────────────────────────────
+    @staticmethod
+    def build_answer_keys(
+        questions: Sequence[AgentQuestion],
+        answers: Sequence[AnswerSelection],
+    ) -> list[SendOp]:
+        """Translate a validated answer plan into ``AskUserQuestion`` keystrokes.
+
+        Pure and deterministic — the verified TUI grammar (on-host, Claude Code
+        2.1.x) encoded exactly once. Raises ``ValueError`` for any plan that
+        doesn't fit these questions (the manager maps that to a 422); it never
+        invents keystrokes for an unverified UI (the provider-boundary rule).
+
+        Grammar, per question in captured order:
+
+        * single-select, predefined option ``i`` chosen → the digit ``i+1`` (the
+          TUI selects it and auto-advances);
+        * single-select, free-text answer → the digit ``len(options)+1`` (the
+          synthetic "Type something." option), the text typed verbatim, Enter;
+        * multiSelect → one digit per chosen option (each toggles), then Tab.
+
+        A trailing Enter is appended IFF a review ("Submit answers") step exists
+        — more than one question OR any multiSelect. A lone single-select question
+        submits on its own digit, so it gets no trailing Enter.
+
+        v1 answers only the option-bearing kinds (``single_select`` /
+        ``multi_select``). A free-text answer is single-select only (the
+        multiSelect toggle-vs-edit interaction is unverified); ``confirm`` and
+        optionless ``free_text`` questions are rejected — their keystrokes were
+        never verified.
+        """
+        if len(answers) != len(questions):
+            raise ValueError(f"expected {len(questions)} answer(s), got {len(answers)}")
+        ops: list[SendOp] = []
+        for q, a in zip(questions, answers, strict=True):
+            ops.extend(ClaudeCodeAdapter._answer_ops(q, a))
+        # The review tab ("1. Submit answers" preselected) exists for any batch
+        # with more than one question or any multiSelect; a lone single-select
+        # already submitted on its digit.
+        if len(questions) > 1 or any(q.multiselect for q in questions):
+            ops.append(SendKey.ENTER)
+        return ops
+
+    @staticmethod
+    def _answer_ops(q: AgentQuestion, a: AnswerSelection) -> list[SendOp]:
+        """The keystrokes for one (question, answer) pair — see build_answer_keys."""
+        if a.text is not None:
+            if q.kind != "single_select":
+                raise ValueError(
+                    f"free-text answer is supported only on single-select questions, not {q.kind!r}"
+                )
+            # The synthetic "Type something." option sits at position len+1.
+            return [str(len(q.options) + 1), a.text, SendKey.ENTER]
+        if q.kind == "single_select":
+            if len(a.indexes) != 1:
+                raise ValueError("a single-select question takes exactly one option index")
+            return [_digit_for(a.indexes[0], q)]
+        if q.kind == "multi_select":
+            if not a.indexes:
+                raise ValueError("a multiSelect question needs at least one option index")
+            return [*(_digit_for(i, q) for i in a.indexes), SendKey.TAB]
+        raise ValueError(f"question kind {q.kind!r} cannot be answered by keystroke")
 
     # ── internal ──────────────────────────────────────────────────────────
     def _summarize(self, session_id: str, path: Path, mtime: float) -> SessionSummary:

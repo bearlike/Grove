@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useInterrupt, useSendMessage } from "@/lib/grove/hooks";
+import { useAnswerQuestion, useInterrupt, useSendMessage } from "@/lib/grove/hooks";
 import type { SessionDetailView } from "@/lib/grove/types";
 
 // .ts on purpose (the unit include pattern), so the provider wrapper uses
@@ -121,5 +121,61 @@ describe("useInterrupt", () => {
     );
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect(init.body).toBeUndefined();
+  });
+});
+
+describe("useAnswerQuestion", () => {
+  it("POSTs session_id/tool_use_id/answers to /workspaces/{id}/question-answer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useAnswerQuestion("w1"), {
+      wrapper: wrapperFor(queryClient),
+    });
+    result.current.mutate({
+      sessionId: "s1",
+      toolUseId: "toolu_1",
+      answers: [{ selected_indexes: [1] }],
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/grove/workspaces/w1/question-answer",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          session_id: "s1",
+          tool_use_id: "toolu_1",
+          answers: [{ selected_indexes: [1] }],
+        }),
+      }),
+    );
+  });
+
+  it("surfaces a 409 (stale tool_use_id) as a typed error", async () => {
+    const refusal = { detail: { error: "question_not_pending", message: "already resolved" } };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(refusal), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useAnswerQuestion("w1"), {
+      wrapper: wrapperFor(queryClient),
+    });
+    result.current.mutate({ sessionId: "s1", toolUseId: "toolu_1", answers: [{ text: "Kiwi" }] });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toMatchObject({
+      name: "GroveProtocolError",
+      code: "question_not_pending",
+      status: 409,
+    });
   });
 });

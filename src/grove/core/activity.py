@@ -33,11 +33,13 @@ from grove.core import paths as core_paths
 from grove.core.agents import (
     AgentActivity,
     AgentActivityState,
+    AgentQuestion,
     AgentSession,
     SessionProvenance,
     get_adapter,
 )
-from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook
+from grove.core.agents.base import AgentAdapter
+from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook, HookRecord
 from grove.core.git import GitRepo
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
 from grove.core.registry import RepoRegistry
@@ -124,6 +126,10 @@ class WorkspaceActivity:
                     s.activity.last_event_at,
                     s.activity.assistant_replies,
                     s.activity.tool_calls,
+                    # A live question batch appearing or resolving must stream at
+                    # once — it can arrive without a state change (the capturing
+                    # PreToolUse is WORKING, like the tool call it gates).
+                    tuple(q.id for q in s.activity.questions),
                 )
                 for s in self.sessions
             ),
@@ -388,16 +394,22 @@ class ActivityService:
           (``cfg.hooks.enabled``), concurrent sessions the user started by hand in
           this worktree are discovered and appended (``provenance="fs_discovered"``).
           Exception: a minted id that never materialized (no transcript, blend
-          still STARTING/UNKNOWN) yields the primary slot to the newest
-          discovered session — the in-process-rotation recovery below.
+          still STARTING/UNKNOWN) yields the primary slot to the newest discovered
+          session that ``state.adopts_session`` accepts (born at/after this
+          workspace's ``created_at``) — the in-process-rotation recovery below. A
+          non-adopting discovered session (a stale transcript predating this
+          workspace, especially over a reused ROOT cwd) never becomes primary but
+          still rides along as a non-primary member.
         - **No minted id** — a workspace whose agent wasn't ``kind="claude_code"``
           at create (so no ``--session-id`` was injected), one created before
           minting existed, or a purely hand-started run. The deterministic lookup
           can't help, so recover the *live* session by discovery and adopt the
-          single most-recent transcript as the primary. Read-only and
-          adapter-gated (a generic/shell agent discovers nothing), so it needs no
-          hooks opt-in — without it the whole agent axis is blank even though a
-          real transcript exists on disk for the worktree.
+          single most-recent transcript that ``state.adopts_session`` accepts as
+          the primary. Read-only and adapter-gated (a generic/shell agent
+          discovers nothing), so it needs no hooks opt-in — without it the whole
+          agent axis is blank even though a real transcript exists on disk for the
+          worktree. With nothing adopted (every discovered transcript predates
+          this workspace), the workspace is honestly sessionless.
         """
         # Prefer the kind persisted at create — it works even when the agent is
         # scoped to a repo's project config the daemon never loads (a "Work"
@@ -428,11 +440,10 @@ class ActivityService:
             # inside the same claude) or a hand-restarted agent leaves the
             # workspace pinned on STARTING forever while the live session sits
             # discoverable in the same cwd. Recover it (ungated by hooks — same
-            # read-only-discovery rule as the no-minted-id path) and surface it
-            # FIRST so it becomes the primary; the minted entry stays behind it
-            # and takes back over if it ever materializes. The sidecar-settled
-            # case (hook says WORKING before any transcript) is deliberately not
-            # demoted — only a STARTING/UNKNOWN blend means "nothing alive here".
+            # read-only-discovery rule as the no-minted-id path). The sidecar-
+            # settled case (hook says WORKING before any transcript) is
+            # deliberately not demoted — only a STARTING/UNKNOWN blend means
+            # "nothing alive here".
             unmaterialized = (
                 not adapter.remote
                 and minted.session.transcript_path is None
@@ -445,17 +456,35 @@ class ActivityService:
                     self._session_activity(mgr, state, kind, sid, "fs_discovered", now)
                     for sid in recent
                 ]
-            if unmaterialized and extras:
-                return [*extras, minted]
+            if unmaterialized:
+                # Only a discovered session whose BIRTH postdates this
+                # workspace's own created_at may take the primary slot — else
+                # the newest transcript in a stale cwd (a leftover from
+                # whatever used to live here, especially ROOT placement) would
+                # be presented as this brand-new workspace's live session. A
+                # non-adopting extra still rides along as a non-primary
+                # member: the fingerprint's "every session" invariant and the
+                # hand-started-surfacing behavior both need it kept, and the
+                # minted entry takes back over if it ever materializes.
+                adopted = next(
+                    (e for e in extras if state.adopts_session(e.activity.started_at)), None
+                )
+                if adopted is not None:
+                    return [adopted, *(e for e in extras if e is not adopted), minted]
             return [minted, *extras]
 
-        # `discover_sessions` returns newest-first; surface exactly ONE — a worktree
-        # accumulates a long transcript history, so the latest is the running session
-        # and the rest are noise on a glance tile.
-        recent = adapter.discover_sessions(worktree, exclude_id=None)[:1]
-        return [
-            self._session_activity(mgr, state, kind, sid, "fs_discovered", now) for sid in recent
-        ]
+        # No minted id: recover the *live* session by discovery. `discover_sessions`
+        # returns newest-first; walk it for the single most-recent transcript
+        # whose birth postdates this workspace's created_at (`adopts_session`) and
+        # adopt only that one — a worktree accumulates a long transcript history,
+        # so the rest would be noise on a glance tile even before the stale-cwd
+        # concern. Nothing adopted (every candidate predates this workspace, e.g.
+        # a reused ROOT cwd) → honestly sessionless.
+        for sid in adapter.discover_sessions(worktree, exclude_id=None):
+            candidate = self._session_activity(mgr, state, kind, sid, "fs_discovered", now)
+            if state.adopts_session(candidate.activity.started_at):
+                return [candidate]
+        return []
 
     def _session_activity(
         self,
@@ -495,6 +524,11 @@ class ActivityService:
         ):
             blended = sidecar.state
         blended = self._settle(session_id, blended, now)
+        # Live questions (#109): the same sidecar may carry a batch captured at
+        # ask-time (before the transcript flushes them). Surfaced independently of
+        # the state override above and cross-checked against the transcript so a
+        # resolved batch never lingers on the stream.
+        questions = self._pending_questions(adapter, worktree, session_id, sidecar, transcript)
         session = AgentSession(
             session_id=session_id,
             transcript_path=paths[0] if paths else None,
@@ -502,7 +536,68 @@ class ActivityService:
             provenance=provenance,
             tmux_window=mgr.config.tmux.agent_window_name,
         )
-        return SessionActivity(session=session, activity=replace(transcript, state=blended))
+        return SessionActivity(
+            session=session, activity=replace(transcript, state=blended, questions=questions)
+        )
+
+    def _pending_questions(
+        self,
+        adapter: AgentAdapter,
+        worktree: Path,
+        session_id: str,
+        sidecar: HookRecord | None,
+        transcript: AgentActivity,
+    ) -> tuple[AgentQuestion, ...]:
+        """The batch the agent is asking right now, or ``()`` (#109).
+
+        Normalizes the sidecar's captured payload through the shared
+        ``from_tool_call`` seam (no question shape re-derived), then confirms it's
+        still pending. One ``AskUserQuestion`` call carries up to four questions
+        answered atomically, so the whole group is returned (ordered as asked) or
+        none of it. The cross-check is cheap by construction: Claude Code flushes
+        nothing while a question is on screen, so while the transcript's last event
+        predates the ask the batch is definitely still pending and no re-parse is
+        needed. Only once the transcript advances past ``asked_at`` do we read the
+        turns to see whether the resolving ``tool_result`` (an answer OR an
+        Esc-cancel ``is_error``) has landed for this ``tool_use_id`` (the batch
+        shares one, resolving together).
+        """
+        if sidecar is None or sidecar.question is None:
+            return ()
+        pending = sidecar.question
+        questions = AgentQuestion.from_tool_call(
+            pending.tool_name, pending.tool_input, pending.tool_use_id
+        )
+        if not questions:
+            return ()
+        advanced = (
+            transcript.last_event_at is not None and transcript.last_event_at > pending.asked_at
+        )
+        if advanced and self._question_resolved(adapter, worktree, session_id, pending.tool_use_id):
+            return ()
+        return questions
+
+    @staticmethod
+    def _question_resolved(
+        adapter: AgentAdapter, worktree: Path, session_id: str, tool_use_id: str
+    ) -> bool:
+        """Whether the transcript already carries a resolving result for ``tool_use_id``.
+
+        Claude Code flushes the ``AskUserQuestion`` tool_use and its ``tool_result``
+        together only after the human answers or Esc-cancels, so the presence of
+        that group in the parsed turns means the question is no longer pending
+        either way. Best-effort: a failed read can't confirm resolution, so we
+        treat it as still pending (the answer path re-checks before it acts)."""
+        try:
+            turns = adapter.read_turns(worktree, session_id)
+        except Exception as exc:  # best-effort: never break the snapshot
+            logger.debug("activity question-resolution read_turns({}) failed: {}", session_id, exc)
+            return False
+        return any(
+            e.question is not None and e.question.group_id == tool_use_id
+            for t in turns
+            for e in t.entries
+        )
 
     @staticmethod
     def _blend(

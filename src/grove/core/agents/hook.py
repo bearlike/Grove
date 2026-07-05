@@ -33,7 +33,7 @@ from typing import Any, ClassVar, Final
 from loguru import logger
 
 from grove.core import paths
-from grove.core.agents.model import AgentActivityState
+from grove.core.agents.model import AgentActivityState, AgentQuestion
 
 # Hook event names Claude Code emits → the agent state they imply. ``Notification``
 # is the high-value one: it fires for "needs your permission" / "waiting for your
@@ -49,6 +49,17 @@ _STATE_BY_EVENT: Final[dict[str, AgentActivityState]] = {
     "SessionEnd": AgentActivityState.IDLE,
 }
 
+# Events that END a pending question's life (#109). A question tool's own
+# PostToolUse means it was answered; any other tool's PreToolUse, a new prompt,
+# a turn Stop (which also fires on Esc-cancel), or session end all mean the
+# question is gone. ``Notification`` / ``SessionStart`` are deliberately absent:
+# a permission ``Notification`` fires ~6s AFTER the ask while the question is
+# still on screen, so it must PRESERVE (carry forward) the standing capture,
+# never clear it.
+_QUESTION_CLEAR_EVENTS: Final[frozenset[str]] = frozenset(
+    {"PostToolUse", "UserPromptSubmit", "Stop", "SessionEnd"}
+)
+
 # How long a WORKING push is trusted with no newer signal. Only WORKING ages out
 # (the dead-agent guard: a session killed right after PreToolUse must not pin
 # WORKING forever). Settled pushes (WAITING/BLOCKED/IDLE) never age out — they
@@ -56,6 +67,61 @@ _STATE_BY_EVENT: Final[dict[str, AgentActivityState]] = {
 # polling cannot see, so expiring it into a polled guess re-creates the
 # "permission prompt shows as working" bug it exists to fix.
 DEFAULT_SIDECAR_MAX_AGE_SECONDS: Final = 300
+
+
+@dataclass(slots=True, frozen=True)
+class PendingQuestion:
+    """A question captured live from a PreToolUse hook, before the transcript flushes it.
+
+    Claude Code writes nothing to the JSONL while an ``AskUserQuestion`` is on
+    screen, so the ask-time hook is the *only* signal (#109). ``tool_name`` +
+    ``tool_input`` are the raw hook payload, kept verbatim and normalized to
+    ``AgentQuestion``(s) at read time through the shared
+    :meth:`AgentQuestion.from_tool_call` seam — no question shape is re-derived
+    here. ``tool_use_id`` is the group answer-back address: the key the answer
+    endpoint matches on and the key the transcript's resolving ``tool_result``
+    carries once the human answers (or Esc-cancels).
+    """
+
+    tool_use_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    asked_at: datetime
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "tool_use_id": self.tool_use_id,
+            "tool_name": self.tool_name,
+            "tool_input": self.tool_input,
+            "asked_at": self.asked_at.isoformat(),
+        }
+
+    @classmethod
+    def from_json(cls, data: object) -> PendingQuestion | None:
+        """Parse a captured question; ``None`` on anything malformed (best-effort)."""
+        if not isinstance(data, dict):
+            return None
+        try:
+            asked_at = datetime.fromisoformat(str(data["asked_at"]))
+        except (KeyError, ValueError, TypeError):
+            return None
+        if asked_at.tzinfo is None:
+            return None  # aware-only, same rule as HookRecord.ts
+        tool_use_id = data.get("tool_use_id")
+        tool_name = data.get("tool_name")
+        tool_input = data.get("tool_input")
+        if (
+            not (isinstance(tool_use_id, str) and tool_use_id)
+            or not (isinstance(tool_name, str) and tool_name)
+            or not isinstance(tool_input, dict)
+        ):
+            return None
+        return cls(
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            asked_at=asked_at,
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -69,6 +135,11 @@ class HookRecord:
     transcript_path: str | None
     tmux_pane: str | None
     ts: datetime
+    # A structured question the agent is asking right now, captured at ask-time
+    # (#109). ``None`` whenever no question stands. It rides the same sidecar as
+    # the pushed state so the one file the ActivityService already reads carries
+    # both the live status AND the live question.
+    question: PendingQuestion | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -79,6 +150,7 @@ class HookRecord:
             "transcript_path": self.transcript_path,
             "tmux_pane": self.tmux_pane,
             "ts": self.ts.isoformat(),
+            "question": self.question.to_json() if self.question is not None else None,
         }
 
     @classmethod
@@ -100,6 +172,9 @@ class HookRecord:
                 transcript_path=_opt_str(data.get("transcript_path")),
                 tmux_pane=_opt_str(data.get("tmux_pane")),
                 ts=ts,
+                # A malformed question is dropped without failing the whole
+                # record — the status half of the sidecar still stands.
+                question=PendingQuestion.from_json(data.get("question")),
             )
         except (KeyError, ValueError, TypeError):
             return None
@@ -180,15 +255,66 @@ class ClaudeHook:
             transcript_path=_opt_str(payload.get("transcript_path")),
             tmux_pane=tmux_pane,
             ts=now,
+            question=cls._pending_question(
+                payload, event, session_id=session_id, sidecar_dir=sidecar_dir, now=now
+            ),
         )
         cls.write(record, sidecar_dir=sidecar_dir)
         return record
+
+    @classmethod
+    def _pending_question(
+        cls,
+        payload: dict[str, Any],
+        event: str,
+        *,
+        session_id: str,
+        sidecar_dir: Path,
+        now: datetime,
+    ) -> PendingQuestion | None:
+        """The pending question this event leaves standing (#109).
+
+        The lifecycle is a small state machine over the single per-session
+        sidecar:
+
+        - a question-tool ``PreToolUse`` CAPTURES a fresh question (the ask);
+        - any other ``PreToolUse``, or a :data:`_QUESTION_CLEAR_EVENTS` event,
+          CLEARS it (a different tool ran, or the turn/session moved on — a
+          question-tool ``PostToolUse`` is the answered case, ``Stop`` the
+          Esc-cancel case);
+        - every other event (``Notification``, ``SessionStart``) CARRIES the
+          standing capture FORWARD, so the ~6s-later permission ``Notification``
+          doesn't erase a question that is still on screen.
+
+        The carry-forward reads the prior sidecar; a missing/corrupt one just
+        means "nothing was pending", which is the correct default.
+        """
+        if event == "PreToolUse":
+            tool_name = payload.get("tool_name")
+            if not (isinstance(tool_name, str) and AgentQuestion.recognizes(tool_name)):
+                return None  # a non-question tool starting clears any pending ask
+            tool_use_id = payload.get("tool_use_id")
+            tool_input = payload.get("tool_input")
+            if not (isinstance(tool_use_id, str) and tool_use_id) or not isinstance(
+                tool_input, dict
+            ):
+                return None  # malformed question payload → nothing to capture
+            return PendingQuestion(
+                tool_use_id=tool_use_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                asked_at=now,
+            )
+        if event in _QUESTION_CLEAR_EVENTS:
+            return None
+        prior = cls.read(session_id, sidecar_dir=sidecar_dir)
+        return prior.question if prior is not None else None
 
     @staticmethod
     def write(record: HookRecord, *, sidecar_dir: Path) -> None:
         """Atomically write a session's sidecar. Best-effort (never raises)."""
         try:
-            sidecar_dir.mkdir(parents=True, exist_ok=True)
+            paths.ensure_dir(sidecar_dir)
             target = sidecar_dir / f"{record.session_id}.json"
             tmp = target.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(record.to_json()), encoding="utf-8")

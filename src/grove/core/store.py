@@ -125,7 +125,7 @@ class JsonWorkspaceStore:
     # ─── internal ──────────────────────────────────────────────────────────
 
     def _write(self, states: Iterable[WorkspaceState]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        paths.ensure_dir(self._path.parent)
         serialized = {s.id: self._serialize(s) for s in states}
         payload: dict[str, Any] = {
             "version": _VERSION,

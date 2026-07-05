@@ -11,6 +11,16 @@ export function startFakeDaemon(port: number): Promise<Server> {
     const app = express();
     app.use(express.json());
 
+    // ─── Live question state (Gitea #111) ────────────────────────────────
+    // The one pending GROUP tracked at a time (a `tool_use_id` shared by every
+    // question in the batch) — enough for the spec's happy path (a single
+    // workspace/session ever has a live question in these tests);
+    // `/_test/push-event` sets it, `/question-answer` validates against it,
+    // `/events` connections (tracked here) receive the delta.
+    let pendingQuestionToolUseId: string | null = null;
+    let eventSeq = 1;
+    const eventClients = new Set<express.Response>();
+
     // ─── Auth (#32): pairing bootstrap + bearer gate ─────────────────────
     // Mirrors the daemon contract (src/grove/daemon/auth.py): POST /auth/pair
     // and GET /auth/pair/{id} are the only unauthenticated entry points; the
@@ -19,7 +29,12 @@ export function startFakeDaemon(port: number): Promise<Server> {
     // the cookie → BFF → bearer chain, not just page rendering.
     const challenges = new Set<string>();
     const isOpen = (path: string) =>
-      path === "/healthz" || path === "/openapi.json" || path.startsWith("/auth/pair");
+      path === "/healthz" ||
+      path === "/openapi.json" ||
+      path.startsWith("/auth/pair") ||
+      // Test-harness control plane only (Gitea #111's live-question spec) —
+      // not a real daemon route, so it never needs the bearer.
+      path.startsWith("/_test/");
     app.use((req, res, next) => {
       if (isOpen(req.path) || req.headers.authorization === `Bearer ${FAKE_DAEMON_TOKEN}`) {
         next();
@@ -296,6 +311,67 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.status(204).end();
     });
 
+    // ─── Live question answer-back (Gitea #111) ─────────────────────────
+    // Mirrors the daemon contract: 204 dispatched (resolution rides back over
+    // /events separately, driven by the test's /_test/push-event calls, never
+    // by this response), 404 unknown workspace, 409 a tool_use_id that isn't
+    // the currently-tracked pending one (stale), 422 an empty answers array.
+    app.post("/workspaces/:id/question-answer", (req, res) => {
+      const ws = FIXTURE_WORKSPACES.find((w) => w.id === req.params.id);
+      if (!ws) {
+        res.status(404).json({ detail: { error: "workspace_not_found", message: "missing" } });
+        return;
+      }
+      const { tool_use_id: toolUseId, answers } = req.body ?? {};
+      if (!Array.isArray(answers) || answers.length === 0) {
+        res.status(422).json({ detail: [{ msg: "answers must be non-empty" }] });
+        return;
+      }
+      if (toolUseId !== pendingQuestionToolUseId) {
+        res.status(409).json({
+          detail: { error: "question_not_pending", message: "no longer the pending question" },
+        });
+        return;
+      }
+      res.status(204).end();
+    });
+
+    // ─── Test-harness control plane (Gitea #111 question.spec.ts ONLY) ──
+    // Not a daemon route: lets a Playwright spec push a live `session_activity`
+    // delta (a pending question GROUP appearing/resolving) over the SAME
+    // /events connection the page already holds, instead of teaching the
+    // fixture fetch-and-poll layer to simulate push semantics. `questions` is
+    // a LIST (a real AskUserQuestion batch can carry more than one, answered
+    // atomically) — every question in it shares one `group_id`.
+    app.post("/_test/push-event", (req, res) => {
+      const { workspaceId, questions } = req.body ?? {};
+      const ws = FIXTURE_WORKSPACES.find((w) => w.id === workspaceId);
+      if (!ws) {
+        res.status(404).json({ detail: { error: "workspace_not_found", message: "missing" } });
+        return;
+      }
+      const pending: Array<{ group_id: string }> = Array.isArray(questions) ? questions : [];
+      pendingQuestionToolUseId = pending[0]?.group_id ?? null;
+      const delta = {
+        kind: "session_activity",
+        seq: ++eventSeq,
+        workspace: workspaceActivity(ws, pending as Record<string, unknown>[]),
+      };
+      const payload = `id: ${delta.seq}\nevent: session_activity\ndata: ${JSON.stringify(delta)}\n\n`;
+      for (const client of eventClients) client.write(payload);
+      res.status(204).end();
+    });
+
+    // Reassigns the server's notion of "the pending tool_use_id" WITHOUT
+    // broadcasting an SSE delta — models the race the 409 response exists
+    // for: the question resolved (or moved on) faster than this page's
+    // stream delivered the update, so its still-rendered card answers a
+    // tool_use_id the daemon no longer considers pending.
+    app.post("/_test/set-pending-tool-use-id", (req, res) => {
+      pendingQuestionToolUseId = req.body?.toolUseId ?? null;
+      res.status(204).end();
+    });
+
     // ─── Activity Dashboard (#17) ───────────────────────────────────────
     app.get("/activity", (_req, res) => {
       res.json(buildActivitySnapshot());
@@ -354,10 +430,17 @@ export function startFakeDaemon(port: number): Promise<Server> {
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
       });
-      const frame = { kind: "snapshot", seq: 1, snapshot: buildActivitySnapshot() };
-      res.write(`id: 1\nevent: snapshot\ndata: ${JSON.stringify(frame)}\n\n`);
+      const frame = { kind: "snapshot", seq: eventSeq, snapshot: buildActivitySnapshot() };
+      res.write(`id: ${eventSeq}\nevent: snapshot\ndata: ${JSON.stringify(frame)}\n\n`);
+      // Tracked so `/_test/push-event` (question.spec.ts) can push a live
+      // `session_activity` delta to every connected page, mirroring the real
+      // daemon's SSE fan-out.
+      eventClients.add(res);
       const keepalive = setInterval(() => res.write(": keepalive\n\n"), 1000);
-      req.on("close", () => clearInterval(keepalive));
+      req.on("close", () => {
+        clearInterval(keepalive);
+        eventClients.delete(res);
+      });
     });
 
     const server = app.listen(port, "127.0.0.1", () => resolve(server));
@@ -576,11 +659,29 @@ function buildActivitySnapshot() {
   };
 }
 
-function workspaceActivity(ws: (typeof FIXTURE_WORKSPACES)[number]) {
+/**
+ * `questions` is Gitea #111's additive live-pending-question payload
+ * (`AgentQuestionView[]`, ordered as asked — a real AskUserQuestion batch can
+ * carry more than one, answered atomically) — passed only by
+ * `/_test/push-event` (question.spec.ts); every other caller keeps it `[]`,
+ * exactly today's behavior.
+ */
+function workspaceActivity(
+  ws: (typeof FIXTURE_WORKSPACES)[number],
+  questions: Record<string, unknown>[] = [],
+) {
   // Map workspace status → a representative agent state for visual variety.
+  // A pending question always reads as BLOCKED — the hook-sourced signal
+  // that overrides the transcript blend (core/activity.py).
   const agentState =
-    ws.status === "active" ? "working" : ws.status === "idle" ? "waiting" : "idle";
-  const attention = agentState === "waiting";
+    questions.length > 0
+      ? "blocked"
+      : ws.status === "active"
+        ? "working"
+        : ws.status === "idle"
+          ? "waiting"
+          : "idle";
+  const attention = agentState === "waiting" || agentState === "blocked";
   return {
     state: ws,
     sessions: [
@@ -605,6 +706,7 @@ function workspaceActivity(ws: (typeof FIXTURE_WORKSPACES)[number]) {
           last_event_at: null,
           needs_attention: attention,
           error_detail: null,
+          questions,
         },
       },
     ],

@@ -1,8 +1,8 @@
-# packaging — systemd-user service units
+# packaging — systemd-user service units + clean-install smoke
 
 > ↑ [root](../CLAUDE.md)
 
-systemd-user service units for the Grove daemon and the optional webapp, plus the Makefile machinery that renders and installs them.
+systemd-user service units for the Grove daemon and the optional webapp, plus the Makefile machinery that renders and installs them, and the Docker clean-install smoke harness.
 
 ## Templates & targets
 
@@ -23,6 +23,10 @@ systemd-user service units for the Grove daemon and the optional webapp, plus th
 ## Testing
 
 **Tests assert against `make systemd-print`, never the live filesystem.** `tests/test_systemd_packaging.py` invokes the print target and asserts placeholder substitution plus the `Wants=` invariant. **Never write to `~/.config/systemd/user` from a test.** See [tests](../tests/CLAUDE.md) for the print-target testing rule.
+
+## Clean-install smoke (`docker/`)
+
+**`packaging/docker/` proves the zero-touch fresh-install path; `make install-smoke` runs it.** The Dockerfile is a deps-only image (fresh Ubuntu, git/tmux/jq/curl, uv + a managed CPython, the stock non-root `ubuntu` user — deliberately NO Grove baked in); `smoke.sh` installs Grove at test time via `uv tool install` from the read-only-mounted checkout and asserts the whole first run with zero human input: version, graceful not-a-repo error, `config init` scaffold, zero-config create/kill on the built-in `shell` agent, daemon pair → `grove auth approve` → authenticated list, and the `initialized <dir>` first-run log lines. `GROVE_INSTALL_SPEC` swaps the install source (e.g. the public `git+...@current` URL) for release-mode verification. Born from issue #105: the PyPI name `grove` is an unrelated package, so installers must always use the full git spec — `tests/test_install_scripts.py` pins that contract on the script text; the container proves it end-to-end.
 
 ## Session lessons
 

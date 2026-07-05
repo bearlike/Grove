@@ -75,8 +75,8 @@ export function WorkspaceCard({
       data-agent-state={agentState}
       data-tier={tier}
       className={cn(
-        "group flex h-full flex-col overflow-hidden border-border p-0 transition-[transform,box-shadow,border-color] duration-200",
-        "hover:-translate-y-px hover:border-border/80 hover:shadow-md",
+        "group flex h-full flex-col overflow-hidden border-border p-0 transition-[transform,border-color] duration-200",
+        "hover:-translate-y-px hover:border-border/80",
         // Attention (waiting/blocked/error) = a single thin LEFT accent bar in
         // the tier accent var — the only on-card hue, never a full ring/fill.
         attention && "border-l-2",

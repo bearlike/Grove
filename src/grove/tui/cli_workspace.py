@@ -55,7 +55,6 @@ from grove.core import (
     build,
 )
 from grove.core.agents import SessionTurn
-from grove.core.git import GitRepo
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,25 +272,6 @@ def _clean_exit() -> Iterator[None]:
         raise typer.Exit(code=1) from exc
 
 
-def _manager() -> WorkspaceManager:
-    """Manager bound to the cwd's repo, keyed by its MAIN worktree root.
-
-    Binds to ``worktree_paths()[0]`` (the main root the workspace store is keyed
-    by), not ``detect_root(cwd)`` directly — the same rule
-    :meth:`SessionExplorer.from_cwd` follows. From inside a *linked* worktree
-    ``detect_root`` returns that worktree's own root, and the store keyed by the
-    main root would then list zero workspaces; ``grove show`` (run from inside a
-    worktree) depends on this. Raises ``GroveError`` outside a repo — surfaced by
-    the caller's :func:`_clean_exit`."""
-    root = GitRepo.detect_root(Path.cwd())
-    if root is None:
-        raise GroveError(
-            "Grove must be run from inside a git repository "
-            "(no repo found at or above the current directory)."
-        )
-    return build(GitRepo(root).worktree_paths()[0])
-
-
 def _resolve_workspace(manager: WorkspaceManager, ref: str) -> WorkspaceState:
     """The unique workspace whose id matches ``ref`` exactly or by prefix.
 
@@ -428,7 +408,7 @@ def create_workspace(
             skip_init=no_init,
             initial_prompt=prompt,
         )
-        state = _manager().create(request)
+        state = build().create(request)
         typer.secho(f"created {state.id}", fg=typer.colors.GREEN)
         typer.echo(f"  title:    {state.title}")
         typer.echo(f"  agent:    {state.agent_name}")
@@ -456,7 +436,7 @@ def message_workspace(
       grove message a1b2 "now add a test for the empty case"
     """
     with _clean_exit():
-        manager = _manager()
+        manager = build()
         state = _resolve_workspace(manager, workspace)
         manager.send_message(state.id, text)
         typer.secho(f"sent to {state.id} ({state.title})", fg=typer.colors.GREEN)
@@ -489,7 +469,7 @@ def pause_workspace(
       grove pause a1b2
     """
     with _clean_exit():
-        manager = _manager()
+        manager = build()
         state = _resolve_workspace(manager, workspace)
         manager.pause(state.id, force=force)
         typer.secho(f"paused {state.id} ({state.title})", fg=typer.colors.GREEN)
@@ -502,7 +482,7 @@ def resume_workspace(workspace: str = _WORKSPACE_ARG) -> None:
       grove resume a1b2
     """
     with _clean_exit():
-        manager = _manager()
+        manager = build()
         state = _resolve_workspace(manager, workspace)
         manager.resume(state.id)
         typer.secho(f"resumed {state.id} ({state.title})", fg=typer.colors.GREEN)
@@ -519,7 +499,7 @@ def respawn_workspace(workspace: str = _WORKSPACE_ARG) -> None:
       grove respawn a1b2
     """
     with _clean_exit():
-        manager = _manager()
+        manager = build()
         state = _resolve_workspace(manager, workspace)
         manager.respawn(state.id)
         typer.secho(f"respawned {state.id} ({state.title})", fg=typer.colors.GREEN)
@@ -547,7 +527,7 @@ def kill_workspace(
       grove kill a1b2 --keep-branch -y
     """
     with _clean_exit():
-        manager = _manager()
+        manager = build()
         state = _resolve_workspace(manager, workspace)
         if not yes and not typer.confirm(f"kill {state.id} ({state.title})?"):
             raise typer.Abort()
@@ -579,7 +559,7 @@ def attach_workspace(workspace: str = _WORKSPACE_ARG) -> None:
       grove attach a1b2
     """
     with _clean_exit():
-        manager = _manager()
+        manager = build()
         state = _resolve_workspace(manager, workspace)
         instruction = manager.attach(state.id)
     # Outside _clean_exit: exec replaces this process, so it never returns and
@@ -611,7 +591,7 @@ def show_workspace(
       grove show a1b2 -l 20
     """
     with _clean_exit():
-        manager = _manager()
+        manager = build()
         state = _resolve_or_infer_workspace(manager, workspace)
         explorer = SessionExplorer.from_cwd(Path.cwd())
         WorkspaceInspection.gather(manager, explorer, state.id, last_turns=last).emit()

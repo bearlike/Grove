@@ -1,3 +1,4 @@
+import type { QuestionAnswerItem } from "./question-plan";
 import type {
   AgentSummaryView,
   BranchInfo,
@@ -128,6 +129,30 @@ export class GroveClient {
     await this._post(`/workspaces/${encodeURIComponent(id)}/interrupt`);
   }
 
+  /**
+   * Answer a live pending `AskUserQuestion` (Gitea #111) — POST
+   * `/workspaces/{id}/question-answer`, 204 on dispatch. This is "dispatched",
+   * not "resolved": the daemon drives the terminal's keystrokes and the actual
+   * resolution rides back later via the SSE-carried `questions` list emptying,
+   * not this response. `toolUseId` is the pending question's
+   * `group_id` — the native tool call every question in the batch shares.
+   * Refusals: 404 unknown workspace, 409 `tool_use_id` no longer pending
+   * (stale — already resolved or cancelled elsewhere), 422 the answer plan
+   * didn't validate against the captured questions.
+   */
+  async answerQuestion(
+    id: string,
+    sessionId: string,
+    toolUseId: string,
+    answers: QuestionAnswerItem[],
+  ): Promise<void> {
+    await this._post(`/workspaces/${encodeURIComponent(id)}/question-answer`, {
+      session_id: sessionId,
+      tool_use_id: toolUseId,
+      answers,
+    });
+  }
+
   // ─── Lifecycle mutations (workspace parity, #56) ───────────────────────────
   // These mirror the daemon's WorkspaceManager routes 1:1; the wire contract is
   // the engine's, so we send the exact request shapes and let the engine own
@@ -216,9 +241,20 @@ export class GroveClient {
       let message = `${res.status} ${res.statusText}`.trim();
       try {
         const errBody = await res.json();
-        if (errBody?.detail?.error) {
-          code = errBody.detail.error;
-          message = errBody.detail.message ?? message;
+        const detail = errBody?.detail;
+        if (detail && typeof detail === "object" && !Array.isArray(detail) && "error" in detail) {
+          // The daemon's own envelope: { detail: { error, message } }.
+          code = detail.error;
+          message = detail.message ?? message;
+        } else if (Array.isArray(detail) && detail.length > 0) {
+          // FastAPI's request-validation 422s (e.g. Pydantic's title max_length)
+          // ship a LIST of {loc, msg, type} instead — no daemon envelope at all.
+          // Join the first couple entries into a readable "field: reason" line.
+          code = "validation_error";
+          message = (detail as Array<{ loc?: unknown[]; msg?: string }>)
+            .slice(0, 2)
+            .map((d) => `${d.loc?.at(-1) ?? "body"}: ${d.msg ?? "invalid"}`)
+            .join("; ");
         }
       } catch {
         // non-JSON body — keep defaults

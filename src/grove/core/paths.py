@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from loguru import logger
 from platformdirs import user_config_dir, user_state_dir
 
 _APP_NAME = "grove"
@@ -22,6 +23,21 @@ _LOGS_DIR = "logs"
 _THEMES_DIR = "themes"
 _SIDECAR_DIR = "agent-sidecars"
 _HOOKS_SETTINGS_FILE = "claude-hooks-settings.json"
+
+
+def ensure_dir(path: Path) -> Path:
+    """Create *path* (with parents) if missing, logging the first creation.
+
+    The single seam every lazy first-write funnels through, so a fresh
+    install reports exactly which directories Grove initialized and where
+    (issue #105). An existing directory is a silent no-op; the log line is
+    INFO, visible under ``GROVE_DEBUG=1``.
+    """
+    if path.is_dir():
+        return path
+    path.mkdir(parents=True, exist_ok=True)
+    logger.info("initialized {}", path)
+    return path
 
 
 def user_config_path() -> Path:

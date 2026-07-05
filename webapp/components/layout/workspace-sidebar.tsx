@@ -111,7 +111,7 @@ function SidebarSearch(): React.ReactElement {
         placeholder="Search workspaces"
         aria-label="Search workspaces"
         data-testid="sidebar-search"
-        className="h-8 border-sidebar-border bg-card pl-8 text-[13px] shadow-inner placeholder:text-muted-foreground/70"
+        className="h-8 border-sidebar-border bg-card pl-8 text-[13px] placeholder:text-muted-foreground/70"
       />
     </div>
   );

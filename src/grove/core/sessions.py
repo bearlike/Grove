@@ -176,6 +176,16 @@ class SessionExplorer:
         one directory regardless of project size. Raises
         :class:`~grove.core.errors.WorkspaceNotFound` for an unknown id.
 
+        A discovered (``fs_discovered``) listing is kept only when
+        ``state.adopts_session(summary.created_at)`` — its birth postdates this
+        workspace's own ``created_at``. Without this gate, a fresh workspace
+        whose cwd already holds older transcripts (especially ROOT placement,
+        whose cwd is the shared repo root) would present a stale, unrelated
+        session as its own. A ``grove_launched`` listing is never gated — Grove
+        minted and launched it for this workspace regardless of its birth.
+        :meth:`list` and the project-scoped listing stay ungated by design:
+        those are browse-everything history views, not workspace attribution.
+
         Returns a tuple — in this class body a ``list[...]`` annotation would
         resolve to the :meth:`list` method, not the builtin (the documented
         mypy shadowing trap).
@@ -189,14 +199,17 @@ class SessionExplorer:
                 if key in seen:
                     continue
                 seen.add(key)
+                provenance: SessionProvenance = (
+                    "grove_launched"
+                    if summary.session_id == state.agent_session_id
+                    else "fs_discovered"
+                )
+                if provenance != "grove_launched" and not state.adopts_session(summary.created_at):
+                    continue
                 listings.append(
                     SessionListing(
                         summary=summary,
-                        provenance=(
-                            "grove_launched"
-                            if summary.session_id == state.agent_session_id
-                            else "fs_discovered"
-                        ),
+                        provenance=provenance,
                         workspace_id=state.id,
                         workspace_title=state.title,
                         workspace_branch=state.branch,

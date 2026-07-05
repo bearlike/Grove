@@ -26,7 +26,9 @@ from grove.core import (
     NewNamedBranch,
     RootBranch,
     TrackRemoteBranch,
+    build,
 )
+from grove.core.git import GitRepo
 from grove.tui.cli import app
 from grove.tui.cli_workspace import BranchFlags, _attach_argv
 from tests.conftest import FakeTmux
@@ -260,3 +262,38 @@ def test_attach_resolves_then_execs_tmux(
     args = captured["args"]
     assert isinstance(args, list)
     assert args[0] == "tmux" and args[1] in {"attach", "switch-client"} and args[2] == "-t"
+
+
+# ─── cwd binding (the build() seam) ───────────────────────────────────────────
+
+
+def test_ls_outside_a_repo_errors_cleanly(
+    runner: CliRunner,
+    tmp_state_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`grove ls` outside any git repo is a typed one-line error, exit 1.
+
+    Regression for #105's harness finding: `build(Path.cwd())` treated the cwd
+    AS the repo root, so a non-repo directory listed `[]` (and the TUI opened
+    empty) instead of surfacing the documented error.
+    """
+    del tmp_state_dir
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["ls"])
+    assert result.exit_code == 1
+    assert "git repository" in result.output
+
+
+def test_build_from_linked_worktree_binds_to_main_root(
+    tmp_state_dir: Path, tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """From inside a linked worktree, build() keys the manager by the MAIN
+    worktree root (the store's key), not the linked worktree's own root."""
+    del tmp_state_dir
+    linked = tmp_repo.parent / "linked-wt"
+    GitRepo(tmp_repo).worktree_add(linked, new_branch="grove-linked-test")
+    monkeypatch.chdir(linked)
+    manager = build()
+    assert manager.repo_root == tmp_repo.resolve()
