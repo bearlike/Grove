@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { applyDashboardEvent, snapshotHasWorkspace } from "@/lib/grove/activity-stream";
+import {
+  applyDashboardEvent,
+  snapshotHasWorkspace,
+  turnsProgressFingerprint,
+} from "@/lib/grove/activity-stream";
 import { snapshot, workspace } from "@/tests/_helpers/activity-fixtures";
 import type { DashboardEvent } from "@/lib/grove/types";
 
@@ -101,5 +105,54 @@ describe("snapshotHasWorkspace", () => {
 
   it("is false for a null snapshot (pre-connect)", () => {
     expect(snapshotHasWorkspace(null, "a")).toBe(false);
+  });
+});
+
+describe("turnsProgressFingerprint", () => {
+  it("changes when tool_calls/assistant_replies/last_event_at advance without a state change (#166)", () => {
+    const before = turnsProgressFingerprint(
+      snapshot(
+        workspace("a", "working", undefined, [], {
+          assistant_replies: 1,
+          tool_calls: 2,
+          last_event_at: "2026-06-01T00:00:01Z",
+        }),
+      ),
+      "a",
+      "s-a",
+    );
+    const after = turnsProgressFingerprint(
+      snapshot(
+        workspace("a", "working", undefined, [], {
+          assistant_replies: 1,
+          tool_calls: 3, // one more tool call — state itself never moved
+          last_event_at: "2026-06-01T00:00:02Z",
+        }),
+      ),
+      "a",
+      "s-a",
+    );
+    expect(before).not.toBe(after);
+  });
+
+  it("is stable when nothing about the session changed", () => {
+    const ws = workspace("a", "working", undefined, [], {
+      assistant_replies: 2,
+      tool_calls: 1,
+      last_event_at: "2026-06-01T00:00:01Z",
+    });
+    expect(turnsProgressFingerprint(snapshot(ws), "a", "s-a")).toBe(
+      turnsProgressFingerprint(snapshot(ws), "a", "s-a"),
+    );
+  });
+
+  it("is empty for a session not yet in the snapshot (pre-connect, unknown workspace/session)", () => {
+    expect(turnsProgressFingerprint(null, "a", "s-a")).toBe("");
+    expect(turnsProgressFingerprint(snapshot(workspace("a", "working")), "zzz", "s-a")).toBe("");
+    expect(turnsProgressFingerprint(snapshot(workspace("a", "working")), "a", "s-zzz")).toBe("");
+  });
+
+  it("is empty when no session is resolved yet (sessionId null)", () => {
+    expect(turnsProgressFingerprint(snapshot(workspace("a", "working")), "a", null)).toBe("");
   });
 });

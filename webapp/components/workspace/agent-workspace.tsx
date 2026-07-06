@@ -1,18 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { Columns2, Square } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, type ReactNode } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { TerminalPane } from "@/components/terminal/terminal-pane";
-import { cn } from "@/lib/utils";
+import { WorkPanel } from "@/components/workspace/work-panel";
+import type { AgentTab } from "@/components/workspace/view-switcher";
+import type { AgentLiveStatus } from "@/lib/grove/agent-activity";
+import type {
+  AgentActivityState,
+  CommitSummaryView,
+  DashboardSnapshotView,
+  WorkspacePeekView,
+} from "@/lib/grove/types";
 
 // Streamdown is a ~460 kB async chunk and the only consumer is the chat panel —
 // keep it behind `next/dynamic` here (the component that renders it) so the
@@ -22,182 +26,118 @@ const ChatPanel = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-full min-h-[20rem] w-full" /> },
 );
 
-type AgentTab = "transcript" | "terminal";
-type View = "tabs" | "split";
-
-/** SSR-safe `min-width` match; jsdom's matchMedia stub reports false → tabs. */
-function useMinWidth(px: number): boolean {
-  const [match, setMatch] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia(`(min-width:${px}px)`);
-    const sync = () => setMatch(mq.matches);
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
-  }, [px]);
-  return match;
-}
-
 /**
- * The dominant surface of the detail page: the agent transcript and the live
- * terminal. Transcript is the default (the revamp's headline — the conversation
- * sits first); the terminal is the second tab, carrying its own live-capture
- * badge. On lg+ a split view shows both panes side by side behind a draggable
- * `Resizable` handle (the canonical primitive, never a hand-rolled resizer),
- * with the ratio persisted via `autoSaveId`. Below lg the split is unreachable
- * — a horizontal split on a phone is wrong — so the surface stays tabs-only and
- * the toggle is hidden.
+ * The dominant surface of the detail page: the agent transcript and the work
+ * panel — panes ONLY since the chrome teardown (#130). The page owns every bit
+ * of view state (which tab, single vs. split) and the view switcher rides the
+ * header identity cluster, so this component just renders the side-by-side
+ * split (`showSplit`) or the single active pane (`tab`). No strip row, no
+ * `TabsList`, no status line.
  *
- * `defaultTab` is derived by the page (Transcript when sessions exist, else
- * Terminal, `null` while loading); a user's explicit tab/view choice always
- * wins after. Seams: `agent-panel`, `agent-tabs`, `tab-transcript`,
- * `tab-terminal`, `view-tabs`, `view-split`, `subagent-badge`.
+ * The Resizable split is the canonical primitive (never a hand-rolled resizer),
+ * its ratio persisted via `autoSaveId` — this contract is FROZEN across the
+ * ADE work-panel change (#142): only the right pane's CONTENT changed, from a
+ * bare `TerminalPane` to the tabbed `WorkPanel` (Terminal/Diff/Info). The
+ * `min-h-0`/`min-w-0` chains thread through verbatim so a long transcript or a
+ * wide terminal scrolls inside its own pane and never widens the document.
+ *
+ * `peek`/`live`/`commits` are the same page-owned reads `ContextBar` already
+ * consumes for the identity strip — threaded here too because the `Diff`/`Info`
+ * tabs need the same git/activity data the strip summarizes. One fetch, two
+ * homes, never a second request.
+ *
+ * ⌘/Ctrl+J toggles the work panel (design §4.2: "one obvious control — `⟩` /
+ * `⌘J` — slides it in"). The page owns the actual tab/view state (so it can
+ * apply the right toggle semantics per breakpoint); this component only
+ * listens for the chord and forwards it via `onTogglePanel`, mirroring the
+ * `[` sidebar-toggle listener pattern in the shell layout. Ignored while a
+ * form field has focus so it never hijacks normal typing.
+ *
+ * Session selection + the activity snapshot are page-owned (one EventSource
+ * per route); the selected `sessionId`, `activitySnapshot`, and `agentState`
+ * pass straight through to the ChatPanel. Seam: `agent-panel`.
  */
 export function AgentWorkspace({
   workspaceId,
-  snapshot,
-  takenAt,
-  tmuxSession,
-  defaultTab,
-  subagents,
+  peek,
+  live,
+  commits,
+  commitsLoading,
+  tab,
+  showSplit,
+  sessionId,
+  activitySnapshot,
+  agentState,
+  emptyStatePicker,
+  onTogglePanel,
 }: {
   workspaceId: string;
-  snapshot: string | null;
-  takenAt: string | null;
-  tmuxSession: string;
-  defaultTab: AgentTab | null;
-  subagents: number;
+  /** The page's polled peek — feeds both the transcript's session cascade context and the work panel's Terminal/Diff/Info tabs. */
+  peek: WorkspacePeekView;
+  live: AgentLiveStatus;
+  commits: CommitSummaryView[] | undefined;
+  commitsLoading?: boolean;
+  /** The active pane in single-pane view; `null` renders the loading skeleton. */
+  tab: AgentTab | null;
+  showSplit: boolean;
+  sessionId: string | null;
+  /** The live dashboard snapshot (page-owned) the chat panel reads for pending questions. */
+  activitySnapshot: DashboardSnapshotView | null;
+  agentState: AgentActivityState;
+  /** The page-wired track picker (#132) shown in the transcript's empty state when no session is tracked but candidates exist. */
+  emptyStatePicker?: ReactNode;
+  /** ⌘/Ctrl+J — the page decides what "toggle" means for the current breakpoint/view. */
+  onTogglePanel?: () => void;
 }) {
-  const isLg = useMinWidth(1024);
-  const [chosenTab, setChosenTab] = useState<AgentTab | null>(null);
-  const [view, setView] = useState<View>("tabs");
-  const tab = chosenTab ?? defaultTab;
-  const showSplit = isLg && view === "split";
+  useEffect(() => {
+    if (!onTogglePanel) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key.toLowerCase() !== "j" || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      e.preventDefault();
+      onTogglePanel?.();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onTogglePanel]);
 
-  const transcript = <ChatPanel workspaceId={workspaceId} />;
-  const terminal = <TerminalPane snapshot={snapshot} takenAt={takenAt} target={tmuxSession} />;
+  const transcript = (
+    <ChatPanel
+      workspaceId={workspaceId}
+      sessionId={sessionId}
+      snapshot={activitySnapshot}
+      agentState={agentState}
+      emptyStatePicker={emptyStatePicker}
+    />
+  );
+  const panel = (
+    <WorkPanel peek={peek} live={live} commits={commits} commitsLoading={commitsLoading} />
+  );
 
-  const rightCluster = (
-    <div className="flex shrink-0 items-center gap-2">
-      {subagents > 0 && (
-        <Badge variant="secondary" data-testid="subagent-badge">
-          {subagents} background agent{subagents === 1 ? "" : "s"}
-        </Badge>
-      )}
-      {isLg && (
-        <div className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
-          <ViewToggle
-            testid="view-tabs"
-            label="Single pane"
-            active={view === "tabs"}
-            onClick={() => setView("tabs")}
-          >
-            <Square className="size-4" />
-          </ViewToggle>
-          <ViewToggle
-            testid="view-split"
-            label="Split view"
-            active={view === "split"}
-            onClick={() => setView("split")}
-          >
-            <Columns2 className="size-4" />
-          </ViewToggle>
+  return (
+    <div data-testid="agent-panel" className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {showSplit ? (
+        <ResizablePanelGroup
+          direction="horizontal"
+          autoSaveId="grove-detail-split"
+          className="min-h-0 flex-1"
+        >
+          <ResizablePanel defaultSize={55} minSize={30} className="flex min-h-0 min-w-0 flex-col">
+            {transcript}
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize={45} minSize={25} className="flex min-h-0 min-w-0 flex-col">
+            {panel}
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      ) : (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {tab === null && <Skeleton className="h-full min-h-[20rem] w-full" />}
+          {tab === "transcript" && transcript}
+          {tab === "terminal" && panel}
         </div>
       )}
     </div>
-  );
-
-  return (
-    <div
-      data-testid="agent-panel"
-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4"
-    >
-      {showSplit ? (
-        <>
-          <div className="flex items-center justify-end gap-2">{rightCluster}</div>
-          <ResizablePanelGroup
-            direction="horizontal"
-            autoSaveId="grove-detail-split"
-            className="min-h-0 flex-1"
-          >
-            <ResizablePanel defaultSize={55} minSize={30} className="flex min-h-0 min-w-0 flex-col pr-1.5">
-              {transcript}
-            </ResizablePanel>
-            <ResizableHandle withHandle />
-            <ResizablePanel defaultSize={45} minSize={25} className="flex min-h-0 min-w-0 flex-col pl-1.5">
-              {terminal}
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        </>
-      ) : (
-        <Tabs
-          value={tab ?? ""}
-          onValueChange={(v) => setChosenTab(v as AgentTab)}
-          className="flex min-h-0 min-w-0 flex-1 flex-col gap-3"
-          data-testid="agent-tabs"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <TabsList>
-              <TabsTrigger value="transcript" data-testid="tab-transcript">
-                Transcript
-              </TabsTrigger>
-              <TabsTrigger value="terminal" data-testid="tab-terminal" className="gap-1.5">
-                Terminal
-                <span
-                  aria-hidden
-                  className="size-1.5 rounded-full bg-[var(--status-active)] motion-safe:animate-pulse"
-                />
-              </TabsTrigger>
-            </TabsList>
-            {rightCluster}
-          </div>
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {tab === null && <Skeleton className="h-full min-h-[20rem] w-full" />}
-            <TabsContent
-              value="transcript"
-              className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
-            >
-              {transcript}
-            </TabsContent>
-            <TabsContent
-              value="terminal"
-              className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
-            >
-              {terminal}
-            </TabsContent>
-          </div>
-        </Tabs>
-      )}
-    </div>
-  );
-}
-
-function ViewToggle({
-  active,
-  onClick,
-  label,
-  testid,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  testid: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      data-testid={testid}
-      aria-label={label}
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        "inline-flex size-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-        active ? "bg-card text-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
   );
 }

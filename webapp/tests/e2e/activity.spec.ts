@@ -7,6 +7,8 @@ import { test, expect } from "@playwright/test";
 test("/activity redirects to the composer-first workspace surface", async ({ page }) => {
   await page.goto("/activity");
   await expect(page).toHaveURL(/\/$/);
+  // The merged surface is the landing (Hero by default): the composer plus the
+  // Hero|Overview toggle. The card grid lives one persisted toggle away.
   await expect(page.getByTestId("composer-prompt")).toBeVisible();
-  await expect(page.getByTestId("workspace-card")).toHaveCount(3);
+  await expect(page.getByTestId("landing-view-toggle")).toBeVisible();
 });

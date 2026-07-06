@@ -238,6 +238,17 @@ export function ContextChips({
             />
             Skip init script
           </label>
+
+          <Field label="Resume session id (optional)" htmlFor="create-resume-session-id">
+            <Input
+              id="create-resume-session-id"
+              data-testid="create-resume-session-id"
+              className="h-9 font-mono text-sm"
+              placeholder="Adopt an existing agent session instead of starting fresh"
+              value={draft.resumeSessionId}
+              onChange={(e) => patch({ resumeSessionId: e.target.value })}
+            />
+          </Field>
         </div>
       ) : null}
     </div>

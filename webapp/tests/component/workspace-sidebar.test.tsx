@@ -1,27 +1,35 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WorkspaceSidebar } from "@/components/layout/workspace-sidebar";
+import { formatUptime, WorkspaceSidebar } from "@/components/layout/workspace-sidebar";
 import { useUiStore } from "@/lib/grove/ui-store";
 import { workspace } from "@/tests/_helpers/activity-fixtures";
 import type { DashboardSnapshotView, WorkspaceActivityView } from "@/lib/grove/types";
 
-// The rail is purely a view-intent surface (#96 deliverable B): it reads the
-// authoritative `/activity` snapshot (via `useActivityStream`, which in jsdom has
-// no EventSource and so falls back to the `["activity"]` poll) and writes the one
-// Zustand UI store. No router is needed — the rail no longer links to detail
-// pages (cards do the navigation now).
+// The rail (ADE #140) is now a session-tree navigator: its scrollable BODY is
+// the `SessionRail` (project → date session tree), the search box at top writes
+// the one `query` store field (filtering the tree AND the Overview grid), and
+// the daemon/identity footer stays at the bottom. This test pins the SHELL
+// contract — search, footer, the collapsed icon rail — and the rail body's own
+// tree behavior lives in `session-rail.test.tsx`. `usePathname`/`useSearchParams`
+// are overridden because the mounted `SessionRail` reads them for the active row.
+
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
+    usePathname: () => "/",
+    useSearchParams: () => new URLSearchParams(),
+  };
+});
 
 /** Place a workspace under a named repo, overriding the fixture's default root. */
-function inRepo(
-  w: WorkspaceActivityView,
-  repo_root: string,
-): WorkspaceActivityView {
+function inRepo(w: WorkspaceActivityView, repo_root: string): WorkspaceActivityView {
   return { ...w, state: { ...w.state, repo_root } };
 }
 
-/** A two-project snapshot: Grove (2 ws: working + idle) and website (1 ws: blocked). */
+/** A two-project snapshot: Grove (2 ws) and website (1 ws). */
 function buildSnapshot(): DashboardSnapshotView {
   const grove = [
     inRepo(workspace("g1", "working"), "/repos/Grove"),
@@ -60,6 +68,9 @@ function renderSidebar({
   // `useActivityStream` falls back to the `["activity"]` poll under jsdom.
   if (snapshot !== undefined) qc.setQueryData(["activity"], snapshot);
   if (whoami !== undefined) qc.setQueryData(["whoami"], whoami);
+  // The rail body reads per-project session lists — seed them empty so the tree
+  // mounts without hitting the network (this test isn't about the rows).
+  for (const p of snapshot?.projects ?? []) qc.setQueryData(["project-sessions", p.repo_root], []);
   return render(
     <QueryClientProvider client={qc}>
       <WorkspaceSidebar />
@@ -68,50 +79,18 @@ function renderSidebar({
 }
 
 beforeEach(() => {
-  // The store is a module-level singleton; reset the view slices each test so
-  // toggles don't leak across cases.
-  useUiStore.setState({
-    query: "",
-    scopeRepo: null,
-    hiddenStates: [],
-    attentionOnly: false,
-  });
+  useUiStore.setState({ query: "", scopeRepo: null });
 });
 
 describe("WorkspaceSidebar", () => {
-  it("renders a repo scope list with counts — All + one row per project, no workspace rows", async () => {
+  it("mounts the session-tree body and a search box at the top", async () => {
     renderSidebar();
-    // "All workspaces" totals the snapshot; each repo row carries its count.
-    const all = await screen.findByTestId("sidebar-repo-all");
-    expect(all).toHaveTextContent("All workspaces");
-    expect(all).toHaveTextContent("3");
-
-    const repos = screen.getAllByTestId("sidebar-repo");
-    expect(repos.map((r) => r.getAttribute("data-repo"))).toEqual([
-      "/repos/Grove",
-      "/repos/website",
-    ]);
-    expect(repos[0]).toHaveTextContent("Grove");
-    expect(repos[0]).toHaveTextContent("2");
-    expect(repos[1]).toHaveTextContent("website");
-    expect(repos[1]).toHaveTextContent("1");
-
-    // It is a nav/scope rail now — no per-workspace rows and no detail links.
-    expect(screen.queryByTestId("sidebar-entry")).toBeNull();
-    expect(screen.queryByRole("link")).toBeNull();
-  });
-
-  it("scopes the store to a repo on click and marks the active row", async () => {
-    const user = userEvent.setup();
-    renderSidebar();
-    const groveRow = (await screen.findAllByTestId("sidebar-repo"))[0];
-    await user.click(groveRow);
-    expect(useUiStore.getState().scopeRepo).toBe("/repos/Grove");
-    expect(groveRow).toHaveAttribute("aria-pressed", "true");
-    // "All workspaces" is active by default until a repo is chosen.
-    await user.click(screen.getByTestId("sidebar-repo-all"));
-    expect(useUiStore.getState().scopeRepo).toBeNull();
-    expect(screen.getByTestId("sidebar-repo-all")).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByTestId("session-rail")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-search")).toBeInTheDocument();
+    // It is a session navigator now — no scope/state filter controls remain.
+    expect(screen.queryByTestId("sidebar-repo-all")).toBeNull();
+    expect(screen.queryByTestId("sidebar-state-chip")).toBeNull();
+    expect(screen.queryByTestId("sidebar-attention-toggle")).toBeNull();
   });
 
   it("writes the search query to the store", async () => {
@@ -121,45 +100,53 @@ describe("WorkspaceSidebar", () => {
     expect(useUiStore.getState().query).toBe("dash");
   });
 
-  it("renders an agent-state chip per present state and toggles hiddenStates", async () => {
-    const user = userEvent.setup();
+  it("never renders a collapsed icon-strip variant (collapse hides the whole rail — #152)", async () => {
+    // Collapse is a shell concern now (the layout animates the wrapper to w-0);
+    // the sidebar always renders its full form, and the old icon strip is gone.
     renderSidebar();
-    const chips = await screen.findAllByTestId("sidebar-state-chip");
-    const present = chips.map((c) => c.getAttribute("data-state-key"));
-    // working, idle, blocked are present in the fixture (order is STATE_ORDER).
-    expect(present).toEqual(["working", "blocked", "idle"]);
-
-    const working = chips.find((c) => c.getAttribute("data-state-key") === "working")!;
-    // A chip starts "on" (state visible → not hidden).
-    expect(working).toHaveAttribute("aria-pressed", "true");
-    await user.click(working);
-    expect(useUiStore.getState().hiddenStates).toContain("working");
-    expect(working).toHaveAttribute("aria-pressed", "false");
+    expect(await screen.findByTestId("session-rail")).toBeInTheDocument();
+    expect(screen.queryByTestId("session-rail-icons")).toBeNull();
+    expect(screen.queryByTestId("sidebar-footer-collapsed")).toBeNull();
   });
 
-  it("toggles attention-only", async () => {
-    const user = userEvent.setup();
-    renderSidebar();
-    const toggle = await screen.findByTestId("sidebar-attention-toggle");
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    // One blocked workspace → attention count of 1.
-    expect(toggle).toHaveTextContent("1");
-    await user.click(toggle);
-    expect(useUiStore.getState().attentionOnly).toBe(true);
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("no longer renders a Workspaces/Activity route nav", () => {
-    renderSidebar();
-    expect(screen.queryByTestId("sidebar-nav-active")).toBeNull();
-    expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
-  });
-
-  it("pins the daemon user identity in the footer, without the version", async () => {
+  it("pins the daemon user identity in the footer", async () => {
     renderSidebar();
     const footer = await screen.findByTestId("sidebar-footer");
     expect(footer).toHaveTextContent("kk@grove-host");
-    // Version lives in the status bar now — de-duplicated out of the rail.
-    expect(footer).not.toHaveTextContent("v0.1.0");
+  });
+
+  it("re-homes the deleted status bar's system context into the rail footer (#138)", async () => {
+    renderSidebar();
+    const status = await screen.findByTestId("daemon-status");
+    expect(status).toHaveTextContent("online");
+    expect(screen.getByTestId("daemon-uptime")).toHaveTextContent(/up \d/);
+    expect(screen.getByTestId("daemon-version")).toHaveTextContent("v0.1.0");
+    // Count comes off the snapshot facets (3 workspaces in the fixture).
+    expect(status.closest("div")).toHaveTextContent("3 ws");
+  });
+
+  it("shows the amber update nudge only when a newer release exists (#80, re-homed)", async () => {
+    renderSidebar({
+      whoami: { ...WHOAMI, latest_version: "0.2.0", update_available: true } as unknown,
+    });
+    const link = await screen.findByTestId("update-available");
+    expect(link).toHaveTextContent("v0.2.0");
+    expect(link).toHaveAttribute("href", "https://github.com/bearlike/Grove/releases/latest");
+  });
+});
+
+describe("formatUptime", () => {
+  it.each([
+    [0, "0s"],
+    [-5, "0s"],
+    [5, "5s"],
+    [65, "1m 5s"],
+    [120, "2m"],
+    [3700, "1h 1m"],
+    [7200, "2h"],
+    [90061, "1d 1h"],
+    [172800, "2d"],
+  ])("formats %i s as %s", (seconds, expected) => {
+    expect(formatUptime(seconds)).toBe(expected);
   });
 });

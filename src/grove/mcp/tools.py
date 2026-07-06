@@ -16,6 +16,7 @@ from pathlib import Path
 
 from grove.client import GroveClient, ProtocolError
 from grove.core.contracts import (
+    AgentSummaryView,
     AutoBranch,
     BranchPlan,
     CreateWorkspaceRequest,
@@ -59,6 +60,13 @@ class GroveTools:
         """Get the full state of one workspace by its id."""
         return await self._client.get_workspace(workspace_id)
 
+    async def list_agents(self, repo_root: str) -> list[AgentSummaryView]:
+        """List the agents available for a repo — the valid `agent_name`
+        values for grove_create_workspace — each with its offered `models`
+        (up to 10) for the optional `model` argument. `model` is a hint, not a
+        whitelist: any id the tool understands is accepted. Read-only."""
+        return await self._client.list_agents(Path(repo_root))
+
     async def peek_workspace(self, workspace_id: str) -> WorkspacePeekView:
         """Get a bounded snapshot of a workspace: git ahead/behind vs base,
         diff added/removed lines, dirty file count, recent commits, and the
@@ -91,6 +99,8 @@ class GroveTools:
         branch_plan: BranchPlan = _AUTO_BRANCH,
         skip_init: bool = False,
         initial_prompt: str | None = None,
+        resume_session_id: str | None = None,
+        model: str | None = None,
     ) -> WorkspaceStateView:
         """Create a Grove workspace: a git worktree plus a tmux session
         running the named agent. ``branch_plan`` defaults to ``auto`` (Grove
@@ -100,8 +110,19 @@ class GroveTools:
         agent's first task, delivered race-free as the session boots so the
         workspace starts working immediately instead of idling at the prompt —
         omit it to boot the agent idle (then drive it with
-        ``grove_send_workspace_message``). Returns the created workspace's
-        state including its stable id.
+        ``grove_send_workspace_message``). ``resume_session_id`` continues an
+        EXISTING agent session in the new workspace instead of starting fresh
+        (claude launches ``--resume``, codex ``resume <id>``); only claude_code
+        and codex agents support it, and it accepts a full session id or a
+        unique id prefix scoped to the project (an unknown/ambiguous/wrong-kind
+        ref fails before any side effect). ``model`` is forwarded VERBATIM to
+        the agent tool — claude/codex receive it as ``--model <id>``, mewbo
+        applies it server-side, and a generic agent ignores it; Grove never
+        interprets the id, so ANY value the tool understands is accepted, not
+        just a fixed list. Omit it to use the tool's own default model. Call
+        ``grove_list_agents`` to see each agent's offered models (up to 10) as
+        a hint before choosing one. Returns the created workspace's state
+        including its stable id.
         """
         req = CreateWorkspaceRequest(
             agent_name=agent_name,
@@ -110,9 +131,24 @@ class GroveTools:
             branch_plan=branch_plan,
             skip_init=skip_init,
             initial_prompt=initial_prompt,
+            resume_session_id=resume_session_id,
+            model=model,
             repo_root=Path(repo_root),
         )
         return await self._client.create_workspace(req)
+
+    async def remap_workspace_session(
+        self, workspace_id: str, session_ref: str
+    ) -> WorkspaceStateView:
+        """Pin an existing agent session as a workspace's tracked primary session.
+        Use this to correct which session the dashboard follows — e.g. after
+        ``/clear`` rotated the agent's session id, or to adopt a hand-started
+        session as the workspace's own. ``session_ref`` is a session id or a
+        unique id-prefix within the workspace's project (see
+        ``grove sessions list``). Trusted and idempotent; returns the updated
+        workspace state.
+        """
+        return await self._client.remap_session(workspace_id, session_ref)
 
     async def pause_workspace(self, workspace_id: str, force: bool = False) -> WorkspaceStateView:
         """Pause a workspace: remove its worktree and tmux session but keep

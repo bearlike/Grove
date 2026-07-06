@@ -138,6 +138,37 @@ def test_sessions_unknown_workspace_404(client: TestClient) -> None:
     assert resp.json()["detail"]["error"] == "workspace_not_found"
 
 
+def test_sessions_candidates_flag_is_ungated(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """`?candidates=true` flips to the ungated remap-picker scan (#132): a
+    session born before the workspace — the gate drops it from the default,
+    attributed view — still appears so a UI can offer it to pin, while the
+    scan stays scoped to the workspace's cwd (the repo-root staged session
+    leaks into neither view)."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    stale_sid = "66666666-6666-4666-8666-666666666666"
+    _write_transcript(
+        claude_home,
+        stale_sid,
+        worktree,
+        mtime=5_000,  # newest mtime → leads the ungated list
+        prompt="pre-existing session",
+        born_at=datetime(2020, 1, 1, tzinfo=UTC),
+    )
+
+    default_ids = [s["session_id"] for s in client.get("/workspaces/a1/sessions").json()]
+    candidate_ids = [
+        s["session_id"]
+        for s in client.get("/workspaces/a1/sessions", params={"candidates": "true"}).json()
+    ]
+
+    assert stale_sid not in default_ids  # gated out of the attributed view
+    assert stale_sid in candidate_ids  # kept for the picker
+    assert candidate_ids[0] == stale_sid  # newest-first by mtime
+    assert ROOT_SID not in candidate_ids  # still cwd-scoped, no repo-root leak
+
+
 # ─── GET /workspaces/{id}/sessions/{sid}/turns ──────────────────────────────
 
 

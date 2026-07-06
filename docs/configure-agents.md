@@ -15,6 +15,7 @@ plain shell.
 | `kind`        | string | no  | Which adapter introspects this agent's sessions: `claude_code`, `codex`, `mewbo`, or `generic` (default). See [below](#telling-grove-what-kind-of-agent-it-is). |
 | `description` | string | no  | One-line label shown beside the name in the picker. |
 | `env`         | object | no  | Extra environment variables exported in the agent's tmux window. |
+| `models`      | `array<string>` | no  | Curated model ids to offer in the create-form picker. Overrides the auto-discovered catalog otherwise surfaced at create time. |
 
 ## Defaults
 

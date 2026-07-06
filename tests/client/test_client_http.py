@@ -23,7 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from grove.client import BackendConfig, GroveClient
+from grove.client import BackendConfig, GroveClient, ProtocolError
+from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.contracts.requests import CreateWorkspaceRequest
 
 pytestmark = [
@@ -57,6 +58,9 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     config_home.mkdir()
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    # Sandbox the daemon subprocess's claude transcript dir too, so a resume-ref
+    # resolution (#F8) can find a session the test materializes under tmp_path.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
 
     config_dir = config_home / "grove"
     config_dir.mkdir()
@@ -235,6 +239,51 @@ async def test_update_clears_description_with_empty_string(
     try:
         cleared = await client.update_workspace(created.id, description="")
         assert cleared.description is None
+    finally:
+        with contextlib.suppress(Exception):
+            await client.kill(created.id, delete_branch=True)
+
+
+async def test_create_with_resume_session_id_round_trips(
+    client: GroveClient, tmp_repo: Path, tmp_path: Path
+) -> None:
+    """``resume_session_id`` rides the create wire and the workspace is created
+    (the claude-kind agent accepts resume). The view omits the session id by
+    design, so this pins the passthrough, not the pinned value."""
+    # #F8: the resume ref must resolve to a real session — materialize one at the
+    # repo root (the daemon subprocess shares CLAUDE_CONFIG_DIR under tmp_path).
+    resume = "deadbeef-1111-2222-3333-444455556666"
+    folder = tmp_path / "claude" / "projects" / _ClaudeHome.encode_cwd(tmp_repo)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{resume}.jsonl").write_text(
+        f'{{"type":"user","cwd":"{tmp_repo}"}}\n', encoding="utf-8"
+    )
+    req = CreateWorkspaceRequest(
+        agent_name="claude",
+        title="resume-me",
+        repo_root=tmp_repo,
+        resume_session_id=resume,
+    )
+    created = await client.create_workspace(req)
+    try:
+        assert created.title == "resume-me"
+    finally:
+        with contextlib.suppress(Exception):
+            await client.kill(created.id, delete_branch=True)
+
+
+async def test_remap_unknown_session_raises_protocol_error(
+    client: GroveClient, tmp_repo: Path
+) -> None:
+    """``remap_session`` round-trips through the daemon; an unresolvable ref
+    surfaces the typed ``agent_session_not_found`` envelope (404)."""
+    req = CreateWorkspaceRequest(agent_name="claude", title="remap-host", repo_root=tmp_repo)
+    created = await client.create_workspace(req)
+    try:
+        with pytest.raises(ProtocolError) as exc_info:
+            await client.remap_session(created.id, "no-such-session")
+        assert exc_info.value.code == "agent_session_not_found"
+        assert exc_info.value.status == 404
     finally:
         with contextlib.suppress(Exception):
             await client.kill(created.id, delete_branch=True)

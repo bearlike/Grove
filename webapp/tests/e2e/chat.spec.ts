@@ -21,21 +21,52 @@ test("chat panel renders the latest session's transcript", async ({ page }) => {
   ).toBeVisible();
 
   // Three single-call runs (each broken by a rendered non-tool row) → three
-  // groups, collapsed by default; expanding the first reveals its Tool block.
+  // borderless "Used N tools" expanders, collapsed by default; expanding the
+  // first reveals its digest row.
   const groups = page.getByTestId("tool-group");
   await expect(groups).toHaveCount(3);
-  await expect(groups.first()).toContainText("1 tool call");
+  await expect(groups.first()).toContainText("Used 1 tool");
   await expect(page.getByTestId("chat-tool")).toHaveCount(0);
 
-  await groups.first().getByRole("button", { name: "1 tool call" }).click();
+  await groups.first().getByRole("button", { name: "Used 1 tool" }).click();
   await expect(page.getByTestId("chat-tool").first()).toBeVisible();
   await expect(page.getByTestId("chat-tool").first()).toContainText("Edit");
 
-  // Subagent spawns stay legible in the collapsed Tool row: the full digest
+  // Subagent spawns stay legible in the expanded digest row: the full digest
   // line ("Agent(Explore): map the webapp"), not just a parsed name.
-  await groups.nth(2).getByRole("button", { name: "1 tool call" }).click();
+  await groups.nth(2).getByRole("button", { name: "Used 1 tool" }).click();
   const spawn = page.getByTestId("chat-tool").filter({ hasText: "Agent(Explore):" });
   await expect(spawn).toContainText("map the webapp");
+});
+
+test("a long user prompt clamps behind Show more and expands (#127)", async ({ page }) => {
+  await page.goto("/w/w-grove-1");
+  const long = page.getByTestId("chat-message").filter({ hasText: "requirements dump" });
+  const clamp = long.getByTestId("user-message-collapse");
+
+  // Collapsed by default at the 6-line cap (9.6rem = 153.6px at text-prose 16px)…
+  await expect(clamp).toHaveAttribute("data-collapsed", "true");
+  await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBeLessThanOrEqual(156);
+  // …with genuinely hidden text (guard against a vacuous pass: the fixture
+  // paste really overflows the clamp in every project viewport).
+  expect(await clamp.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+
+  // Expand: full prompt shows, seam flips, label swaps.
+  const toggle = long.getByTestId("user-message-toggle");
+  await expect(toggle).toHaveText(/Show more/);
+  await toggle.click();
+  await expect(clamp).toHaveAttribute("data-collapsed", "false");
+  await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBeGreaterThan(156);
+  await expect(toggle).toHaveText(/Show less/);
+
+  // Re-collapse round-trip.
+  await toggle.click();
+  await expect(clamp).toHaveAttribute("data-collapsed", "true");
+  await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBeLessThanOrEqual(156);
+
+  // Short prompts never grow a toggle.
+  const short = page.getByTestId("chat-message").filter({ hasText: "iterate 1" });
+  await expect(short.getByTestId("user-message-toggle")).toHaveCount(0);
 });
 
 test("a background-task notification renders as a quiet expandable row", async ({ page }) => {
@@ -86,6 +117,40 @@ test("interrupt is WORKING-gated and POSTs through the BFF", async ({ page }) =>
   await page.goto("/w/w-grove-2");
   await expect(page.getByTestId("chat-panel")).toBeVisible();
   await expect(page.getByTestId("chat-interrupt")).toHaveCount(0);
+});
+
+test("the session rail pins a chosen session as the workspace's primary (#121/#132, rehomed to the rail #140)", async ({
+  page,
+}) => {
+  // Session management moved OUT of the header popover into the persistent
+  // session rail (#140). Rail listing + `?s=` transcript switching + inert
+  // metadata rows are covered in sidebar.spec.ts; this owns the one flow unique
+  // to the picker's successor — "make primary", the durable remap (#121/#132).
+  await page.goto("/w/w-grove-1");
+  await expect(page.getByTestId("chat-panel")).toBeVisible();
+
+  // The rail is a persistent column on desktop, a Sheet on mobile — open the
+  // drawer when the hamburger is present. The rail mounts in BOTH the (CSS-
+  // hidden below lg) desktop aside AND the mobile Sheet, so match the VISIBLE
+  // copy (`:visible`) to keep the row locator unique on both projects.
+  const trigger = page.getByTestId("sidebar-trigger");
+  if (await trigger.isVisible().catch(() => false)) await trigger.click();
+
+  const row = page.locator(
+    '[data-testid="session-rail-row"][data-session-id="s-w-grove-1"]:visible',
+  );
+  await expect(row).toBeVisible();
+
+  // "Make primary" from the row overflow durably repins the daemon's tracked
+  // session — a remap POST carrying the row's ref (confirmation arrives over the
+  // activity stream, never the response body — see useRemapSession).
+  const posted = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().endsWith("/api/grove/workspaces/w-grove-1/session"),
+  );
+  await row.getByTestId("session-rail-row-menu").click();
+  await page.getByTestId("session-rail-make-primary").click();
+  const req = await posted;
+  expect(req.postDataJSON()).toEqual({ session_ref: "s-w-grove-1" });
 });
 
 test("a steering refusal renders as a quiet inline notice, not a crash", async ({ page }) => {

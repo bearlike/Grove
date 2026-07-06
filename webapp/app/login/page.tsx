@@ -168,8 +168,21 @@ function LoginPageInner() {
   }
 
   return (
-    <main className="grid min-h-dvh place-items-center p-4">
-      <Card className="w-full max-w-md">
+    <main className="grid min-h-dvh place-items-center px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2rem,env(safe-area-inset-top))]">
+      <div className="flex w-full max-w-md flex-col items-center gap-8">
+        {/* First-impression brand moment (brand.md §5): the mark large + the ONE
+            display-scale wordmark the app allows, over generous whitespace —
+            carried by scale and space alone, no gradient / glow / shadow. */}
+        <div className="flex flex-col items-center gap-3 text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/grove-logo.png" alt="" aria-hidden width={56} height={56} className="size-14" />
+          <h1 className="text-4xl font-semibold tracking-tight">Grove</h1>
+          <p className="max-w-xs text-sm text-muted-foreground">
+            Tend your agent worktrees like a forest.
+          </p>
+        </div>
+
+        <Card className="w-full">
         <CardHeader>
           <CardTitle>Pair this device</CardTitle>
           <CardDescription>
@@ -178,7 +191,12 @@ function LoginPageInner() {
               : "Grant this browser access to the Grove dashboard."}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        {/* Keyed by phase so each transition (pairing → approved …) cross-fades
+            in over 200ms instead of snapping — the very first motion on stage. */}
+        <CardContent
+          key={phase.kind}
+          className="motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200"
+        >
           {phase.kind === "idle" && (
             <div className="space-y-4">
               <label className="block space-y-2">
@@ -260,7 +278,8 @@ function LoginPageInner() {
             </Button>
           )}
         </CardFooter>
-      </Card>
+        </Card>
+      </div>
     </main>
   );
 }

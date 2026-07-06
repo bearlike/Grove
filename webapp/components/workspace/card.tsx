@@ -1,14 +1,23 @@
 "use client";
 import Link from "next/link";
-import { GitBranch, Radio } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowDownToLine,
+  ArrowUp,
+  ArrowUpFromLine,
+  FileDiff,
+  GitBranch,
+  MessagesSquare,
+  Radio,
+  Wrench,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "./status-badge";
 import { PlacementBadge } from "./placement-badge";
-import { StatTrio } from "./stat-trio";
 import { RelativeTime } from "@/components/shared/relative-time";
-import { MetaRow } from "@/components/shared/meta";
+import { Stat } from "@/components/shared/stat";
 import { AgentStateMark } from "@/components/shared/state-mark";
-import { AgentStateBadge } from "@/components/dashboard/agent-state-badge";
+import { LandingRing } from "@/components/shared/landing-ring";
 import { AgentLiveStatus } from "@/lib/grove/agent-activity";
 import { tierForActivity } from "@/lib/grove/activity-tier";
 import { parseCommitSubject } from "@/lib/grove/commit-format";
@@ -16,28 +25,44 @@ import { cn } from "@/lib/utils";
 import type { WorkspaceActivityView } from "@/lib/grove/types";
 
 /**
- * The ONE workspace card (issue #89, redesigned #96, restructured #98-followup) —
- * THREE explicit regions reading straight off `WorkspaceActivityView`, so a glance
- * resolves identity → activity → durable facts top-to-bottom:
+ * The ONE workspace card — rebuilt in the ADE language (issue #155), its metadata
+ * torn down to a single `Stat` grammar (#161). The pre-ADE card stacked THREE
+ * boxed regions and was the loudest tile on the wall; the #155 rebuild collapsed
+ * that to calm tiers, but its META still wore TWO rival dialects on adjacent rows
+ * (`main 0 ahead 0 behind 12 dirty` above `13t · 108⚒ · 18.9M↑ 160.3k↓`) — no
+ * icons, zeros as noise, per-row font drift. This card speaks the same calm
+ * `state mark · title · time` vocabulary as the v2 session rail row across three
+ * zones separated by space, not lines or a tinted well:
  *
- *   HEADER  (p-4) — `AgentStateMark` glyph · title link · ONE right-aligned status
- *     pill, then a quiet branch sub-row (mono teal `--ref-branch`). The state pill
- *     top-aligns so a wrapped two-line title never shoves it off-row.
- *   BODY    (px-4) — "happening now" (`AgentLiveStatus.taskLine`), `line-clamp-2`
- *     so a long task line stays readable instead of single-truncating to nothing
- *     (error detail wins the slot while erroring).
- *   FOOTER  (muted well, `bg-muted/40 border-t`) — metrics one-liner + the WORKING-
- *     gated Live toggle on row one; a `MetaRow` of diff `StatTrio` · last commit ·
- *     placement on row two. The well lifts the durable facts onto their own tier.
+ *   HEADER   — the canonical `AgentStateMark` glyph (the rail's own state atom,
+ *     not a second badge) · title link (ONE line, truncate) · a right-aligned
+ *     relative time. The lifecycle `StatusBadge` returns to this line ONLY when
+ *     it is itself the signal (no agent session, or a broken orphaned/error
+ *     lifecycle) — every healthy card wears zero pills.
+ *   CONTEXT  — "happening now" (`AgentLiveStatus.taskLine`), `line-clamp-1`;
+ *     error detail wins the slot while erroring, keeping the `· N bg` suffix.
+ *   META     — TWO aligned `Stat` rows on one 11px baseline grid (`h-5` line
+ *     boxes so card heights stay uniform across the grid), then the one prose
+ *     last-commit line. Row 1 = provenance (branch · ahead · behind · dirty ·
+ *     placement-when-root); row 2 = activity (turns · tool calls · tokens in ·
+ *     tokens out) with the WORKING-gated Live toggle pinned right. Every stat is
+ *     an icon + tabular value via `Stat` — the unit lives in the tooltip, a zero
+ *     renders NOTHING (no "0 ahead" noise). No footer well: tone breaks belong to
+ *     the page, not every card.
  *
- * Color discipline (deliverable D/E): the card border stays neutral; NO full-card
- * status ring/glow/fill, NO terracotta. Attention (waiting/blocked/error) is a
- * single thin LEFT accent bar in the tier accent var; the footer is the only
- * tinted surface, and only a neutral well. Live focus = a quiet "Live" toggle.
+ * Quiet-chrome discipline (design-system.md): the surface is `rounded-xl bg-card`
+ * on a `border-border/60` hairline; hover is a tonal shift + border-strengthen —
+ * NO shadow, NO translate lift, NO full-card status glow. Attention
+ * (waiting/blocked/error) keeps a single thin LEFT `border-l-2` accent bar in the
+ * tier accent var — the only on-card hue. Live focus is a quiet terracotta ring.
+ *
+ * Zero-loss: every datum the old card carried keeps a visible home here (a zero
+ * is suppressed, not lost — its stat reappears the instant it goes nonzero).
  *
  * Test seams kept stable: `data-testid="workspace-card"` + `data-status` +
- * `data-agent-state` + `data-tier`; `happening-now`, `metrics`, `last-commit`,
- * `live-toggle`, the title `<Link>`, and the status/state/stat-trio atoms.
+ * `data-agent-state` + `data-tier`; the `state-mark` glyph, `happening-now`,
+ * `last-commit`, `live-toggle`, `placement-badge`/`status-badge` atoms, the title
+ * `<Link>`, and each `Stat`'s `data-testid="stat"` + `data-stat="<label>"`.
  */
 export function WorkspaceCard({
   activity,
@@ -61,11 +86,11 @@ export function WorkspaceCard({
   const subagents = live.subagents;
   const lastCommit = activity.recent_commits[0] ?? null;
   const canGoLive = agentState === "working" && onToggleLive != null;
-  // Lifecycle badge only where it is itself the signal: no agent session to
-  // badge, or a broken lifecycle state worth surfacing over the agent axis.
+  // Lifecycle badge only where it is itself the signal: no agent session to badge
+  // on the agent axis, or a broken lifecycle state worth surfacing over it.
   const showStatus = primary == null || s.status === "orphaned" || s.status === "error";
   // Attention (waiting/blocked/error) earns a single thin left accent bar — the
-  // only on-card hue, never a full ring/fill (deliverable D).
+  // only on-card hue, never a full ring/fill (design quiet-chrome rule).
   const attention = treatment === "ring";
 
   return (
@@ -75,82 +100,81 @@ export function WorkspaceCard({
       data-agent-state={agentState}
       data-tier={tier}
       className={cn(
-        "group flex h-full flex-col overflow-hidden border-border p-0 transition-[transform,border-color] duration-200",
-        "hover:-translate-y-px hover:border-border/80",
-        // Attention (waiting/blocked/error) = a single thin LEFT accent bar in
-        // the tier accent var — the only on-card hue, never a full ring/fill.
+        "group relative flex h-full flex-col gap-2 overflow-hidden rounded-xl border-border/60 bg-card p-3.5 transition-colors",
+        "hover:border-border hover:bg-muted/40",
         attention && "border-l-2",
         liveOpen && "ring-2 ring-ring",
       )}
       style={attention ? { borderLeftColor: accentVar } : undefined}
     >
-      {/* ── HEADER: identity ───────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-1.5 p-4 pb-3">
-        <div className="flex items-start gap-2">
-          <AgentStateMark state={agentState} className="mt-[3px] shrink-0" />
-          <Link
-            href={`/w/${encodeURIComponent(s.id)}`}
-            title={`${s.title} — ${s.branch}`}
-            className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold leading-snug text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
-          >
-            {s.title}
-          </Link>
-          {showStatus ? (
-            <StatusBadge status={s.status} size="sm" />
-          ) : (
-            <AgentStateBadge state={agentState} />
+      {/* ── HEADER: state · title · time ───────────────────────────────────── */}
+      <div className="flex items-center gap-2">
+        <AgentStateMark state={agentState} className="shrink-0 text-[13px]" />
+        <Link
+          href={`/w/${encodeURIComponent(s.id)}`}
+          title={`${s.title} — ${s.branch}`}
+          className="min-w-0 flex-1 truncate text-sm font-medium leading-snug text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
+        >
+          {s.title}
+        </Link>
+        {showStatus && <StatusBadge status={s.status} size="sm" className="shrink-0" />}
+        <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          <RelativeTime iso={s.updated_at} />
+        </span>
+      </div>
+
+      {/* ── CONTEXT: what the agent is doing now (one line) ─────────────────── */}
+      {live.errorDetail ? (
+        <p
+          data-testid="happening-now"
+          className="line-clamp-1 text-[13px] leading-snug"
+          style={{ color: "var(--agent-error)" }}
+          title={live.errorDetail}
+        >
+          {live.errorDetail}
+        </p>
+      ) : (
+        <p
+          data-testid="happening-now"
+          className={cn(
+            "line-clamp-1 text-[13px] leading-snug",
+            happening ? "text-muted-foreground" : "italic text-muted-foreground/70",
           )}
-        </div>
+          title={happening ?? undefined}
+        >
+          {happening ?? (primary ? "no activity yet" : "no agent session")}
+          {subagents > 0 && (
+            <span className="text-muted-foreground/70">
+              {" · "}
+              {subagents} bg agent{subagents > 1 ? "s" : ""}
+            </span>
+          )}
+        </p>
+      )}
 
-        {/* Branch sub-row — durable identity given its own quiet line. */}
-        <div className="flex min-w-0 items-center gap-1.5 pl-[1.375rem] text-xs">
-          <GitBranch aria-hidden className="size-3 shrink-0 text-[var(--ref-branch)]" />
-          <span title={s.branch} className="truncate font-mono text-[var(--ref-branch)]">
-            {s.branch}
+      {/* ── META: two aligned Stat rows on one 11px baseline grid, then the
+          prose last-commit line. `h-5` line boxes + shared `gap-3` keep the
+          rhythm and card heights uniform across the grid; zeros self-suppress. */}
+      <div className="mt-auto flex flex-col gap-1 pt-0.5 text-[11px]">
+        {/* Row 1 — provenance: branch, then the git deltas. */}
+        <div className="flex h-5 items-center gap-3">
+          <span className="flex min-w-0 items-center gap-1 text-[var(--ref-branch)]">
+            <GitBranch aria-hidden className="size-3 shrink-0" />
+            <span title={s.branch} className="truncate font-mono">
+              {s.branch}
+            </span>
           </span>
+          <Stat icon={ArrowUp} value={activity.base_ahead} label="ahead" tone="add" />
+          <Stat icon={ArrowDown} value={activity.base_behind} label="behind" tone="remove" />
+          <Stat icon={FileDiff} value={activity.dirty_files} label="dirty" />
+          <PlacementBadge placement={s.placement} size="sm" className="ml-auto shrink-0" />
         </div>
-      </div>
-
-      {/* ── BODY: what the agent is doing now (up to two lines) ─────────────── */}
-      <div className="px-4 pb-3">
-        {live.errorDetail ? (
-          <p
-            data-testid="happening-now"
-            className="line-clamp-2 text-[13px] leading-snug"
-            style={{ color: "var(--agent-error)" }}
-            title={live.errorDetail}
-          >
-            {live.errorDetail}
-          </p>
-        ) : (
-          <p
-            data-testid="happening-now"
-            className={cn(
-              "line-clamp-2 text-[13px] leading-snug",
-              happening ? "text-foreground/90" : "italic text-muted-foreground/70",
-            )}
-            title={happening ?? undefined}
-          >
-            {happening ?? (primary ? "no activity yet" : "no agent session")}
-            {subagents > 0 && (
-              <span className="text-muted-foreground">
-                {" · "}
-                {subagents} bg agent{subagents > 1 ? "s" : ""}
-              </span>
-            )}
-          </p>
-        )}
-      </div>
-
-      {/* ── FOOTER: durable facts on their own muted well ──────────────────── */}
-      <div className="mt-auto flex flex-col gap-1.5 border-t border-border bg-muted/40 px-4 py-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <span
-            data-testid="metrics"
-            className="truncate font-mono text-xs tabular-nums text-muted-foreground"
-          >
-            {live.metricsLine ?? "—"}
-          </span>
+        {/* Row 2 — activity: turns, tool calls, tokens; Live toggle pinned right. */}
+        <div className="flex h-5 items-center gap-3">
+          <Stat icon={MessagesSquare} value={live.turns} label="turns" />
+          <Stat icon={Wrench} value={live.toolCalls} label="tool calls" />
+          <Stat icon={ArrowDownToLine} value={live.tokensIn} label="tokens in" />
+          <Stat icon={ArrowUpFromLine} value={live.tokensOut} label="tokens out" />
           {canGoLive && (
             <button
               type="button"
@@ -158,7 +182,7 @@ export function WorkspaceCard({
               aria-pressed={liveOpen}
               onClick={() => onToggleLive?.(s.id)}
               className={cn(
-                "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                "ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                 liveOpen
                   ? "text-[var(--agent-working)]"
                   : "text-muted-foreground hover:text-foreground",
@@ -169,22 +193,18 @@ export function WorkspaceCard({
             </button>
           )}
         </div>
-
-        <MetaRow>
-          <StatTrio
-            ahead={activity.base_ahead}
-            behind={activity.base_behind}
-            dirty={activity.dirty_files}
-          />
-          <LastCommit lastCommit={lastCommit} />
-          <PlacementBadge placement={s.placement} size="sm" />
-        </MetaRow>
+        {/* The one prose line — not a stat, so it lives outside the grammar. */}
+        <LastCommit lastCommit={lastCommit} />
       </div>
+
+      {/* One-shot terracotta ring the moment a just-created workspace lands in
+          the grid — decays to nothing (see LandingRing). */}
+      <LandingRing landedAt={s.created_at} />
     </Card>
   );
 }
 
-/** The footer's last-commit slot — parsed tag + clean subject + relative time
+/** The meta row's last-commit slot — parsed tag + clean subject + relative time
  *  (no gitmoji); a stable `last-commit` seam whether or not a commit exists. */
 function LastCommit({ lastCommit }: { lastCommit: WorkspaceActivityView["recent_commits"][number] | null }) {
   if (!lastCommit) {

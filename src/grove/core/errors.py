@@ -135,6 +135,22 @@ class QuestionAnswerInvalid(GroveError):
     """
 
 
+# ─── resume validation (raised by WorkspaceManager.create) ──────────────────
+
+
+class ResumeNotSupported(GroveError):
+    """A create named ``resume_session_id`` for an agent kind that can't resume
+    an existing session by explicit id (#120).
+
+    Only filesystem CLI kinds carry a resume handle — ``claude_code``
+    (``claude --resume <id>``) and ``codex`` (``codex resume <id>``). A remote
+    (mewbo) session or a generic/shell agent has no such mechanism, so naming a
+    resume id for one is a malformed request, not a runtime failure. Raised at
+    create()'s validation gate before any side effect. Maps to 422 at the daemon
+    edge — the request is well-formed but semantically invalid for this agent.
+    """
+
+
 # ─── branch validation errors (raised by WorkspaceManager.create) ───────────
 
 

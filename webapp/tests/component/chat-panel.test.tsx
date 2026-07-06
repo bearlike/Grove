@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ChatPanel } from "@/components/chat/chat-panel";
@@ -10,6 +10,15 @@ import type {
   SessionDetailView,
   SessionSummaryView,
 } from "@/lib/grove/types";
+
+// Session selection + the activity snapshot are page-owned since #130, so the
+// panel is a pure renderer: it takes the resolved `sessionId`, the activity
+// `snapshot` (source of live pending questions), and the selected session's
+// `agentState`. These tests exercise that prop contract — transcript,
+// notifications, and the live pending-question flow — driving question changes
+// by re-rendering with a new snapshot rather than polling `/activity`. The
+// session-picker cascade + remap now live at the page; their contract is pinned
+// by `session-picker.test.tsx` (the control) + `chat.spec.ts` (the integration).
 
 const SESSION: SessionSummaryView = {
   session_id: "s1",
@@ -61,22 +70,38 @@ const DETAIL: SessionDetailView = {
   ],
 };
 
-/** Route the panel's two reads by URL — sessions list, then the turns digest. */
-function stubFetch() {
-  const json = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: RequestInfo | URL) => {
-      const u = String(url);
-      if (u.includes("/turns")) return json(DETAIL);
-      if (u.includes("/sessions")) return json([SESSION]);
-      throw new Error(`unexpected fetch ${u}`);
-    }),
-  );
+/** Route the panel's one read (the turns digest) by URL. */
+function stubTurns() {
+  vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => turnsRouter(url)));
+}
+
+const json = (body: unknown) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
+async function turnsRouter(url: RequestInfo | URL): Promise<Response> {
+  const u = String(url);
+  if (u.includes("/turns")) return json(DETAIL);
+  throw new Error(`unexpected fetch ${u}`);
+}
+
+/** `stubTurns` plus routing for the answer POST (the live pending-question
+ *  flow). The pending group itself arrives via the `snapshot` PROP, not a
+ *  fetch — so no `/activity` routing is needed here anymore. */
+function stubAnswer(answerResponse: Response = new Response(null, { status: 204 })) {
+  const answerCalls: unknown[] = [];
+  const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("/question-answer")) {
+      answerCalls.push(init?.body ? JSON.parse(String(init.body)) : undefined);
+      return answerResponse;
+    }
+    return turnsRouter(url);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock, answerCalls };
 }
 
 const QUESTION: AgentQuestionView = {
@@ -111,11 +136,11 @@ const TOPPINGS: AgentQuestionView = {
   source_tool: "AskUserQuestion",
 };
 
-/** One-workspace/one-session `DashboardSnapshotView` carrying a live pending
- * question GROUP on `w1`'s `s1` session — jsdom has no `EventSource`, so
- * `useActivityStream` falls back to polling `/activity`, which is how the
- * chat panel is meant to learn about a pending group in these tests. */
-function activitySnapshotWithQuestions(questions: AgentQuestionView[]): DashboardSnapshotView {
+/** One-workspace `DashboardSnapshotView` carrying a live pending question GROUP
+ * on `w1`'s session `s1` — the page reads exactly this off `useActivityStream`
+ * and hands it down as the `snapshot` prop. `state` flips to "blocked" while a
+ * group is pending so the fixture stays coherent with the questions it holds. */
+function snapshotWithQuestions(questions: AgentQuestionView[]): DashboardSnapshotView {
   const activity: AgentActivityView = {
     state: questions.length > 0 ? "blocked" : "working",
     title: null,
@@ -162,38 +187,23 @@ function activitySnapshotWithQuestions(questions: AgentQuestionView[]): Dashboar
   };
 }
 
-/** `stubFetch` plus routing for the activity poll (live pending question
- * group) and the answer POST — kept separate from `stubFetch` so the
- * existing tests above stay exactly as they were (their background
- * `/activity` poll just fails silently, as today). */
-function stubFetchWithActivity(
-  questions: AgentQuestionView[],
-  answerResponse: Response = new Response(null, { status: 204 }),
-) {
-  const json = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  const answerCalls: unknown[] = [];
-  const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-    const u = String(url);
-    if (u.includes("/question-answer")) {
-      answerCalls.push(init?.body ? JSON.parse(String(init.body)) : undefined);
-      return answerResponse;
-    }
-    if (u.includes("/turns")) return json(DETAIL);
-    if (u.includes("/sessions")) return json([SESSION]);
-    if (u.includes("/activity")) return json(activitySnapshotWithQuestions(questions));
-    throw new Error(`unexpected fetch ${u}`);
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, answerCalls };
+function makeClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
-function r(node: React.ReactNode) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{node}</QueryClientProvider>);
+/** Render the panel as the page would: the resolved session `s1` + a snapshot. */
+function renderPanel(
+  {
+    snapshot = null,
+    agentState = "idle",
+  }: { snapshot?: DashboardSnapshotView | null; agentState?: AgentActivityView["state"] } = {},
+  qc = makeClient(),
+) {
+  return render(
+    <QueryClientProvider client={qc}>
+      <ChatPanel workspaceId="w1" sessionId="s1" snapshot={snapshot} agentState={agentState} />
+    </QueryClientProvider>,
+  );
 }
 
 beforeEach(() => {
@@ -202,8 +212,8 @@ beforeEach(() => {
 
 describe("ChatPanel", () => {
   it("tags each bubble with an IRC-style speaker label: you (clay) / agent (blue)", async () => {
-    stubFetch();
-    r(<ChatPanel workspaceId="w1" />);
+    stubTurns();
+    renderPanel();
 
     const messages = await screen.findAllByTestId("chat-message");
     const user = messages.find((m) => m.dataset.role === "user");
@@ -227,8 +237,8 @@ describe("ChatPanel", () => {
   });
 
   it("renders a notification as a quiet row: summary visible, result behind a disclosure", async () => {
-    stubFetch();
-    r(<ChatPanel workspaceId="w1" />);
+    stubTurns();
+    renderPanel();
 
     const note = await screen.findByTestId("chat-notification");
     expect(note).toHaveTextContent("Background task completed: Explore");
@@ -240,9 +250,29 @@ describe("ChatPanel", () => {
     expect(note).toHaveTextContent("The full subagent result body.");
   });
 
-  it("renders a live pending question from the activity stream (not /turns) as an interactive card", async () => {
-    stubFetchWithActivity([QUESTION]);
-    r(<ChatPanel workspaceId="w1" />);
+  it("clamps the user bubble by default, keeps the full text in the DOM, and hides the toggle without layout (jsdom)", async () => {
+    // #128's SmartCollapse contract, ported to the #130 prop-driven panel.
+    stubTurns();
+    renderPanel();
+
+    const messages = await screen.findAllByTestId("chat-message");
+    const user = messages.find((m) => m.dataset.role === "user")!;
+    expect(user).toBeDefined();
+
+    // The full prompt is always mounted — collapse is visual, never a truncation.
+    expect(user).toHaveTextContent("ship it");
+
+    // The clamp wrapper carries the collapse seam and is collapsed by default.
+    const clamp = within(user).getByTestId("user-message-collapse");
+    expect(clamp).toHaveAttribute("data-collapsed", "true");
+
+    // jsdom has no layout (scrollHeight 0), so nothing overflows → no toggle.
+    expect(within(user).queryByTestId("user-message-toggle")).toBeNull();
+  });
+
+  it("renders a live pending question from the snapshot (not /turns) as an interactive card", async () => {
+    stubTurns();
+    renderPanel({ snapshot: snapshotWithQuestions([QUESTION]), agentState: "blocked" });
 
     const card = await screen.findByTestId("pending-question-card");
     expect(card).toHaveTextContent("Which migration strategy?");
@@ -250,9 +280,9 @@ describe("ChatPanel", () => {
   });
 
   it("answering a lone single-select question POSTs the plan to /question-answer", async () => {
-    const { answerCalls } = stubFetchWithActivity([QUESTION]);
+    const { answerCalls } = stubAnswer();
     const user = userEvent.setup();
-    r(<ChatPanel workspaceId="w1" />);
+    renderPanel({ snapshot: snapshotWithQuestions([QUESTION]), agentState: "blocked" });
 
     const buttons = await screen.findAllByTestId("question-option-button");
     await user.click(buttons[1]);
@@ -266,9 +296,9 @@ describe("ChatPanel", () => {
   });
 
   it("a genuine multi-question batch renders as ONE group and submits ONE POST with N ordered answers", async () => {
-    const { answerCalls } = stubFetchWithActivity([QUESTION, TOPPINGS]);
+    const { answerCalls } = stubAnswer();
     const user = userEvent.setup();
-    r(<ChatPanel workspaceId="w1" />);
+    renderPanel({ snapshot: snapshotWithQuestions([QUESTION, TOPPINGS]), agentState: "blocked" });
 
     const card = await screen.findByTestId("pending-question-card");
     expect(card).toHaveTextContent("Which migration strategy?");
@@ -301,9 +331,9 @@ describe("ChatPanel", () => {
       JSON.stringify({ detail: { error: "question_not_pending", message: "already resolved" } }),
       { status: 409, headers: { "content-type": "application/json" } },
     );
-    stubFetchWithActivity([QUESTION], refusal);
+    stubAnswer(refusal);
     const user = userEvent.setup();
-    r(<ChatPanel workspaceId="w1" />);
+    renderPanel({ snapshot: snapshotWithQuestions([QUESTION]), agentState: "blocked" });
 
     const buttons = await screen.findAllByTestId("question-option-button");
     await user.click(buttons[0]);
@@ -314,9 +344,9 @@ describe("ChatPanel", () => {
     expect(screen.queryByTestId("question-option-button")).toBeNull();
   });
 
-  it("renders nothing extra when the activity stream reports no pending questions", async () => {
-    stubFetchWithActivity([]);
-    r(<ChatPanel workspaceId="w1" />);
+  it("renders nothing extra when the snapshot reports no pending questions", async () => {
+    stubTurns();
+    renderPanel({ snapshot: snapshotWithQuestions([]), agentState: "working" });
 
     await screen.findAllByTestId("chat-message");
     expect(screen.queryByTestId("pending-question-card")).toBeNull();
@@ -335,57 +365,35 @@ describe("ChatPanel", () => {
       answer: null,
       source_tool: "AskUserQuestion",
     };
-    const json = (body: unknown) =>
-      new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    const answerCalls: unknown[] = [];
-    let answered = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-        const u = String(url);
-        if (u.includes("/question-answer")) {
-          answerCalls.push(init?.body ? JSON.parse(String(init.body)) : undefined);
-          answered = true;
-          return new Response(null, { status: 204 });
-        }
-        if (u.includes("/turns")) return json(DETAIL);
-        if (u.includes("/sessions")) return json([SESSION]);
-        // The activity poll reports the ORIGINAL group until a fresh read is
-        // forced below — that's the "still the same pending group after a
-        // resolved POST" window the latch must survive.
-        if (u.includes("/activity")) {
-          return json(activitySnapshotWithQuestions([answered ? NEXT_QUESTION : QUESTION]));
-        }
-        throw new Error(`unexpected fetch ${u}`);
-      }),
-    );
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    stubAnswer();
+    const qc = makeClient();
     const user = userEvent.setup();
-    render(
-      <QueryClientProvider client={qc}>
-        <ChatPanel workspaceId="w1" />
-      </QueryClientProvider>,
-    );
+    const view = renderPanel({ snapshot: snapshotWithQuestions([QUESTION]), agentState: "blocked" }, qc);
 
     const buttons = await screen.findAllByTestId("question-option-button");
     await user.click(buttons[0]); // lone single-select auto-submits
-    await waitFor(() => expect(answerCalls).toHaveLength(1));
 
-    // The 204 resolved (isPending cleared), but the stream hasn't reported a
-    // new group yet — controls must stay disabled (isSuccess latches
-    // `submitting`), not silently re-enable for a beat.
+    // The 204 resolved (isPending cleared), but the snapshot still reports the
+    // SAME group — controls must stay disabled (isSuccess latches `submitting`),
+    // not silently re-enable for a beat.
     await waitFor(() => {
       const stillButtons = screen.getAllByTestId("question-option-button");
       expect(stillButtons[0]).toBeDisabled();
     });
 
-    // Force the next activity read (mirrors the real poll noticing the group
-    // resolved and moving to the next one) — the effect resets the mutation
-    // on `liveGroupId` change, so the NEW group's controls come back enabled.
-    await qc.invalidateQueries({ queryKey: ["activity"] });
+    // The page's next snapshot names the NEXT group (the poll noticing the old
+    // one resolved) — the effect resets the mutation on `liveGroupId` change, so
+    // the new group's controls come back enabled.
+    view.rerender(
+      <QueryClientProvider client={qc}>
+        <ChatPanel
+          workspaceId="w1"
+          sessionId="s1"
+          snapshot={snapshotWithQuestions([NEXT_QUESTION])}
+          agentState="blocked"
+        />
+      </QueryClientProvider>,
+    );
 
     await waitFor(
       () => {
@@ -394,5 +402,39 @@ describe("ChatPanel", () => {
       },
       { timeout: 3000 },
     );
+  });
+
+  // The empty-state seam (#132): with no tracked session the panel shows an
+  // empty state — generic by default, but a "track a session" CTA when the page
+  // hands down a picker (its presence IS the "candidates exist" signal).
+  it("keeps the generic empty state when nothing is tracked and no candidates exist", () => {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <ChatPanel workspaceId="w1" sessionId={null} snapshot={null} agentState="idle" />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("No conversation yet")).toBeInTheDocument();
+    expect(screen.getByText("Send a message to steer the agent.")).toBeInTheDocument();
+    expect(screen.queryByText("No session tracked")).toBeNull();
+  });
+
+  it("swaps in the track-a-session CTA when candidates exist but none is tracked (#132)", () => {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <ChatPanel
+          workspaceId="w1"
+          sessionId={null}
+          snapshot={null}
+          agentState="idle"
+          emptyStatePicker={<div data-testid="stub-track-picker">picker</div>}
+        />
+      </QueryClientProvider>,
+    );
+    // Distinct calm copy + the picker mounted right in the empty state; the
+    // generic "send a message" copy is gone.
+    expect(screen.getByText("No session tracked")).toBeInTheDocument();
+    expect(screen.getByText("Pick the session Grove should follow.")).toBeInTheDocument();
+    expect(screen.getByTestId("stub-track-picker")).toBeInTheDocument();
+    expect(screen.queryByText("No conversation yet")).toBeNull();
   });
 });

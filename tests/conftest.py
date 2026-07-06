@@ -33,6 +33,30 @@ def _offline_release_check(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _offline_codex_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may shell out to a real ``codex`` for its model catalog.
+
+    Patches the module-level subprocess seam so a default ``CodexAdapter``
+    (the registry singleton) reads a fixed in-memory catalog instead of running
+    ``codex debug models``. Same discipline as ``_offline_release_check`` and the
+    fake tmux/git seams — real I/O never runs under pytest. A test that wants a
+    specific catalog (or an unreadable one) re-patches ``_probe_codex_models``,
+    or exercises the pure ``_parse_codex_models`` directly.
+    """
+    catalog = (
+        '{"models":['
+        '{"slug":"gpt-5.5","visibility":"list","priority":0},'
+        '{"slug":"gpt-5.4","visibility":"list","priority":1},'
+        '{"slug":"codex-auto-review","visibility":"hide","priority":2}'
+        "]}"
+    )
+    monkeypatch.setattr(
+        "grove.core.agents.codex._probe_codex_models",
+        lambda binary: catalog,
+    )
+
+
 # ─── on-disk paths redirected to a tmpdir ───────────────────────────────────
 
 

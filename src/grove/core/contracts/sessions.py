@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from grove.core.contracts.activity import AgentActivityView
 from grove.core.contracts.questions import (
@@ -29,6 +29,24 @@ from grove.core.contracts.questions import (
 if TYPE_CHECKING:
     from grove.core.agents import DigestEntry, SessionTurn
     from grove.core.sessions import SessionListing
+
+
+class RemapSessionRequest(BaseModel):
+    """Body for ``POST /workspaces/{id}/session`` — pin an existing agent session
+    as a workspace's tracked primary (#120).
+
+    ``session_ref`` is a session id or a unique id-prefix, resolved through the
+    workspace's project scope (the same resolution ``grove sessions show``
+    accepts). Lives here beside ``SessionSummaryView`` — it is a session-domain
+    write, not part of the create-workspace shape — mirroring the way
+    ``QuestionAnswerRequest`` sits with the question views. The daemon answers
+    with the updated ``WorkspaceStateView``, like the other mutation verbs.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_ref: str = Field(min_length=1)
+    """A full agent-session id or a unique id-prefix within the project."""
 
 
 class DigestEntryView(BaseModel):

@@ -44,11 +44,26 @@ export interface DashboardFacets {
 
 /** Project + agent-state distribution of the whole snapshot — feeds the sidebar (live counts). */
 export function computeFacets(snapshot: DashboardSnapshotView): DashboardFacets {
-  const projects = snapshot.projects.map((g) => ({
-    repo_root: g.repo_root,
-    repo_name: g.repo_name,
-    count: g.workspaces.length,
-  }));
+  // Nested-project groups (#101) share a `repo_root` but differ in `cwd`; the
+  // rail's per-repo sessions source (`GET /sessions?repo=`) has no per-subpath
+  // scoping, so a facet-level section is per-REPO, not per-group — collapse by
+  // `repo_root` here (first occurrence's `repo_name` wins, counts sum) so a
+  // repo with N nested cwds renders one rail section instead of N duplicate-
+  // keyed ones each listing the whole repo (#151).
+  const byRoot = new Map<string, { repo_root: string; repo_name: string; count: number }>();
+  for (const g of snapshot.projects) {
+    const existing = byRoot.get(g.repo_root);
+    if (existing) {
+      existing.count += g.workspaces.length;
+    } else {
+      byRoot.set(g.repo_root, {
+        repo_root: g.repo_root,
+        repo_name: g.repo_name,
+        count: g.workspaces.length,
+      });
+    }
+  }
+  const projects = [...byRoot.values()];
   const stateCounts = new Map<AgentActivityState, number>();
   let attention = 0;
   let total = 0;

@@ -35,6 +35,7 @@ from textual.widgets import (
 )
 
 from grove.core import AgentSpec, GroveConfig
+from grove.core.agents import resolve_models
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import (
     AutoBranch,
@@ -308,6 +309,8 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
     _PREVIEW_TITLE_PLACEHOLDER: ClassVar[str] = "<title>"
     _PREVIEW_BRANCH_PLACEHOLDER: ClassVar[str] = "<branch>"
     _PREVIEW_REMOTE_PLACEHOLDER: ClassVar[str] = "<remote>"
+    _MODEL_HINT_FALLBACK: ClassVar[str] = "e.g. sonnet, opus, gpt-5.5"
+    _MODEL_HINT_CAP: ClassVar[int] = 8
 
     def __init__(
         self,
@@ -345,6 +348,26 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         self._existing_block = _ExistingLocalBlock(local_opts)
         self._remote_block = _TrackRemoteBlock(remote_opts)
         self._root_block = _RootBlock(self._current_branch_name())
+        self._model_hint = self._build_model_hint()
+
+    def _build_model_hint(self) -> str:
+        """Placeholder text for the model input: the union of every configured
+        agent's resolved model catalog (``agents.resolve_models`` — the same
+        seam the daemon/webapp use), deduped and capped to a glance-width list.
+
+        Deliberately NOT reactive to the agent Select (KISS — a static hint
+        computed once at open time is enough context to type a plausible id;
+        the field never validates against this list, so a stale hint after an
+        agent switch costs nothing but a slightly-off suggestion).
+        """
+        seen: dict[str, None] = {}
+        for spec in self._agents:
+            models = resolve_models(kind=spec.kind, command=spec.command, configured=spec.models)
+            for model in models:
+                seen.setdefault(model, None)
+        if not seen:
+            return self._MODEL_HINT_FALLBACK
+        return "e.g. " + ", ".join(tuple(seen)[: self._MODEL_HINT_CAP])
 
     def _current_branch_name(self) -> str:
         """Branch HEAD points to, read from ``local_branches``.
@@ -396,6 +419,8 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 id="agent",
                 allow_blank=False,
             )
+            yield Label("Model (blank = agent default):", classes="field-label")
+            yield Input(placeholder=self._model_hint, id="model")
             yield Label("Title:", classes="field-label")
             yield Input(placeholder="my-task", id="title")
             yield Label("Branch:", classes="field-label")
@@ -600,12 +625,14 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             self.app.bell()
             return
         skip_init = self.query_one("#skip-init", Checkbox).value
+        model = self.query_one("#model", Input).value.strip() or None
         try:
             request = CreateWorkspaceRequest(
                 agent_name=str(self.query_one("#agent", Select).value),
                 title=title,
                 branch_plan=plan,
                 skip_init=skip_init,
+                model=model,
             )
         except Exception:
             self.app.bell()

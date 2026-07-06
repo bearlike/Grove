@@ -50,6 +50,27 @@ describe("computeFacets (FROZEN — sidebar input)", () => {
     const states = Object.fromEntries(f.states.map((s) => [s.state, s.count]));
     expect(states).toMatchObject({ working: 1, waiting: 1, unknown: 1 });
   });
+
+  it("collapses nested-project groups (shared repo_root, different cwd) to one facet entry (#151)", () => {
+    // The engine emits one ProjectGroup per (repo_root, cwd) for nested projects
+    // (#101) — two groups here share "/r1" but scope different subpaths.
+    const nested: DashboardSnapshotView = {
+      projects: [
+        { repo_root: "/r1", repo_name: "r1", cwd: "/r1", workspaces: [workspace("a", "working")] },
+        {
+          repo_root: "/r1",
+          repo_name: "r1",
+          cwd: "/r1/services/api",
+          workspaces: [workspace("b", "waiting")],
+        },
+      ],
+      generated_at: "2026-06-01T00:00:00Z",
+      total_workspaces: 2,
+      needs_attention: 1,
+    };
+    const f = computeFacets(nested);
+    expect(f.projects).toEqual([{ repo_root: "/r1", repo_name: "r1", count: 2 }]);
+  });
 });
 
 describe("selectSections (the grid selector)", () => {

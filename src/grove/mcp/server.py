@@ -117,6 +117,7 @@ class GroveMcpServer:
         for fn, name in (
             (t.list_workspaces, "grove_list_workspaces"),
             (t.get_workspace, "grove_get_workspace"),
+            (t.list_agents, "grove_list_agents"),
             (t.create_workspace, "grove_create_workspace"),
             (t.peek_workspace, "grove_peek_workspace"),
             (t.pause_workspace, "grove_pause_workspace"),
@@ -125,6 +126,7 @@ class GroveMcpServer:
             (t.kill_workspace, "grove_kill_workspace"),
             (t.attach_instruction, "grove_attach_instruction"),
             (t.send_workspace_message, "grove_send_workspace_message"),
+            (t.remap_workspace_session, "grove_remap_workspace_session"),
         ):
             self._mcp.add_tool(fn, name=name)
 

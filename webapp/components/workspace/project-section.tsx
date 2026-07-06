@@ -32,7 +32,7 @@ export function ProjectSection({
     <section data-testid="project-section" data-repo={section.repo_root} className="flex flex-col gap-2">
       <h2
         data-testid="project-section-header"
-        className="flex items-baseline gap-2 px-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
+        className="flex items-baseline gap-2 px-2.5 text-xs font-medium text-muted-foreground"
       >
         <span className="truncate">{section.repo_name}</span>
         <span className="tabular-nums text-muted-foreground/60">{section.workspaces.length}</span>

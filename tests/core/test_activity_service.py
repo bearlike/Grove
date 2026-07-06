@@ -17,7 +17,7 @@ import pytest
 
 from grove.core.activity import ActivityService, DashboardDelta, SessionActivity, WorkspaceActivity
 from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
-from grove.core.agents.claude_code import _ClaudeHome
+from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
 from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
@@ -660,8 +660,16 @@ def test_settled_working_expires_into_honest_starting(
     mgr = registry.get(repo)
 
     def state_at(now: datetime) -> AgentActivityState:
+        sidecar = ClaudeHook.read(sid, sidecar_dir=sidecar_dir)
         return service._session_activity(
-            mgr, state, "claude_code", sid, "grove_launched", now
+            mgr,
+            state,
+            "claude_code",
+            sid,
+            "grove_launched",
+            now,
+            sidecar=sidecar,
+            cwd=state.agent_cwd,
         ).activity.state
 
     # Tick 1 (within the sidecar window): the push wins, WORKING settles.
@@ -740,10 +748,13 @@ def test_fs_discovery_surfaces_handstarted_session(
     worktree = Path(state.worktree_path)
     folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
     folder.mkdir(parents=True)
-    # A session the user started by hand in the worktree — same cwd, different id.
+    # A session the user started by hand in the worktree CONCURRENTLY — same cwd,
+    # different id, born after the workspace so the birth gate adopts it (#F5: a
+    # transcript predating the workspace is excluded as history, tested below).
+    born_after = _iso(state.created_at + timedelta(seconds=5))
     (folder / "99999999-9999-4999-8999-999999999999.jsonl").write_text(
         f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
-        '"timestamp":"2026-06-01T10:00:00.000Z","isSidechain":false,'
+        f'"timestamp":"{born_after}","isSidechain":false,'
         '"message":{"role":"user","content":"hand started"}}\n',
         encoding="utf-8",
     )
@@ -975,6 +986,509 @@ def test_root_workspace_never_promotes_stale_repo_root_session_to_primary(
     assert row.primary.state is AgentActivityState.STARTING
     assert row.primary.current_task != "leftover from a prior life"
     assert row.sessions[0].session.session_id != stale_sid
+
+
+# ─── #117 dead-pointer recovery + resumed-session sidecar adoption ───────────
+
+
+def test_sessionend_dead_pointer_recovers_resumed_session(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The 2026-07-05 live incident, end to end. Grove minted M and launched
+    ``claude --session-id M``, but the user resumed a pre-existing session R in
+    the pane. M ends almost immediately — its OWN SessionEnd sidecar settles the
+    blend to IDLE (not STARTING/UNKNOWN), so the dead pointer read as live and
+    recovery never ran (defect A). R was born long before this workspace, so
+    birth alone can never adopt it (defect B) — but its post-create SessionStart
+    sidecar in this cwd does. R must become primary; the dead M rides behind."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="resumed"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    assert minted is not None
+
+    # M ends 7s after create — SessionEnd settles the blend to IDLE.
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionEnd", "session_id": minted, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%479",
+        now=state.created_at + timedelta(seconds=7),
+    )
+    # R: resumed in the pane, born 23 min BEFORE this workspace, but live here
+    # now (fresh transcript + a post-create SessionStart sidecar in this cwd).
+    resumed = "deadbeef-0000-4000-8000-000000000000"
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    born_before = _iso(state.created_at - timedelta(minutes=23))
+    (folder / f"{resumed}.jsonl").write_text(
+        f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
+        f'"timestamp":"{born_before}","isSidechain":false,'
+        '"message":{"role":"user","content":"resumed conversation"}}\n',
+        encoding="utf-8",
+    )
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": resumed, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%479",
+        now=state.created_at + timedelta(seconds=8),
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    assert row.primary is not None
+    assert row.sessions[0].session.session_id == resumed
+    assert row.sessions[0].session.provenance == "fs_discovered"
+    assert row.primary.current_task == "resumed conversation"
+    assert row.primary.state is not AgentActivityState.STARTING
+    # The dead minted pointer rides behind rather than being dropped.
+    assert row.sessions[-1].session.session_id == minted
+
+
+def test_resumed_session_adopted_via_sidecar_evidence(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The live incident (#F1): the minted --session-id went dead (user /resume'd
+    in the pane), and the resumed session — born BEFORE the workspace — is
+    adopted because its post-create sidecar shares the SAME pane the minted
+    session's sidecar recorded (the reference pane). Birth alone rejected it;
+    pane-verified live-here evidence carries it, and the dead minted entry yields
+    the primary slot."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="resumed"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    assert minted is not None
+
+    # The minted id is a dead pointer: SessionEnd, no transcript — its sidecar
+    # pins the workspace's reference pane (%12).
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionEnd", "session_id": minted, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%12",
+        now=state.created_at + timedelta(seconds=2),
+    )
+
+    resumed = "abcabc00-0000-4000-8000-000000000000"
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    born_before = _iso(state.created_at - timedelta(minutes=30))
+    (folder / f"{resumed}.jsonl").write_text(
+        f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
+        f'"timestamp":"{born_before}","isSidechain":false,'
+        '"message":{"role":"user","content":"resumed here"}}\n',
+        encoding="utf-8",
+    )
+    # The resumed session is live in the SAME pane %12 after creation.
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": resumed, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%12",
+        now=state.created_at + timedelta(seconds=5),
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    ids = [s.session.session_id for s in row.sessions]
+    assert ids[0] == resumed  # recovery promotes the resumed session to primary
+    assert minted in ids  # the dead minted entry rides behind
+    assert row.primary is not None
+    assert row.primary.current_task == "resumed here"
+
+
+def test_cross_tenant_live_session_rejected_on_pane_mismatch(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """#F1: a workspace must NOT adopt another live workspace's session that
+    happens to share its cwd (the ROOT-placement hole). The other tenant's
+    sidecar keeps refreshing ``ts >= created_at`` with the same cwd, but its pane
+    differs from THIS workspace's reference pane (the minted session's), so the
+    live-here evidence is rejected and only our own session stands."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="tenant-a"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    assert minted is not None
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+
+    # Our own materialized session, its sidecar pinning the reference pane %1.
+    mine_born = _iso(state.created_at + timedelta(seconds=1))
+    (folder / f"{minted}.jsonl").write_text(
+        f'{{"type":"user","uuid":"m","cwd":"{worktree}","timestamp":"{mine_born}",'
+        '"isSidechain":false,"message":{"role":"user","content":"mine"}}\n',
+        encoding="utf-8",
+    )
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": minted, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%1",
+        now=state.created_at + timedelta(seconds=1),
+    )
+    # A DIFFERENT live workspace's session, sharing this cwd, refreshing after our
+    # creation — but in pane %2. Born before us, so only pane-live could adopt it.
+    tenant_b = "bbbbbbbb-0000-4000-8000-000000000000"
+    (folder / f"{tenant_b}.jsonl").write_text(
+        f'{{"type":"user","uuid":"b","cwd":"{worktree}",'
+        f'"timestamp":"{_iso(state.created_at - timedelta(hours=1))}",'
+        '"isSidechain":false,"message":{"role":"user","content":"theirs"}}\n',
+        encoding="utf-8",
+    )
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": tenant_b, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%2",
+        now=state.created_at + timedelta(seconds=5),
+    )
+
+    ids = [s.session.session_id for s in service.snapshot().projects[0].workspaces[0].sessions]
+    assert minted in ids
+    assert tenant_b not in ids  # pane mismatch → not ours
+
+
+def test_minted_card_excludes_historical_session(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """#F5: a discovered session predating the workspace (no live-here sidecar) is
+    excluded from the card entirely — history is rejected on cheap birth metadata
+    before any full parse, so per-tick cost stays O(new sessions)."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="hist"))
+    worktree = Path(state.worktree_path)
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    born_before = _iso(state.created_at - timedelta(days=3))
+    (folder / "11110000-0000-4000-8000-000000000000.jsonl").write_text(
+        f'{{"type":"user","uuid":"h","cwd":"{worktree}","timestamp":"{born_before}",'
+        '"isSidechain":false,"message":{"role":"user","content":"old work"}}\n',
+        encoding="utf-8",
+    )
+
+    sessions = service.snapshot().projects[0].workspaces[0].sessions
+    ids = [s.session.session_id for s in sessions]
+    assert ids == [state.agent_session_id]  # only the minted session; history excluded
+
+
+def test_historical_sessions_never_full_parsed(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """#F5: the O(new sessions) cost guarantee. A full ``parse_activity`` is paid
+    for the minted session and any ADOPTED candidate only; historical transcripts
+    are rejected on the cheap birth head-read (``discover_births``) and never
+    full-parsed, so per-tick cost is O(new), not O(history)."""
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="cost"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    (folder / f"{minted}.jsonl").write_text(
+        f'{{"type":"user","uuid":"m","cwd":"{worktree}",'
+        f'"timestamp":"{_iso(state.created_at + timedelta(seconds=1))}",'
+        '"isSidechain":false,"message":{"role":"user","content":"mine"}}\n',
+        encoding="utf-8",
+    )
+    historical = [f"{n}0000000-0000-4000-8000-000000000000" for n in range(1, 5)]
+    for hid in historical:
+        (folder / f"{hid}.jsonl").write_text(
+            f'{{"type":"user","uuid":"h","cwd":"{worktree}",'
+            f'"timestamp":"{_iso(state.created_at - timedelta(days=2))}",'
+            '"isSidechain":false,"message":{"role":"user","content":"old"}}\n',
+            encoding="utf-8",
+        )
+
+    parsed: list[str] = []
+    real_parse = ClaudeCodeAdapter.parse_activity
+
+    def spy(self: ClaudeCodeAdapter, cwd: Path, session_id: str) -> object:
+        parsed.append(session_id)
+        return real_parse(self, cwd, session_id)
+
+    monkeypatch.setattr(ClaudeCodeAdapter, "parse_activity", spy)
+    service.snapshot()
+
+    assert minted in parsed
+    for hid in historical:
+        assert hid not in parsed  # cheap birth reject — no full parse for history
+
+
+def test_materialized_sessionend_stays_primary(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """#F6: a minted session that HAS a transcript is never a dead pointer, even
+    when its last hook event is SessionEnd — a remapped/materialized ended session
+    stays primary showing its honest idle/done state, not demoted below a
+    discovered bystander."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="ended"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    assert minted is not None
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    # The minted session materialized, then ended (SessionEnd sidecar).
+    mine_born = _iso(state.created_at + timedelta(seconds=1))
+    (folder / f"{minted}.jsonl").write_text(
+        f'{{"type":"user","uuid":"m","cwd":"{worktree}","timestamp":"{mine_born}",'
+        '"isSidechain":false,"message":{"role":"user","content":"my work"}}\n',
+        encoding="utf-8",
+    )
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionEnd", "session_id": minted, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%1",
+        now=state.created_at + timedelta(seconds=3),
+    )
+    # A concurrent discovered session that WOULD be adoptable (born after us).
+    bystander = "cccc0000-0000-4000-8000-000000000000"
+    (folder / f"{bystander}.jsonl").write_text(
+        f'{{"type":"user","uuid":"c","cwd":"{worktree}",'
+        f'"timestamp":"{_iso(state.created_at + timedelta(seconds=2))}",'
+        '"isSidechain":false,"message":{"role":"user","content":"bystander"}}\n',
+        encoding="utf-8",
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    assert row.sessions[0].session.session_id == minted  # materialized end stays primary
+    assert bystander in [s.session.session_id for s in row.sessions]  # bystander rides behind
+
+
+def test_stale_cwd_session_with_predating_sidecar_not_adopted(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The #107 stale-cwd protection survives the sidecar-evidence extension: a
+    previous tenant of a reused cwd left both a transcript AND a sidecar, but
+    both predate this workspace's creation, so the ``>= created_at`` guard still
+    rejects it. (Pane evidence would also reject on mismatch; cwd+ts is the
+    accepted fallback and the ts guard is what holds here.)"""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="reused"))
+    worktree = Path(state.worktree_path)
+    mgr.store.save(replace(state, agent_session_id=None))
+
+    stale = "99998888-7777-4666-8555-444433332222"
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    predating = _iso(state.created_at - timedelta(days=2))
+    (folder / f"{stale}.jsonl").write_text(
+        f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
+        f'"timestamp":"{predating}","isSidechain":false,'
+        '"message":{"role":"user","content":"prior tenant"}}\n',
+        encoding="utf-8",
+    )
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": stale, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%1",
+        now=state.created_at - timedelta(days=2),  # sidecar predates create too
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    assert row.sessions == ()  # nothing adopted — the prior tenant is not ours
+
+
+def test_sessionend_before_transcript_keeps_minted_materialized(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The dead-pointer SessionEnd check is gated on the sidecar still
+    superseding the poll: when the minted session's transcript advanced PAST its
+    SessionEnd (the id continued/rematerialized), the minted entry stays primary
+    — preserving 'the minted entry reclaims primary the moment it materializes'
+    even though a discovered bystander would otherwise be adoptable."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="rematerialized"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    assert minted is not None
+
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionEnd", "session_id": minted, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%1",
+        now=state.created_at + timedelta(seconds=5),
+    )
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    later = _iso(state.created_at + timedelta(seconds=10))  # transcript outran SessionEnd
+    (folder / f"{minted}.jsonl").write_text(
+        f'{{"type":"user","uuid":"u","cwd":"{worktree}",'
+        f'"timestamp":"{later}","isSidechain":false,'
+        '"message":{"role":"user","content":"still going"}}\n',
+        encoding="utf-8",
+    )
+    other = "12341234-0000-4000-8000-000000000000"
+    (folder / f"{other}.jsonl").write_text(
+        f'{{"type":"user","uuid":"o","cwd":"{worktree}",'
+        f'"timestamp":"{later}","isSidechain":false,'
+        '"message":{"role":"user","content":"a bystander"}}\n',
+        encoding="utf-8",
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    assert row.primary is not None
+    assert row.sessions[0].session.session_id == minted  # minted stayed primary
+    assert row.primary.current_task == "still going"
+
+
+# ─── #118 nested-project discovery (agent_cwd, not worktree root) ─────────────
+
+
+def test_nested_project_discovery_scans_agent_cwd(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A nested project's agent runs in worktree/subpath and records its
+    transcript's cwd there — discovery must scan agent_cwd, not the worktree
+    root, or the session is invisible (#118). Pre-fix scanned the worktree root
+    and found nothing."""
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    sub = repo / "services" / "api"
+    sub.mkdir(parents=True)
+    (sub / ".keep").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "api", "--no-verify"], cwd=repo, check=True, capture_output=True
+    )
+
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="nested", project_cwd=sub))
+    assert state.project_subpath == "services/api"
+    agent_cwd = state.agent_cwd
+
+    handstarted = "aaaa1111-2222-4333-8444-555566667777"
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(agent_cwd)
+    folder.mkdir(parents=True)
+    born = _iso(state.created_at + timedelta(seconds=1))
+    (folder / f"{handstarted}.jsonl").write_text(
+        f'{{"type":"user","uuid":"u","cwd":"{agent_cwd}",'
+        f'"timestamp":"{born}","isSidechain":false,'
+        '"message":{"role":"user","content":"nested work"}}\n',
+        encoding="utf-8",
+    )
+
+    rows = list(service.snapshot().iter_workspaces())
+    assert len(rows) == 1
+    by_id = {s.session.session_id: s for s in rows[0].sessions}
+    assert handstarted in by_id
+    assert by_id[handstarted].activity.current_task == "nested work"
+
+
+# ─── #119 extras discovery is not gated by cfg.hooks.enabled ─────────────────
+
+
+def test_extras_discovered_without_hooks_enabled(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Concurrent hand-started sessions in a workspace's cwd surface even with
+    hooks DISABLED — discovery is a read-only fs glob no longer gated on
+    cfg.hooks.enabled (#119). hooks.enabled gates only the sidecar push."""
+    service, registry = env  # env's cfg leaves hooks disabled (the default)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    assert mgr.config.hooks.enabled is False
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="extras"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    assert minted is not None
+
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    born = _iso(state.created_at + timedelta(seconds=1))
+    # The Grove-minted session materialized (so it stays primary, not recovered).
+    (folder / f"{minted}.jsonl").write_text(
+        f'{{"type":"user","uuid":"m","cwd":"{worktree}",'
+        f'"timestamp":"{born}","isSidechain":false,'
+        '"message":{"role":"user","content":"minted work"}}\n',
+        encoding="utf-8",
+    )
+    hand = "beadfeed-0000-4000-8000-000000000000"
+    (folder / f"{hand}.jsonl").write_text(
+        f'{{"type":"user","uuid":"h","cwd":"{worktree}",'
+        f'"timestamp":"{born}","isSidechain":false,'
+        '"message":{"role":"user","content":"hand started"}}\n',
+        encoding="utf-8",
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    ids = {s.session.session_id for s in row.sessions}
+    provenances = {s.session.provenance for s in row.sessions}
+    assert ids == {minted, hand}
+    assert provenances == {"grove_launched", "fs_discovered"}
+    assert row.sessions[0].session.session_id == minted  # minted materialized → primary
 
 
 # ─── dirty_files (uncommitted churn streams before any commit) ───────────────

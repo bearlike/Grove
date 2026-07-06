@@ -29,7 +29,10 @@ export function AgentStateMark({
       data-state={state}
       title={agentStateLabel(state)}
       className={cn(
-        "inline-block font-mono leading-none",
+        // `transition-colors` cross-fades the hue when the agent state flips
+        // (working→waiting→idle …) instead of snapping — the glyph char still
+        // swaps instantly, but the color eases (design-direction.md §5).
+        "inline-block font-mono leading-none transition-colors duration-200",
         state === "working" && "animate-grove-pulse motion-reduce:animate-none",
         className,
       )}

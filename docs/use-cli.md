@@ -230,6 +230,31 @@ far cheaper.
 grove sessions dump 7b3f2c1a --jsonl | jq -c 'select(.type=="assistant")'
 ```
 
+#### `grove sessions remap`
+
+Implemented in [`cli_sessions.py`](repo:src/grove/tui/cli_sessions.py). Pin an existing agent session as a workspace's tracked primary. This is the
+manual counterpart to Grove's automatic session tracking: re-point a
+workspace whose Grove-minted session died (a `/clear` rotated the id, the
+process crashed) at the live or recovered session, or adopt a hand-started
+session as the workspace's own.
+
+```bash
+grove sessions remap WORKSPACE SESSION
+```
+
+| Argument | Meaning |
+|---|---|
+| `WORKSPACE` (required) | Workspace id, or any unique prefix. |
+| `SESSION` (required) | Session id, or any unique prefix, resolved in the workspace's project. |
+
+```bash
+grove sessions remap a1b2 cafef00d
+```
+
+Trusted and idempotent: the session ref is resolved in the workspace's own
+project, and re-running with the same pair is a no-op. On success it prints
+the workspace id, title, and the session id now tracked.
+
 ## Lifecycle commands
 
 All lifecycle verbs accept an id prefix for the WORKSPACE argument. They make
@@ -242,13 +267,14 @@ Create a workspace: a git worktree, a branch, a tmux session, and a running
 agent.
 
 ```bash
-grove create TITLE --agent/-a NAME [branch flags] [--base REF] [--description/-d TEXT] [--no-init] [--prompt/-p TEXT]
+grove create TITLE --agent/-a NAME [--model/-m ID] [branch flags] [--base REF] [--description/-d TEXT] [--no-init] [--prompt/-p TEXT]
 ```
 
 | Option | Meaning |
 |---|---|
 | `TITLE` (required) | Human label; its slug seeds the worktree path and tmux session name. |
 | `--agent`, `-a` (required) | Agent to launch (must match a name in your config). |
+| `--model`, `-m ID` | Model id for the agent tool (e.g. claude: `sonnet`/`opus`/`haiku`, codex: `gpt-5.5`). Forwarded to the agent verbatim, never validated — the per-agent catalog only informs the choice. Blank means the tool's own default. |
 | `--branch`, `-b NAME` | Create a new branch with this exact name off `--base`. |
 | `--checkout`, `-c NAME` | Check out an existing local branch into the worktree. |
 | `--track`, `-t REF` | Track a remote branch by creating a fresh local tracking branch. |

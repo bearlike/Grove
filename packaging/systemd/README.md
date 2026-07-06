@@ -55,6 +55,18 @@ DAEMON_PORT=7777 WEBAPP_PORT=3030 WITH_WEBAPP=1 make systemd
 
 Reinstalling the unit files after a `make systemd` is safe — the recipes overwrite atomically and run `systemctl --user daemon-reload`. If a service is currently running, you'll need to `make systemd-disable && make systemd-enable` (or `systemctl --user restart`) for the new ExecStart to take effect.
 
+### Verifying sessions survive an update
+
+The daemon unit ships `KillMode=process` so restarting it (every Grove update runs `systemctl --user restart grove-daemon`) does **not** kill the shared tmux server it forked into its cgroup. Confirm the behavior:
+
+```bash
+tmux new-session -d -s survive && \
+  systemctl --user restart grove-daemon && \
+  tmux has-session -t survive && echo "survived"
+```
+
+`survive` dies with the old `KillMode=control-group` default and lives with `KillMode=process`.
+
 ## First-time webapp setup
 
 The webapp service runs in production mode (`npm run start`), which needs a build artifact:

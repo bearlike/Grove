@@ -25,7 +25,7 @@
 
 Grove runs several AI coding agents at once, each in its own isolated **workspace**: a dedicated git worktree on its own branch, paired with a tmux session and a window. The rule is one agent, one worktree, one window. Agents are productive in parallel but chaotic in the same folder, where they overwrite each other's files and collide on the same branch. Grove gives each one its own bench.
 
-Every workspace is reachable asynchronously, from the terminal TUI, the CLI, the web dashboard on any device, or another agent over [MCP](https://bearlike.github.io/Grove/latest/use-mcp/). The same isolated-workspace primitive backs human and agent orchestration alike. Through all of it your git history stays yours: Grove never commits, never pushes, and never touches a remote branch.
+Every workspace is reachable asynchronously, from the terminal TUI, the CLI, the web IDE on any device, or another agent over [MCP](https://bearlike.github.io/Grove/latest/use-mcp/). The same isolated-workspace primitive backs human and agent orchestration alike. Through all of it your git history stays yours: Grove never commits, never pushes, and never touches a remote branch.
 
 ## ✨ Features
 
@@ -33,29 +33,29 @@ Every workspace is reachable asynchronously, from the terminal TUI, the CLI, the
 <tr>
 <td width="50%" valign="middle">
 
-### Async access, any device
+### A web IDE for your agents
 
-Reach the whole fleet over your network. A composer starts a workspace from a prompt, and the live, repo-grouped grid shows every agent. Pair a device once; the daemon stays loopback.
+Reach the whole fleet over your network. A session rail lists every agent thread by recency; the landing is a composer, so a prompt spins up a workspace. Pair a device once and the daemon stays loopback. Space-black, dark-first.
 
 [Docs →](https://bearlike.github.io/Grove/latest/use-webapp/)
 
 </td>
 <td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-home-grid.png" alt="Grove web dashboard: a composer over the repo-grouped grid of every agent's workspace" width="100%" /></a>
+  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-home.png" alt="Grove's web IDE: a session rail listing every agent thread on the left, a composer at the center to start a workspace, on a dark space-black canvas" width="100%" /></a>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="middle">
 
-### Transcript and terminal, side by side
+### Transcript, terminal, and diff in one shell
 
-A split view shows the agent's transcript next to its live terminal. Read the conversation, send a follow-up, and answer the agent's structured questions inline. Watch the work happen at the same time.
+Open a session and land in a three-zone shell: the rail, the agent's live transcript, and a tabbed work panel with terminal, diff, and info. Steer the agent with a follow-up while it works, answer its structured questions inline, and watch the diff grow.
 
 [Docs →](https://bearlike.github.io/Grove/latest/use-webapp/#the-workspace-ide-shell)
 
 </td>
 <td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/use-webapp/#the-workspace-ide-shell"><img src="docs/img/screenshots/webapp-workspace-split.png" alt="A split view: the agent's transcript with a multiple-choice question on the left, the live terminal on the right" width="100%" /></a>
+  <a href="https://bearlike.github.io/Grove/latest/use-webapp/#the-workspace-ide-shell"><img src="docs/img/screenshots/webapp-workspace.png" alt="A Grove session page: the session rail, the agent's live transcript with an inline multiple-choice question, and a tabbed work panel showing the terminal and diff" width="100%" /></a>
 </td>
 </tr>
 <tr>
@@ -92,6 +92,8 @@ Grove is a terminal program first. Run `grove` in a repo to see only its workspa
 
 - **[Branch-aware lifecycle](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/).** Create, pause, resume, respawn, and kill. Pause keeps the branch and drops the worktree. Kill deletes only branches Grove created, never remotes.
 - **[Configuration cascade](https://bearlike.github.io/Grove/latest/features-cascade/).** A committed `.grove/config.json` sets the team baseline. Six layers let each developer override locally without touching it.
+- **[Per-agent model selection](https://bearlike.github.io/Grove/latest/use-webapp/).** Each agent exposes its own model catalog. Pick the model per workspace: a cheap one for scaffolding, a strong one for the hard refactor, side by side.
+- **[Session recovery](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/).** Grove pane-verifies each agent session and re-adopts it across daemon restarts and a different user attaching. A stale pointer remaps to the recovered session in a click.
 - **[Ticket providers](https://bearlike.github.io/Grove/latest/features-ticket-providers/).** Branch-aware Gitea, GitHub, and Linear context, surfaced next to the workspace.
 - **[Push notifications](https://bearlike.github.io/Grove/latest/features-notifications/).** Get pinged when an agent finishes a turn or needs you.
 
@@ -134,7 +136,7 @@ Full documentation lives at **<https://bearlike.github.io/Grove/latest/>**.
 | --- | --- |
 | [Get Started](https://bearlike.github.io/Grove/latest/getting-started/) | Install, prerequisites, first run, verify. |
 | [Configure](https://bearlike.github.io/Grove/latest/configure-project/) | Project setup, agents, init scripts, configuration reference. |
-| [Use](https://bearlike.github.io/Grove/latest/use-tui/) | TUI tour, CLI, web dashboard, authentication, daily workflow. |
+| [Use](https://bearlike.github.io/Grove/latest/use-tui/) | TUI tour, CLI, web IDE, authentication, daily workflow. |
 | [Capabilities](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/) | Lifecycle, branch provenance, live activity, status semantics, configuration cascade. |
 | [Develop](https://bearlike.github.io/Grove/latest/develop-architecture/) | Architecture, public API, engineering principles, contributing, design system. |
 | [Troubleshooting](https://bearlike.github.io/Grove/latest/troubleshooting/) | Symptom → cause → fix for common failures. |

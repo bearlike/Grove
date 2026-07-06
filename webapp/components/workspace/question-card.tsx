@@ -38,12 +38,12 @@ export function QuestionCard({ question }: { question: AgentQuestionView }) {
     <div
       data-testid="question-card"
       data-answered={answered}
-      className="not-prose w-full rounded-md border border-border bg-muted/40"
+      className="not-prose w-full rounded-lg bg-muted/30"
     >
       <QuestionHeader question={question} />
 
       {question.options.length > 0 && (
-        <ul className="flex flex-col gap-1 p-2">
+        <ul className="flex flex-col gap-1 px-2 py-1.5">
           {question.options.map((option, i) => (
             <li
               key={i}
@@ -67,7 +67,7 @@ export function QuestionCard({ question }: { question: AgentQuestionView }) {
         </ul>
       )}
 
-      <div className="border-t border-border p-2">
+      <div className="px-2 py-1.5">
         {answered ? (
           <p
             data-testid="question-answer"
@@ -97,7 +97,7 @@ export function QuestionCard({ question }: { question: AgentQuestionView }) {
  * question's identity look like". */
 function QuestionHeader({ question }: { question: AgentQuestionView }) {
   return (
-    <div className="flex items-start gap-2 border-b border-border p-2">
+    <div className="flex items-start gap-2 px-2 py-1.5">
       <CircleHelpIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-[var(--ref-info)]" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         {question.header && (
@@ -246,11 +246,11 @@ function QuestionAnswerBlock({
   };
 
   return (
-    <div className="w-full rounded-md border border-border bg-muted/40">
+    <div className="w-full rounded-lg bg-muted/30">
       <QuestionHeader question={question} />
 
       {question.options.length > 0 && (
-        <ul className="flex flex-col gap-1 p-2">
+        <ul className="flex flex-col gap-1 px-2 py-1.5">
           {question.options.map((option, i) => {
             const checked = question.multiselect
               ? selectedIndexes.includes(i)
@@ -329,7 +329,7 @@ function QuestionAnswerBlock({
       {/* "Other" free text — non-multiSelect questions only (v1 wire rule):
           an optionless free_text-kind question renders ONLY this input. */}
       {!question.multiselect && (
-        <div className="border-t border-border p-2">
+        <div className="px-2 py-1.5">
           <input
             type="text"
             data-testid="question-other-input"

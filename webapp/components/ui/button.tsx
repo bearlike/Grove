@@ -22,8 +22,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        // Text-bearing CTA fill uses --primary-strong (#b95230, white label
+        // 4.8:1 AA), never bare --primary (#d97757 = 3.12:1, fails AA at 14px).
+        // The brand MARK still uses --primary; only fills carrying a label do.
         default:
-          "bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/95",
+          "bg-primary-strong text-primary-foreground hover:bg-primary-strong/90 active:bg-primary-strong/95",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         outline:

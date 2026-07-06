@@ -29,10 +29,16 @@ from grove.core.agents.model import (
     SessionSummary,
     SessionTurn,
 )
-from grove.core.agents.registry import all_adapters, get_adapter
+from grove.core.agents.registry import (
+    MODEL_CATALOG_CAP,
+    all_adapters,
+    get_adapter,
+    resolve_models,
+)
 
 __all__ = [
     "ATTENTION_STATES",
+    "MODEL_CATALOG_CAP",
     "QUESTION_TOOL_NAMES",
     "AgentActivity",
     "AgentActivityState",
@@ -49,4 +55,5 @@ __all__ = [
     "SessionTurn",
     "all_adapters",
     "get_adapter",
+    "resolve_models",
 ]

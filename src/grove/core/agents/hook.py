@@ -28,12 +28,20 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from loguru import logger
 
 from grove.core import paths
 from grove.core.agents.model import AgentActivityState, AgentQuestion
+
+if TYPE_CHECKING:
+    # Annotation-only (postponed annotations): the adoption seam composes
+    # `WorkspaceState.adopts_session` with sidecar evidence, but importing the
+    # engine dataclass at runtime would point the agents layer back at the
+    # engine. The method only calls `state.adopts_session` (duck-typed), so the
+    # TYPE_CHECKING import keeps the dependency direction clean.
+    from grove.core.workspace import WorkspaceState
 
 # Hook event names Claude Code emits → the agent state they imply. ``Notification``
 # is the high-value one: it fires for "needs your permission" / "waiting for your
@@ -321,6 +329,73 @@ class ClaudeHook:
             os.replace(tmp, target)
         except OSError as exc:
             logger.debug("could not write agent sidecar for {}: {}", record.session_id, exc)
+
+    @classmethod
+    def adopts(
+        cls,
+        state: WorkspaceState,
+        born_at: datetime | None,
+        *,
+        candidate: HookRecord | None,
+        reference_pane: str | None,
+        cwd: Path,
+    ) -> bool:
+        """Whether ``state`` adopts a discovered session — the ONE evidence seam.
+
+        Composes the two axes `WorkspaceState.adopts_session` weighs, so the
+        composition can't drift between the two discovery sites
+        (`ActivityService.sessions_for`, `SessionExplorer.for_workspace`, #F10a):
+
+        - transcript BIRTH (``born_at``, immutable) — the pure predicate's job;
+        - a hook sidecar proving the session was live *in this workspace* — the
+          boundary's job, distilled here from the pre-read ``candidate`` sidecar
+          via :meth:`live_here_at`.
+
+        Takes the already-read ``candidate`` record and the workspace's
+        ``reference_pane`` (both resolved once per session per tick by the
+        caller) so no sidecar is re-read (#F9). ``reference_pane`` is the
+        ``tmux_pane`` recorded on the *minted* session's sidecar — the pane this
+        workspace owns; passing ``None`` (no minted id, no sidecar yet, or a
+        sidecar with no pane) drops the live-here arm entirely, leaving
+        birth-only adoption. See :meth:`live_here_at` for why the pane check is
+        load-bearing.
+        """
+        live_at = cls.live_here_at(candidate, cwd=cwd, reference_pane=reference_pane)
+        return state.adopts_session(born_at, live_here_at=live_at)
+
+    @classmethod
+    def live_here_at(
+        cls, record: HookRecord | None, *, cwd: Path, reference_pane: str | None
+    ) -> datetime | None:
+        """The sidecar ts proving ``record``'s session was live *here*, or ``None``.
+
+        Adoption evidence for a session the user RESUMED inside a workspace's
+        pane (#117): its transcript is born before the workspace, so birth can't
+        adopt it (`WorkspaceState.adopts_session`), but a hook sidecar recorded
+        from the workspace's own pane *after* creation can.
+
+        Attribution is **pane-verified** (#F1): the candidate sidecar's
+        ``tmux_pane`` must equal the workspace's ``reference_pane`` (the pane the
+        minted session's sidecar recorded). cwd-match alone was a cross-tenant
+        hole — a fresh workspace at a shared cwd (ROOT placement, whose cwd is
+        the repo root) would adopt a *different* live workspace's session, since
+        that tenant's sidecar keeps refreshing ``ts >= created_at`` with the same
+        cwd. The pane is the identity that a shared cwd cannot forge. The cwd
+        match is retained as defense-in-depth, and the caller's ``>= created_at``
+        guard still rejects a previous tenant of a reused pane whose sidecar
+        predates the workspace.
+
+        Returns the *ts*, not a verdict: the ``>= created_at`` comparison is
+        `adopts_session`'s single gate, so this stays mechanism (attribute) and
+        leaves policy (adopt) to the one predicate. Takes a pre-read record
+        (never reads a sidecar) so the caller controls the one-read-per-tick
+        discipline (#F9).
+        """
+        if record is None or record.cwd is None or reference_pane is None:
+            return None
+        if record.tmux_pane != reference_pane:
+            return None
+        return record.ts if Path(record.cwd).resolve() == cwd.resolve() else None
 
     @staticmethod
     def read(session_id: str, *, sidecar_dir: Path) -> HookRecord | None:

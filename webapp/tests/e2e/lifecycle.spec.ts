@@ -39,7 +39,7 @@ test.describe("create workspace (composer-first)", () => {
   test("a selected model rides the request as model", async ({ page }) => {
     await page.goto("/");
     await page.getByTestId("composer-model").click();
-    await page.getByRole("menuitem", { name: "Sonnet 4.6", exact: true }).click();
+    await page.getByRole("menuitem", { name: "claude-sonnet-4-6", exact: true }).click();
     await page.getByTestId("composer-prompt").fill("with a model");
     await waitReady(page);
 
@@ -89,6 +89,36 @@ test.describe("create workspace (composer-first)", () => {
     await page.getByTestId("create-mode").selectOption("root");
     await expect(page.getByTestId("create-skip-init")).toBeChecked();
     await expect(page.getByTestId("create-root-note")).toBeVisible();
+  });
+
+  test("Advanced resume-session-id rides the request as resume_session_id (#121)", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByTestId("composer-advanced-toggle").click();
+    await page.getByTestId("create-resume-session-id").fill("a1b2c3d4-adopt-me");
+    await page.getByTestId("composer-prompt").fill("resume an existing session");
+    await waitReady(page);
+
+    const reqPromise = page.waitForRequest(
+      (r) => r.url().endsWith("/api/grove/workspaces") && r.method() === "POST",
+    );
+    await page.getByTestId("composer-prompt").press("Enter");
+    const body = (await reqPromise).postDataJSON();
+    expect(body.resume_session_id).toBe("a1b2c3d4-adopt-me");
+  });
+
+  test("an empty resume-session-id sends null, not an empty string", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("composer-prompt").fill("fresh session, no resume");
+    await waitReady(page);
+
+    const reqPromise = page.waitForRequest(
+      (r) => r.url().endsWith("/api/grove/workspaces") && r.method() === "POST",
+    );
+    await page.getByTestId("composer-prompt").press("Enter");
+    const body = (await reqPromise).postDataJSON();
+    expect(body.resume_session_id).toBeNull();
   });
 });
 
@@ -172,41 +202,57 @@ async function mockWorkspace(
 }
 
 test.describe("lifecycle controls", () => {
+  // Every lifecycle verb lives in the identity popover again (#153) — the
+  // separate "Actions" dropdown is gone. Open the popover via `identity-trigger`;
+  // a plain popover button click does NOT dismiss the surface, so the reversible
+  // verb swaps IN PLACE (pause → resume) without the popover closing.
+
   test("pauses then resumes a running workspace", async ({ page }) => {
     await mockWorkspace(page, { status: "active" });
     await page.goto("/w/w-grove-1");
-    const actions = page.getByTestId("workspace-actions");
-    await expect(actions.getByTestId("action-pause")).toBeVisible();
 
-    await actions.getByTestId("action-pause").click();
-    await expect(actions.getByTestId("action-resume")).toBeVisible();
-    await expect(actions.getByTestId("action-pause")).toHaveCount(0);
-
-    await actions.getByTestId("action-resume").click();
-    await expect(actions.getByTestId("action-pause")).toBeVisible();
+    await page.getByTestId("identity-trigger").click();
+    await page.getByTestId("action-pause").click();
+    // The popover stays open across the mutation, so once the status flips to
+    // paused the same open popover re-renders pause→resume live. The sessionless
+    // identity badge on the trigger mirrors the status.
+    await expect(page.getByTestId("status-badge")).toHaveAttribute("data-status", "paused");
+    await expect(page.getByTestId("action-resume")).toBeVisible();
+    await expect(page.getByTestId("action-pause")).toHaveCount(0);
+    await page.getByTestId("action-resume").click();
+    await expect(page.getByTestId("status-badge")).toHaveAttribute("data-status", "active");
   });
 
   test("kill confirm defaults to deleting a grove branch and returns home", async ({ page }) => {
     await mockWorkspace(page, { status: "active", provenance: "grove" });
     await page.goto("/w/w-grove-1");
 
+    // Kill lives in the identity popover's danger zone now (#153).
+    await page.getByTestId("identity-trigger").click();
     await page.getByTestId("action-kill").click();
     const confirm = page.getByTestId("kill-confirm-dialog");
     await expect(confirm).toBeVisible();
     await expect(confirm.getByTestId("kill-delete-branch")).toBeChecked();
 
     await confirm.getByTestId("kill-confirm").click();
-    await expect(page).toHaveURL(/\/$/);
+    // Returns home (the peek would 404). Wait for the home composer — a definitive
+    // nav-complete signal — before the URL, since on throttled mobile the
+    // router.push view swap can outrun the location update `toHaveURL` polls.
+    await expect(page.getByTestId("composer-prompt")).toBeVisible();
+    await expect(page).toHaveURL(/\/$/, { timeout: 10_000 });
   });
 
-  test("root workspace hides pause and never deletes the branch", async ({ page }) => {
+  test("root workspace has no reversible verb and never deletes the branch", async ({ page }) => {
     await mockWorkspace(page, { status: "active", placement: "root", provenance: "attached" });
     await page.goto("/w/w-grove-1");
-    const actions = page.getByTestId("workspace-actions");
-    await expect(actions.getByTestId("action-kill")).toBeVisible();
-    await expect(actions.getByTestId("action-pause")).toHaveCount(0);
 
-    await actions.getByTestId("action-kill").click();
+    await page.getByTestId("identity-trigger").click();
+    // Root+active strips pause/resume, leaving only kill in the danger zone.
+    await expect(page.getByTestId("action-kill")).toBeVisible();
+    await expect(page.getByTestId("action-pause")).toHaveCount(0);
+    await expect(page.getByTestId("action-resume")).toHaveCount(0);
+
+    await page.getByTestId("action-kill").click();
     const checkbox = page.getByTestId("kill-delete-branch");
     await expect(checkbox).not.toBeChecked();
     await expect(checkbox).toBeDisabled();

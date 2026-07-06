@@ -71,6 +71,7 @@ from grove.tui.screens.edit import EditWorkspaceScreen
 from grove.tui.screens.help import HelpScreen
 from grove.tui.screens.message import SendMessageScreen
 from grove.tui.screens.project_picker import ProjectPickerScreen, RepoChoice
+from grove.tui.screens.remap_session import RemapSessionScreen
 from grove.tui.screens.sessions import SessionsScreen
 from grove.tui.widgets.filter_bar import FilterBar
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
@@ -333,6 +334,35 @@ class WorkspaceListScreen(Screen[None]):
                 workspace_title=title,
             )
         )
+
+    def action_remap_session(self) -> None:
+        """Manually pin a session as the selected workspace's tracked primary (#132).
+
+        Sources candidates from ``SessionExplorer.candidates_for`` — the
+        UNGATED cwd-scoped scan — never ``for_workspace``, which drops
+        exactly the sessions this verb exists to recover (a dead-minted
+        pointer's pre-birth live successor, a foreign session sharing a
+        ROOT cwd). ``manager.remap_session`` is likewise ungated, so
+        nothing offered here can be refused except an adapter-kind
+        mismatch, which surfaces as a typed ``_safe_call`` error flash.
+        """
+        wid = self._selected_id()
+        if wid is None:
+            self._flash("nothing selected")
+            return
+        state = self._selected_state()
+        title = state.title if state is not None else wid[:8]
+        candidates = self._explorer.candidates_for(wid)
+        if not candidates:
+            self._flash("no sessions to remap")
+            return
+
+        def _on_result(session_id: str | None) -> None:
+            if session_id is None:
+                return
+            self._safe_call("remap", lambda: self._manager.remap_session(wid, session_id))
+
+        self.app.push_screen(RemapSessionScreen(candidates, workspace_title=title), _on_result)
 
     def action_send_message(self) -> None:
         """Send a follow-up message to the selected workspace's agent.
@@ -797,12 +827,15 @@ class WorkspaceListScreen(Screen[None]):
             # Tailor the message so the user sees what actually changed.
             title_changed = event.detail.get("title_changed") == "true"
             description_changed = event.detail.get("description_changed") == "true"
+            session_remapped = event.detail.get("session_remapped")
             if title_changed and description_changed:
                 self._flash("renamed and updated description", level="success")
             elif title_changed:
                 self._flash("workspace renamed", level="success")
             elif description_changed:
                 self._flash("description updated", level="success")
+            elif session_remapped:
+                self._flash(f"session remapped to {session_remapped[:8]}", level="success")
 
     def _safe_call(self, label: str, fn: Callable[[], object]) -> None:
         try:
@@ -927,13 +960,18 @@ _AVAILABLE_KEYS_BY_STATUS: dict[WorkspaceStatus, frozenset[str]] = {
     # Message ('m') is RUNNING-family only — same gate family as pause:
     # steering needs a live session (the engine refuses OFFLINE/PAUSED with
     # a typed error; the footer dims the key so the modal isn't a trap).
-    WorkspaceStatus.ACTIVE: frozenset({"enter,a", "m", "e", "s", "p", "k"}),
-    WorkspaceStatus.IDLE: frozenset({"enter,a", "m", "e", "s", "p", "k"}),
-    WorkspaceStatus.RUNNING: frozenset({"enter,a", "m", "e", "s", "p", "k"}),  # raw intent leak
-    WorkspaceStatus.PAUSED: frozenset({"e", "s", "R", "k"}),
-    WorkspaceStatus.OFFLINE: frozenset({"e", "s", "o", "k"}),
+    # Remap ('x') shares edit's gate exactly — same `ensure_can_update`
+    # rule the engine's `remap_session` enforces (a doomed ORPHANED record
+    # gains nothing from a re-pinned session).
+    WorkspaceStatus.ACTIVE: frozenset({"enter,a", "m", "e", "s", "x", "p", "k"}),
+    WorkspaceStatus.IDLE: frozenset({"enter,a", "m", "e", "s", "x", "p", "k"}),
+    WorkspaceStatus.RUNNING: frozenset(
+        {"enter,a", "m", "e", "s", "x", "p", "k"}
+    ),  # raw intent leak
+    WorkspaceStatus.PAUSED: frozenset({"e", "s", "x", "R", "k"}),
+    WorkspaceStatus.OFFLINE: frozenset({"e", "s", "x", "o", "k"}),
     WorkspaceStatus.ORPHANED: frozenset({"s", "k"}),
-    WorkspaceStatus.ERROR: frozenset({"e", "s", "k"}),
+    WorkspaceStatus.ERROR: frozenset({"e", "s", "x", "k"}),
 }
 
 # Keys a placement strips out *after* the status gate. ROOT workspaces have no

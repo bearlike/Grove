@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from grove.core import paths as core_paths
 from grove.core.agents import (
     SessionProvenance,
     SessionSummary,
@@ -28,6 +29,7 @@ from grove.core.agents import (
     all_adapters,
     get_adapter,
 )
+from grove.core.agents.hook import ClaudeHook
 from grove.core.errors import GroveError
 from grove.core.git import GitRepo, detect_root
 from grove.core.manager import WorkspaceManager, build
@@ -86,15 +88,21 @@ class SessionExplorer:
         """Every directory whose sessions belong to this project, de-duplicated.
 
         Union of the live ``git worktree list`` (main first; covers hand-made
-        worktrees Grove never managed) and every workspace's persisted
-        ``worktree_path`` (covers paused workspaces whose directory is gone —
-        their transcripts still exist under the encoded-cwd projects folder).
+        worktrees Grove never managed), every workspace's persisted ``agent_cwd``
+        (worktree/subpath — where a nested project's agent actually runs and
+        records its transcript's cwd, #101/#118), and its ``worktree_path``
+        (covers paused workspaces whose directory is gone — their transcripts
+        still live under the encoded-cwd projects folder). ``agent_cwd`` collapses
+        to the worktree root for the common empty-subpath case, so the extra
+        entry only matters for nested projects.
         """
         out: list[Path] = []
         seen: set[str] = set()
+        states = self._manager.list()
         candidates = [
             *GitRepo(self._manager.repo_root).worktree_paths(),
-            *(Path(state.worktree_path) for state in self._manager.list()),
+            *(state.agent_cwd for state in states),
+            *(Path(state.worktree_path) for state in states),
         ]
         for path in candidates:
             key = str(path)
@@ -119,10 +127,20 @@ class SessionExplorer:
         result after sorting.
         """
         states = self._manager.list()
-        by_cwd: dict[str, WorkspaceState] = {s.worktree_path: s for s in states}
+        # A scanned root binds to its workspace by cwd — key on both agent_cwd
+        # (a nested project's real cwd, #118) and worktree_path so a session found
+        # under either resolves to its workspace. First-wins on collision.
+        by_cwd: dict[str, WorkspaceState] = {}
+        for s in states:
+            for cwd_key in (str(s.agent_cwd), s.worktree_path):
+                by_cwd.setdefault(cwd_key, s)
         minted: dict[str, WorkspaceState] = {
             s.agent_session_id: s for s in states if s.agent_session_id
         }
+        # A workspace's effective agent kind, computed once (config lookup for
+        # legacy records): the cwd fallback below tags a session only when its
+        # kind matches, so it's read per state, not per session.
+        eff_kind: dict[str, str] = {s.id: self._manager.effective_kind(s) for s in states}
 
         listings: list[SessionListing] = []
         seen: set[tuple[str, str]] = set()
@@ -133,7 +151,21 @@ class SessionExplorer:
                     if key in seen:
                         continue
                     seen.add(key)
-                    state = minted.get(summary.session_id) or by_cwd.get(str(root))
+                    # Minted-id equality is authoritative (Grove launched it here,
+                    # and the id was minted by this workspace's own adapter, so the
+                    # kind matches by construction). The cwd fallback is NOT: a ROOT
+                    # workspace's cwd is the shared repo root, so a foreign-kind
+                    # session there (a codex rollout under a claude_code workspace)
+                    # sits in the same dir — annotating it with this workspace's
+                    # id/title would mis-attribute a session the workspace can never
+                    # own (its adapter can't read it; remap rejects a kind mismatch).
+                    # So the cwd fallback tags only a same-kind session; otherwise
+                    # the browse row stays unmapped, honest history (#164).
+                    state = minted.get(summary.session_id)
+                    if state is None:
+                        candidate = by_cwd.get(str(root))
+                        if candidate is not None and summary.adapter_kind == eff_kind[candidate.id]:
+                            state = candidate
                     listings.append(
                         SessionListing(
                             summary=summary,
@@ -176,25 +208,93 @@ class SessionExplorer:
         one directory regardless of project size. Raises
         :class:`~grove.core.errors.WorkspaceNotFound` for an unknown id.
 
+        Scans the union of ``state.agent_cwd`` (worktree/subpath — where a nested
+        project's agent runs) and the worktree root (a session hand-started at the
+        repo root records *its* cwd, #F7), deduped for a flat workspace. Both are
+        where filesystem adapters exact-match a transcript's recorded cwd.
+
         A discovered (``fs_discovered``) listing is kept only when
-        ``state.adopts_session(summary.created_at)`` — its birth postdates this
-        workspace's own ``created_at``. Without this gate, a fresh workspace
-        whose cwd already holds older transcripts (especially ROOT placement,
-        whose cwd is the shared repo root) would present a stale, unrelated
-        session as its own. A ``grove_launched`` listing is never gated — Grove
-        minted and launched it for this workspace regardless of its birth.
-        :meth:`list` and the project-scoped listing stay ungated by design:
-        those are browse-everything history views, not workspace attribution.
+        ``state.adopts_session`` accepts it — its transcript birth postdates this
+        workspace's ``created_at``, OR a hook sidecar proves it was live in this
+        workspace's own PANE after creation (the same pane-verified evidence rule
+        `ActivityService.sessions_for` uses, so a session *resumed* in the pane —
+        born before the workspace — still attributes here, while a shared cwd
+        can't steal another workspace's live session, #F1). Without the gate, a
+        fresh workspace whose cwd already holds older transcripts (especially
+        ROOT placement, whose cwd is the shared repo root) would present a stale,
+        unrelated session as its own. A ``grove_launched`` listing is never gated
+        — Grove minted it for this workspace regardless of birth. :meth:`list`
+        and the project-scoped listing stay ungated by design: those are
+        browse-everything history views, not workspace attribution.
 
         Returns a tuple — in this class body a ``list[...]`` annotation would
         resolve to the :meth:`list` method, not the builtin (the documented
         mypy shadowing trap).
         """
-        state = self._manager.get(workspace_id)
+        return self._scan_workspace(self._manager.get(workspace_id), adopt_gate=True)
+
+    def candidates_for(self, workspace_id: str) -> tuple[SessionListing, ...]:
+        """Every session recorded in one workspace's directories, newest-first,
+        UNGATED — the remap-picker seam (#132).
+
+        The ungated sibling of :meth:`for_workspace`: the same bounded one-cwd
+        scan (cheap per request), but applying NO ``adopts_session`` birth/pane
+        gate. So a session the auto-adoption heuristic rejects — a
+        dead-minted-pointer's live successor born before the workspace, or a
+        foreign session sharing a ROOT cwd — is still offered. This is exactly
+        the set a human picks from to remap: the operator supplies the
+        attribution the gate withholds (and `manager.remap_session`, the write
+        it feeds, is likewise ungated). Provenance is still ``grove_launched``
+        for the minted id, ``fs_discovered`` otherwise. Raises
+        :class:`~grove.core.errors.WorkspaceNotFound` for an unknown id.
+
+        A browse-everything counterpart to the ungated project-wide :meth:`list`,
+        but scoped to one workspace's ``scan_cwds`` — so a picker pays one
+        directory's parse, not the whole project's. Returns a tuple (the
+        ``list``-method shadowing trap, as in :meth:`for_workspace`).
+        """
+        return self._scan_workspace(self._manager.get(workspace_id), adopt_gate=False)
+
+    def _scan_workspace(
+        self, state: WorkspaceState, *, adopt_gate: bool
+    ) -> tuple[SessionListing, ...]:
+        """The shared one-cwd scan behind :meth:`for_workspace` (``adopt_gate``
+        True) and :meth:`candidates_for` (False).
+
+        Scans the ``state.scan_cwds`` union **through the single adapter for this
+        workspace's effective kind**, dedupes by ``(kind, id)``, tags provenance
+        by minted-id equality, sorts newest-first by mtime. Only when
+        ``adopt_gate`` does it drop a discovered listing ``ClaudeHook.adopts``
+        rejects (birth ≥ ``created_at`` OR a pane-verified live-here sidecar,
+        #F1) — the minted (``grove_launched``) listing is never gated either way.
+        One derivation so the gated and ungated reads can't drift.
+
+        The single-adapter restriction (#164) is the kind counterpart of the cwd
+        scope: a workspace runs exactly one agent kind, so only that adapter's
+        sessions can be its own. A ROOT workspace's cwd is the shared repo root,
+        where the human also runs *other* tools — a foreign-kind transcript there
+        (a codex rollout under a claude_code workspace) can never be this
+        workspace's minted session, be adopted by its adapter, or be pinned
+        (``remap_session`` rejects a kind mismatch). Scanning every adapter let
+        ``candidates_for`` offer exactly those un-pinnable sessions; restricting
+        to ``mgr.effective_kind`` keeps the picker in agreement with the pin and
+        matches the read path (``ActivityService.sessions_for`` discovers through
+        this same one adapter).
+        """
+        adapter = get_adapter(self._manager.effective_kind(state))
+        # Reference pane from the minted session's sidecar (#F1): the pane this
+        # workspace owns, against which a discovered session's live-here evidence
+        # is verified. Read once, before the scan loop — and only when gating.
+        reference_pane: str | None = None
+        if adopt_gate and state.agent_session_id:
+            ref = ClaudeHook.read(
+                state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+            )
+            reference_pane = ref.tmux_pane if ref is not None else None
         listings: list[SessionListing] = []
         seen: set[tuple[str, str]] = set()
-        for adapter in all_adapters():
-            for summary in adapter.list_sessions(Path(state.worktree_path)):
+        for cwd in state.scan_cwds:
+            for summary in adapter.list_sessions(cwd):
                 key = (summary.adapter_kind, summary.session_id)
                 if key in seen:
                     continue
@@ -204,8 +304,18 @@ class SessionExplorer:
                     if summary.session_id == state.agent_session_id
                     else "fs_discovered"
                 )
-                if provenance != "grove_launched" and not state.adopts_session(summary.created_at):
-                    continue
+                if adopt_gate and provenance != "grove_launched":
+                    candidate = ClaudeHook.read(
+                        summary.session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                    )
+                    if not ClaudeHook.adopts(
+                        state,
+                        summary.created_at,
+                        candidate=candidate,
+                        reference_pane=reference_pane,
+                        cwd=cwd,
+                    ):
+                        continue
                 listings.append(
                     SessionListing(
                         summary=summary,

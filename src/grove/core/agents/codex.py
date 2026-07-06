@@ -48,6 +48,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -147,24 +149,27 @@ class _CodexHome:
         mint a Codex id — there is no resume-safe ``--session-id`` flag — so
         every Codex session reaches Grove through this discovery path.)
         """
-        return [sid for sid, _, _ in cls.discover_paths(cwd, exclude_id=exclude_id)]
+        return [sid for sid, *_ in cls.discover_paths(cwd, exclude_id=exclude_id)]
 
     @classmethod
     def discover_paths(
         cls, cwd: Path, *, exclude_id: str | None = None
-    ) -> list[tuple[str, Path, float]]:
-        """``(session_id, path, mtime)`` for every rollout recorded in ``cwd``,
-        newest-first by mtime — the one scan behind both ``discover`` (ids for
-        the dashboard) and ``list_sessions`` (summaries for the explorer).
+    ) -> list[tuple[str, Path, float, datetime | None]]:
+        """``(session_id, path, mtime, birth)`` for every rollout recorded in
+        ``cwd``, newest-first by mtime — the one scan behind ``discover`` (ids for
+        the dashboard), ``discover_births`` (the cheap adoption pre-filter, #F5),
+        and ``list_sessions`` (summaries for the explorer).
 
         Reads each rollout's head ``session_meta`` line for its id + cwd (the cwd
         is not on every line, unlike Claude), keeping only those whose cwd
-        matches and confirming the id from the meta, not the filename.
+        matches and confirming the id from the meta, not the filename. ``birth``
+        (the first head record's timestamp) rides out of the same bounded head
+        read — no full parse — so the adoption gate can reject history cheaply.
         """
         target = str(cwd)
-        found: dict[str, tuple[Path, float]] = {}
+        found: dict[str, tuple[Path, float, datetime | None]] = {}
         for path in cls._iter_rollouts():
-            meta = cls._meta(path)
+            meta, birth = cls._meta_and_birth(path)
             session_id = meta.get("id")
             if not isinstance(session_id, str) or not session_id:
                 continue
@@ -178,10 +183,12 @@ class _CodexHome:
                 mtime = 0.0
             prior = found.get(session_id)
             if prior is None or mtime > prior[1]:
-                found[session_id] = (path, mtime)
+                found[session_id] = (path, mtime, birth)
         return [
-            (sid, path, mtime)
-            for sid, (path, mtime) in sorted(found.items(), key=lambda kv: (-kv[1][1], kv[0]))
+            (sid, path, mtime, birth)
+            for sid, (path, mtime, birth) in sorted(
+                found.items(), key=lambda kv: (-kv[1][1], kv[0])
+            )
         ]
 
     @classmethod
@@ -196,9 +203,22 @@ class _CodexHome:
     def _meta(cls, path: Path) -> dict[str, Any]:
         """The ``session_meta.payload`` dict (always line 1), or ``{}`` if absent.
 
+        A projection of :meth:`_meta_and_birth` for callers that want only the
+        meta (id / cwd lookups)."""
+        return cls._meta_and_birth(path)[0]
+
+    @classmethod
+    def _meta_and_birth(cls, path: Path) -> tuple[dict[str, Any], datetime | None]:
+        """The ``(session_meta.payload, birth)`` from ONE bounded head read.
+
         Bounded to a short head read — ``session_meta`` is the first record by
         construction — so a pathological file costs no more than a few lines.
+        ``birth`` is the first head record's timestamp (records are time-sorted),
+        so the cheap adoption pre-filter (#F5) reads a session's birth without a
+        full parse.
         """
+        payload: dict[str, Any] = {}
+        birth: datetime | None = None
         try:
             with path.open(encoding="utf-8") as fh:
                 for index, line in enumerate(fh):
@@ -211,12 +231,18 @@ class _CodexHome:
                         rec = json.loads(stripped)
                     except json.JSONDecodeError:
                         continue
-                    if isinstance(rec, dict) and rec.get("type") == "session_meta":
-                        payload = rec.get("payload")
-                        return payload if isinstance(payload, dict) else {}
+                    if not isinstance(rec, dict):
+                        continue
+                    if birth is None:
+                        birth = _parse_timestamp(rec.get("timestamp"))
+                    if not payload and rec.get("type") == "session_meta":
+                        candidate = rec.get("payload")
+                        payload = candidate if isinstance(candidate, dict) else {}
+                    if payload and birth is not None:
+                        break
         except OSError:
-            return {}
-        return {}
+            return ({}, None)
+        return (payload, birth)
 
     @classmethod
     def _meta_id(cls, path: Path) -> str | None:
@@ -797,6 +823,71 @@ class _RolloutParser:
         return answered
 
 
+_MODELS_PROBE_TIMEOUT = 5.0
+"""Seconds to wait on ``codex debug models``. The bundled catalog is instant
+and offline; the bound only guards a wedged binary — best-effort never hangs."""
+
+
+def _binary_of(command: str) -> str:
+    """The executable (first shell token) of a launch command, or ``""``.
+
+    ``AgentSpec.command`` may carry flags (``codex --full-auto``); model
+    discovery needs only the binary. No var name is hard-coded — the binary
+    comes from config, honoring a renamed/aliased ``codex``."""
+    try:
+        parts = shlex.split(command)
+    except ValueError:  # unbalanced quotes in a hand-edited command
+        return ""
+    return parts[0] if parts else ""
+
+
+def _probe_codex_models(binary: str) -> str | None:
+    """Raw stdout of ``<binary> debug models``, or ``None`` on any failure.
+
+    The ONE subprocess in this adapter — a read-only introspection of Codex's
+    own bundled model catalog (offline, structured JSON). Best-effort by
+    contract, exactly like the filesystem reads: a missing binary, a non-zero
+    exit, or a timeout returns ``None`` (the caller offers an empty catalog),
+    never raises. ``shell=False`` with a fixed list argv keeps it injection-safe;
+    the bounded timeout keeps it non-hanging. This is the seam tests patch so
+    the suite never shells out to a real ``codex``.
+    """
+    try:
+        proc = subprocess.run(
+            [binary, "debug", "models"],  # fixed argv, shell=False, bounded
+            capture_output=True,
+            text=True,
+            timeout=_MODELS_PROBE_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("codex debug models ({}) failed: {}", binary, exc)
+        return None
+    if proc.returncode != 0:
+        logger.debug("codex debug models ({}) exited {}", binary, proc.returncode)
+        return None
+    return proc.stdout
+
+
+def _parse_codex_models(raw: str) -> tuple[str, ...]:
+    """Slugs of the *listable* models in ``codex debug models`` JSON, in order.
+
+    Keeps only ``visibility == "list"`` entries — dropping internal/hidden ones
+    (``codex-auto-review`` is ``"hide"``) — orders by the catalog's own
+    ``priority`` (0 first), and returns each ``slug``. Pure and best-effort:
+    malformed JSON or an unexpected shape yields ``()`` (verified against real
+    on-host output, codex-cli 0.125.0: ``{"models":[{slug,visibility,priority,…}]}``).
+    """
+    try:
+        models = json.loads(raw).get("models", [])
+    except (json.JSONDecodeError, AttributeError) as exc:
+        logger.debug("codex debug models parse failed: {}", exc)
+        return ()
+    listable = [m for m in models if isinstance(m, dict) and m.get("visibility") == "list"]
+    listable.sort(key=lambda m: m.get("priority", 1_000_000))
+    return tuple(str(m["slug"]) for m in listable if m.get("slug"))
+
+
 class CodexAdapter:
     """Introspect OpenAI Codex CLI sessions (a filesystem :class:`AgentAdapter`).
 
@@ -812,13 +903,23 @@ class CodexAdapter:
 
     kind = "codex"
     remote = False
+    resumable = True
 
-    def launch_decoration(self, session_id: str) -> list[str]:
-        """Empty — Codex mints its own thread id, with no flag to set it.
+    def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
+        """Empty for a fresh run — Codex mints its own thread id, with no flag to
+        set it, so ``_mint_agent_session_id`` returns ``None`` and Grove tracks it
+        purely through fs discovery.
 
-        ``_mint_agent_session_id`` returns ``None`` for any kind with an empty
-        decoration, so Grove tracks the session purely through fs discovery.
+        ``resume=True`` returns the ``resume <uuid>`` SUBCOMMAND (#120). Codex's
+        grammar is ``codex [OPTIONS] <COMMAND> [ARGS]`` (top-level flags precede
+        the subcommand), so this rides *after* the configured command verbatim —
+        ``codex`` → ``codex resume <uuid>``, ``codex --full-auto`` → ``codex
+        --full-auto resume <uuid>`` — no subcommand-injection machinery needed.
+        Explicit-uuid resume bypasses Codex's own cwd matching, so the persisted
+        primary is known without discovery.
         """
+        if resume:
+            return ["resume", session_id]
         del session_id
         return []
 
@@ -830,6 +931,19 @@ class CodexAdapter:
         ``launch_decoration`` is empty.
         """
         return ["--model", model]
+
+    def available_models(self, command: str) -> tuple[str, ...]:
+        """Codex's listable model slugs, read live from ``codex debug models``.
+
+        The real *auto-refresh* path: Codex ships a structured, offline model
+        catalog, so Grove READS it rather than hard-coding slugs that drift each
+        release. The binary comes from the configured ``command`` (its first
+        shell token). Best-effort — an unreadable catalog yields ``()`` and the
+        picker falls back to a free-text field. The value is still forwarded
+        verbatim on create, so an id absent from this list works fine.
+        """
+        raw = _probe_codex_models(_binary_of(command))
+        return _parse_codex_models(raw) if raw is not None else ()
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         try:
@@ -845,13 +959,31 @@ class CodexAdapter:
             logger.debug("discover_sessions({}) failed: {}", cwd, exc)
             return []
 
+    def discover_births(
+        self, cwd: Path, *, exclude_id: str | None = None
+    ) -> list[tuple[str, datetime | None, float]]:
+        """``(session_id, birth, mtime)`` for discovered rollouts — the cheap
+        adoption pre-filter (#F5). Birth rides out of the same bounded
+        ``session_meta`` head read discovery already does; no full parse.
+        Best-effort: ``[]`` on any error."""
+        try:
+            return [
+                (sid, birth, mtime)
+                for sid, _path, mtime, birth in _CodexHome.discover_paths(
+                    cwd, exclude_id=exclude_id
+                )
+            ]
+        except OSError as exc:
+            logger.debug("discover_births({}) failed: {}", cwd, exc)
+            return []
+
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
         try:
             scanned = _CodexHome.discover_paths(cwd)
         except OSError as exc:
             logger.debug("list_sessions({}) failed: {}", cwd, exc)
             return []
-        return [self._summarize(sid, path, mtime) for sid, path, mtime in scanned]
+        return [self._summarize(sid, path, mtime) for sid, path, mtime, _ in scanned]
 
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None

@@ -115,6 +115,20 @@ def test_daemon_unit_bakes_install_time_path() -> None:
     assert "@DAEMON_PATH@" not in out
 
 
+def test_daemon_unit_uses_killmode_process() -> None:
+    """The daemon forks the shared tmux server into its cgroup, so the unit must
+    set KillMode=process — the systemd default (control-group) tears the server
+    and every session down on each `systemctl restart` (= every update). Not
+    `mixed`: its final SIGKILL still hits the cgroup (issue #135).
+    """
+    out = _run_print(with_webapp=False)
+    # Assert on active directive lines only — the WHY comment names the
+    # control-group default it replaces, so a raw substring scan of the whole
+    # unit would false-positive on the prose.
+    directives = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("KillMode=")]
+    assert directives == ["KillMode=process"]
+
+
 def test_no_unsubstituted_placeholders_remain() -> None:
     """No @TOKEN@ should survive in either rendered unit."""
     out = _run_print(with_webapp=True)

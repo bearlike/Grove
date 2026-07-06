@@ -75,6 +75,17 @@ class AgentSpec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     """Extra env vars *exported* into the agent's tmux window before launch."""
 
+    models: tuple[str, ...] = ()
+    """Curated model ids to OFFER for this agent in the create-form picker — a
+    display/override seam, never a validated allowlist (any id is still
+    forwarded verbatim on create; the provider boundary). Empty (the default)
+    falls through to the adapter's live discovery: Codex reads ``codex debug
+    models``, Claude Code offers its stable ``sonnet``/``opus``/``haiku``
+    aliases, a remote/shell agent offers nothing. Set it to pin, restrict,
+    reorder, or add gateway/custom ids — it cascades and merges by field like
+    every other AgentSpec knob (mechanism, not policy). The engine
+    (``agents.resolve_models``) caps the offered list at ten."""
+
     env_unset: tuple[str, ...] = ()
     """Env vars *cleared* in the agent's tmux window before ``env`` is applied.
 

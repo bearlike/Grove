@@ -387,104 +387,190 @@ class ActivityService:
         ``_workspace_activity``) and the TUI list screen's slow tick — so the
         blend + hook-sidecar policy stays in this single site.
 
+        Discovery is a read-only fs glob over ``state.scan_cwds`` — the union of
+        ``agent_cwd`` (``worktree/subpath``, where the agent runs) and the
+        worktree root (a session hand-started at the repo root of a nested
+        project records *its* cwd, #F7). It **always runs**, adapter-gated only
+        (generic/shell discover nothing): ``cfg.hooks.enabled`` gates the sidecar
+        push, never read-only discovery (#119).
+
         Two paths, by whether Grove minted a deterministic id at create:
 
         - **Minted id present** (the #13 happy path): that ``grove_launched``
-          session is the primary. When the #18 enhancement is on
-          (``cfg.hooks.enabled``), concurrent sessions the user started by hand in
-          this worktree are discovered and appended (``provenance="fs_discovered"``).
-          Exception: a minted id that never materialized (no transcript, blend
-          still STARTING/UNKNOWN) yields the primary slot to the newest discovered
-          session that ``state.adopts_session`` accepts (born at/after this
-          workspace's ``created_at``) — the in-process-rotation recovery below. A
-          non-adopting discovered session (a stale transcript predating this
-          workspace, especially over a reused ROOT cwd) never becomes primary but
-          still rides along as a non-primary member.
+          session is the primary; only the discovered sessions this workspace
+          *adopts* ride along as ``fs_discovered`` extras. Candidates are
+          pre-filtered on CHEAP head metadata (birth) + the sidecar BEFORE any
+          full parse (#F5), so per-tick cost is O(new sessions), not O(history) —
+          a historical transcript predating the workspace is excluded from the
+          card entirely (the "adopt only what's ours; the rest is noise"
+          precedent). Exception: a minted id that is a *dead pointer* yields the
+          primary slot to the newest adopted session; the minted entry rides
+          behind and reclaims primary the moment it materializes.
         - **No minted id** — a workspace whose agent wasn't ``kind="claude_code"``
-          at create (so no ``--session-id`` was injected), one created before
-          minting existed, or a purely hand-started run. The deterministic lookup
-          can't help, so recover the *live* session by discovery and adopt the
-          single most-recent transcript that ``state.adopts_session`` accepts as
-          the primary. Read-only and adapter-gated (a generic/shell agent
-          discovers nothing), so it needs no hooks opt-in — without it the whole
-          agent axis is blank even though a real transcript exists on disk for the
-          worktree. With nothing adopted (every discovered transcript predates
-          this workspace), the workspace is honestly sessionless.
+          at create, one created before minting existed, or a purely hand-started
+          run. With no minted session there is no reference pane, so adoption is
+          birth-only (#F1); adopt the single most-recent session that passes.
+          Nothing adopted (every candidate predates this workspace, e.g. a reused
+          ROOT cwd) → honestly sessionless.
+
+        Adoption weighs transcript birth AND a hook sidecar proving the session
+        was live in this workspace's own PANE after creation
+        (`ClaudeHook.adopts`) — the sidecar arm lets a session *resumed* inside
+        the pane (born before the workspace) be adopted, and the pane check keeps
+        a shared cwd (ROOT placement) from adopting another live workspace's
+        session (#F1).
         """
-        # Prefer the kind persisted at create — it works even when the agent is
-        # scoped to a repo's project config the daemon never loads (a "Work"
-        # profile defined only in private-repos). Fall back to a config lookup
-        # for legacy records written before agent_kind existed.
-        kind = state.agent_kind
-        if kind is None:
-            agent = mgr.config.find_agent(state.agent_name)
-            kind = agent.kind if agent is not None else "generic"
+        kind = self._effective_kind(mgr, state)
         adapter = get_adapter(kind)
-        worktree = Path(state.worktree_path)
         now = _utcnow()
 
         if state.agent_session_id:
+            # Read the minted sidecar ONCE (#F9): it drives the minted blend,
+            # the dead-pointer test, AND is the reference pane every candidate's
+            # adoption is verified against (#F1).
+            minted_sidecar = ClaudeHook.read(
+                state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+            )
+            reference_pane = minted_sidecar.tmux_pane if minted_sidecar is not None else None
             minted = self._session_activity(
-                mgr, state, kind, state.agent_session_id, "grove_launched", now
+                mgr,
+                state,
+                kind,
+                state.agent_session_id,
+                "grove_launched",
+                now,
+                sidecar=minted_sidecar,
+                cwd=state.agent_cwd,
             )
-            extras: list[SessionActivity] = []
-            if mgr.config.hooks.enabled:
-                extras = [
-                    self._session_activity(mgr, state, kind, discovered, "fs_discovered", now)
-                    for discovered in adapter.discover_sessions(
-                        worktree, exclude_id=state.agent_session_id
-                    )
-                ]
-            # A minted id that never materialized is a dead pointer, not a young
-            # session: an in-process rotation (`/clear` mints a NEW session id
-            # inside the same claude) or a hand-restarted agent leaves the
-            # workspace pinned on STARTING forever while the live session sits
-            # discoverable in the same cwd. Recover it (ungated by hooks — same
-            # read-only-discovery rule as the no-minted-id path). The sidecar-
-            # settled case (hook says WORKING before any transcript) is
-            # deliberately not demoted — only a STARTING/UNKNOWN blend means
-            # "nothing alive here".
-            unmaterialized = (
-                not adapter.remote
-                and minted.session.transcript_path is None
-                and minted.activity.state
-                in (AgentActivityState.STARTING, AgentActivityState.UNKNOWN)
-            )
-            if unmaterialized and not extras:
-                recent = adapter.discover_sessions(worktree, exclude_id=state.agent_session_id)[:1]
-                extras = [
-                    self._session_activity(mgr, state, kind, sid, "fs_discovered", now)
-                    for sid in recent
-                ]
-            if unmaterialized:
-                # Only a discovered session whose BIRTH postdates this
-                # workspace's own created_at may take the primary slot — else
-                # the newest transcript in a stale cwd (a leftover from
-                # whatever used to live here, especially ROOT placement) would
-                # be presented as this brand-new workspace's live session. A
-                # non-adopting extra still rides along as a non-primary
-                # member: the fingerprint's "every session" invariant and the
-                # hand-started-surfacing behavior both need it kept, and the
-                # minted entry takes back over if it ever materializes.
-                adopted = next(
-                    (e for e in extras if state.adopts_session(e.activity.started_at)), None
+            # Only the adopted concurrent sessions ride along; the cheap pre-filter
+            # already dropped history, so a full parse is paid per NEW session, not
+            # per historical transcript in the cwd (#F5).
+            extras = [
+                self._session_activity(
+                    mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
                 )
-                if adopted is not None:
-                    return [adopted, *(e for e in extras if e is not adopted), minted]
+                for sid, cwd, sidecar in self._adopted_candidates(
+                    adapter, state, reference_pane=reference_pane, exclude_id=state.agent_session_id
+                )
+            ]
+            if self._minted_unmaterialized(adapter, minted, minted_sidecar, now) and extras:
+                # The minted --session-id is a dead pointer (rotated by `/clear`,
+                # hand-restarted, or ended). Extras are already adoption-filtered
+                # and newest-first, so the head is the live session to promote;
+                # the minted entry rides behind and reclaims primary the moment
+                # it materializes.
+                return [*extras, minted]
             return [minted, *extras]
 
-        # No minted id: recover the *live* session by discovery. `discover_sessions`
-        # returns newest-first; walk it for the single most-recent transcript
-        # whose birth postdates this workspace's created_at (`adopts_session`) and
-        # adopt only that one — a worktree accumulates a long transcript history,
-        # so the rest would be noise on a glance tile even before the stale-cwd
-        # concern. Nothing adopted (every candidate predates this workspace, e.g.
-        # a reused ROOT cwd) → honestly sessionless.
-        for sid in adapter.discover_sessions(worktree, exclude_id=None):
-            candidate = self._session_activity(mgr, state, kind, sid, "fs_discovered", now)
-            if state.adopts_session(candidate.activity.started_at):
-                return [candidate]
+        # No minted id: recover the *live* session by discovery — birth-only, as
+        # there is no minted session to source a reference pane from (#F1). The
+        # pre-filter walks scan_cwds newest-first and returns adopted candidates
+        # only, so we full-parse just the most-recent one (the rest is noise).
+        for sid, cwd, sidecar in self._adopted_candidates(
+            adapter, state, reference_pane=None, exclude_id=None
+        ):
+            return [
+                self._session_activity(
+                    mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
+                )
+            ]
         return []
+
+    @staticmethod
+    def _effective_kind(mgr: WorkspaceManager, state: WorkspaceState) -> str:
+        """The adapter kind for ``state`` — persisted at create, else config.
+
+        Prefer the kind persisted at create: it resolves even when the agent is
+        scoped to a repo's project config the daemon never loads (a "Work"
+        profile defined only in private-repos). Fall back to a config lookup for
+        legacy records written before ``agent_kind`` existed.
+        """
+        if state.agent_kind is not None:
+            return state.agent_kind
+        agent = mgr.config.find_agent(state.agent_name)
+        return agent.kind if agent is not None else "generic"
+
+    def _adopted_candidates(
+        self,
+        adapter: AgentAdapter,
+        state: WorkspaceState,
+        *,
+        reference_pane: str | None,
+        exclude_id: str | None,
+    ) -> list[tuple[str, Path, HookRecord | None]]:
+        """Discovered sessions this workspace adopts — cheaply pre-filtered (#F5).
+
+        Unions ``discover_births`` across ``state.scan_cwds`` (#F7), sorts the
+        result newest-first by mtime, then applies the adoption gate on the CHEAP
+        head metadata (birth) plus the sidecar — reading each candidate's sidecar
+        exactly once (#F9) — BEFORE the caller pays any full transcript parse.
+        Returns ``(session_id, cwd, sidecar)`` for the passers, newest-first: the
+        cwd the session was discovered under (so its parse and pane check key on
+        the right directory across a nested project's union) and the already-read
+        sidecar (so the caller reuses it for the blend). A candidate that predates
+        the workspace and left no pane-live sidecar is dropped here and never
+        full-parsed.
+        """
+        merged: list[tuple[str, datetime | None, float, Path]] = []
+        for cwd in state.scan_cwds:
+            for sid, born_at, mtime in adapter.discover_births(cwd, exclude_id=exclude_id):
+                merged.append((sid, born_at, mtime, cwd))
+        merged.sort(key=lambda t: -t[2])  # newest-first by mtime across the union
+        out: list[tuple[str, Path, HookRecord | None]] = []
+        seen: set[str] = set()
+        for sid, born_at, _mtime, cwd in merged:
+            if sid in seen:
+                continue
+            seen.add(sid)
+            sidecar = ClaudeHook.read(sid, sidecar_dir=core_paths.agent_sidecar_dir())
+            if ClaudeHook.adopts(
+                state, born_at, candidate=sidecar, reference_pane=reference_pane, cwd=cwd
+            ):
+                out.append((sid, cwd, sidecar))
+        return out
+
+    def _minted_unmaterialized(
+        self,
+        adapter: AgentAdapter,
+        minted: SessionActivity,
+        sidecar: HookRecord | None,
+        now: datetime,
+    ) -> bool:
+        """Whether the minted ``--session-id`` is a dead pointer eligible for recovery.
+
+        The minted id carries no live work in three shapes: an in-process
+        rotation (`/clear` mints a fresh id in the same claude), a hand-restart,
+        or the session ending outright. A materialized session — one with a
+        transcript on disk — is NEVER a dead pointer (#F6): a just-remapped or
+        resumed session whose last hook event is ``SessionEnd`` has a transcript
+        and must stay primary, showing its honest idle/done state, rather than
+        being demoted against the trusted manual pin. So both detectors require
+        no transcript:
+
+        - **No transcript, blend STARTING/UNKNOWN** — nothing was written under
+          this id and no sidecar settled it, so it's honestly empty.
+        - **No transcript, latest sidecar event ``SessionEnd``** — the session is
+          over even though ``SessionEnd`` settles the blend to IDLE (not
+          STARTING/UNKNOWN); without this the dead pointer read as a live-but-quiet
+          session and recovery never ran (the 2026-07-05 incident). Gated on the
+          sidecar still superseding the poll, so a transcript that somehow outran
+          the ``SessionEnd`` keeps the id materialized.
+
+        The threaded ``sidecar`` is the minted session's, read once by the caller
+        (#F9). Remote adapters never recover this way (no local session to rotate).
+        """
+        if adapter.remote or minted.session.transcript_path is not None:
+            return False
+        if (
+            sidecar is not None
+            and sidecar.event == "SessionEnd"
+            and sidecar.supersedes_poll(now=now, transcript_at=minted.activity.last_event_at)
+        ):
+            return True
+        return minted.activity.state in (
+            AgentActivityState.STARTING,
+            AgentActivityState.UNKNOWN,
+        )
 
     def _session_activity(
         self,
@@ -494,13 +580,23 @@ class ActivityService:
         session_id: str,
         provenance: SessionProvenance,
         now: datetime,
+        *,
+        sidecar: HookRecord | None,
+        cwd: Path,
     ) -> SessionActivity:
         adapter = get_adapter(kind)
-        worktree = Path(state.worktree_path)
+        # ``cwd`` is the directory this session was discovered under — agent_cwd
+        # for the minted session, the discovered cwd for an extra (which may be
+        # the worktree root for a nested project's root-recorded session, #F7).
+        # Both filesystem adapters exact-string-match it, so keying locate/parse
+        # off the wrong directory would miss the transcript.
+        #
+        # The ``sidecar`` is pre-read once per session per tick (#F9) and reused
+        # for both the push-status override and the pending-question surface.
         # locate stays alongside the (cwd, session_id)-keyed parse: the paths
         # feed the displayed transcript_path and the STARTING detection below.
-        paths = adapter.locate_transcripts(worktree, session_id)
-        transcript = adapter.parse_activity(worktree, session_id)
+        paths = adapter.locate_transcripts(cwd, session_id)
+        transcript = adapter.parse_activity(cwd, session_id)
         # Remote adapters surface state with no local file, so "materialized"
         # can't mean "a file exists" — UNKNOWN-and-fileless is the only true
         # STARTING window.
@@ -518,7 +614,6 @@ class ActivityService:
         # waiting/done split that polling can't. It outranks the poll until the
         # transcript outruns it (the record's own staleness call); absent or
         # superseded → polled blend stands.
-        sidecar = ClaudeHook.read(session_id, sidecar_dir=core_paths.agent_sidecar_dir())
         if sidecar is not None and sidecar.supersedes_poll(
             now=now, transcript_at=transcript.last_event_at
         ):
@@ -528,7 +623,7 @@ class ActivityService:
         # ask-time (before the transcript flushes them). Surfaced independently of
         # the state override above and cross-checked against the transcript so a
         # resolved batch never lingers on the stream.
-        questions = self._pending_questions(adapter, worktree, session_id, sidecar, transcript)
+        questions = self._pending_questions(adapter, cwd, session_id, sidecar, transcript)
         session = AgentSession(
             session_id=session_id,
             transcript_path=paths[0] if paths else None,

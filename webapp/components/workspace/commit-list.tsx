@@ -1,7 +1,6 @@
 "use client";
 import type { CommitSummaryView } from "@/lib/grove/types";
 import { RelativeTime } from "@/components/shared/relative-time";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { parseCommitSubject } from "@/lib/grove/commit-format";
 
 interface Props {
@@ -10,10 +9,10 @@ interface Props {
 }
 
 /**
- * Comprehensive commit list. shadcn ScrollArea provides the scrollbar
- * (cross-browser-consistent, theme-aware). Each row is a left-rule
- * marker — VS Code source-control / git-graph styling — sha + relative
- * time on top, full subject below.
+ * Comprehensive commit list. Scrolls under the global native scrollbar rule
+ * (design-direction.md §4.7, wired in app/globals.css) — no ScrollArea
+ * wrapper needed. Each row is a left-rule marker — VS Code source-control /
+ * git-graph styling — sha + relative time on top, full subject below.
  */
 export function CommitList({ commits, isLoading }: Props) {
   if (isLoading && !commits) {
@@ -26,7 +25,7 @@ export function CommitList({ commits, isLoading }: Props) {
       </p>
     );
   }
-  // `flex h-full min-h-0` so the ScrollArea below can flex-1 inside a
+  // `flex h-full min-h-0` so the scroll container below can flex-1 inside a
   // viewport-fill parent (the Summary card on the detail page). `min-h-0`
   // is the standard escape hatch for `overflow:auto` children inside a
   // flex column — without it the child can't shrink below its content.
@@ -36,7 +35,7 @@ export function CommitList({ commits, isLoading }: Props) {
         <span className="font-bold tabular-nums text-foreground">{commits.length}</span>{" "}
         {commits.length === 1 ? "commit" : "commits"} since fork
       </p>
-      <ScrollArea className="min-h-[16rem] flex-1 pr-3">
+      <div className="min-h-[16rem] flex-1 overflow-y-auto pr-3">
         <ul className="space-y-3">
           {commits.map((c) => {
             // Strip the leading gitmoji + surface the conventional-commit type as
@@ -66,7 +65,7 @@ export function CommitList({ commits, isLoading }: Props) {
             );
           })}
         </ul>
-      </ScrollArea>
+      </div>
     </div>
   );
 }

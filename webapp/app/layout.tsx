@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { GeistSans, GeistMono } from "./fonts";
 import { Providers } from "./providers";
-import { StatusBar } from "@/components/layout/status-bar";
 
 export const metadata: Metadata = {
   title: "Grove",
@@ -25,12 +24,17 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  // Browser-chrome tint. A meta value can't read a CSS var, so these are the one
-  // place a canvas hex is unavoidable — kept in lock-step with the `--background`
-  // tokens in globals.css (dark hsl(224 20% 6%), light hsl(220 24% 98%)).
+  // On-screen keyboards shrink the app shell instead of overlaying it, so the
+  // fixed-height detail page's composer stays reachable above the keyboard
+  // rather than being covered (Next 15 exposes the `interactiveWidget` meta).
+  interactiveWidget: "resizes-content",
+  // Browser-chrome tint (the mobile status-bar / notch fill). A meta value can't
+  // read a CSS var, so these are the one place a canvas hex is unavoidable — kept
+  // in lock-step with the `--background` tokens in globals.css (detuned #139:
+  // dark hsl(45 10% 8%) = #171613, light hsl(48 33% 97%) = #faf9f5).
   themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#0c0e14" },
-    { media: "(prefers-color-scheme: light)", color: "#f9fafb" },
+    { media: "(prefers-color-scheme: dark)", color: "#171613" },
+    { media: "(prefers-color-scheme: light)", color: "#faf9f5" },
   ],
 };
 
@@ -38,11 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body className="min-h-dvh bg-background font-sans text-foreground antialiased">
-        <Providers>
-          {/* Bottom status bar takes 28px; reserve it via padding-bottom. */}
-          <div className="pb-7">{children}</div>
-          <StatusBar />
-        </Providers>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

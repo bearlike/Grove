@@ -16,13 +16,21 @@ import type { AgentActivityState, BranchPlan } from "./types";
  * tiny dep replaced three ad-hoc state homes (`use-sidebar-state.ts`,
  * `filter-persistence.ts`, and a page-local `useState` web) — a net deletion.
  *
- * Persistence (the durable slices only — `sidebarCollapsed`, `hiddenStates`,
- * `attentionOnly`) rides the `persist` middleware with `skipHydration`: the
- * store boots at defaults on the server AND the first client paint (so the
- * markup matches), then `rehydrate()` (called once on mount in providers)
- * flips to the stored values. `hydrated` lets a component hold the default
- * shape until then, the same mount-guard the old `useSidebarState` used.
+ * Persistence (the durable CHROME + rail-filter prefs — `sidebarCollapsed`,
+ * `landingView`, and the rail filters `hiddenStates`/`hiddenProjects`/
+ * `attentionOnly`/`showUnmapped`) rides the `persist` middleware with
+ * `skipHydration`: the store boots at defaults on the server AND the first
+ * client paint (so the markup matches), then `rehydrate()` (called once on mount
+ * in providers) flips to the stored values. `hydrated` lets a component hold the
+ * default shape until then, the same mount-guard the old `useSidebarState` used.
+ * The rail filters are safe to persist because the rail's compact filter
+ * (`SidebarFilter`) is the always-reachable clear-path (#158); only `query` and
+ * `scopeRepo` stay transient — a stale search/scope would silently empty the
+ * rail with no obvious way to clear it, so those reset to "show all" each load.
  */
+
+/** The two landing views (design §4.1): the composer-hero vs the card grid. */
+export type LandingView = "hero" | "overview";
 
 /** The five branch modes — mirrors the wire `BranchPlan` discriminant. */
 export type BranchMode = BranchPlan["kind"];
@@ -43,6 +51,11 @@ export interface ComposerDraft {
   remoteRef: string;
   remoteLocal: string;
   skipInit: boolean;
+  /** Adopt an existing agent session instead of minting a fresh one (#120/#121)
+   *  — rides as `CreateWorkspaceRequest.resume_session_id`. Empty = mint fresh
+   *  (the default); a full session id resumes it (claude_code/codex only, the
+   *  engine 422s otherwise). Create-only, like `skipInit`. */
+  resumeSessionId: string;
   /** Whether the Advanced ▾ disclosure (branch source + skip-init) is open. */
   advancedOpen: boolean;
 }
@@ -59,6 +72,7 @@ const INITIAL_DRAFT: ComposerDraft = {
   remoteRef: "",
   remoteLocal: "",
   skipInit: false,
+  resumeSessionId: "",
   advancedOpen: false,
 };
 
@@ -78,6 +92,11 @@ export interface UiStore {
   toggleSidebar: () => void;
   setSidebarCollapsed: (v: boolean) => void;
 
+  // ─── Landing view (ADE #140; persisted per-user, design §4.1) ───────────────
+  /** `hero` = composer-hero (default, clean first-run); `overview` = card grid. */
+  landingView: LandingView;
+  setLandingView: (v: LandingView) => void;
+
   // ─── View scope + filter (deliverable B; replaces filter-persistence.ts) ────
   /** Free-text search over title/branch — transient, never persisted. */
   query: string;
@@ -88,8 +107,19 @@ export interface UiStore {
   /** Agent-states to HIDE (empty = show all; a later state is visible by default). */
   hiddenStates: AgentActivityState[];
   toggleState: (s: AgentActivityState) => void;
+  /** `repo_root`s to HIDE from the rail (empty = all projects show; a project that
+   *  appears later is visible by default — the same hidden-set philosophy as
+   *  `hiddenStates`, so the rail never silently drops a fresh project). */
+  hiddenProjects: string[];
+  toggleProject: (repoRoot: string) => void;
   attentionOnly: boolean;
   setAttentionOnly: (v: boolean) => void;
+  /** Show the unmapped/metadata-only rows (default false — actionable rows only).
+   *  The debugging escape hatch: unmapped sessions have no live workspace to open,
+   *  so they're hidden by default and revealed on demand (the rail's hidden-note
+   *  or the filter menu). */
+  showUnmapped: boolean;
+  setShowUnmapped: (v: boolean) => void;
   clearFilters: () => void;
 
   // ─── Single live-pane focus (replaces page-local useState) ──────────────────
@@ -120,6 +150,9 @@ export const useUiStore = create<UiStore>()(
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
 
+      landingView: "hero",
+      setLandingView: (v) => set({ landingView: v }),
+
       query: "",
       setQuery: (q) => set({ query: q }),
       scopeRepo: null,
@@ -131,10 +164,26 @@ export const useUiStore = create<UiStore>()(
             ? s.hiddenStates.filter((x) => x !== state)
             : [...s.hiddenStates, state],
         })),
+      hiddenProjects: [],
+      toggleProject: (repoRoot) =>
+        set((s) => ({
+          hiddenProjects: s.hiddenProjects.includes(repoRoot)
+            ? s.hiddenProjects.filter((x) => x !== repoRoot)
+            : [...s.hiddenProjects, repoRoot],
+        })),
       attentionOnly: false,
       setAttentionOnly: (v) => set({ attentionOnly: v }),
+      showUnmapped: false,
+      setShowUnmapped: (v) => set({ showUnmapped: v }),
       clearFilters: () =>
-        set({ scopeRepo: null, hiddenStates: [], attentionOnly: false, query: "" }),
+        set({
+          scopeRepo: null,
+          hiddenStates: [],
+          hiddenProjects: [],
+          attentionOnly: false,
+          showUnmapped: false,
+          query: "",
+        }),
 
       liveId: null,
       toggleLive: (id) => set((s) => ({ liveId: s.liveId === id ? null : id })),
@@ -143,12 +192,19 @@ export const useUiStore = create<UiStore>()(
     {
       name: "grove:ui",
       storage: createJSONStorage(() => localStorage),
-      // Only the durable view/chrome preferences persist; the composer draft and
-      // transient focus/search are intentionally session-local.
+      // Durable CHROME + rail-filter preferences persist; the composer draft and
+      // transient search stay session-local. `hiddenStates`/`attentionOnly` are
+      // safe to persist again now the rail's compact filter (SidebarFilter) is
+      // the always-reachable clear-path — the §4.9 drop had unpersisted them only
+      // because nothing could clear a stale filter (`scopeRepo`/`query` stay
+      // transient: a stale scope/search would silently empty the rail).
       partialize: (s) => ({
         sidebarCollapsed: s.sidebarCollapsed,
+        landingView: s.landingView,
         hiddenStates: s.hiddenStates,
+        hiddenProjects: s.hiddenProjects,
         attentionOnly: s.attentionOnly,
+        showUnmapped: s.showUnmapped,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

@@ -1,29 +1,31 @@
 ---
-version: "1.0"
+version: "2.0"
 name: Grove-webapp-design-system
-description: "A space-black product dashboard built around the deep-cool canvas (#0c0e14, hue 224 nearly pure black with a faint blue tint), off-white foreground (#f0f3f8), and terracotta (#d97757) as the single chromatic accent. Grove's webapp reads as software-craft infrastructure: dense, technical, and focused. Display type is Geist Sans at 500-600 with measured negative tracking. Cards are dark charcoal panels with hairline borders. Terracotta appears on the brand mark, focus rings, and the primary CTA — never decoratively. Page rhythm leans on product UI screenshots and workspace activity tiles rather than atmospheric color. This philosophy is directly inherited from Linear's marketing canvas, adapted to Grove's terracotta brand and space-black palette."
+description: "A calm agent-development-environment: a persistent left session rail, a centered composer-hero landing, and a three-zone session page (rail · assistant-ui transcript · tabbed work panel) — a mental-model shift from 'monitor a fleet of cards' to 'work in a session, switch sessions in a rail' (the ADE overhaul, #136-#143). Built on a DETUNED near-neutral 'space-black' canvas (#171613, hue ~45, barely warm — no longer the cool-blue hue 224 of the #98 redesign) and a warm-neutral light theme (#faf9f5), with terracotta (#d97757) as the single chromatic accent, split into three AA-safe roles (brand mark / text / CTA fill). Every text pair is WCAG-computed and enforced by `tests/unit/contrast.test.ts` — AA 4.5:1 floor for all text (no large-text discount), AAA 7:1 for chat prose, 3:1 for non-text indicators. Display type is Geist Sans; lucide icons carry a single app-wide 1.75 stroke; a global `scrollbar-color` rule themes every native scroll surface. Persistent surfaces separate by tone and space — hairlines only where tone cannot, and transient overlays keep their chrome. Terracotta appears on the brand mark, the `you` speaker label, and the primary CTA fill — never decoratively. Grove's visual language still traces to Linear's marketing canvas; the operating philosophy is calm-first (see Design philosophy)."
 
 colors:
-  # Accent — terracotta (Grove brand, inherits from TUI $primary)
-  primary: "#d97757"
+  # Accent — terracotta (Grove brand). THREE roles since the ADE contrast pass
+  # (#139): the brand mark is never a text-bearing fill (white-on-#d97757 is
+  # only 3.12:1, fails AA).
+  primary: "#d97757"          # brand mark ONLY — logo, dark-mode focus ring
   primary-foreground: "#ffffff"
-  primary-hover: "#e08a66"
-  primary-focus: "#c96a44"
-  primary-ring: "hsl(15 74% 61% / 0.4)"
+  primary-fg: "#e08a6e"       # terracotta AS TEXT (links; intended for the `you` label too — RoleLabel ships bare `--primary` instead, see Contrast contract) — dark theme, 6.0:1
+  primary-strong: "#b95230"   # CTA fill (send/create buttons) — white label 4.8:1 AA, both themes
+  ring: "#d97757"             # dark-theme focus ring (5.9:1 on canvas)
   # Foreground (text)
-  ink: "#f0f3f8"
-  ink-muted: "#9dafc8"
-  ink-subtle: "#8d9ab3"
-  ink-tertiary: "#5c6a84"
-  # Canvas & surfaces
-  canvas: "#0c0e14"
-  surface-1: "#151820"
-  surface-2: "#191c28"
-  surface-3: "#1b1f2c"
-  chrome: "#0f1219"
-  hairline: "#24293a"
-  hairline-strong: "#2d334a"
-  # Semantic
+  ink: "#f6f5ef"
+  ink-muted: "#b0aca2"        # muted-foreground — 6.0:1 worst-case, incl. 12-13px meta
+  # Canvas & surfaces — DETUNED near-neutral (hue ~45), replacing the #98
+  # redesign's cool-blue hue-224 "space black"
+  canvas: "#171613"
+  sidebar: "#1c1b17"          # chrome: header · rail · rail footer
+  card: "#232320"
+  elevated: "#2b2a26"
+  muted: "#2f2e2a"
+  hairline: "#38352f"         # decorative, WCAG-exempt — see Contrast contract
+  code: "#e9e7df"
+  code-well: "#201f1c"
+  # Semantic (Python-mirrored, drift-tested — unchanged by the ADE detune)
   semantic-success: "#84cc16"
   semantic-warning: "#b8860b"
   semantic-destructive: "#e64c4c"
@@ -32,303 +34,320 @@ colors:
   ref-branch: "#26a69a"
   ref-add: "#99d199"
   ref-remove: "#e66666"
+  ref-info: "#c2dcf7"
+
+# Light theme — warm-neutral off-white (replaces the earlier cool-slate,
+# hue ~220). Documented once here since `defaultTheme="system"` makes both
+# themes equally primary; see the CSS Variable table below for the full pair.
+colors-light:
+  primary-fg: "#b4491f"       # 5.2:1
+  primary-strong: "#b95230"
+  ring: "#b95230"             # 4.6:1 on canvas
+  ink: "#1b1a17"
+  ink-muted: "#6b6559"
+  canvas: "#faf9f5"
+  sidebar: "#f3f1ea"
+  card: "#ffffff"
+  elevated: "#ffffff"
+  muted: "#efece4"
+  hairline: "#e6e2d9"
+  code: "#26241f"
+  code-well: "#f3f1ea"
 
 typography:
-  display-xl:
+  # The scale actually shipped in components (verified against globals.css +
+  # every consumer — session rail, context bar, work panel, chat). A DORMANT
+  # named scale (§4.3 tokens) also lives in globals.css's `@theme` block for
+  # future phases; the chat transcript already consumes `--text-prose`.
+  page-title:
     fontFamily: Geist Sans
-    fontSize: 80px
+    fontSize: 16px
     fontWeight: 600
-    lineHeight: 1.05
-    letterSpacing: -3.0px
-  display-lg:
-    fontFamily: Geist Sans
-    fontSize: 56px
-    fontWeight: 600
-    lineHeight: 1.10
-    letterSpacing: -1.8px
-  display-md:
-    fontFamily: Geist Sans
-    fontSize: 40px
-    fontWeight: 600
-    lineHeight: 1.15
-    letterSpacing: -1.0px
-  headline:
-    fontFamily: Geist Sans
-    fontSize: 28px
-    fontWeight: 600
-    lineHeight: 1.20
-    letterSpacing: -0.6px
-  card-title:
-    fontFamily: Geist Sans
-    fontSize: 22px
-    fontWeight: 500
-    lineHeight: 1.25
-    letterSpacing: -0.4px
-  subhead:
-    fontFamily: Geist Sans
-    fontSize: 20px
-    fontWeight: 400
-    lineHeight: 1.40
-    letterSpacing: -0.2px
-  body-lg:
-    fontFamily: Geist Sans
-    fontSize: 18px
-    fontWeight: 400
-    lineHeight: 1.50
-    letterSpacing: -0.1px
+    lineHeight: 1.4
+    usage: Route/dialog titles, prominent stat values
   body:
+    fontFamily: Geist Sans
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.43
+    usage: Body copy, controls, buttons, form inputs
+  chat-prose:
     fontFamily: Geist Sans
     fontSize: 16px
     fontWeight: 400
-    lineHeight: 1.50
-    letterSpacing: -0.05px
-  body-sm:
+    lineHeight: 1.6
+    usage: "Assistant + user transcript prose — the text-prose reading scale (--text-prose token)"
+  dense-row:
     fontFamily: Geist Sans
-    fontSize: 14px
+    fontSize: 13px
     fontWeight: 400
-    lineHeight: 1.50
-    letterSpacing: 0
-  caption:
+    lineHeight: 1.5
+    usage: Identity-popover mono values, ALL code (inline + fenced)
+  meta:
     fontFamily: Geist Sans
     fontSize: 12px
     fontWeight: 400
-    lineHeight: 1.40
-    letterSpacing: 0
-  button:
+    lineHeight: 1.4
+    usage: Relative times, byline copy, secondary info
+  section-label:
     fontFamily: Geist Sans
-    fontSize: 14px
-    fontWeight: 500
-    lineHeight: 1.20
-    letterSpacing: 0
-  eyebrow:
+    fontSize: 11px
+    fontWeight: 600
+    lineHeight: 1.3
+    letterSpacing: 0.08em
+    usage: "Uppercase panel/section headers (SUMMARY, IDENTITY, TIMELINE) — the terminal-feel cue"
+  micro-label:
     fontFamily: Geist Sans
-    fontSize: 13px
+    fontSize: 10px
     fontWeight: 500
-    lineHeight: 1.30
-    letterSpacing: 0.4px
+    letterSpacing: 0.08em
+    usage: Stat units, inline state labels beside a glyph
   mono:
     fontFamily: Geist Mono
     fontSize: 13px
     fontWeight: 400
-    lineHeight: 1.50
-    letterSpacing: 0
+    lineHeight: 1.5
+    usage: Branches, SHAs, agent/model identifiers, fenced + inline code
 
 rounded:
-  xs: 4px
-  sm: 6px
-  md: 8px
-  lg: 12px
-  xl: 16px
-  xxl: 24px
-  pill: 9999px
-  full: 9999px
+  # Derived from `--radius: 0.5rem` (8px) via the shadcn formula in globals.css
+  # `@theme inline` — NOT the marketing-canvas 12px/16px scale the pre-ADE docs
+  # named. `rounded-2xl`/`rounded-3xl`/`rounded-full` are Tailwind's own
+  # untouched defaults (the formula only remaps sm/md/lg/xl).
+  sm: 4px      # rounded-sm  — calc(radius - 4px)
+  md: 6px      # rounded-md  — calc(radius - 2px) — ALL buttons, badges, inputs
+  lg: 8px      # rounded-lg  — = radius — cards, panels, dialogs
+  xl: 12px     # rounded-xl  — calc(radius + 4px)
+  xxl: 16px    # rounded-2xl — Tailwind default, unused today
+  composer: 24px  # rounded-3xl — Tailwind default; the ONE surface that opts up: the create-composer hero card + the steer composer well
+  pill: 9999px # rounded-full — status pills, toggle pills
 
 spacing:
+  # 4px grid. Section/display-hero spacing tiers from the old marketing-canvas
+  # lineage were dropped — no shipped surface uses them (no marketing page
+  # exists; `/` IS the composer-hero landing).
   xxs: 4px
   xs: 8px
   sm: 12px
   md: 16px
   lg: 24px
   xl: 32px
-  xxl: 48px
-  section: 96px
 
 components:
   button-primary:
-    backgroundColor: "{colors.primary}"
+    backgroundColor: "{colors.primary-strong}"
     textColor: "{colors.primary-foreground}"
-    typography: "{typography.button}"
+    typography: "{typography.body}"
     rounded: "{rounded.md}"
     padding: 8px 14px
   button-secondary:
-    backgroundColor: "{colors.surface-1}"
+    backgroundColor: "{colors.card}"
     textColor: "{colors.ink}"
-    typography: "{typography.button}"
+    typography: "{typography.body}"
     rounded: "{rounded.md}"
     padding: 8px 14px
     border: "1px {colors.hairline}"
   button-ghost:
     backgroundColor: "transparent"
     textColor: "{colors.ink}"
-    typography: "{typography.button}"
+    typography: "{typography.body}"
     rounded: "{rounded.md}"
     padding: 8px 14px
   workspace-card:
-    backgroundColor: "{colors.surface-1}"
+    backgroundColor: "{colors.card}"
     textColor: "{colors.ink}"
-    typography: "{typography.body-sm}"
-    rounded: "{rounded.lg}"
-    border: "1px {colors.hairline}"
-  workspace-card-active:
-    backgroundColor: "{colors.surface-1}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.lg}"
-    border: "1px {colors.hairline-strong}"
+    typography: "{typography.body}"
+    rounded: "{rounded.xl}"          # rounded-xl (12px) since the #155 calm rebuild
+    border: "1px {colors.hairline}"  # border-border/60 in code
   status-badge:
-    backgroundColor: "{colors.surface-2}"
+    backgroundColor: "{colors.elevated}"
     textColor: "{colors.ink-muted}"
-    typography: "{typography.caption}"
+    typography: "{typography.meta}"
     rounded: "{rounded.pill}"
     padding: 2px 8px
-  sidebar-nav:
-    backgroundColor: "{colors.chrome}"
+  session-rail:
+    backgroundColor: "{colors.sidebar}"
     textColor: "{colors.ink}"
-    typography: "{typography.body-sm}"
-    height: 56px
-  composer-panel:
-    backgroundColor: "{colors.surface-2}"
-    textColor: "{colors.ink}"
-    typography: "{typography.body}"
-    rounded: "{rounded.xl}"
-    border: "1px {colors.hairline}"
-    padding: 24px
-  detail-panel:
-    backgroundColor: "{colors.surface-1}"
+    typography: "{typography.body}"       # text-sm title line; meta line is 11px
+    width: 280px                          # hides entirely (w-0) when collapsed — no icon strip
+  header:
+    backgroundColor: "{colors.sidebar}"
     textColor: "{colors.ink}"
     typography: "{typography.body}"
-    rounded: "{rounded.lg}"
-    border: "1px {colors.hairline}"
-    padding: 24px
+    height: 52px
+  composer-hero:
+    backgroundColor: "{colors.card}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.composer}"
+    padding: 12px
+  identity-trigger:
+    backgroundColor: "transparent"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"   # text-sm font-semibold (a heading role, not 16px)
+    # The header's state-led title trigger (ContextBar) — opens the session
+    # popover (#153); no background of its own, rides the shared header slot.
+  work-panel:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "0"
+    border: "none"
   terminal-pane:
     backgroundColor: "{colors.canvas}"
     textColor: "{colors.ink}"
-    fontFamily: "Geist Mono"
-    rounded: "{rounded.lg}"
-    border: "1px {colors.hairline}"
+    fontFamily: "Geist Mono / JetBrains Mono Nerd"
+    rounded: "0"
+    border: "none"
   text-input:
-    backgroundColor: "{colors.surface-2}"
+    backgroundColor: "{colors.elevated}"
     textColor: "{colors.ink}"
     typography: "{typography.body}"
     rounded: "{rounded.md}"
-    border: "1px {colors.hairline-strong}"
+    border: "1px {colors.hairline}"
     padding: 8px 12px
-  text-input-focused:
-    backgroundColor: "{colors.surface-2}"
-    textColor: "{colors.ink}"
-    typography: "{typography.body}"
-    rounded: "{rounded.md}"
-    focusRing: "2px {colors.primary-ring}"
-    padding: 8px 12px
-  project-header:
-    backgroundColor: "{colors.chrome}"
-    textColor: "{colors.ink}"
-    typography: "{typography.body-sm}"
-    height: 56px
-    border: "1px solid {colors.hairline}"
 ---
 
 ## Overview
 
-Grove's webapp canvas is "space black" — `{colors.canvas}` (`hsl(224 20% 6%)`) is a deep cool near-black with a faint blue tint. On top sits a four-step surface ladder (`{colors.surface-1}` through `{colors.chrome}`) for cards, panels, and chrome, with hairline borders at `{colors.hairline}`. Off-white text (`{colors.ink}` `hsl(210 24% 96%)`) carries the body and headlines.
+Grove's webapp is an **agent development environment (ADE)**, not a dashboard you monitor from a distance (the ADE overhaul, epics #136-#143). Every route shares ONE persistent shell: a 52px header and a 280px left **session rail** — Grove's "thread list," a single flat cross-project list sorted by recency (latest first), with per-row provenance (project · branch · ±changes) and attention signaled inline rather than a pinned group (rail v3, #158). The landing route (`/`) defaults to a centered **composer-hero** (a persisted `Hero | Overview` toggle keeps today's rich card grid one click away for power users). The session route (`/w/[id]`) is a **three-zone layout**: the shared rail, an `@assistant-ui/react`-driven transcript column (~704px, centered), and a tabbed **work panel** (Terminal · Diff · Info) that can split side-by-side with the transcript or collapse to full-screen.
 
-The single chromatic accent is **terracotta** `{colors.primary}` (`#d97757`) — used on focus rings, primary CTA, the active status indicator, and the brand mark. Grove inherits this accent from the TUI's `$primary` clay, so the terminal UI and the web dashboard share one brand voice. A lighter hover state (`{colors.primary-hover}`) and a deeper focus-ring tint (`{colors.primary-focus}`) extend the same hue. Grove avoids saturated second accents on the marketing canvas — semantic colors (`{colors.semantic-success}` lime, `{colors.semantic-warning}` amber, `{colors.semantic-destructive}` red) exist only for workspace-status signals, never for decorative sections.
+The canvas is a **detuned near-neutral "space black"** — `{colors.canvas}` (`#171613`, hue ~45, barely warm) — replacing the earlier cool-blue hue-224 canvas from the #98 redesign. The blue cast was the one thing fighting the warm terracotta accent; the detune keeps the deep, dark-first identity while removing that discord (design-direction.md §1.3, ruling 1.3). The light theme is a warm-neutral off-white (`#faf9f5`), not the earlier cool slate. `defaultTheme="system"` is unchanged — following the OS is itself the familiar behavior.
 
-The underlying **design philosophy is inherited from Linear's marketing canvas** (see root `DESIGN.md`, the origin document). Linear's key insights adopted here: near-black canvas as the whitespace; a surface ladder replacing drop shadows; a single chromatic accent used at high discipline; aggressive negative letter-spacing on display type; and product UI screenshots as the decorative protagonist. The only divergence: Grove's brand accent is terracotta rather than lavender, matching the TUI and the Grove identity.
+The single chromatic accent is **terracotta**, now split into **three AA-safe roles** (the #139 contrast pass): `{colors.primary}` is the brand mark ONLY (logo, dark-mode focus ring — never a text-bearing fill, since white-on-`#d97757` is only 3.12:1 and fails AA); `{colors.primary-fg}` is terracotta AS TEXT (links; the design intent for the `you` speaker label too, though `RoleLabel` currently ships bare `--primary` — a KNOWN, uncorrected component-class gap, see below); `{colors.primary-strong}` is the deepened CTA fill for send/create buttons (white label clears AA in both themes). Semantic colors (`--status-*`/`--agent-*`/`--ref-*`) are unchanged and still Python-mirrored, drift-tested, and used only for workspace/agent-state signals — never decoratively.
 
-**Implementation:** All tokens map to Tailwind v4 CSS variables in `app/globals.css`. The Tailwind `@theme inline` block bridges these to utility classes (`bg-card`, `border-border`, `text-muted-foreground`, etc.). Never inline a raw hex — reach for the closest CSS variable first.
+**Implementation:** All tokens map to Tailwind v4 CSS variables in `app/globals.css`. The Tailwind `@theme inline` block bridges these to utility classes (`bg-card`, `border-border`, `text-muted-foreground`, etc.). Never inline a raw hex — reach for the closest CSS variable first. **Every neutral + brand text pair is enforced by `tests/unit/contrast.test.ts`**, not eyeballed (see Contrast contract below) — a token edit that quietly drops below floor fails the build.
 
 **Key characteristics:**
-- **Space-black canvas** (`{colors.canvas}`) — the deepest surface, with a faint blue tint (not pure black).
-- **Terracotta accent** (`{colors.primary}`) — used only on brand mark, primary CTA, focus ring, and active-status indicators.
-- Four-step surface ladder (canvas → surface-1 → surface-2 → chrome) carries hierarchy without shadow.
-- Display tracking is aggressively negative (−3.0px at 80px); body holds at −0.05px.
-- Cards use `{rounded.lg}` 12px corners with 1px hairline borders — never pill-rounded cards.
-- **Product UI screenshots and workspace-activity tiles** dominate the screen real estate.
-- No second chromatic accent for decoration. No atmospheric gradients. No spotlight cards.
+- **Rail-first IA.** A persistent, collapsible session rail on every route (it hides entirely when collapsed — modern-chat behavior, no icon strip) — the fleet is one glance away instead of a wall of cards.
+- **Detuned space-black canvas** (`{colors.canvas}`) — deep and dark-first, but near-neutral rather than cool-blue.
+- **Terracotta accent**, three roles (mark / text / CTA fill) — see above.
+- Surface ladder (canvas → sidebar/chrome → card → elevated → muted) carries hierarchy without shadow.
+- **1.75 lucide stroke, one global rule** — no per-instance overrides.
+- **Global thin scrollbars** (`scrollbar-width: thin`) — no `ScrollArea` wrapper, no `::-webkit-scrollbar`.
+- **No atmospheric gradients. No spotlight cards.** No drop shadows except floating overlays (Popover/Dialog/Sheet/Tooltip/Dropdown).
+
+---
+
+## Design philosophy — calm by default, focus-first
+
+Grove's ADE is **calm technology** (after Weiser & Brown): the interface asks for attention only when it has something worth saying, and otherwise recedes. On the session page, the transcript is the **one focal surface**; the rail, header, and work panel exist to frame it, never to compete with it.
+
+Four rules follow from that stance, and they govern every layout decision below:
+
+1. **One focal surface.** Each screen has a single thing the user came to watch — on `/w/[id]` it's the transcript (or the terminal when the work panel is the active pane). Chrome frames it and gets out of the way.
+2. **Signal-to-noise discipline.** Every persistent line, border, badge, and label spends attention, so it has to earn that cost by carrying state or structure needed *at rest*. Decoration that carries nothing is noise — remove it.
+3. **Progressive disclosure.** Detail is opt-in, and each datum has exactly one named home: session switch/track lives in the rail rows, the full diff + commit list in the work panel's Diff tab, metrics/timeline in the Info tab, and git identity + lifecycle verbs one click behind the title in the session identity popover (Identity · Changes · Actions · Danger zone). The v2 refit (#153) re-consolidated identity + lifecycle into that popover — one hop away, not spread flat across the header — while session→rail and diff/metrics→tabs held. Nothing lost, everything paced.
+4. **Density is a byproduct, not the goal.** A dense screen is what you get *after* removing chrome and deferring detail — never bought by shrinking type. The rail's calm single-line 32px rows and the transcript's 24px inter-message gap keep readability first; density is what's left when chrome is removed.
+
+**Lineage vs. philosophy.** The *visual language* — the near-black palette, the surface ladder, the single accent — still traces to Linear's marketing canvas (see root `DESIGN.md`). The *operating philosophy* above is calm-first and is Grove's own; where the two pull apart, calm-first wins. Persistent surfaces separate by **tone and space, not lines** (the #130 rule, carried forward into the ADE shell) — transient overlays (Popover/Dialog/Dropdown/Sheet/Tooltip) are the deliberate exception, since a floating surface leaving the page plane needs an edge to read against whatever it covers.
 
 ---
 
 ## CSS Variable → Design Token Mapping
 
-> Every design token maps to one of Grove's Tailwind v4 CSS variables. This table is the implementation bridge.
+> Every design token maps to one of Grove's Tailwind v4 CSS variables, defined once in `app/globals.css`'s `:root` (light) and `.dark` blocks. This table is the implementation bridge — both themes are documented since `defaultTheme="system"` makes them equally primary.
 
-| Design token | CSS variable | Dark value | Purpose |
-|---|---|---|---|
-| `{colors.canvas}` | `--background` | `hsl(224 20% 6%)` | Page canvas — every screen's root surface |
-| `{colors.surface-1}` | `--card` | `hsl(222 17% 10%)` | Default card/panel background |
-| `{colors.surface-2}` | `--elevated` | `hsl(222 16% 13%)` | Raised wells, composer hero, popovers |
-| `{colors.chrome}` | `--sidebar` | `hsl(224 18% 8%)` | Persistent chrome: header, left rail, status bar |
-| `{colors.hairline}` | `--border` | `hsl(220 12% 18%)` | Default 1px card borders, dividers |
-| `{colors.hairline-strong}` | `--input` | `hsl(220 12% 21%)` | Input backgrounds and focus-ring surfaces |
-| `{colors.ink}` | `--foreground` | `hsl(210 24% 96%)` | Body text, headlines |
-| `{colors.ink-subtle}` | `--muted-foreground` | `hsl(216 14% 62%)` | Secondary text, captions, meta |
-| `{colors.primary}` | `--primary` | `hsl(15 74% 61%)` | Terracotta accent |
-| `{colors.primary-focus}` | `--ring` | `hsl(15 74% 61%)` | Focus rings |
-| `{colors.surface-2}` | `--muted` | `hsl(222 14% 13%)` | Muted surface backgrounds |
-| `{colors.surface-2}` | `--accent` | `hsl(220 13% 17%)` | Hover/accent surface |
-| `{colors.semantic-destructive}` | `--destructive` | `hsl(0 68% 58%)` | Destructive actions, error status |
+| Design token | CSS variable | Dark value | Light value | Purpose |
+|---|---|---|---|---|
+| `{colors.canvas}` | `--background` | `#171613` (hsl 45 10% 8%) | `#faf9f5` (hsl 48 33% 97%) | Page canvas — deepest surface |
+| `{colors.sidebar}` | `--sidebar` | `#1c1b17` (hsl 48 10% 10%) | `#f3f1ea` (hsl 47 27% 94%) | Persistent chrome: header, rail, rail footer |
+| `{colors.card}` | `--card` | `#232320` (hsl 60 4% 13%) | `#ffffff` | Default card/panel background |
+| `{colors.elevated}` | `--elevated` | `#2b2a26` (hsl 48 6% 16%) | `#ffffff` | Raised wells, popovers |
+| `{colors.muted}` | `--muted` | `#2f2e2a` (hsl 48 6% 17%) | `#efece4` (hsl 44 26% 92%) | Footer strips, well fills |
+| `{colors.hairline}` | `--border` | `#38352f` (hsl 40 9% 20%) | `#e6e2d9` (hsl 42 21% 88%) | Decorative hairline — WCAG-exempt, see Contrast contract |
+| `{colors.ink}` | `--foreground` | `#f6f5ef` (hsl 51 28% 95%) | `#1b1a17` (hsl 45 8% 10%) | Body text, headlines — AAA on every surface |
+| `{colors.ink-muted}` | `--muted-foreground` | `#b0aca2` (hsl 43 8% 66%) | `#6b6559` (hsl 40 9% 38%) | Secondary text, captions, meta, placeholder |
+| `{colors.code}` / `{colors.code-well}` | `--code` / `--code-well` | `#e9e7df` / `#201f1c` | `#26241f` / `#f3f1ea` | Fenced/inline code — a distinct surface from `--muted` |
+| `{colors.primary}` | `--primary` | `#d97757` | `#d97757` | Brand mark ONLY — never a text-bearing fill (KNOWN uncorrected gap: `RoleLabel`'s `you` tag ships bare `text-primary`, see the terracotta-roles note + Contrast contract) |
+| `{colors.primary-fg}` | `--primary-fg` | `#e08a6e` | `#b4491f` | Terracotta AS TEXT (design intent: `you` label, links) |
+| `{colors.primary-strong}` | `--primary-strong` | `#b95230` | `#b95230` | CTA fill (send/create) — white label 4.8:1 |
+| `{colors.ring}` | `--ring` | `#d97757` | `#b95230` | Focus ring |
+| `--scrollbar-thumb` | `--scrollbar-thumb` | `rgba(255,255,255,.18)` | `rgba(0,0,0,.20)` | Global scrollbar thumb (§ Scrollbars) |
+| `{colors.semantic-destructive}` | `--destructive` | `#e64c4c` | `#991b1b` | Destructive actions, error status |
 
 **Using tokens in Tailwind utilities:**
 
 ```tsx
-// Background tiers
 <div className="bg-background">          // canvas
-<div className="bg-card">               // surface-1 (default card)
-<div className="bg-elevated">           // surface-2 (raised well)
-<div className="bg-sidebar">            // chrome
-
-// Borders
-<div className="border border-border">  // hairline
-<div className="border border-input">   // stronger input border
-
-// Text
-<p className="text-foreground">         // ink
-<p className="text-muted-foreground">   // ink-subtle
-<p className="text-primary">           // terracotta accent
-
-// Focus ring
-<button className="ring-ring">         // terracotta focus ring
+<div className="bg-sidebar">             // chrome (header/rail)
+<div className="bg-card">                // default card
+<div className="bg-elevated">            // raised well
+<div className="border border-border">   // hairline
+<p className="text-foreground">          // ink
+<p className="text-muted-foreground">    // ink-muted
+<p className="text-primary-fg">          // terracotta as text
+<button className="bg-primary-strong text-primary-foreground"> // CTA fill
+<button className="ring-2 ring-ring">    // focus ring
 ```
 
 ---
 
 ## Colors
 
-### Brand & Accent
+### Brand & Accent — three terracotta roles, not one
 
-**Terracotta** (`{colors.primary}`, `--primary`): The single chromatic accent — primary CTA, focus rings, active-status glyphs, the brand mark. A direct inheritance from the TUI's `$primary` clay, ensuring visual continuity between terminal and web.
+The #139 contrast pass split terracotta into three tokens because white-on-`#d97757` (`{colors.primary}`) is only 3.12:1 — it fails AA for a 14px label:
 
-- Default: `#d97757` (hsl 15 74% 61%)
-- Hover lift: `#e08a66` (slightly brighter)
-- Focus/pressed: `#c96a44` (slightly deeper)
-- Focus ring: 2px at 40% opacity
+- **`{colors.primary}` (`--primary`, `#d97757`)** — the brand MARK only: the logo, the dark-theme focus ring. Never a text-bearing fill.
+- **`{colors.primary-fg}` (`--primary-fg`)** — terracotta AS TEXT: links. `#e08a6e` dark (6.0:1), `#b4491f` light (5.2:1). This is also the *intended* role for the `RoleLabel` `you` speaker tag, but see the gap below.
+- **`{colors.primary-strong}` (`--primary-strong`, `#b95230`)** — the CTA FILL for send/create buttons. White label clears 4.8:1 AA in both themes; the fill itself clears 3:1 against canvas (the non-text component-boundary floor).
 
-**One-accent rule.** Terracotta is the only chromatic accent on the marketing/chrome surfaces. The ref colors (teal for branches, cyan for agent info) live *inside* workspace tiles — those are content, not decoration.
+**One-accent rule, unchanged.** Terracotta (in whichever of its three roles) is the only chromatic accent on chrome surfaces. The ref colors (teal branches, blue agent info) live *inside* content — those are semantic data, not decoration.
+
+**KNOWN, uncorrected gap — `RoleLabel`'s `you` tag ships bare `--primary` (`text-primary`), not `--primary-fg`.** Mirrors the `Button` `default`-variant gap: the #139 token pass flagged the mismatch but deliberately did NOT touch component classes (that's a later phase) — fix it by swapping `RoleLabel`'s `you` branch to `text-primary-fg` when that component is next restyled. Until then, treat every "`you` = `--primary-fg`" statement below as design intent, not shipped behavior.
 
 ### Canvas & Surfaces
 
-The dark canvas IS the whitespace. Sections separate by lift onto surface panels, not by gaps in white. Four steps:
+The dark canvas IS the whitespace — now detuned to near-neutral (hue ~45) rather than the earlier cool-blue (hue ~224). Four steps, climbing in lightness so depth reads without borrowing chroma:
 
 | Level | Token | CSS Var | Use |
 |---|---|---|---|
-| 0 — Canvas | `{colors.canvas}` | `--background` | Screen root, sidebar behind cards, page areas |
-| 1 — Chrome | `{colors.chrome}` | `--sidebar` | Persistent header, left rail, status bar |
-| 2 — Card | `{colors.surface-1}` | `--card` | Workspace cards, list panels, default content panels |
-| 3 — Elevated | `{colors.surface-2}` | `--elevated` | Composer, detail popover, raised wells, `--muted`, `--accent` |
+| 0 — Canvas | `{colors.canvas}` | `--background` | Screen root, terminal well, deepest surface |
+| 1 — Chrome | `{colors.sidebar}` | `--sidebar` | Header, session rail, rail footer — ONE tone unifying the persistent frame |
+| 2 — Card | `{colors.card}` | `--card` | Cards, dialogs, popovers, list panels |
+| 3 — Elevated / Muted | `{colors.elevated}` / `{colors.muted}` | `--elevated` / `--muted` | Raised wells, the composer plane, the work-panel tab strip, the view-switcher tone well |
 
 ### Text Tiers
 
 | Token | CSS Var | Use |
 |---|---|---|
-| `{colors.ink}` | `--foreground` | All headlines and emphasized body type |
-| `{colors.ink-muted}` | (interpolated) | Secondary metadata, hover labels |
-| `{colors.ink-subtle}` | `--muted-foreground` | Tertiary type, captions, disabled |
-| `{colors.ink-tertiary}` | (interpolated) | Quaternary — footnotes, placeholder chrome |
+| `{colors.ink}` | `--foreground` | All headlines and body type — 16.4:1+ (AAA) on every surface, both themes |
+| `{colors.ink-muted}` | `--muted-foreground` | Secondary metadata, captions, labels, placeholder — 6.0:1 dark / 4.9:1 light (danger-zone 12-13px meta, still AA) |
 
 ### Semantic
 
-- **Lime** (`{colors.semantic-success}` `#84cc16`): Active/working status indicators. The only vibrant green on the surface.
+- **Lime** (`{colors.semantic-success}` `#84cc16`): Active/working status indicators.
 - **Amber** (`{colors.semantic-warning}` `#b8860b`): Orphaned, waiting, attention-needed states.
 - **Red** (`{colors.semantic-destructive}` `#e64c4c`): Error, destructive actions.
 - **Cyan** (`{colors.semantic-info}` `#c2dcf7`): Agent name, info slot, idle status.
 
-Semantic colors live on status badges and state glyphs — **not** as section backgrounds or card fills.
+Semantic colors live on status badges and state glyphs — never as section backgrounds or card fills. Mirrored from `grove/core/contracts/status_palette.py` / `agent_palette.py`; the drift tests (`status-tokens.test.ts`, `agent-state-tokens.test.ts`) fail the build if a hex here diverges from Python. **One known pre-existing gap, inherited (not fixed) by the ADE detune:** light-mode `--status-active` lime (`#65a30d` as a glyph reference) drops below 3:1 on some light surfaces — since the hue is frozen (Python-owned), Grove compensates by never signaling ACTIVE/working with the glyph alone: a foreground text label and the `grove-pulse` motion cue always ride with it.
 
 ### Ref colors (git / agent)
 
-- **Teal** (`{colors.ref-branch}` `#26a69a`): Branch names, git refs.
-- **Green** (`{colors.ref-add}` `#99d199`): `+N` additions, ahead, success flash.
-- **Red** (`{colors.ref-remove}` `#e66666`): `-N` deletions, behind, error flash.
+- **Teal** (`{colors.ref-branch}` `#26a69a`): Branch names, git refs. The card meta row and the identity popover render the branch as a teal mono VALUE behind a matching teal `GitBranch` glyph; light-mode branch-teal-as-text sits at the same frozen-hue gap as the lime note above (`#1f8c7e` ≈ 3.9:1, outside `contrast.test.ts`'s neutral-only scope) — an accepted trade for mono-ref legibility, not a clean avoidance.
+- **Green** (`{colors.ref-add}` `#99d199`): `+N` additions, ahead count, success flash.
+- **Red** (`{colors.ref-remove}` `#e66666`): `-N` deletions, behind count, error flash.
+- **Blue** (`{colors.ref-info}` `#c2dcf7`): Agent identifier, the `agent` speaker label.
+
+---
+
+## Contrast contract
+
+**Every neutral + brand text pair is WCAG-computed and enforced by `tests/unit/contrast.test.ts`, mirroring the `status-tokens.test.ts` drift-test pattern.** The test parses the real `:root`/`.dark` HSL tokens straight out of `globals.css`, computes contrast ratios, and fails the build if any pair drops below floor — so a future edit that lightens a token can't ship unnoticed.
+
+| Floor | Applies to |
+|---|---|
+| **AA 4.5:1** | ALL text, including 12-13px metadata/captions/placeholders — no large-text discount |
+| **AAA 7:1** | Chat prose (`--foreground` on background/card/elevated/muted) — the surface read for minutes |
+| **3:1** | Non-text indicators: focus ring, CTA-fill component boundary |
+
+**Hairline borders are exempt from 3:1, by correct WCAG scoping, not hand-waving.** `--border` lands ~1.3-1.5:1 in both themes (same order as Linear's own hairline). WCAG 1.4.11 requires 3:1 only for graphics *required to identify* a component or state — Grove identifies controls by fill + focus ring (the "tone over lines" rule + filled input wells), so a resting hairline isn't the sole indicator and doesn't need to clear it. The 3:1 obligation is met by the focus ring and CTA-fill boundary instead, both asserted directly.
+
+The scope is deliberately narrow: only the free-to-retheme **neutral ramp + terracotta trio**. The frozen `--status-*`/`--agent-*`/`--ref-*` hues are Python-mirrored and owned by their own drift tests (`status-tokens.test.ts`, `agent-state-tokens.test.ts`) — `contrast.test.ts` doesn't touch them, since their hue can't move regardless of what the ratio says (see the light-mode lime gap noted above).
+
+**A second known, uncorrected gap: `RoleLabel`'s `you` tag ships bare `--primary` (`text-primary`), not `--primary-fg`.** The token itself is AA-clean in its intended TEXT role (`--primary-fg`, 6.0:1 dark / 5.2:1 light) — the gap is that the component never switched to it, the same class of gap as `Button`'s `default` variant (flagged in the #139 pass, deliberately left for a later component-class restyle rather than bundled into the token change). `contrast.test.ts` asserts the token pair, not this component's class list, so it doesn't catch the mismatch — don't cite `RoleLabel`'s `you` label as proof `--primary-fg` renders anywhere until this is fixed.
 
 ---
 
@@ -336,66 +355,93 @@ Semantic colors live on status badges and state glyphs — **not** as section ba
 
 ### Font Families
 
-- **Geist Sans** (`--font-sans`): All UI chrome, headings, body, buttons, captions. Wired via `next/font` in `app/fonts.ts`. The Geist family is a direct substitute for Linear's custom display/text cuts at 400–600 weight — clean, technical, and legible at dashboard density.
-- **Geist Mono** (`--font-mono`): Code blocks, SHA hashes, terminal-style values, commit IDs, structured data tokens.
-- **JetBrains Mono Nerd Font** (`--font-terminal`): Live terminal panes (`font-terminal` utility). Falls back to Geist Mono when not installed. Never used in UI chrome.
+- **Geist Sans** (`--font-sans`): All UI chrome, headings, body, buttons, captions, session-rail rows. Self-hosted via `next/font` in `app/fonts.ts`.
+- **Geist Mono** (`--font-mono`): Branches, base branches, agent/model identifiers, SHAs, and **all code** (inline + fenced) at the dense-row 13px scale.
+- **JetBrains Mono Nerd Font** (`--font-terminal` → `--font-jetbrains-nerd`): Scoped ONLY to the terminal pane subtree (never `<html>`) so its full glyph range doesn't bleed into app chrome. Falls back to Geist Mono when absent.
 
-### Type Scale
+### Applied type scale (what components actually use)
 
-| Token | Size | Weight | Line Height | Letter Spacing | Use |
-|---|---|---|---|---|---|
-| `{typography.display-xl}` | 80px | 600 | 1.05 | −3.0px | Landing hero (marketing only) |
-| `{typography.display-lg}` | 56px | 600 | 1.10 | −1.8px | Section opener (marketing) |
-| `{typography.display-md}` | 40px | 600 | 1.15 | −1.0px | Page title, empty-state hero |
-| `{typography.headline}` | 28px | 600 | 1.20 | −0.6px | Section headings, card group titles |
-| `{typography.card-title}` | 22px | 500 | 1.25 | −0.4px | Card primary label |
-| `{typography.subhead}` | 20px | 400 | 1.40 | −0.2px | Lead text, intro paragraphs |
-| `{typography.body-lg}` | 18px | 400 | 1.50 | −0.1px | Hero subhead, lead copy |
-| `{typography.body}` | 16px | 400 | 1.50 | −0.05px | Default body |
-| `{typography.body-sm}` | 14px | 400 | 1.50 | 0 | Card meta, sidebar items, footer |
-| `{typography.caption}` | 12px | 400 | 1.40 | 0 | Status badges, timestamps, sub-labels |
-| `{typography.button}` | 14px | 500 | 1.20 | 0 | All button labels |
-| `{typography.eyebrow}` | 13px | 500 | 1.30 | +0.4px | Section eyebrows, group labels |
-| `{typography.mono}` | 13px | 400 | 1.50 | 0 | Geist Mono for code, SHA, IDs |
+| Tier | Class | Use |
+|---|---|---|
+| `{typography.page-title}` | `text-base` (16px) `font-semibold` | Route/dialog titles, prominent stat values |
+| `{typography.body}` | `text-sm` (14px) | Body copy, controls, buttons, inputs, session-rail rows |
+| `{typography.chat-prose}` | `text-prose` (16px / 1.6) | Assistant + user transcript prose — the reading surface, consumes `--text-prose` |
+| `{typography.dense-row}` | `text-[13px]` | Identity-popover mono values, ALL code |
+| `{typography.meta}` | `text-xs` (12px) `text-muted-foreground` | Relative times, byline copy, secondary info |
+| `{typography.section-label}` | `text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground` | Panel section headers (Work panel's "ACTIVITY"/"IDENTITY"/"TIMELINE") |
+| `{typography.micro-label}` | `text-[10px] uppercase tracking-wider` | Stat units, inline state labels |
+| `{typography.mono}` | `font-mono text-[13px]` | Branches, SHAs, agent/model ids, fenced + inline code |
+
+**Chat prose reads at the `--text-prose` scale (aligned 2026-07-06, design-direction §4.3):** both the assistant markdown (`AssistantTextPart`) and the user bubble (`CollapsedUserText`) in `components/chat/chat-message.tsx` render at the `text-prose` utility — 16px / 1.6, the `--text-prose` `@theme` token — the one surface deliberately looser and larger than the 14px chrome because it is read for minutes. The user bubble's `USER_MESSAGE_CLAMP_HEIGHT` derives its 6-line collapse cap from the matching 1.6rem line-height (9.6rem = 153.6px), which `tests/e2e/chat.spec.ts` pins.
+
+### Dormant named scale (`globals.css` `@theme`, design-direction.md §4.3)
+
+`--text-prose` is live (the chat transcript — see above); the remaining tiers exist in `globals.css` `@theme` but are not yet consumed — reserved for a future phase to adopt as `text-page-title`, `text-card-title`, `text-caption`, `text-code`, `text-micro` utilities:
+
+| Token | Size / line-height | Tracking |
+|---|---|---|
+| `--text-page-title` | 20px / 1.3 | −0.01em |
+| `--text-card-title` | 16px / 1.4 | −0.005em |
+| `--text-prose` | 16px / 1.6 | 0 |
+| `--text-caption` | 13px / 1.4 | 0 |
+| `--text-code` | 13px / 1.5 | 0 |
+| `--text-micro` | 11px / 1.3 | **+0.04em** |
+
+Note the micro-label tracking mismatch: the dormant token specs `+0.04em`, but every shipped uppercase micro-label (`SECTION_LABEL` in `work-panel.tsx`, the rail filter's `DropdownMenuLabel`s — "Show states", "Projects" since #158 added the second) uses `tracking-[0.08em]` directly. Don't "fix" one to match the other without checking both call sites — they're independently correct today, just not yet unified.
 
 ### Typography principles
 
-- **Aggressive negative tracking on display** (−3.0px at 80px). On dashboard chrome, body holds at −0.05px.
-- **Single weight voice: 600 for headings, 500 for labels/buttons, 400 for body.** Grove resists 700+ weights on the dashboard.
-- **Eyebrow uses positive tracking** (+0.4px) — contrast against the negative-tracked display marks it as taxonomy/metadata.
-- **Mono only in code/data contexts.** Geist Mono for terminal panes, SHA values, branch slugs shown in a monospace context, structured IDs. UI chrome is always Geist Sans.
-- **Letter-spacing override in `body` tag.** `globals.css` sets `letter-spacing: 0.01em` on `body` to restore air at dashboard density — this is a measured departure from the strict token value; don't fight it.
+- **Single weight voice: 600 for titles/section-labels, 500 for micro-labels, 400 for body.** Grove resists 700+ weights everywhere.
+- **Mono only in code/data contexts** — git refs, code, terminal, model/agent ids. UI chrome is always Geist Sans.
+- **`letter-spacing: 0.01em` on `body`** restores air at dense scale — a measured departure from the strict per-tier values; don't fight it.
+- **Chat prose reads at `text-prose` (16px / 1.6)** — assistant markdown AND the user bubble, the one surface read for minutes (design §4.3). The user bubble's `USER_MESSAGE_CLAMP_HEIGHT` tracks the matching 1.6rem line-height (9.6rem for 6 lines) so the collapse clamp math stays exact — keep the two in lockstep if either changes.
 
 ---
 
 ## Layout
 
+### The persistent shell
+
+Every non-login route renders through `app/(shell)/layout.tsx` — ONE header (52px, `h-13`) and ONE persistent left session rail (280px, hidden entirely at `w-0` when collapsed — no icon strip, #152), including `/w/[id]` (moved INTO the shell group by the ADE reframe; it used to be a standalone full-bleed shell with its own header and no rail). The header's middle is a generic slot: pages that need to fill it (today, only the session page's identity trigger) portal a `ReactNode` into it via `HeaderSlotContext` rather than passing a prop up through the layout tree — the portaled subtree re-renders with the page, so live session data stays fresh without pushing an ever-changing node through React state.
+
+The viewport-fill magic number is now **`3.25rem` (52px, `h-13`) — the header alone.** The old `4.75rem` (header + a separate status bar) is gone: the status bar was deleted in the ADE reframe and its content (daemon health, uptime, version/update nudge, workspace count, GitHub link) moved into the session rail's footer (`RailFooter` in `workspace-sidebar.tsx`). Change `3.25rem` / `top-13` together if the header height ever moves — they are the only two references left.
+
 ### Spacing system
 
-Base unit: 4px. Token names match the front-matter `spacing` block.
+Base unit: 4px.
 
 | Token | Value | Use |
 |---|---|---|
 | `xxs` | 4px | Tight internal gaps, icon margins |
 | `xs` | 8px | Chip padding, icon-to-label gaps |
 | `sm` | 12px | Input inner padding (horizontal) |
-| `md` | 16px | Default card inner padding |
-| `lg` | 24px | Card interior padding (feature/workspace cards) |
-| `xl` | 32px | Panel internal breathing, wide card padding |
-| `xxl` | 48px | Section inner padding (composer, CTA panels) |
-| `section` | 96px | Between-section vertical rhythm |
+| `md` | 16px | Default card/panel inner padding |
+| `lg` | 24px | Card interior padding, transcript inter-message gap |
+| `xl` | 32px | Panel internal breathing |
+
+### Landing (`/`) — persisted Hero | Overview
+
+`app/(shell)/page.tsx` reads one persisted `ui-store` slice, `landingView` (`"hero" | "overview"`, alongside `sidebarCollapsed` — zero new machinery):
+
+- **Hero** (default): a centered composer (`max-w-3xl`) — type a task, press Enter, a workspace is created — plus a quiet "Recent" strip of the most-recently-active workspaces. The fleet lives in the rail, one glance away, never hidden.
+- **Overview**: today's rich repo-grouped card grid, verbatim, plus the Live focused-pane toggle — the power-user's whole-wall view.
+
+The toggle itself (`landing-view-toggle`) is a quiet two-button segmented control on a `bg-muted/60` well — never terracotta (reserved for the composer's send CTA).
+
+### Session page (`/w/[id]`) — three zones
+
+`rail (shared shell) | transcript column (~704px, centered) | work panel (Terminal · Diff · Info, resizable + collapsible + full-screen)`.
+
+- The session's **identity cluster** (`ContextBar` — a state-led title trigger opening the session popover) is built by the page and portaled into the shared header's middle slot at every breakpoint — exactly one `context-bar` mount, no separate below-`lg` band. Its `session-state-live` sr-only `aria-live` region announces the state WORD on change (never the raw task/prompt text — the #136 bound); the old in-page `context-task` subheader is deleted, so the panes get the full column below the header.
+- The **work panel** replaces the old bare terminal pane with three tabs — Terminal (the live tmux pane, D2 differentiator, permanent live-pulse dot on its tab), Diff (StatTrio + line-delta + full commit list — the "Changes"/"Commits" sections that used to live in a popover), Info (metrics one-liner, agent/model identity, placement, created/paused timestamps). Full-screen is a plain CSS overlay, not a portal, so it composes with the resizable split underneath.
+- The transcript/work-panel **split is reachable, never the default** (#159): `react-resizable-panels` with `autoSaveId="grove-detail-split"`, toggled on via the `ViewSwitcher`, lg-only. Every breakpoint OPENS single-pane tabs (`Transcript`/`Terminal`) — transcript-first once a session resolves, else terminal-only — and an explicit tab/view choice wins from there. Split used to default open on lg+ (#124/#130); the #159 ruling made it opt-in everywhere.
 
 ### Grid & container
 
-- Max content width: 1280px.
-- Workspace grid: fluid column count driven by `minmax(280px, 1fr)` — fills the terminal gracefully.
-- Activity wall: same fluid columns, capped at 6 max on ultra-wide.
-- Detail page: 2-column (content left, sidebar right) above 768px; single-column below.
-- Sidebar rail: fixed width (~240px desktop), collapsed on mobile.
-
-### Whitespace philosophy
-
-The dark canvas IS the whitespace. Sections separate by lift onto surface panels, not by gaps in a white page. Within a panel, generous `lg` (24px) gaps between content blocks; `section` (96px) between major page sections on marketing.
+- Landing content: `max-w-[100rem]` (ultrawide-friendly), rail flush-left, full-bleed shell.
+- Workspace grid (Overview): fluid columns, `minmax(22rem, 1fr)`.
+- Transcript column: `max-w-[44rem]` (704px) — the assistant-ui/Claude reading measure — shared by transcript content, the notice row, and the composer via one `CHAT_COLUMN` constant in `chat-panel.tsx` so the three never drift.
+- User bubbles cap at `max-w-[85%]`.
 
 ---
 
@@ -403,19 +449,59 @@ The dark canvas IS the whitespace. Sections separate by lift onto surface panels
 
 | Level | Treatment | CSS | Use |
 |---|---|---|---|
-| 0 (flat) | No border, canvas bg | `bg-background` | Page body, behind cards |
-| 1 (chrome) | Sidebar bg | `bg-sidebar border-b border-sidebar-border` | Header, rail, persistent chrome |
-| 2 (card lift) | Card bg + hairline border | `bg-card border border-border` | Workspace cards, list panels |
-| 3 (elevated lift) | Elevated bg + stronger border | `bg-elevated border border-input` | Composer, raised wells, popovers, detail drawers |
-| 4 (focus ring) | 2px terracotta ring at 40% opacity | `ring-2 ring-ring` | Focused inputs, focused buttons |
+| 0 (flat) | No border, canvas bg | `bg-background` | Page body, terminal well |
+| 1 (chrome) | Sidebar bg (tone only) | `bg-sidebar` | Header, rail, rail footer — borderless, tone alone separates |
+| 2 (card lift) | Card bg + hairline border | `bg-card border border-border` | Cards, dialogs, popovers |
+| 3 (elevated/well) | Elevated or muted bg | `bg-elevated` / `bg-muted/40` | Composer plane, work-panel tab strip, the view-switcher tone well |
+| 4 (focus ring) | 2px terracotta ring | `ring-2 ring-ring` | Focused inputs, focused buttons |
 
-Grove's depth is carried by surface ladder + hairline borders. **No drop shadows on dark surfaces.** The brand resists box-shadow on dark almost entirely — where shadow is unavoidable (a floating popover), use `shadow-lg` with opacity clipped low.
+Depth is carried by the **surface tone ladder**; hairline borders are a last resort on persistent surfaces. **No drop shadows on dark surfaces.** Two sanctioned exceptions: floating overlays (Popover/Dialog/Sheet/Tooltip/Dropdown) keep `shadow-lg` at low opacity in both themes because a surface leaving the page plane needs an edge against whatever it covers; and the steer composer's floating-plane `--composer-shadow` is a subtle LIGHT-mode-only lift (dark stays shadowless — the ladder carries depth), a per-theme var, not the `dark:` variant (#154).
 
-### Decorative depth
+**The session page is fully frameless.** `detail-panel` is a bare full-bleed flex column — no lift gutter, no bordered card, no terminal frame. The terminal pane's title bar separates from its grid by tone alone (`bg-muted/40` vs `bg-background`), matching the header's own tone-only separation from the canvas.
 
-- **Workspace activity tiles** and product UI screenshots dominate as decorative depth — same as the product UI screenshots on Linear.
-- **No atmospheric gradients.** No spotlight cards with radial glows.
-- **Subtle inset wells** (the composer panel, the terminal pane, the detail sidebar) use a slightly lifted surface (`bg-elevated`) with a hairline border to read as depth without shadow.
+---
+
+## Iconography
+
+**lucide-react**, one global stroke rule (design-direction.md §4.5, #139): `svg.lucide { stroke-width: 1.75 }` in `globals.css`'s `@layer base` — lucide has no theme provider, so this CSS selector (targeting the `lucide` class every icon carries) is the ONE seam for an app-wide stroke tune. **Never pass `strokeWidth` on an individual `<Icon>`** to work around it; 1.75 (lucide's default is 2) is the measured register that survives Grove's 14px dense rows without going wispy at exactly-AA `muted-foreground` contrast.
+
+- **Size ramp:** chrome/action **16px** (`size-4`) · dense identity/work-panel row **14px** (`size-3.5`) · inline micro glyphs (rail `StateDot`, delta dots) **6px** (`size-1.5`). SVG sizing lives per-component-size, not in a base default.
+- **Color:** `text-muted-foreground` default → `text-foreground` on hover/active → a semantic hue only for state. Never a saturated icon as decoration.
+- **One glyph per concept, app-wide:** tool = `Wrench` (the "Used N tools" trigger; each revealed digest row leads with the success `CircleCheck` instead, since Grove's wire emits a tool call only post-hoc), question = `CircleHelp`, agent/response = `Sparkles`, you = `User`, success = `CircleCheck`, error = `TriangleAlert`, expand/collapse = `ChevronDown` + `rotate-180` — **except on chat surfaces**, where the tool/notification/show-more expanders rotate `-90-when-closed` (the modern-chat-native template convention, a named divergence). Agent-state marks (`▶ ◑ ⚠ ○ ◌ ✗ ·`) stay custom text glyphs — they're the semantic state system (`AgentStateMark`), drift-synced with the TUI, not part of the lucide set.
+
+---
+
+## Scrollbars
+
+**One app-wide mechanism, the standard CSS properties, applied globally** (design-direction.md §4.7):
+
+```css
+@layer base {
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+}
+```
+
+`scrollbar-width`/`scrollbar-color` is Baseline (Safari since Dec 2024, Firefox/Chromium long-standing), theme-aware via `--scrollbar-thumb`, and reserves no gutter by default. This also themes `@assistant-ui/react`'s `Thread.Viewport` for free — it ships bare `overflow-y-scroll` with no scrollbar CSS of its own.
+
+**`::-webkit-scrollbar` is banned, not just discouraged.** Current Chrome deprioritizes the webkit pseudo-elements in favor of the standard props, and setting any `::-webkit-scrollbar` size **force-renders a classic always-visible bar, killing the native macOS overlay auto-hide** this rule relies on.
+
+**`ScrollArea` is retired app-wide.** Every former consumer (`CommitList`, the session rail body, `TurnsView`) moved to a plain `overflow-y-auto` div under the global rule; the `components/ui/scroll-area.tsx` primitive + its `@radix-ui/react-scroll-area` dependency are deleted now that no consumer remains. Reach for `ScrollArea` again only if a single surface needs genuine JS-driven idle-hide (none do today).
+
+---
+
+## Motion
+
+Calm, short, ease-out (150-250ms), nothing bounces, everything honors `prefers-reduced-motion` (design-direction.md §5).
+
+- **`grove-pulse`** (existing) — the 4Hz stepped blink for ACTIVE/RUNNING status marks and the transcript's "agent working" dot (`chat-shimmer` in `chat-panel.tsx`) — a terminal-cursor-like blink, not a smooth spinner ease, so both readings share one cadence.
+- **`grove-shimmer`** — the ONE loading skeleton (`components/ui/skeleton.tsx`), reused everywhere data loads (rail, transcript, peek, grid): a ~5%-opacity terracotta band translated across the muted base. `motion-safe:` only — reduced motion gets a static `bg-muted` block.
+- **`grove-ring`** — the one-shot "just landed" ring (`components/shared/landing-ring.tsx`) on a freshly-created card/row: an INSET box-shadow ring (so `overflow-hidden` doesn't clip it) that decays to transparent within ~900ms and never persists. Rendered as an absolutely-positioned sibling, never touching the host's own className, so the host's `ring-*`/`border-*` test contracts stay intact.
+
+Both `grove-shimmer` and `grove-ring` are the ONLY two places terracotta *moves* across a whole surface — both decay within ~1s so neither becomes a steady-state fill (accent scarcity holds).
+
+**Transcript rhythm — three-tier, line-free** (`GroveMessage` in `chat-message.tsx`, mirroring design-direction.md §4.6 exactly): a top margin keyed to position — **56px** (`mt-14`) before a turn head (a new user prompt or a continuation marker), **24px** (`mt-6`) before an agent reply, **12px** (`mt-3`) before an intra-turn part (tool group, note, notification, question). The turn boundary stays ≥2× the inter-message gap so the transcript reads as distinct exchanges without a drawn divider — carried by space + the `RoleLabel`, never a line.
+
+**Press tactility:** the composer send buttons (both create and steer) carry `active:scale-[0.97] motion-reduce:active:scale-100`, transform listed explicitly — never `transition-all`.
 
 ---
 
@@ -423,15 +509,16 @@ Grove's depth is carried by surface ladder + hairline borders. **No drop shadows
 
 ### Border Radius Scale
 
-| Token | Value | CSS | Use |
+Derived from `--radius: 0.5rem` (8px, both themes) via the shadcn formula in `globals.css`'s `@theme inline` — `radius-lg = var(--radius)`, `radius-md = radius - 2px`, `radius-sm = radius - 4px`, `radius-xl = radius + 4px`. `rounded-2xl`/`rounded-3xl`/`rounded-full` are Tailwind's own untouched defaults, not remapped by the formula.
+
+| Token | Value | Tailwind class | Use |
 |---|---|---|---|
-| `{rounded.xs}` | 4px | `rounded` | Status badges, small chips (TW default `0.25rem`) |
-| `{rounded.sm}` | 6px | `rounded-sm` | Inline tags (TW `0.375rem` ≈ 6px) |
-| `{rounded.md}` | 8px | `rounded-md` | All buttons, form inputs (TW `0.5rem`) |
-| `{rounded.lg}` | 12px | `rounded-lg` | Workspace cards, list panels, feature cards (TW `0.75rem`) |
-| `{rounded.xl}` | 16px | `rounded-xl` | Composer panel, product screenshot frames (TW `1rem`) |
-| `{rounded.xxl}` | 24px | `rounded-2xl` | Large hero cards, oversized CTA banners |
-| `{rounded.pill}` | 9999px | `rounded-full` | Status pills, toggle-type badges |
+| `{rounded.sm}` | 4px | `rounded-sm` | Small chips |
+| `{rounded.md}` | 6px | `rounded-md` | ALL buttons, badges, form inputs |
+| `{rounded.lg}` | 8px | `rounded-lg` | Cards, dialogs, popovers, list panels |
+| `{rounded.xl}` | 12px | `rounded-xl` | Overview cards, the user bubble, fenced-code wells |
+| `{rounded.composer}` | 24px | `rounded-3xl` | The create-composer hero card + the steer composer well — the ONE surface that opts up (design §4.8) |
+| `{rounded.pill}` | 9999px | `rounded-full` | Status pills, toggle pills, and the composer's circular send / Stop CTAs (the named exception below) |
 
 ---
 
@@ -439,75 +526,96 @@ Grove's depth is carried by surface ladder + hairline borders. **No drop shadows
 
 ### Buttons
 
-**`button-primary`** — Terracotta CTA. The default primary action.
-- `bg-primary text-primary-foreground`, padding `8px 14px`, `rounded-md`, weight 500.
-- Hover: slightly brighter (`hover:bg-primary/90`).
-- Pressed: slightly darker (`active:bg-primary/80`).
-- Focus ring: `ring-2 ring-ring ring-offset-2 ring-offset-background`.
+**`button-primary`** — CTA. `bg-primary-strong text-primary-foreground` (never bare `bg-primary` — see the terracotta-roles note above), `rounded-md`, weight 500. Focus ring: `ring-2 ring-ring ring-offset-2 ring-offset-background`.
 
-**`button-secondary`** — Dark card button. Used for secondary CTAs.
-- `bg-card text-foreground border border-border`, same geometry. Hover: `hover:bg-accent`.
+**`button-secondary`** — `bg-card text-foreground border border-border`, same geometry.
 
-**`button-ghost`** — Transparent text button.
-- `bg-transparent text-foreground`, same geometry. Hover: `hover:bg-accent`.
+**`button-ghost`** — `bg-transparent text-foreground`, same geometry.
 
-**Rule:** Never pill-round CTAs (`rounded-full` on a button). That shape is reserved for status badges and toggle pills.
+**Rule:** Never pill-round CTAs (`rounded-full` on a `<button>`) — reserved for status/toggle pills. TWO deliberate composer exceptions: the create/steer composer card is `rounded-3xl` (24px, not a pill), and the steer composer's **circular** send + Stop buttons are genuinely `rounded-full` (icon-only, single-glyph — the modern-chat-native send affordance, #154).
 
 ### Status Badges
 
-**`status-badge`** — Workspace lifecycle pill.
-- `bg-elevated text-muted-foreground`, `rounded-full`, `text-xs`, `px-2 py-0.5`.
-- Active state uses the status CSS variable directly: `style={{ color: 'var(--status-active)' }}`.
-- Never fill a badge with the status color as the background — use it only on the glyph and text.
+`bg-elevated text-muted-foreground`, `rounded-full`, `text-xs`, `px-2 py-0.5`. Active state colors only the glyph and text via the status CSS variable — never fills the badge background with the status hue. Colors are inherited from the Python TUI contract, drift-tested.
 
-Status colors (`--status-active`, `--status-idle`, etc.) are inherited from the Python TUI contract (`grove/core/contracts/status_palette.py`). They are drift-tested. Never redefine them here.
+### Workspace Cards (Overview grid, `components/workspace/card.tsx`, #155; META torn down to one `Stat` grammar #161)
 
-### Workspace Cards
+Rebuilt in the ADE language (#155) — the same calm `state · title · time` vocabulary as a rail row, in TWO visual tiers separated by **space, not lines or a tinted well**. `rounded-xl bg-card` on a `border-border/60` hairline; hover is a tonal shift + border-strengthen — **no shadow, no translate lift, no full-card status glow**. Three regions:
 
-**`workspace-card`** — The primary grid tile.
-- `bg-card border border-border rounded-lg`.
-- Active border lift: `border-border/60` → `border-border` (stronger hairline, not color change).
-- Focus (keyboard): `ring-2 ring-ring` around the card container.
-- Never paint the card background with the status color. Status reads only on the leading glyph and label.
-- Three-line anatomy: (1) glyph + title + age; (2) branch + agent + state; (3) stat numstat. See `components/shared/` atoms.
+- **HEADER** — the canonical `AgentStateMark` glyph (the same state atom the identity trigger wears — NOT a second badge) · title link (one line, truncate) · a right-aligned `RelativeTime`. The lifecycle `StatusBadge` returns to this line ONLY when it is itself the signal (no agent session, or an `orphaned`/`error` lifecycle); every healthy card wears zero pills.
+- **CONTEXT** — "happening now" (`AgentLiveStatus.taskLine`), `line-clamp-1`; error detail wins the slot while erroring, keeping the `· N bg` suffix.
+- **META (#161)** — TWO aligned `Stat` rows on one 11px `h-5` baseline grid (shared `gap-3`, so card heights stay uniform across the grid), then the one prose last-commit line. Row 1 = provenance (teal `GitBranch` + mono branch · ahead · behind · dirty · placement-when-root); row 2 = activity (turns · tool calls · tokens in/out) with the WORKING-gated Live toggle pinned right. Every count is an icon + tabular value via the shared **`Stat`** atom (`components/shared/stat.tsx`): the unit lives in the tooltip/aria-label, `tone` colors the value only (`--ref-add` ahead, `--ref-remove` behind), and a **zero renders NOTHING** — no "0 ahead 0 behind" noise. The old middot `MetaRow`/`StatTrio`/metrics-one-liner dialect is gone from the card (those atoms keep their other homes — the Diff/Info tabs, the identity popover). No footer well — tone breaks belong to the page, not every card. **The rail's (#158) meta line deliberately does NOT share this atom:** it stays an icon-free quiet `MetaRow` with `+N/−M` line-changed sigils and a plain-muted (not teal) branch — same `--ref-add`/`--ref-remove` tone grammar, different register + fields, so the atom is shared in spirit, not forced across both.
 
-### Composer Panel
+Attention (waiting/blocked/error) keeps a single thin LEFT `border-l-2` accent bar in the tier accent var — the only on-card hue. Live focus is a quiet terracotta ring. Zero-loss: every datum the pre-ADE card carried keeps a visible home (nothing moved behind a tooltip).
 
-**`composer-panel`** — The create-workspace hero.
-- `bg-elevated border border-input rounded-xl`, `p-6`.
-- Elevated above the card tier — this is the one surface that intentionally lifts above cards.
-- Inputs inside use `bg-elevated border border-input rounded-md` (same tone as panel bg to read as inset wells).
+### The session rail (`components/layout/session-rail.tsx`, #140 → modern-chat-native #152 → provenance rows #158)
+
+Grove's "thread list" — the fleet moved out of the center card grid into a persistent left rail, the fastest surface in the app:
+
+- **Row shape (polished #163):** TWO lines on a fixed rhythm (`leading-5` head / `leading-4` meta, `gap-0.5`) so every row is structurally identical. Line one — a quiet 6px `StateDot` (the `session-rail-dot` atom, in the state's `--agent-*` hue) · the title (`text-sm`, truncate, first-class) · the created-ago, right-aligned + muted (the card header's own "state · title · time" rhythm; a static `relativeTimeLabel`, not a per-row ticking interval — the rail's poll/SSE re-renders keep it fresh). Line two — the provenance meta, `project · branch · +N/−M`: project carries a subtle dotted underline (`decoration-dotted decoration-muted-foreground/40 underline-offset-2`) as the quiet cue separating it from branch (both are muted, so tone alone can't), and never fully vanishes (`shrink-0 max-w-[45%]`); branch is plain muted mono — deliberately NOT the teal `--ref-branch` token, so the `±` change stats carry the row's only hue, and shrinks first when tight (`min-w-0`). `+N`/`−M` come from the live workspace's `diff_added`/`diff_removed` (`WorkspaceActivityView`), zero-suppressed (no change data → nothing renders, blank beats noise). Truncation priority: title first, then branch, project never vanishes. **Deliberately no icons** on either line — the dotted underline already does the separating job, and a glyph on an already-dense two-line row would violate the rail's quiet contract. Color is never the only signal — the dot always rides with a `title`/aria-label carrying `<title> — <state>`. Seams: `session-rail-age`, `session-rail-project-name`.
+- **Ordering (flat, #158):** ONE cross-project list sorted `modified_at` DESC — no project sections, no date buckets, no attention pin; the v2 group machinery is gone. Attention (`needs_attention`) signals INLINE instead: the dot's per-state color plus a faint `--agent-waiting`-tinted row background, never a separate group.
+- **Actionable-only default:** a row is "mapped" when it carries a `workspace_id` that's present in the live snapshot. Unmapped rows (no workspace, or a workspace the daemon isn't tracking) are HIDDEN by default behind a quiet "N unmapped session(s) hidden" note at the list end that flips on `showUnmapped` (persisted) — the debugging escape hatch, not the default read.
+- **New session** ghost row at the rail top — the modern-chat new-thread affordance; links to `/` (the hero composer IS the create surface).
+- **Hover `⋯` menu** (`session-rail-row-menu`): a sibling of the row link (never nested), revealed on hover/focus (always visible below `lg`), carrying "Make primary" (repins the tracked session via `useRemapSession`).
+- **Live overlay:** a row's displayed state comes from the live `/activity` snapshot (by session id) when the daemon is tracking it, else from the recorded session summary — the rail and cards never disagree.
+- **Metadata-only rows** (`workspace_id === null`): dimmed, "history only," NOT navigable — a hard wire-visible rule, not a heuristic, and folded into the same "unmapped" hidden-by-default set above. Copy never promises "every session ever."
+- **The filter menu is the single organizing instrument (`SidebarFilter`, #140 → glyph cohesion #156 → #158):** one quiet dropdown covering state visibility (each row leads with its `AgentStateMark` glyph), "Needs attention only" (`BellRing`), per-project checkboxes, and "Show unmapped sessions" — `hiddenStates`/`hiddenProjects`/`attentionOnly`/`showUnmapped` all persist, since this menu is the one reachable clear-path. The filtered-empty state ("No sessions match the active filters") carries its own inline "Clear filters" affordance for the same reason.
+- **Footer (`RailFooter`):** absorbs everything the deleted VS-Code-style status bar used to carry — daemon health + live uptime, version + update nudge, workspace count, then a user-identity row + GitHub link.
+- **Collapse is a shell concern (#152):** the whole rail hides (`w-0`, modern-chat behavior) — there is NO collapsed icon-strip variant; the header toggle and `[` reopen it. Mobile = a left `Sheet` drawer.
+
+### Session identity + control popover (`ContextBar`, `components/workspace/context-bar.tsx`, #153)
+
+The session page's ONE identity + control surface, portaled into the shared header — a **state-led title trigger opening a single popover** (#153 restored the user-validated #134/#136 consolidation that the ADE overhaul had briefly flattened into an always-visible strip + a separate lifecycle menu, both now deleted). Everything the header cluster needs lives one click behind the title again — the calm-chrome default — rather than spread flat across the header.
+
+- **Trigger (`identity-trigger`):** a leading `AgentStateMark` (a SIBLING of the button — the mark is block-ish) · the truncated title · a short inline label kept ONLY for `blocked`/`error` (color is never the sole signal) · the amber `branch-delta-dot` (`--status-orphaned`, shown only when the branch has any ahead/behind/dirty delta) · `ChevronDown`. An sr-only `aria-live` region (`session-state-live`) beside the mark announces the state WORD on change — never the raw task/prompt text (the #136 bound the deleted `context-task` subheader used to hold, carried here).
+- **Popover (`branch-summary`), Separator-divided sections, each `SECTION_LABEL` + `space-y-2 px-4 py-3`:** **Identity** (branch → base · agent/model · placement — the branch pair has no other home) · **Changes** (StatTrio + ±diff-line summary, a glance echo of the Diff tab) · **Actions** (the reversible verbs pause/resume/respawn — fire DIRECTLY, and the open popover re-renders the swapped verb IN PLACE as the status flips) · **Danger zone** (destructive `kill`, tinted `--status-error`, opening the `KillConfirmDialog` rendered as a SIBLING of the Popover so it survives the popover closing under the modal's focus grab).
+- **Deliberately NOT here** (both zero-loss relocations, not drops): the full **CommitList** lives in the work panel's Diff tab (the Changes section's ±summary is the glance); **session switch/track** moved to the rail (#140) — the #132 dead-pointer recovery picker lives on as the transcript's own empty-state picker, mounting only when no session resolves.
+- The `Separator` hairlines inside are the deliberate **overlay exception** to the tone-over-lines rule: a floating Popover already draws its own edge, so an internal hairline is legible.
+
+### Work panel (`components/workspace/work-panel.tsx`, ADE #142)
+
+The tabbed surface filling the session page's right pane: **Terminal** (the live tmux pane, permanent live-pulse dot), **Diff** (StatTrio + line delta + full commit list — the CommitList home), **Info** (metrics one-liner, agent/model identity, placement, timeline). `bg-muted/40` tab strip, full-screen via a plain `fixed inset-0` overlay (composes with the resizable split, no portal/focus-trap fight).
+
+### Composer
+
+**Create composer (`components/composer/composer.tsx`)** — the landing Hero's create surface. `rounded-3xl` (24px) card; the textarea IS the create surface (Enter submits, title auto-derives from the first line); a quiet chip row (agent ▾ · model ▾) plus a fullscreen `Maximize2` toggle opening a Write/Preview Markdown dialog (Preview lazy-loads streamdown). The send button is the one filled `bg-primary-strong` CTA in the view, with `active:scale-[0.97]` press tactility.
+
+**Steer composer (`components/chat/chat-panel.tsx`, restyled modern-chat-native #154)** — a **floating input plane**: the textarea over an action row, at the 24px `--composer-radius` on the muted-tinted `--composer-bg`, riding `ComposerPrimitive`. Enter sends, Shift+Enter newlines. Send is a **circular** terracotta CTA (`ArrowUp`, `bg-primary-strong` via the default variant); the WORKING-gated **Interrupt** is a SEPARATE **circular** Stop alongside it (never a toggle that hides Send). **Steering rule: the composer NEVER disables while the agent runs** — steering a working agent with a follow-up IS the product, so `adapter.isRunning` stays unset. The plane carries the ONE sanctioned transcript shadow — `--composer-shadow`, LIGHT-mode only (dark stays shadowless; the surface ladder carries depth), a per-theme var, not the `dark:` variant. **Interrupt** is the sole emergency affordance (no lifecycle menu) — always one click while WORKING.
+
+### Chat transcript (assistant-ui, Phase D #141; modern-chat-native #154)
+
+The transcript runs on `@assistant-ui/react` headless primitives (`ThreadPrimitive`/`MessagePrimitive`/`ComposerPrimitive`) over Grove's own `useExternalStoreRuntime` — never a client LLM call. Rendering adopts the styled assistant-ui/Claude template anatomy verbatim (see the template-adoption rule below):
+
+- **Assistant** = full-width plain prose, no bubble, no avatar; a `RoleLabel agent` tag above it and a reserve-height hover action bar below (a copy affordance that reserves its own height via the template's `-mb-7.5/min-h-7.5` trick, so revealing it on hover never shifts the transcript). Markdown reads at `text-prose` (16px / 1.6) with the template's inline-code pill / fenced-code + table well classes (streamdown's native code/table chrome, flattened to one frame each — see the streamdown lesson in `webapp/CLAUDE.md`); links ride `--primary-fg`, never bare `--primary`.
+- **User** = a small right bubble (`bg-muted rounded-xl`) placed in the template's `grid-cols-[minmax(72px,1fr)_auto]` (a spacer column keeps it off the left margin without a hard `%` cap), clamped to 6 lines behind a mask fade + "Show more".
+- **Tool runs** = BORDERLESS "Used N tools" **ghost expanders** (a `Wrench` + count trigger, collapsed by default per the #124 invariant), no bordered card. Each revealed digest row leads with a **success `CircleCheck`** (not `Wrench`) — Grove's wire emits a tool call only post-hoc, so every call reads as completed. Notes / notifications / questions / continuations render as quiet event rows via a `data.by_name` registry, never speech bubbles.
+
+**Chat-surface chevron divergence:** the tool/notification/show-more expanders rotate `-90-when-closed` → `0` open (the template convention), a NAMED exception to the app-wide `ChevronDown + rotate-180`. See Motion for the turn-rhythm margins.
+
+### The template-adoption rule (the epic's core lesson)
+
+Hand-styling over assistant-ui's headless primitives re-created the old dashboard (the #136 failure mode — a lifecycle-menu-and-strip re-flatten, a bordered-card transcript). The v2 refit (#151-#156) instead **adopts the styled templates' anatomy + classes verbatim** — thread-list rows, the borderless tool-fallback expander, the thread/composer tokens (`--thread-max-width` 44rem, `--composer-bg`, `--composer-radius`) — and **forks ONLY where Grove's model genuinely requires it**: the steering composer that never disables; digest-only tool leaves (one collapse level, since Grove's wire emits a completed digest, not an args/result payload). (The rail's original status-first-over-`lastMessageAt` fork — sort working agents first, not by recency — was itself dropped by the #158 rail v3 pass, which converged the rail back to the template's plain `modified_at` DESC recency sort; see The session rail above.) Cite the upstream templates so nobody re-researches: `packages/ui/src/components/assistant-ui/{thread,thread-list,tool-fallback,markdown-text}.tsx`. **Intent: match the template, diverge on purpose, name the divergence** — never restyle from scratch.
 
 ### Terminal Pane
 
-**`terminal-pane`** — Live tmux capture.
-- `bg-background font-terminal rounded-lg border border-border`.
-- Canvas-tone background so the pane's own SGR foreground colors read against a near-black field.
-- `overflow-hidden`, `no-wrap` equivalent via `whitespace-pre` + `overflow-x-hidden`.
-
-### Navigation / Sidebar
-
-**`sidebar-nav`** — Persistent left rail.
-- `bg-sidebar border-r border-sidebar-border`.
-- Nav item active: `bg-accent text-accent-foreground rounded-md`.
-- Nav item hover: `hover:bg-accent/60`.
-- Section label (eyebrow): `text-xs font-medium tracking-widest text-muted-foreground uppercase`.
+`bg-background font-terminal`, frameless — no border, no rounding, no traffic-light dots. The title bar separates from the terminal grid below it by tone alone (`bg-muted/40` vs `bg-background`), the same convention the app header uses to separate from the canvas. `whitespace-pre` + `overflow-auto` — a wide capture scrolls horizontally, never wraps.
 
 ### Inputs & Forms
 
-**`text-input`** — All form fields.
-- `bg-elevated border border-input rounded-md text-foreground`, `px-3 py-2`.
-- Focus ring: `focus:ring-2 focus:ring-ring focus:ring-offset-0` (no offset — the elevated bg is the inset cue).
-- Placeholder: `placeholder:text-muted-foreground/60`.
+`bg-elevated border border-input rounded-md text-foreground`, `px-3 py-2`. Focus ring: `focus:ring-2 focus:ring-ring focus:ring-offset-0` (no offset — the elevated background is the inset cue). Placeholder: `placeholder:text-muted-foreground/60`.
 
-### Shared Presentational Atoms
+### Shared Presentational Atoms (`components/shared/`)
 
-Grove's `components/shared/` atoms encode the design rules as reusable leaves:
+- **`AgentStateMark`** (`state-mark.tsx`): THE agent-state glyph+color system — `▶ ◑ ⚠ ○ ✗`. Uses `--agent-*`. The **full-density** state tier — worn on rich surfaces (the card header, the identity trigger).
+- **`MetaRow`** (`meta.tsx`): THE middot-separated meta row (branch · agent · age).
+- **`Stat`** (`stat.tsx`, #161): THE single countable-metric leaf — a lucide glyph + compacted tabular value at the parent's meta tier. Zero-suppresses (0/null → nothing), unit in the `title`/aria-label ("<value> <label>"), `tone` (`add`/`remove`) colors the value only. Font-size inherits, so a surface adopts it at its own tier. The card's whole META grid is built from it; reach for it before hand-rolling any `icon + number` stat.
+- **`RoleLabel`** (`role-label.tsx`): THE transcript speaker label — lowercase `you`/`agent`, micro-label tier, `you` = `text-primary` clay (ships bare `--primary`, NOT `--primary-fg` — see the terracotta-roles gap above), `agent` = `--ref-info` blue. Shared with the TUI's transcript labels so the two read as siblings.
+- **`RelativeTime`** (`relative-time.tsx`): Relative timestamp rendering, used across the rail, work panel, and cards. Also exports **`relativeTimeLabel(iso)`** — the plain string form, for surfaces where the time rides a native `title` tooltip instead of a visible element (the rail row).
+- **`StateDot`** (`session-rail-dot`, in `session-rail.tsx`): the **minimal** state tier — a 6px `--agent-*` dot, the calm thread-list cue that replaces the glyph on the rail row. Pure per-state color, no attention override (#158) — attention rides the row's background tint instead, never the dot. (See the two-tier state vocabulary below.)
+- **`LandingRing`** (`landing-ring.tsx`): The one-shot "just landed" ring — see Motion above.
+- **`Dot`** (`dot.tsx`): The middot separator primitive `MetaRow` and other inline meta rows compose.
 
-- **`AgentStateMark`**: THE agent-state glyph+color system. Source of truth for the glyph shown beside agent names. Uses `--agent-working`, `--agent-waiting`, etc.
-- **`StatusDot`** / **`StateMark`**: Workspace-status glyph. Uses `--status-active`, etc.
-- **`MetaRow`**: THE middot-separated meta row (`branch · agent · age`). Muted text tier, consistent spacing.
-- **`CountChip`**: Small numeric badge — `bg-muted text-muted-foreground rounded-full text-xs px-2`.
+**Two-tier state vocabulary.** ONE color system (`--agent-*`), TWO densities: the minimal `StateDot` on the thread-list rail (a calm 6px dot), the full `AgentStateMark` glyph on rich surfaces (card header, identity trigger). Reach for the tier the surface's density calls for — never invent a third state renderer. (`AgentStateBadge`, the pre-ADE dashboard badge, was DELETED with the #155 card rebuild — the card wears the bare `AgentStateMark`, no pill.) `CountChip` was likewise retired (no consumer) — don't reintroduce it without checking whether a `Badge` composition covers the case first.
 
 **Never hand-roll these patterns in a component.** Import the shared atom.
 
@@ -517,28 +625,28 @@ Grove's `components/shared/` atoms encode the design rules as reusable leaves:
 
 ### Do
 
-- Reserve `{colors.canvas}` as the system's anchor surface — the faint blue tint is intentional.
-- Use `{colors.primary}` terracotta ONLY for: brand mark, primary CTA, focus ring, active-status glyphs.
-- Use the four-step surface ladder for hierarchy. Avoid skipping levels.
-- Pair heading weight 600 with body weight 400 — Grove resists 700+ on the dashboard.
-- Apply negative letter-spacing on display sizes (−1px and below at 28px+).
-- Use workspace activity tiles and screenshots as the visual protagonist of every section.
-- Compose CTAs as `{rounded.md}` 8px corners; status pills as `{rounded.pill}`.
+- Reserve `{colors.canvas}` as the system's anchor surface — near-neutral, barely warm, not pure black.
+- Use terracotta in its correct role: `{colors.primary}` for the mark only, `{colors.primary-fg}` for text, `{colors.primary-strong}` for CTA fills. Never bare `bg-primary` under a text label.
+- Use the surface ladder (canvas → sidebar → card → elevated/muted) for hierarchy. Avoid skipping levels.
+- Separate persistent surfaces with tone and spacing; reach for a hairline only when tone can't do it (transient overlays keep their chrome).
+- Apply the single global lucide stroke rule — never `strokeWidth` on an individual icon instance.
+- Let the global `scrollbar-color` rule theme new scroll surfaces — don't add `::-webkit-scrollbar` or a fresh `ScrollArea` wrapper.
 - Source status and agent colors from the CSS variables (`--status-*`, `--agent-*`) — never inline the hex.
-- Use the `components/shared/` atoms (`AgentStateMark`, `MetaRow`, `CountChip`) rather than re-implementing the same patterns.
+- Use the `components/shared/` atoms rather than re-implementing the same patterns.
+- Check `tests/unit/contrast.test.ts` before shipping a neutral or terracotta token edit — it's the gate, not a launch-day audit.
 
 ### Don't
 
-- Don't ship a light-mode-first page. The webapp is dark-primary; light mode is supported but designed after dark.
-- Don't use terracotta as a section background, card fill, or decorative strip.
-- Don't introduce a second chromatic accent (blue, green, purple for chrome decoration).
+- Don't reintroduce the cool-blue hue-224 canvas — the detune to near-neutral (hue ~45) is deliberate (design-direction.md ruling 1.3).
+- Don't use bare `{colors.primary}` as a text-bearing fill (white-on-`#d97757` fails AA) — use `{colors.primary-strong}`.
+- Don't add a second chromatic accent for chrome decoration.
 - Don't add atmospheric gradients or spotlight/glow cards.
-- Don't pill-round buttons (`rounded-full` on a `<button>`).
-- Don't use `#000000` pure black as the canvas — Grove's canvas has the blue tint.
+- Don't pill-round buttons (`rounded-full` on a `<button>`) — the sanctioned exceptions are the composer plane (`rounded-3xl`, not a pill) and the steer composer's circular icon-only send + Stop CTAs (#154); nothing else.
 - Don't define a new status color inline — extend `globals.css` and the Python contract together.
-- Don't re-implement `AgentStateMark`, `MetaRow`, or `CountChip` inline in a component. Import the shared atom.
-- Don't use Tailwind `dim` equivalent (`opacity-50` as a blanket mute) — use `text-muted-foreground` instead (emulator-consistent, theme-aware).
-- Don't use `box-shadow` on dark surface cards. Use the surface ladder.
+- Don't re-implement `AgentStateMark`, `MetaRow`, or `RoleLabel` inline in a component.
+- Don't use `box-shadow` on dark surface cards — use the surface ladder. The only exception is floating overlays.
+- Don't draw borders on resting transcript blocks — tool rows, question cards, and the composer are tone fills, not outlined boxes.
+- Don't add decorative divider lines on persistent chrome — separate by tone and spacing instead.
 
 ---
 
@@ -548,24 +656,22 @@ Grove's `components/shared/` atoms encode the design rules as reusable leaves:
 
 | Name | Width | Key Changes |
 |---|---|---|
-| `sm` | 640px | Composer goes full-width |
-| `md` | 768px | Detail 2-col; nav hamburger; single card-col below |
-| `lg` | 1024px | Grid 2-col → 3-col; sidebar rail visible |
-| `xl` | 1280px | Grid 3-col; full content width reached |
-| `2xl` | 1536px | Max-width capped at 1280px; extra padding on sides |
+| `sm` | 640px | Work-panel/rail tabs go icon-only below this; the ViewSwitcher tabs drop their text label |
+| `md` | 768px | Overview grid relaxes; the full git identity is popover-resident at every width now (no `md:flex` header reveal) |
+| `lg` | 1024px | Session rail becomes a sticky persistent column (mobile: a `Sheet` drawer); the transcript/work-panel resizable split becomes available (`useMinWidth(1024)` gates split availability only — placement is identical above/below since the rail rides the header at every width) |
+| `xl` | 1280px | Overview grid reaches full column count |
 
 ### Touch targets
 
 - CTAs: ≥40px height across all viewports.
-- Status pills: ≥32px tap height; touch viewports use ≥44px.
+- Rail rows: two-line provenance rows (`py-1.5`, title + meta) — the calm modern-chat-native thread-list row, still frictionless to scan (#158).
 - Form inputs: ≥44px tap target on touch.
 
 ### Collapsing strategy
 
-- **Sidebar**: collapses to hamburger/sheet below `md`.
-- **Workspace grid**: fluid columns using `minmax(280px, 1fr)` — naturally collapses to 1-col on narrow.
-- **Display type**: scales toward `{typography.display-md}` (40px) on mobile from 80px on desktop.
-- **Detail sidebar**: stacks below the main content panel below `md`.
+- **Session rail**: hides entirely (`w-0`, desktop `sidebarCollapsed`) or opens as a left `Sheet` drawer (mobile hamburger) — no icon strip (#152, modern-chat behavior).
+- **Work panel**: collapsible via `⌘/Ctrl+J`, full-screen via a plain overlay; below `lg` it's tabs-only (no split).
+- **Session page**: a fixed-height shell (`h-[calc(100dvh-3.25rem)]`) at every breakpoint — the panes own their scroll from the smallest phone up. Never `overflow-hidden` on the page column or `detail-panel` — a fixed-height, clipped ancestor holding actionable buttons hangs Playwright's pre-click `scrollIntoViewIfNeeded`.
 
 ---
 
@@ -573,41 +679,37 @@ Grove's `components/shared/` atoms encode the design rules as reusable leaves:
 
 ### Adding a new component
 
-1. Identify which surface tier it belongs to (canvas / chrome / card / elevated).
+1. Identify which surface tier it belongs to (canvas / chrome (sidebar) / card / elevated).
 2. Use the closest Tailwind utility (`bg-card`, `bg-elevated`, etc.) — never inline a hex.
-3. Apply `border border-border` (card-tier) or `border border-input` (elevated-tier) for the hairline.
-4. Apply `rounded-lg` for cards, `rounded-md` for buttons/inputs, `rounded-full` for pills.
-5. Source status/agent colors from `var(--status-*)` / `var(--agent-*)` CSS variables — not from a new constant.
-6. If the component repeats a `glyph · label · age · branch` pattern: use `MetaRow` and `AgentStateMark`.
-7. Run `npm run typecheck && npm run test` before committing.
+3. Apply `border border-border` for the hairline where tone alone can't separate two surfaces.
+4. Apply `rounded-xl` (12px) for the overview card + user bubble, `rounded-lg` (8px) for dialogs/popovers/panels, `rounded-md` (6px) for buttons/inputs, `rounded-full` for pills (+ the composer's circular send/Stop), `rounded-3xl` (24px) for the composer plane.
+5. Source status/agent colors from `var(--status-*)` / `var(--agent-*)` — not a new constant.
+6. If the component repeats a `glyph · label · age · branch` pattern, use `MetaRow` and `AgentStateMark`.
+7. If it introduces a new neutral or terracotta token, run `npm run test -- contrast` (or the full unit suite) before committing.
 
 ### Modifying an existing token
 
-1. Update the HSL value in `app/globals.css` (both `:root` for light and `.dark` for dark).
-2. If the token maps to a semantic status color (`--status-*`, `--agent-*`), update `lib/grove/status-tokens.ts` AND the Python source in `grove/core/contracts/`. The drift test (`status-tokens.test.ts`) will catch divergence.
-3. Never update `lib/grove/types.gen.ts` by hand — it is codegen output.
+1. Update the HSL value in `app/globals.css` (both `:root` and `.dark`).
+2. If the token maps to a semantic status/agent color, update `lib/grove/status-tokens.ts` (or `agent-state-tokens.ts`) AND the Python source in `grove/core/contracts/`. The drift tests catch divergence.
+3. If it's a neutral or terracotta token, `tests/unit/contrast.test.ts` will fail the build if the new value drops below its floor — that's the point.
+4. Never update `lib/grove/types.gen.ts` by hand — it is codegen output.
 
 ### Linting the design
 
-Check a component against this system with these questions:
 1. Does it use a raw hex literal? → Replace with a CSS variable.
-2. Does it use `box-shadow` on a dark surface? → Remove; use surface lift instead.
-3. Does it inline a status/agent color (`#84cc16`, `#b8860b`, …)? → Replace with `var(--status-*)`.
-4. Does it re-implement `MetaRow` or `AgentStateMark`? → Import the shared atom.
-5. Does it use `rounded-full` on a button? → Replace with `rounded-md`.
-6. Does it use terracotta (`--primary`) as a background or decorative fill? → Remove; reserve for CTAs and focus only.
+2. Does it use `box-shadow` on a dark surface? → Remove; use the surface ladder instead.
+3. Does it inline a status/agent color? → Replace with `var(--status-*)`.
+4. Does it re-implement a shared atom (`MetaRow`, `AgentStateMark`, `RoleLabel`)? → Import it.
+5. Does it use `rounded-full` on a button? → Replace with `rounded-md` (or `rounded-3xl` if it's genuinely the composer).
+6. Does it use bare `--primary` as a background under text? → Replace with `--primary-strong`.
+7. Does it add `::-webkit-scrollbar` or a new `ScrollArea` wrapper? → Remove; the global `scrollbar-color` rule already covers it.
 
 ---
 
 ## Design Philosophy Lineage
 
-This system inherits directly from the analysis in `DESIGN.md` (committed 2026-06-17), which documented Linear's marketing canvas as the primary reference. The key inherited principles:
+This system still inherits from the analysis in `DESIGN.md` (committed 2026-06-17), which documented Linear's marketing canvas as the primary reference. The inherited principles (near-black canvas as whitespace, a single scarce chromatic accent, a surface ladder with no drop shadows, product-UI-as-protagonist) are unchanged — only the ADE overhaul's specific numbers (hue, radii, the accent's three roles) moved.
 
-1. **Near-black canvas as whitespace.** Linear uses `#010102`; Grove uses `hsl(224 20% 6%)`. Both treat the deep dark surface as the whitespace — sections separate by lift, not by gaps.
-2. **Single chromatic accent, used sparingly.** Linear uses lavender `#5e6ad2`; Grove uses terracotta `#d97757`. Both treat the accent as scarce: brand mark, primary CTA, focus ring only.
-3. **Four-step surface ladder, no drop shadows.** Both systems carry hierarchy through background-color steps + hairline borders. Both resist box-shadow on dark.
-4. **Aggressive negative tracking on display.** −3.0px at 80px is the shared specification.
-5. **Product UI as the decorative protagonist.** Linear leads every section with product screenshots; Grove leads with workspace-activity tiles and terminal pane captures.
-6. **No atmospheric gradients. No spotlight cards.** Both systems keep the dark canvas clean.
+**2026-07-06 — the ADE overhaul (epics #136-#143): from dashboard to agent development environment.** The mental-model shift — "monitor a fleet of cards" to "work in a session, switch sessions in a rail" — is the biggest IA change since the #98 redesign. It carried three concrete moves recorded here so a future session doesn't re-derive them: **(1) the canvas detuned** from cool-blue (hue 224) to near-neutral (hue ~45), the one change to Grove's core "space black" identity since #98, made because the blue cast fought the warm terracotta accent (design-direction.md ruling 1.3); **(2) chrome consolidated to a rail + 52px header on every route**, replacing the VS-Code-style header+status-bar+filter-rail with one persistent session tree and folding the deleted status bar's system telemetry into the rail's footer; **(3) the control plane was re-homed into named, glanceable places** — session switch to rail rows, diff/metrics to work-panel tabs, and git identity + lifecycle back into a single session popover behind the title — the same progressive-disclosure principle the #130/#134/#136 chrome teardowns established, now at IA scale.
 
-The original DESIGN.md file is the research artifact; this file is the implementation contract.
+**2026-07-06 — the v2 ADE refit (#151-#157).** A follow-on pass that pulled the ADE overhaul the last step toward the assistant-ui benchmark: the overhaul had briefly flattened the identity/lifecycle popover into an always-visible header strip + a separate lifecycle menu (#142), and the refit **reverted that** (#153) — the state-led title trigger + one popover (Identity · Changes · Actions · Danger zone) is the calm default again. Alongside: the rail became a single-line modern-chat-native thread list with status-first groups and full-hide (`w-0`) collapse (#152/#156) — **superseded same-day by rail v3** (#158-#161, see The session rail above): a flat, section-less list and actionable-only default replaced the status-first groups, full-hide collapse held; the overview card was rebuilt as a calm two-tier `rounded-xl` card (`AgentStateMark`, no footer well, `AgentStateBadge` deleted, #155); the transcript adopted the styled-template anatomy verbatim — borderless tool expanders, a floating composer plane with circular CTAs (#154); and nested-project facets now dedupe by `repo_root` (#151). The through-line: **adopt the template, diverge only where Grove's model requires, and name the divergence.**

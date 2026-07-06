@@ -44,20 +44,22 @@ tends the worktrees and the sessions. Your git history stays yours. Grove never 
 and never touches a remote branch.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="img/screenshots/webapp-home-grid.png" alt="Grove web dashboard: a composer hero at the top for starting a workspace, the repo-grouped workspace cards below, a scope rail on the left, and the daemon status bar along the bottom" /></div>
-  <figcaption class="ms-shot__body">The Grove web dashboard. Workspace cards are grouped by repository, the composer sits at the top, and the daemon status bar runs along the bottom.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="img/screenshots/webapp-home.png" alt="Grove's web IDE: a session rail on the left listing every agent thread by recency, a composer at the center to start a workspace, on a dark space-black canvas" /></div>
+  <figcaption class="ms-shot__body">The Grove web IDE. A session rail lists every agent thread on the left; the landing is a composer, so a prompt starts a workspace. Dark-first, on a space-black canvas.</figcaption>
 </figure>
+
+The landing defaults to the composer. A toggle flips to Overview, a card grid grouped by repository. A repo that hosts several projects gets one section per project.
 
 ## What you get { .ms-h2-icon data-icon="grid" }
 
 <div class="ms-grid ms-grid--4">
   <a class="ms-card" href="use-webapp/">
-    <span class="ms-card__title">Async access, any device</span>
-    <p class="ms-card__body">A composer starts a workspace from a prompt. A live, repo-grouped grid shows every agent. Pair a device once; the daemon stays loopback.</p>
+    <span class="ms-card__title">A web IDE for your agents</span>
+    <p class="ms-card__body">A session rail lists every agent thread; the landing is a composer. Reach the fleet from any device once you pair it, and the daemon stays loopback.</p>
   </a>
   <a class="ms-card" href="use-webapp/#the-workspace-ide-shell">
-    <span class="ms-card__title">Transcript and terminal</span>
-    <p class="ms-card__body">A split view shows the agent's conversation next to its live terminal. Read the transcript, send a follow-up, and answer structured questions inline.</p>
+    <span class="ms-card__title">Transcript, terminal, and diff</span>
+    <p class="ms-card__body">Open a session into a three-zone shell: the rail, the live transcript, and a tabbed work panel. Steer the agent while it works, and answer structured questions inline.</p>
   </a>
   <a class="ms-card" href="use-mcp/">
     <span class="ms-card__title">Drive Grove from any agent</span>
@@ -66,6 +68,22 @@ and never touches a remote branch.
   <a class="ms-card" href="use-tui/">
     <span class="ms-card__title">Terminal first</span>
     <p class="ms-card__body">Run <code>grove</code> in a repo to see only its workspaces. Create, attach, pause, and kill, each one keypress. A peek rail mirrors the selected agent's pane live.</p>
+  </a>
+  <a class="ms-card" href="use-webapp/">
+    <span class="ms-card__title">Per-agent model selection</span>
+    <p class="ms-card__body">Each agent exposes its own model catalog. Pick the model per workspace: a cheap one for scaffolding, a strong one for the hard refactor, side by side.</p>
+  </a>
+  <a class="ms-card" href="features-workspace-lifecycle/">
+    <span class="ms-card__title">Session recovery</span>
+    <p class="ms-card__body">Grove pane-verifies each agent session and re-adopts it across daemon restarts and a different user attaching. A stale pointer remaps to the recovered session in a click.</p>
+  </a>
+  <a class="ms-card" href="features-ticket-providers/">
+    <span class="ms-card__title">Ticket providers</span>
+    <p class="ms-card__body">Branch-aware Gitea, GitHub, and Linear context, surfaced next to the workspace.</p>
+  </a>
+  <a class="ms-card" href="features-notifications/">
+    <span class="ms-card__title">Push notifications</span>
+    <p class="ms-card__body">Get pinged when an agent finishes a turn or needs you.</p>
   </a>
 </div>
 
@@ -95,7 +113,7 @@ default, with room for personal overrides.
 Teams put this to work in familiar ways. They run an agent per feature branch. They pit Claude against
 Aider on the same task and compare the results. They pause a long refactor and pick it up days later.
 
-When you need the fleet beyond the terminal, point the web dashboard at the daemon for async access from
+When you need the fleet beyond the terminal, point the web IDE at the daemon for async access from
 any device on the network. It shows the same status and live output as the TUI, and you can create a
 workspace, steer an agent, and pause or kill it from there too. Pair a device once to grant it access,
 and the daemon stays on loopback behind that handshake. Workspaces are not only yours to drive: through
@@ -111,7 +129,7 @@ workspace primitive behind both human and agent orchestration.
   </a>
   <a class="ms-card" href="use-tui/">
     <span class="ms-card__title">Use</span>
-    <span class="ms-card__body">TUI tour, CLI, web dashboard, authentication, daily workflow.</span>
+    <span class="ms-card__body">TUI tour, CLI, web IDE, authentication, daily workflow.</span>
   </a>
   <a class="ms-card" href="configure-project/">
     <span class="ms-card__title">Configure</span>

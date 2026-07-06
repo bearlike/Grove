@@ -9,12 +9,14 @@ annotation, filters, and unique-prefix resolution.
 from __future__ import annotations
 
 import os
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from grove.core.agents.claude_code import _ClaudeHome
+from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig
 from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
@@ -79,6 +81,25 @@ def _write_transcript(
     return path
 
 
+def _write_codex_rollout(codex_home: Path, sid: str, cwd: Path, *, mtime: int, prompt: str) -> Path:
+    """A minimal real-shaped codex rollout under the date-partitioned sessions
+    tree: a ``session_meta`` head carrying the id + cwd, then one real human
+    turn (a ``response_item`` user message, no preamble markers)."""
+    folder = codex_home / "sessions" / "2026" / "06" / "09"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"rollout-2026-06-09T08-00-00-{sid}.jsonl"
+    path.write_text(
+        '{"timestamp":"2026-06-09T08:00:00.000Z","type":"session_meta",'
+        f'"payload":{{"id":"{sid}","timestamp":"2026-06-09T08:00:00.000Z","cwd":"{cwd}"}}}}\n'
+        '{"timestamp":"2026-06-09T08:00:01.000Z","type":"response_item",'
+        f'"payload":{{"type":"message","role":"user",'
+        f'"content":[{{"type":"input_text","text":"{prompt}"}}]}}}}\n',
+        encoding="utf-8",
+    )
+    os.utime(path, (mtime, mtime))
+    return path
+
+
 def test_lists_sessions_across_root_and_worktrees(
     manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
 ) -> None:
@@ -100,6 +121,47 @@ def test_lists_sessions_across_root_and_worktrees(
     assert minted.workspace_title == "widget work"
     assert hand.provenance == "fs_discovered"
     assert hand.workspace_id is None  # repo root has no ROOT-placement workspace
+
+
+def test_list_does_not_annotate_foreign_kind_sessions_to_a_root_workspace(
+    manager: WorkspaceManager,
+    claude_home: Path,
+    tmp_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """#164: the project browse (`list`) annotates a session to a workspace by
+    cwd-equality — but a ROOT workspace's cwd is the shared repo root, where a
+    foreign-kind (codex) rollout can already live. That session is NOT the
+    workspace's own (its adapter can't read it, `remap_session` rejects a kind
+    mismatch), so it must render UNMAPPED (`workspace_id`/title None) rather than
+    borrow the workspace's identity — while a same-kind session at the same cwd
+    still annotates. `list` stays all-kinds (the codex row still appears); only
+    the attribution is kind-gated."""
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    codex_sid = "019dd5d5-60fb-7461-bd07-b6e8cf342726"
+    _write_codex_rollout(codex_home, codex_sid, tmp_repo, mtime=9_000, prompt="foreign codex work")
+
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="root claude", branch_plan=RootBranch())
+    )
+    assert state.placement is Placement.ROOT
+    assert state.agent_session_id is not None
+    _write_transcript(claude_home, state.agent_session_id, tmp_repo, mtime=2_000, prompt="mine")
+
+    by_id = {ls.summary.session_id: ls for ls in SessionExplorer(manager).list()}
+
+    # The same-kind claude session IS annotated to the workspace.
+    assert by_id[state.agent_session_id].workspace_id == state.id
+    assert by_id[state.agent_session_id].workspace_title == "root claude"
+    # The foreign-kind codex session still appears (all-kinds browse) but borrows
+    # NO workspace identity — honest, unmapped history rather than mis-attribution.
+    assert codex_sid in by_id
+    assert by_id[codex_sid].workspace_id is None
+    assert by_id[codex_sid].workspace_title is None
+    assert by_id[codex_sid].workspace_branch is None
+    assert by_id[codex_sid].provenance == "fs_discovered"
 
 
 def test_paused_workspace_sessions_survive_worktree_removal(
@@ -243,6 +305,216 @@ def test_for_workspace_root_placement_ignores_stale_repo_root_transcript(
     listings = SessionExplorer(manager).for_workspace(state.id)
 
     assert stale_sid not in [ls.summary.session_id for ls in listings]
+
+
+def test_for_workspace_adopts_resumed_session_via_sidecar(
+    manager: WorkspaceManager,
+    claude_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """`for_workspace` mirrors the ActivityService adoption rule (#117/#F1): a
+    session born BEFORE the workspace but proven live in the workspace's OWN pane
+    by a post-create hook sidecar is kept (the resumed-in-pane case). The pane is
+    verified against the minted session's sidecar (the reference pane), so birth
+    alone — which filters it as stale — is not the only signal."""
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="scoped-resume"))
+    worktree = Path(state.worktree_path)
+    minted = state.agent_session_id
+    assert minted is not None
+    # The minted session's sidecar pins the workspace's reference pane %3.
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": minted, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%3",
+        now=state.created_at + timedelta(seconds=1),
+    )
+    resumed = "55554444-3333-4222-8111-000099998888"
+    _write_transcript(
+        claude_home,
+        resumed,
+        worktree,
+        mtime=5_000,
+        prompt="resumed here",
+        born_at=state.created_at - timedelta(hours=1),
+    )
+    # The resumed session is live in the SAME pane %3 after creation.
+    ClaudeHook.record_event(
+        {"hook_event_name": "SessionStart", "session_id": resumed, "cwd": str(worktree)},
+        sidecar_dir=sidecar_dir,
+        tmux_pane="%3",
+        now=state.created_at + timedelta(seconds=4),
+    )
+
+    listings = SessionExplorer(manager).for_workspace(state.id)
+    assert resumed in [ls.summary.session_id for ls in listings]
+
+
+def test_for_workspace_scans_nested_agent_cwd(
+    manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
+) -> None:
+    """`for_workspace` scans agent_cwd (worktree/subpath), where a nested
+    project's agent records its transcript — not the worktree root (#118).
+    Pre-fix scanned the worktree root and returned nothing."""
+    sub = tmp_repo / "services" / "api"
+    sub.mkdir(parents=True)
+    (sub / ".keep").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "api", "--no-verify"], cwd=tmp_repo, check=True, capture_output=True
+    )
+
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="nested", project_cwd=sub)
+    )
+    assert state.project_subpath == "services/api"
+    assert state.agent_session_id is not None
+    _write_transcript(
+        claude_home,
+        state.agent_session_id,
+        state.agent_cwd,
+        mtime=2_000,
+        prompt="nested session",
+        born_at=state.created_at + timedelta(seconds=1),
+    )
+
+    listings = SessionExplorer(manager).for_workspace(state.id)
+    assert state.agent_session_id in [ls.summary.session_id for ls in listings]
+
+
+def test_for_workspace_scans_worktree_root_for_nested_project(
+    manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
+) -> None:
+    """#F7: a session hand-started at the WORKTREE ROOT of a nested project (cwd =
+    worktree_path, not agent_cwd) is still discovered — `for_workspace` scans the
+    UNION of {agent_cwd, worktree_path}. Re-keying to agent_cwd alone (#118)
+    dropped it, leaving a repo-root `claude` untracked."""
+    sub = tmp_repo / "services" / "api"
+    sub.mkdir(parents=True)
+    (sub / ".keep").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "api", "--no-verify"], cwd=tmp_repo, check=True, capture_output=True
+    )
+
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="nested-root", project_cwd=sub)
+    )
+    worktree = Path(state.worktree_path)
+    assert worktree != state.agent_cwd  # nested: the two scan cwds genuinely differ
+    root_session = "abcd0000-0000-4000-8000-000000000000"
+    _write_transcript(
+        claude_home,
+        root_session,
+        worktree,  # recorded at the worktree ROOT, not the nested agent_cwd
+        mtime=9_000,
+        prompt="root session",
+        born_at=state.created_at + timedelta(seconds=1),
+    )
+
+    listings = SessionExplorer(manager).for_workspace(state.id)
+    assert root_session in [ls.summary.session_id for ls in listings]
+
+
+def test_candidates_for_is_ungated_and_cwd_scoped(
+    manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
+) -> None:
+    """`candidates_for` is the remap-picker seam (#132): the ungated sibling of
+    `for_workspace`. It keeps a session the adoption gate drops — one born
+    before the workspace (a dead-minted-pointer's live successor / foreign
+    resumed session) — so a human can pin it, while staying scoped to the
+    workspace's own cwd (a root-level session must not leak in)."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="pickable"))
+    assert state.agent_session_id is not None
+    worktree = Path(state.worktree_path)
+    _write_transcript(
+        claude_home,
+        state.agent_session_id,
+        worktree,
+        mtime=2_000,
+        prompt="mine",
+        born_at=state.created_at + timedelta(seconds=1),
+    )
+    # Born a full day BEFORE the workspace — the exact shape the gate rejects.
+    stale_sid = "44444444-4444-4444-8444-444444444444"
+    _write_transcript(
+        claude_home,
+        stale_sid,
+        worktree,
+        mtime=5_000,  # newest mtime → leads the ungated list
+        prompt="pre-existing live session",
+        born_at=state.created_at - timedelta(days=1),
+    )
+    _write_transcript(claude_home, ROOT_SID, tmp_repo, mtime=4_000, prompt="root noise")
+    explorer = SessionExplorer(manager)
+
+    gated = [ls.summary.session_id for ls in explorer.for_workspace(state.id)]
+    ungated = [ls.summary.session_id for ls in explorer.candidates_for(state.id)]
+
+    # The gate drops the pre-birth session; the picker keeps it.
+    assert stale_sid not in gated
+    assert stale_sid in ungated
+    # Ungated is newest-first by mtime and still cwd-scoped (no root leak).
+    assert ungated == [stale_sid, state.agent_session_id]
+    by_id = {ls.summary.session_id: ls for ls in explorer.candidates_for(state.id)}
+    assert by_id[state.agent_session_id].provenance == "grove_launched"
+    assert by_id[stale_sid].provenance == "fs_discovered"
+    assert all(ls.workspace_id == state.id for ls in explorer.candidates_for(state.id))
+
+
+def test_scan_workspace_excludes_foreign_kind_sessions(
+    manager: WorkspaceManager,
+    claude_home: Path,
+    tmp_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """#164: a claude_code ROOT workspace's cwd is the shared repo root, where the
+    human also runs *other* tools — so a foreign-kind (codex) rollout can already
+    live there. That session can never be this workspace's own: its adapter can't
+    read it and `remap_session` rejects a kind mismatch. So neither the gated
+    attribution (`for_workspace`) nor the ungated remap picker (`candidates_for`)
+    may offer it — the picker must never surface a session the pin would reject —
+    even though the all-kinds project browse (`list`) still finds it."""
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    codex_sid = "019dd5d5-60fb-7461-bd07-b6e8cf342726"
+    _write_codex_rollout(codex_home, codex_sid, tmp_repo, mtime=9_000, prompt="foreign codex work")
+
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="root claude", branch_plan=RootBranch())
+    )
+    assert state.placement is Placement.ROOT
+    assert state.agent_session_id is not None
+    # The workspace's own claude session in the same (root) cwd.
+    _write_transcript(
+        claude_home,
+        state.agent_session_id,
+        tmp_repo,
+        mtime=2_000,
+        prompt="mine",
+        born_at=state.created_at + timedelta(seconds=1),
+    )
+    explorer = SessionExplorer(manager)
+
+    # The codex rollout IS discoverable by the all-kinds project browse ...
+    assert codex_sid in [ls.summary.session_id for ls in explorer.list(agent="codex")]
+    # ... but both per-workspace scans exclude it by kind, keeping only the
+    # workspace's own claude_code session.
+    gated = [ls.summary.session_id for ls in explorer.for_workspace(state.id)]
+    ungated = [ls.summary.session_id for ls in explorer.candidates_for(state.id)]
+    assert codex_sid not in gated
+    assert codex_sid not in ungated
+    assert gated == [state.agent_session_id]
+    assert ungated == [state.agent_session_id]
+    assert all(ls.summary.adapter_kind == "claude_code" for ls in explorer.candidates_for(state.id))
+
+
+def test_candidates_for_unknown_id_raises(manager: WorkspaceManager) -> None:
+    with pytest.raises(WorkspaceNotFound):
+        SessionExplorer(manager).candidates_for("deadbeef")
 
 
 def test_for_workspace_unknown_id_raises(manager: WorkspaceManager) -> None:

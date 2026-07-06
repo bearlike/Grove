@@ -7,8 +7,22 @@
  * import-graph scan can't see them. Without this @source, chat markdown
  * (headings, tables, code blocks) silently renders unstyled. The JS stays
  * lazy (next/dynamic chunk); only the utility CSS lands in the global sheet.
+ * Glob (not a single file): streamdown ships its syntax-highlighter and
+ * mermaid renderer as separate lazy chunks (dist/chunk-*.js,
+ * dist/highlighted-body-*.js, dist/mermaid-*.js), each with its own classes.
  */
-@source "../node_modules/streamdown/dist/index.js";
+@source "../node_modules/streamdown/dist/**/*.js";
+
+/*
+ * assistant-ui (the chat transcript's headless substrate, Phase D #141) ships
+ * its own Tailwind utility classes — `tw-shimmer` streaming caret, composer
+ * chrome, the `aui-*` layout hooks — from inside its dist bundles, never from
+ * our TSX, so v4's import-graph scan can't see them (the same node_modules trap
+ * as streamdown above). Glob both the primitives package and its streamdown
+ * text renderer so those classes land in the global sheet.
+ */
+@source "../node_modules/@assistant-ui/react/dist/**/*.js";
+@source "../node_modules/@assistant-ui/react-streamdown/dist/**/*.js";
 
 /*
  * Tailwind v4 theme bridge: maps the shadcn-style HSL CSS vars below into
@@ -45,10 +59,47 @@
   --color-sidebar-border: hsl(var(--sidebar-border));
   /* Elevated surface above card (raised wells, the composer hero). */
   --color-elevated: hsl(var(--elevated));
+  /* Code well (fenced/inline code background) — distinct from --muted so a
+     code block reads as its own surface, not a footer strip. */
+  --color-code: hsl(var(--code));
+  --color-code-well: hsl(var(--code-well));
+  /* Terracotta is split three ways so every use clears AA (design-direction.md
+     §4.4): --primary stays the brand MARK (logo, dark-mode ring) and is never
+     a text-bearing fill — white-on-#d97757 is only 3.12:1. --primary-fg is
+     terracotta AS TEXT (the `you` speaker label, links). --primary-strong is
+     the deepened CTA FILL for send/create buttons (white label 4.8:1 AA). */
+  --color-primary-fg: hsl(var(--primary-fg));
+  --color-primary-strong: hsl(var(--primary-strong));
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /*
+   * Type scale (design-direction.md §4.3) — named tiers for tokens whose
+   * size/line-height/tracking don't already match a Tailwind default
+   * (text-xs/sm/base/lg/xl). "Body/control" and "dense rail/meta row" both
+   * spec 14px/1.45 — that's within rounding of the stock `text-sm` line-height
+   * (1.4286), so they deliberately reuse it rather than mint a near-duplicate
+   * token. Consumed by later phases (rail/chat/work-panel restyles); not
+   * applied to any component in this pass.
+   */
+  --text-page-title: 1.25rem; /* 20px route/section titles */
+  --text-page-title--line-height: 1.3;
+  --text-card-title: 1rem; /* 16px card/dialog titles */
+  --text-card-title--line-height: 1.4;
+  --text-prose: 1rem; /* 16px chat prose — the surface read for minutes */
+  --text-prose--line-height: 1.6;
+  --text-caption: 0.8125rem; /* 13px caption/label/secondary meta */
+  --text-caption--line-height: 1.4;
+  --text-code: 0.8125rem; /* 13px code/mono, git-ref values */
+  --text-code--line-height: 1.5;
+  --text-micro: 0.6875rem; /* 11px uppercase state-section micro-labels */
+  --text-micro--line-height: 1.3;
+
+  --tracking-page-title: -0.01em;
+  --tracking-card-title: -0.005em;
+  --tracking-micro: 0.04em; /* the ONLY uppercase-tracking use per §4.3 */
 
   /*
    * Typography. Geist Sans/Mono are wired via next/font in app/fonts.ts and
@@ -67,6 +118,35 @@
     0%, 100% { opacity: 1; transform: scale(1); }
     50%      { opacity: 0.55; transform: scale(1.18); }
   }
+
+  /*
+   * Phase F motion (issue #143, design-direction.md §5 + brand.md §4-5). Two
+   * TEMPORAL uses of terracotta the redesign sanctions — both decay to nothing
+   * within ~1s so neither becomes a steady-state fill (terracotta scarcity holds).
+   *
+   * grove-shimmer — the loading-skeleton sweep: a ~5%-opacity terracotta band
+   * translated across the muted base, the ONLY place terracotta *moves* across a
+   * whole surface. Applied motion-safe only (a static muted block under
+   * prefers-reduced-motion). The element carries a 200%-wide background-image so
+   * the band sweeps fully off both edges.
+   *
+   * grove-ring — the one-shot "just landed" ring on a freshly-created card/row.
+   * An INSET ring (drawn inside the border-box) so an `overflow-hidden` card
+   * doesn't clip it; `forwards` holds it transparent after the single pass so it
+   * never persists. See components/shared/landing-ring.tsx for the mount gate.
+   */
+  --animate-grove-shimmer: grove-shimmer 1.5s ease-in-out infinite;
+  --animate-grove-ring: grove-ring 800ms ease-out forwards;
+
+  @keyframes grove-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  @keyframes grove-ring {
+    from { box-shadow: inset 0 0 0 2px hsl(var(--primary) / 0.55); }
+    to   { box-shadow: inset 0 0 0 2px hsl(var(--primary) / 0); }
+  }
 }
 
 /*
@@ -84,43 +164,102 @@
   }
 }
 
+/*
+ * Global scrollbar rule (design-direction.md §4.7) — ONE app-wide mechanism,
+ * the standard CSS properties, not `::-webkit-scrollbar` pseudo-elements and
+ * not a `ScrollArea` wrapper per surface. `scrollbar-width/-color` is
+ * Baseline (Safari since Dec 2024; Firefox/Chromium long-standing),
+ * theme-aware via --scrollbar-thumb, and reserves no gutter by default — the
+ * bar only appears where content overflows. Do NOT add `::-webkit-scrollbar`
+ * anywhere: current Chrome deprioritizes it in favor of the standard props,
+ * and setting one force-renders a classic always-visible bar, killing the
+ * native macOS overlay auto-hide this rule relies on. This also themes
+ * assistant-ui's Thread.Viewport for free (it ships bare `overflow-y-scroll`,
+ * no scrollbar CSS of its own).
+ */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+
+/*
+ * Icon stroke seam (design-direction.md §4.5) — lucide-react has no theme
+ * provider, so a single global CSS rule is the one seam for an app-wide
+ * stroke width. lucide-react's Icon component always sets class="lucide" as
+ * the FIRST class on every icon it renders (verified in
+ * node_modules/lucide-react/dist/esm/Icon.js), so this reaches every icon
+ * regardless of per-instance className. 1.75 (lucide's default is 2) is the
+ * measured Linear/Notion register — 1.5 goes wispy at Grove's 14px dense rows
+ * rendered in --muted-foreground at exactly-AA contrast.
+ */
+@layer base {
+  svg.lucide {
+    stroke-width: 1.75;
+  }
+}
+
 @layer base {
   :root {
-    /* Light theme — a calm, low-glare slate-neutral system. The canvas is a
-       soft off-white so white `card` panels lift off it; chrome sits a hair
-       cooler. Hue 220 (cool slate) holds across the whole neutral ramp so
-       there is no muddy warmth, and lightness steps are wide enough to read as
-       distinct elevation tiers. Foreground is deep slate (not pure black) for
-       comfortable long-form contrast. Terracotta `--primary` is deepened to
-       hold AA against white. Semantic --status/--agent/--ref vars below are
-       mirrored from Python and intentionally left untouched. */
-    --background: 220 24% 98%;
-    --foreground: 222 28% 11%;
+    /* Light theme — warm-neutral off-white (design-direction.md §4.4,
+       ADE overhaul #139). Replaces the cool-slate (hue 220) system: hue ~40-48
+       (barely-warm, low chroma) holds across the whole neutral ramp so there's
+       no muddy warmth, matching the detuned dark theme's temperature and
+       harmonizing with the terracotta accent instead of fighting it.
+       Lightness steps stay wide for legible elevation. Every text pair here
+       is WCAG-computed, not eyeballed — see tests/unit/contrast.test.ts (the
+       enforcement seam) and design-direction.md §4.4 for the full matrix.
+       Semantic --status/--agent/--ref vars below are mirrored from Python and
+       intentionally left untouched — never move a hex there without also
+       moving it in the Python source. */
+    --background: 48 33% 97%; /* #faf9f5 */
+    --foreground: 45 8% 10%; /* #1b1a17 — 16.4:1 on canvas (AAA) */
     --card: 0 0% 100%;
-    --card-foreground: 222 28% 11%;
+    --card-foreground: 45 8% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 28% 11%;
+    --popover-foreground: 45 8% 10%;
     --elevated: 0 0% 100%;
-    --primary: 14 72% 47%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 220 16% 93%;
-    --secondary-foreground: 222 22% 18%;
-    --muted: 220 18% 95%;
-    --muted-foreground: 220 9% 40%;
-    --accent: 220 17% 91%;
-    --accent-foreground: 222 22% 16%;
+    --primary: 15 63% 60%; /* #d97757 brand mark ONLY — not a text-bearing fill, see --primary-strong */
+    --primary-foreground: 0 0% 100%; /* white — pairs with --primary-strong fills, never bare --primary */
+    --secondary: 44 26% 92%;
+    --secondary-foreground: 45 8% 10%;
+    --muted: 44 26% 92%; /* #efece4 */
+    --muted-foreground: 40 9% 38%; /* #6b6559 — 5.6:1 worst-case (AA, incl. 12-13px meta) */
+    --accent: 44 26% 92%;
+    --accent-foreground: 45 8% 10%;
     --destructive: 0 72% 46%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 16% 87%;
-    --input: 220 16% 85%;
-    --ring: 14 72% 47%;
+    --border: 42 21% 88%; /* #e6e2d9 — decorative hairline, WCAG-exempt (identity = fill + ring, not the line) */
+    --input: 42 21% 88%;
+    --ring: 15 59% 46%; /* #b95230 — deepened for 4.5:1 as a focus ring on white */
     --radius: 0.5rem;
+
+    /* Code well (fenced/inline code) — a distinct surface from --muted so a
+       code block doesn't read as a footer strip. */
+    --code: 43 10% 14%; /* #26241f — 13.6:1 on --code-well */
+    --code-well: 47 27% 94%; /* #f3f1ea, = --sidebar tone */
+
+    /* Terracotta as TEXT and as a CTA fill are separate tokens from the brand
+       mark (see --primary above and the --color-primary-* comment in @theme
+       inline) — each is tuned to clear AA in its own role. */
+    --primary-fg: 17 71% 41%; /* #b4491f — terracotta AS TEXT (`you` label, links), 5.2:1 */
+    --primary-strong: 15 59% 46%; /* #b95230 — send/create CTA fill; white label 4.8:1 */
+    --scrollbar-thumb: rgba(0, 0, 0, 0.2);
+
+    /* Composer floating-plane shadow — the ONE sanctioned transcript shadow,
+       and LIGHT-mode only (a var, not the `dark:` variant, since Grove themes
+       by flipping CSS vars in :root/.dark, not by the OS media query). On dark
+       it is `none` (the no-shadow-on-dark rule holds; the surface ladder carries
+       depth); on light a subtle lift reads the steer composer as a floating
+       input plane (assistant-ui's template floating-plane exception, #154). */
+    --composer-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.06), 0 1px 3px 0 rgb(0 0 0 / 0.08);
 
     /* Chrome (header · rail · status bar) — slightly off the canvas so the
        persistent frame is legible without contrasting fills. */
-    --sidebar: 220 26% 96%;
-    --sidebar-foreground: 222 28% 11%;
-    --sidebar-border: 220 16% 87%;
+    --sidebar: 47 27% 94%; /* #f3f1ea */
+    --sidebar-foreground: 45 8% 10%;
+    --sidebar-border: 42 21% 88%;
 
     /* Status — light mode (mirrors STATUS_HEX_LIGHT in lib/grove/status-tokens.ts). */
     --status-active: #4d7c0f;
@@ -150,40 +289,59 @@
   }
 
   .dark {
-    /* Dark theme — "space black". A deep, cool near-black canvas (hue 224, very
-       low chroma) replaces the old warm-olive `hsl(60 4% 17%)` monotone that
-       read as dead grey. The neutral ramp climbs in clear lightness steps so
-       elevation is legible WITHOUT borrowing chroma: canvas 6 → chrome 8 →
-       card 10 → popover/elevated 12 → muted 13 → accent/secondary 16 →
-       border 18. Foreground is a cool off-white; `--primary` terracotta is
-       nudged a touch brighter so it still sings against the deeper canvas.
-       Semantic --status/--agent/--ref vars below stay canonical (Python). */
-    --background: 224 20% 6%;
-    --foreground: 210 24% 96%;
-    --card: 222 17% 10%;
-    --card-foreground: 210 24% 96%;
-    --popover: 222 17% 12%;
-    --popover-foreground: 210 24% 96%;
-    --elevated: 222 16% 13%;
-    --primary: 15 74% 61%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 220 13% 16%;
-    --secondary-foreground: 210 22% 95%;
-    --muted: 222 14% 13%;
-    --muted-foreground: 216 14% 62%;
-    --accent: 220 13% 17%;
-    --accent-foreground: 210 24% 96%;
+    /* Dark theme — "space black", DETUNED (design-direction.md §4.4, ADE
+       overhaul #139, ruling 1.3). Keeps the deep, dark-first space-black
+       identity but moves the neutral hue from cool-blue (~224) to
+       near-neutral/barely-warm (~45-60, chroma unchanged) — the blue cast was
+       the one thing fighting the warm terracotta accent. The lightness ladder
+       still climbs the same way: canvas → chrome → card → elevated → muted →
+       border, legible without borrowing chroma. `--primary` terracotta is
+       unchanged (#d97757, brand mark). Every text pair is WCAG-computed — see
+       tests/unit/contrast.test.ts and design-direction.md §4.4. Semantic
+       --status/--agent/--ref vars below stay canonical (Python-mirrored) and
+       are untouched by this hue shift. */
+    --background: 45 10% 8%; /* #171613 */
+    --foreground: 51 28% 95%; /* #f6f5ef — 16.6:1 on canvas (AAA) */
+    --card: 60 4% 13%; /* #232320 */
+    --card-foreground: 51 28% 95%;
+    --popover: 60 4% 13%;
+    --popover-foreground: 51 28% 95%;
+    --elevated: 48 6% 16%; /* #2b2a26 */
+    --primary: 15 63% 60%; /* #d97757 brand mark ONLY — not a text-bearing fill, see --primary-strong */
+    --primary-foreground: 0 0% 100%; /* white — pairs with --primary-strong fills, never bare --primary */
+    --secondary: 48 6% 17%;
+    --secondary-foreground: 51 28% 95%;
+    --muted: 48 6% 17%; /* #2f2e2a */
+    --muted-foreground: 43 8% 66%; /* #b0aca2 — 6.0:1 worst-case (AA, incl. 12-13px meta) */
+    --accent: 48 6% 17%;
+    --accent-foreground: 51 28% 95%;
     --destructive: 0 68% 58%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 12% 18%;
-    --input: 220 12% 21%;
-    --ring: 15 74% 61%;
+    --border: 40 9% 20%; /* #38352f — decorative hairline, WCAG-exempt (identity = fill + ring, not the line) */
+    --input: 40 9% 20%;
+    --ring: 15 63% 60%; /* #d97757 — 5.9:1 focus ring on canvas */
+
+    /* Code well (fenced/inline code) — a distinct surface from --muted so a
+       code block doesn't read as a footer strip. */
+    --code: 48 19% 89%; /* #e9e7df — 13.1:1 on --code-well */
+    --code-well: 45 7% 12%; /* #201f1c */
+
+    /* Terracotta as TEXT and as a CTA fill are separate tokens from the brand
+       mark (see --primary above and the --color-primary-* comment in @theme
+       inline) — each is tuned to clear AA in its own role. */
+    --primary-fg: 15 65% 65%; /* #e08a6e — terracotta AS TEXT (`you` label, links), 6.0:1 */
+    --primary-strong: 15 59% 46%; /* #b95230 — send/create CTA fill; white label 4.8:1 */
+    --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+
+    /* No shadow on dark surfaces — depth is the surface ladder (see the light
+       :root `--composer-shadow` note). */
+    --composer-shadow: none;
 
     /* Chrome (header · rail · status bar) — one tone between canvas and card so
        the persistent frame is unified and distinct from the content well. */
-    --sidebar: 224 18% 8%;
-    --sidebar-foreground: 210 24% 96%;
-    --sidebar-border: 220 12% 16%;
+    --sidebar: 48 10% 10%; /* #1c1b17 */
+    --sidebar-foreground: 51 28% 95%;
+    --sidebar-border: 40 9% 20%;
 
     /* Status — dark mode (canonical from grove/core/contracts/status_palette.py). */
     --status-active: #84cc16;

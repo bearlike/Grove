@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from grove import __version__ as _GROVE_VERSION
 from grove.core.activity import ActivityService
+from grove.core.agents import resolve_models
 from grove.core.auth import SessionStore
 from grove.core.config import GroveConfig, load_config
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
@@ -31,7 +32,11 @@ from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
-from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView
+from grove.core.contracts.sessions import (
+    RemapSessionRequest,
+    SessionDetailView,
+    SessionSummaryView,
+)
 from grove.core.contracts.tickets import (
     TicketProviderName,
     TicketProviderView,
@@ -57,6 +62,7 @@ from grove.core.errors import (
     PaneNotFound,
     QuestionAnswerInvalid,
     QuestionNotPending,
+    ResumeNotSupported,
     SteeringUnsupported,
     TicketProviderError,
     TicketProviderNotConfigured,
@@ -310,8 +316,15 @@ def build_app(  # noqa: PLR0915
             QuestionNotPending: (409, "question_not_pending"),
             QuestionAnswerInvalid: (422, "question_answer_invalid"),
             # Agent-transcript sessions; the auth domain's `session_not_found`
-            # (revoked bearer sessions) lives in the auth router.
+            # (revoked bearer sessions) lives in the auth router. Also the
+            # remap verb's not-found/ambiguous session-ref (#120), re-raised in
+            # this domain by remap_session so it never falls through to 500.
             AgentSessionNotFound: (404, "agent_session_not_found"),
+            # Resume-into-workspace (#120): a create named resume_session_id for
+            # an agent kind with no resume handle (mewbo/generic). 422 — the
+            # request is well-formed but semantically invalid for this agent, no
+            # state change fixes it (mirrors question_answer_invalid).
+            ResumeNotSupported: (422, "resume_not_supported"),
             # Ticket providers (#7). NotConfigured is 404 — the named tracker
             # simply isn't enabled for this repo (nothing went wrong on the
             # wire). TicketProviderError is 502 — the upstream tracker API
@@ -585,6 +598,35 @@ def build_app(  # noqa: PLR0915
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
 
+    @app.post(
+        "/workspaces/{ws_id}/session",
+        response_model=WorkspaceStateView,
+        dependencies=auth_dep,
+    )
+    async def remap_workspace_session(ws_id: str, body: RemapSessionRequest) -> WorkspaceStateView:
+        """Pin an existing agent session as this workspace's tracked primary (#120).
+
+        The manual counterpart to Grove's automatic discovery/adoption: the
+        operator names a session (id or unique prefix, resolved in the
+        workspace's project scope) and it becomes the persisted
+        ``agent_session_id``. Trusted — no birth-gate, mirroring
+        ``attach_ticket``; idempotent by resolved id. Returns the updated
+        workspace. Refusals ride the envelope: 404 ``workspace_not_found`` /
+        ``agent_session_not_found`` (the ref resolves nowhere, or is ambiguous),
+        409 ``workspace_state_error`` (ORPHANED).
+        """
+        mgr = _manager_for(ws_id)
+        # remap_session resolves the ref through SessionExplorer, which
+        # full-parses every transcript across every worktree — blocking I/O, so
+        # off-load it to the executor exactly like the sibling session-scan
+        # endpoints (#F3) rather than stalling the event loop.
+        loop = asyncio.get_running_loop()
+        try:
+            state = await loop.run_in_executor(None, mgr.remap_session, ws_id, body.session_ref)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return WorkspaceStateView.from_state(state)
+
     @app.patch(
         "/workspaces/{ws_id}",
         response_model=WorkspaceStateView,
@@ -739,6 +781,7 @@ def build_app(  # noqa: PLR0915
     async def workspace_sessions(
         ws_id: str,
         limit: Annotated[int, Query(ge=1, le=200)] = 20,
+        candidates: Annotated[bool, Query()] = False,
     ) -> list[SessionSummaryView]:
         """Every agent session recorded for the workspace's directory, newest-first.
 
@@ -746,12 +789,20 @@ def build_app(  # noqa: PLR0915
         The scan full-parses each transcript in one cwd (the documented
         ``list_sessions`` cost model), so it runs in the executor like
         ``/activity``.
+
+        ``candidates=true`` flips the scan to the UNGATED
+        :meth:`SessionExplorer.candidates_for` — the remap-picker set (#132),
+        which keeps a session the adoption gate rejects (a dead-minted-pointer's
+        pre-birth successor, a foreign session in a shared ROOT cwd) so a UI can
+        offer it to pin via ``POST .../session``. The default gated view stays
+        the workspace's own attributed history.
         """
         mgr = _manager_for(ws_id)
         explorer = SessionExplorer(mgr)
+        scan = explorer.candidates_for if candidates else explorer.for_workspace
         loop = asyncio.get_running_loop()
         try:
-            listings = await loop.run_in_executor(None, explorer.for_workspace, ws_id)
+            listings = await loop.run_in_executor(None, scan, ws_id)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
         return [SessionSummaryView.from_listing(ls) for ls in listings[:limit]]
@@ -840,10 +891,27 @@ def build_app(  # noqa: PLR0915
         dispatches like ``/branches`` (per-repo cascade), so a project-scoped agent
         defined in ``<repo>/.grove/config.json`` shows up here too. Read-only and
         non-git, so it can't raise — an arbitrary path just yields the default
-        cascade.
+        cascade. Each row's ``models`` catalog is resolved via the single
+        ``resolve_models`` seam (config override, else live adapter discovery);
+        Codex discovery shells out (``codex debug models``), so the whole list is
+        built in the executor to keep that subprocess off the event loop.
         """
         mgr = registry.get(repo)
-        return [AgentSummaryView.from_spec(spec) for spec in mgr.config.agents]
+        agents = mgr.config.agents
+
+        def _build() -> list[AgentSummaryView]:
+            return [
+                AgentSummaryView.from_spec(
+                    spec,
+                    models=resolve_models(
+                        kind=spec.kind, command=spec.command, configured=spec.models
+                    ),
+                )
+                for spec in agents
+            ]
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _build)
 
     @app.get(
         "/branches",

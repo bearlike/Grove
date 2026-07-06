@@ -71,9 +71,16 @@ describe("GroveClient", () => {
       expect.objectContaining({ method: "GET" }),
     );
 
-    await client.getSessions("w1", 5);
+    await client.getSessions("w1", { limit: 5 });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/grove/workspaces/w1/sessions?limit=5",
+      expect.objectContaining({ method: "GET" }),
+    );
+
+    // `candidates: true` flips to the ungated remap-picker scan (#132).
+    await client.getSessions("w1", { candidates: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/grove/workspaces/w1/sessions?candidates=true",
       expect.objectContaining({ method: "GET" }),
     );
   });

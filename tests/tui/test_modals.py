@@ -162,6 +162,61 @@ def test_create_inherits_grove_modal_chrome() -> None:
     assert issubclass(CreateWorkspaceScreen, GroveModal)
 
 
+@pytest.mark.asyncio
+async def test_create_modal_model_input_flows_into_request(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A filled model Input lands on ``CreateWorkspaceRequest.model`` verbatim
+    (the provider boundary — Grove forwards any id, never validates it)."""
+    from textual.widgets import Input  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    captured: dict[str, CreateWorkspaceRequest] = {}
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        modal.dismiss = lambda result=None: captured.__setitem__("req", result)  # type: ignore[assignment,method-assign]
+        modal.query_one("#model", Input).value = "opus"
+        for ch in "modeled":
+            await pilot.press(ch)
+        await pilot.pause()
+        modal._submit()
+        await pilot.pause()
+
+    req = captured["req"]
+    assert isinstance(req, CreateWorkspaceRequest)
+    assert req.model == "opus"
+
+
+@pytest.mark.asyncio
+async def test_create_modal_blank_model_resolves_to_none(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Leaving the model Input blank resolves to ``None`` — the agent tool's
+    own default, never a Grove-picked model."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    captured: dict[str, CreateWorkspaceRequest] = {}
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        modal.dismiss = lambda result=None: captured.__setitem__("req", result)  # type: ignore[assignment,method-assign]
+        for ch in "blank model":
+            await pilot.press(ch)
+        await pilot.pause()
+        modal._submit()
+        await pilot.pause()
+
+    req = captured["req"]
+    assert isinstance(req, CreateWorkspaceRequest)
+    assert req.model is None
+
+
 # ─── Create: root placement + skip-init ──────────────────────────────────────
 
 
