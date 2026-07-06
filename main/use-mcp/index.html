@@ -394,7 +394,6 @@
 
 
 
-
 <div data-slot="sidebar-group" data-sidebar="group" class="relative flex w-full min-w-0 flex-col p-2 pt-6">
     <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
         <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
@@ -1289,8 +1288,12 @@ grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">
 <td>Full state for one workspace by id.</td>
 </tr>
 <tr>
+<td><code>grove_list_agents</code></td>
+<td>List the agents available for a repo, each with its offered <code>models</code> catalog (up to 10) — the valid <code>agent_name</code> and <code>model</code> values for <code>grove_create_workspace</code>. Read-only.</td>
+</tr>
+<tr>
 <td><code>grove_create_workspace</code></td>
-<td>Create a workspace: worktree, branch, tmux session, agent. Params: <code>repo_root</code>, <code>title</code>, <code>agent_name</code>, optional <code>description</code>, <code>branch_plan</code> (<code>auto</code> default, <code>new_named</code>, <code>existing_local</code>, <code>track_remote</code>, <code>root</code>), <code>skip_init</code>, <code>initial_prompt</code>. Pass <code>initial_prompt</code> to deliver the agent's first task race-free at boot so the workspace starts working immediately; omit it to boot idle and steer later with <code>grove_send_workspace_message</code>.</td>
+<td>Create a workspace: worktree, branch, tmux session, agent. Params: <code>repo_root</code>, <code>title</code>, <code>agent_name</code>, optional <code>description</code>, <code>branch_plan</code> (<code>auto</code> default, <code>new_named</code>, <code>existing_local</code>, <code>track_remote</code>, <code>root</code>), <code>skip_init</code>, <code>initial_prompt</code>, <code>resume_session_id</code>, <code>model</code>. Pass <code>initial_prompt</code> to deliver the agent's first task race-free at boot so the workspace starts working immediately; omit it to boot idle and steer later with <code>grove_send_workspace_message</code>. <code>model</code> is forwarded verbatim to the agent tool (claude/codex as <code>--model &lt;id&gt;</code>, mewbo server-side; generic ignores it) — any id the tool understands is accepted, not just a fixed list; call <code>grove_list_agents</code> first to see the offered catalog as a hint.</td>
 </tr>
 <tr>
 <td><code>grove_peek_workspace</code></td>
@@ -1319,6 +1322,10 @@ grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">
 <tr>
 <td><code>grove_send_workspace_message</code></td>
 <td>Send a steering message to the workspace's agent. Returns <code>status="sent"</code> on success or <code>status="unavailable"</code> when the connected daemon predates the messaging endpoint.</td>
+</tr>
+<tr>
+<td><code>grove_remap_workspace_session</code></td>
+<td>Re-point a workspace to a different agent session — e.g. after <code>/clear</code> rotated the session id, or to adopt a hand-started session as the workspace's own. Params: <code>workspace_id</code>, <code>session_ref</code> (a full session id or a unique id-prefix within the workspace's project).</td>
 </tr>
 </tbody>
 </table></div>
@@ -1387,7 +1394,6 @@ grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">
             <svg xmlns="http://www.w3.org/2000/svg" width="18px" height="18px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         
-
 
 
 
@@ -2227,6 +2233,7 @@ grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">
 </div>
 </main>
         
+
 
 
 

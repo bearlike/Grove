@@ -32,19 +32,22 @@ repository the daemon knows about, on one attention-first surface that
 puts the agents needing you at the very top.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-focused-pane.png" alt="The web dashboard's unified surface with a working agent's Live toggle flipped, one focused terminal pane mirroring that agent above the repo-grouped grid of workspace cards" /></div>
-  <figcaption class="ms-shot__body">The wall in the browser, now the one unified home surface. A project chip on each card and one live pane. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="The web dashboard's Hero composer as the default home surface, with the flat session rail on the left listing every agent session across projects" /></div>
+  <figcaption class="ms-shot__body">The wall in the browser, now the one unified home surface. A persisted Hero/Overview toggle swaps between the composer and the repo-grouped card grid; the session rail on the left stays put either way. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
 </figure>
 
 In the browser this wall is the home surface itself. The live grid and
 the old standalone activity page merged into one place (#89), so
-`/activity` now just redirects home. Cards group by repository, each with
-a project chip to keep its origin legible. The grid streams live from the
-daemon over SSE (server-sent events), so a state change tweens into place
-within a second, no manual refresh; a poll fallback covers a dropped
-stream. One consolidated filter in the scope rail narrows the wall by
-project, by agent state, or to just the ones that need attention, and
-your choices persist in the browser.
+`/activity` now just redirects home. A Hero composer is the default view;
+flip the persisted Hero/Overview toggle for the repo-grouped card grid,
+each card carrying a project chip to keep its origin legible. Either view
+streams live from the daemon over SSE (server-sent events), so a state
+change tweens into place within a second, no manual refresh; a poll
+fallback covers a dropped stream. The session rail on the left is a flat,
+recency-sorted list of every session, not a repo scope-switcher; its one
+consolidated filter dropdown narrows the wall by project, by agent state,
+or to just the ones that need attention, and your choices persist in the
+browser.
 
 Each card carries the agent and its state, the workspace title and
 project, the agent's own one-line summary of what it is doing right now,
@@ -166,6 +169,20 @@ are tagged as Grove's, because Grove handed the agent its session id at
 create time. Sessions you started by hand in the same directory show up
 too, labeled as hand-started. Nothing is hidden just because Grove did
 not start it.
+
+### Adoption and recovery
+
+A workspace's pin to its live session has to survive a daemon restart or
+a different user attaching to the same box, so Grove never trusts a bare
+session id: adoption is pane-verified, meaning the candidate's transcript
+birth and the workspace's own tmux pane have to agree before Grove treats
+it as the live session (see [`sessions.py`](repo:src/grove/core/sessions.py)
+and [`manager.py`](repo:src/grove/core/manager.py)). Resume runs the same
+check, so it re-points a workspace at the correct live session rather than
+a stale one. If the Grove-minted session dies and a successor gets
+gate-rejected, the pointer goes stale and the transcript reads blank; fix
+it with `grove sessions remap WORKSPACE SESSION`, the TUI's `x` key, or the
+web dashboard's remap picker.
 
 ## See also
 

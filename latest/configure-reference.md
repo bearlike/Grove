@@ -15,6 +15,7 @@ One selectable agent in the new-workspace picker.
 | `env` | `object` | `(none)` |  |
 | `env_unset` | `array<string>` | ``[]`` |  |
 | `kind` | `string` | ``'generic'`` |  |
+| `models` | `array<string>` | ``[]`` |  |
 | `name` | `string` | `**required**` |  |
 
 ## `auth`

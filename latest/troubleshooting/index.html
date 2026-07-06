@@ -394,7 +394,6 @@
 
 
 
-
 <div data-slot="sidebar-group" data-sidebar="group" class="relative flex w-full min-w-0 flex-col p-2 pt-6">
     <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
         <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
@@ -1377,6 +1376,37 @@ needs an existing worktree to rebuild from.</p>
 any remaining tmux session. If the branch still exists in your repo,
 create a fresh workspace against it via the create modal's <em>Existing
 local</em> path.</p>
+<h2 id="workspace-shows-a-blank-transcript-wrong-session">Workspace shows a blank transcript / wrong session</h2>
+<p><strong>Symptom.</strong> A workspace's transcript is empty, or replays a conversation
+that is not the one running in its pane.</p>
+<p><strong>Cause.</strong> The Grove-minted session died and a successor session started in
+the same directory, but Grove's pane-verified adoption gate rejected it (the
+transcript birth and the workspace's live pane didn't agree), so the
+workspace's session pointer is stale. See <a href="https://github.com/bearlike/Grove/blob/e3b6e27c/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a>
+for the adoption gate and <a href="../features-activity/#adoption-and-recovery">Session adoption and recovery</a>.</p>
+<p><strong>Fix.</strong> Re-point the workspace at the correct live session:</p>
+<div class="codehilite"><pre><span></span><code>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>WORKSPACE<span class="w"> </span>SESSION
+</code></pre></div>
+<p>Or use the TUI's <code>x</code> key on the workspace, or the remap picker in the web
+dashboard's session-picker empty state.</p>
+<h2 id="a-grove-update-killed-my-other-tmux-sessions">A Grove update killed my other tmux sessions</h2>
+<p><strong>Symptom.</strong> Restarting or updating Grove's daemon tears down every tmux
+session on the box, not just the ones Grove manages.</p>
+<p><strong>Cause.</strong> The <code>grove-daemon</code> systemd unit was installed before the
+<code>KillMode=process</code> fix landed. The daemon forks the shared default tmux
+server into its own cgroup, and systemd's default <code>KillMode=control-group</code>
+kills that whole cgroup, tmux server included, on every
+<code>systemctl restart grove-daemon</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Check before you restart</p>
+<p>If your unit predates this fix, any daemon restart is destructive to
+unrelated tmux sessions. Apply the fix first.</p>
+</div>
+<p><strong>Fix.</strong> Re-render the unit with the fix baked in, then reload systemd:</p>
+<div class="codehilite"><pre><span></span><code>make<span class="w"> </span>systemd
+systemctl<span class="w"> </span>--user<span class="w"> </span>daemon-reload
+</code></pre></div>
+<p>See <a href="https://github.com/bearlike/Grove/blob/e3b6e27c/packaging/CLAUDE.md" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>packaging</span></a> for the durable KillMode lesson.</p>
 <h2 id="no-agent-state-on-the-dashboard">No agent state on the dashboard</h2>
 <p><strong>Symptom.</strong> A workspace shows up on the <a href="../features-activity/">Activity
 Dashboard</a> but carries no agent state, no turn or
@@ -1525,7 +1555,6 @@ without provisioning WSL2 just for that.</p>
             <svg xmlns="http://www.w3.org/2000/svg" width="18px" height="18px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         
-
 
 
 
@@ -2391,6 +2420,22 @@ without provisioning WSL2 just for that.</p>
             </a>
             
             
+            <a href="#workspace-shows-a-blank-transcript-wrong-session"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#workspace-shows-a-blank-transcript-wrong-session');">
+                Workspace shows a blank transcript / wrong session
+            </a>
+            
+            
+            <a href="#a-grove-update-killed-my-other-tmux-sessions"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#a-grove-update-killed-my-other-tmux-sessions');">
+                A Grove update killed my other tmux sessions
+            </a>
+            
+            
             <a href="#no-agent-state-on-the-dashboard"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -2453,6 +2498,7 @@ without provisioning WSL2 just for that.</p>
 </div>
 </main>
         
+
 
 
 

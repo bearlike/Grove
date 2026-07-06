@@ -394,7 +394,6 @@
 
 
 
-
 <div data-slot="sidebar-group" data-sidebar="group" class="relative flex w-full min-w-0 flex-col p-2 pt-6">
     <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
         <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
@@ -1272,6 +1271,12 @@ plain shell.</p>
 <td>no</td>
 <td>Extra environment variables exported in the agent's tmux window.</td>
 </tr>
+<tr>
+<td><code>models</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td>no</td>
+<td>Curated model ids to offer in the create-form picker. Overrides the auto-discovered catalog otherwise surfaced at create time.</td>
+</tr>
 </tbody>
 </table></div>
 <h2 id="defaults">Defaults</h2>
@@ -1463,7 +1468,6 @@ off is just flipping the flag back to <code>false</code>.</p>
             <svg xmlns="http://www.w3.org/2000/svg" width="18px" height="18px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         
-
 
 
 
@@ -2343,6 +2347,7 @@ off is just flipping the flag back to <code>false</code>.</p>
 </div>
 </main>
         
+
 
 
 

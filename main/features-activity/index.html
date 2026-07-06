@@ -394,7 +394,6 @@
 
 
 
-
 <div data-slot="sidebar-group" data-sidebar="group" class="relative flex w-full min-w-0 flex-col p-2 pt-6">
     <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
         <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
@@ -1252,19 +1251,22 @@ Either way you get the same wall: every agent session across every
 repository the daemon knows about, on one attention-first surface that
 puts the agents needing you at the very top.</p>
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-focused-pane.png" alt="The web dashboard's unified surface with a working agent's Live toggle flipped, one focused terminal pane mirroring that agent above the repo-grouped grid of workspace cards" /></div>
-  <figcaption class="ms-shot__body">The wall in the browser, now the one unified home surface. A project chip on each card and one live pane. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="The web dashboard's Hero composer as the default home surface, with the flat session rail on the left listing every agent session across projects" /></div>
+  <figcaption class="ms-shot__body">The wall in the browser, now the one unified home surface. A persisted Hero/Overview toggle swaps between the composer and the repo-grouped card grid; the session rail on the left stays put either way. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
 </figure>
 
 <p>In the browser this wall is the home surface itself. The live grid and
 the old standalone activity page merged into one place (#89), so
-<code>/activity</code> now just redirects home. Cards group by repository, each with
-a project chip to keep its origin legible. The grid streams live from the
-daemon over SSE (server-sent events), so a state change tweens into place
-within a second, no manual refresh; a poll fallback covers a dropped
-stream. One consolidated filter in the scope rail narrows the wall by
-project, by agent state, or to just the ones that need attention, and
-your choices persist in the browser.</p>
+<code>/activity</code> now just redirects home. A Hero composer is the default view;
+flip the persisted Hero/Overview toggle for the repo-grouped card grid,
+each card carrying a project chip to keep its origin legible. Either view
+streams live from the daemon over SSE (server-sent events), so a state
+change tweens into place within a second, no manual refresh; a poll
+fallback covers a dropped stream. The session rail on the left is a flat,
+recency-sorted list of every session, not a repo scope-switcher; its one
+consolidated filter dropdown narrows the wall by project, by agent state,
+or to just the ones that need attention, and your choices persist in the
+browser.</p>
 <p>Each card carries the agent and its state, the workspace title and
 project, the agent's own one-line summary of what it is doing right now,
 a compact turns-tools-tokens metrics line, and the last commit with its
@@ -1368,6 +1370,18 @@ are tagged as Grove's, because Grove handed the agent its session id at
 create time. Sessions you started by hand in the same directory show up
 too, labeled as hand-started. Nothing is hidden just because Grove did
 not start it.</p>
+<h3 id="adoption-and-recovery">Adoption and recovery</h3>
+<p>A workspace's pin to its live session has to survive a daemon restart or
+a different user attaching to the same box, so Grove never trusts a bare
+session id: adoption is pane-verified, meaning the candidate's transcript
+birth and the workspace's own tmux pane have to agree before Grove treats
+it as the live session (see <a href="https://github.com/bearlike/Grove/blob/e3b6e27c/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a>
+and <a href="https://github.com/bearlike/Grove/blob/e3b6e27c/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>manager.py</span></a>). Resume runs the same
+check, so it re-points a workspace at the correct live session rather than
+a stale one. If the Grove-minted session dies and a successor gets
+gate-rejected, the pointer goes stale and the transcript reads blank; fix
+it with <code>grove sessions remap WORKSPACE SESSION</code>, the TUI's <code>x</code> key, or the
+web dashboard's remap picker.</p>
 <h2 id="see-also">See also</h2>
 <ul>
 <li><a href="../use-tui/">TUI tour</a>: the dashboard screen, its keys, and where
@@ -1426,7 +1440,6 @@ not start it.</p>
             <svg xmlns="http://www.w3.org/2000/svg" width="18px" height="18px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
         
-
 
 
 
@@ -2268,6 +2281,15 @@ not start it.</p>
             </a>
             
             
+            <a href="#adoption-and-recovery"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#adoption-and-recovery');">
+                Adoption and recovery
+            </a>
+            
+            
+            
             <a href="#see-also"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -2290,6 +2312,7 @@ not start it.</p>
 </div>
 </main>
         
+
 
 
 

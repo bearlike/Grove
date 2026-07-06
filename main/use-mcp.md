@@ -49,7 +49,8 @@ claude mcp add grove -- grove-mcp
 |---|---|
 | `grove_list_workspaces` | List every workspace with id, branch, agent, and status. |
 | `grove_get_workspace` | Full state for one workspace by id. |
-| `grove_create_workspace` | Create a workspace: worktree, branch, tmux session, agent. Params: `repo_root`, `title`, `agent_name`, optional `description`, `branch_plan` (`auto` default, `new_named`, `existing_local`, `track_remote`, `root`), `skip_init`, `initial_prompt`. Pass `initial_prompt` to deliver the agent's first task race-free at boot so the workspace starts working immediately; omit it to boot idle and steer later with `grove_send_workspace_message`. |
+| `grove_list_agents` | List the agents available for a repo, each with its offered `models` catalog (up to 10) — the valid `agent_name` and `model` values for `grove_create_workspace`. Read-only. |
+| `grove_create_workspace` | Create a workspace: worktree, branch, tmux session, agent. Params: `repo_root`, `title`, `agent_name`, optional `description`, `branch_plan` (`auto` default, `new_named`, `existing_local`, `track_remote`, `root`), `skip_init`, `initial_prompt`, `resume_session_id`, `model`. Pass `initial_prompt` to deliver the agent's first task race-free at boot so the workspace starts working immediately; omit it to boot idle and steer later with `grove_send_workspace_message`. `model` is forwarded verbatim to the agent tool (claude/codex as `--model <id>`, mewbo server-side; generic ignores it) — any id the tool understands is accepted, not just a fixed list; call `grove_list_agents` first to see the offered catalog as a hint. |
 | `grove_peek_workspace` | Bounded snapshot: ahead/behind, diff stats, dirty files, recent commits, capped pane output. |
 | `grove_pause_workspace` | Remove worktree and session, keep the branch. Refuses dirty worktrees unless `force` is true. |
 | `grove_resume_workspace` | Recreate a paused workspace from its branch. |
@@ -57,6 +58,7 @@ claude mcp add grove -- grove-mcp
 | `grove_kill_workspace` | Destroy a workspace. `delete_branch` is required and has no default: the caller must state intent. Remote branches are never touched. |
 | `grove_attach_instruction` | The `tmux attach` command for handing a session to a human. |
 | `grove_send_workspace_message` | Send a steering message to the workspace's agent. Returns `status="sent"` on success or `status="unavailable"` when the connected daemon predates the messaging endpoint. |
+| `grove_remap_workspace_session` | Re-point a workspace to a different agent session — e.g. after `/clear` rotated the session id, or to adopt a hand-started session as the workspace's own. Params: `workspace_id`, `session_ref` (a full session id or a unique id-prefix within the workspace's project). |
 
 Every response is structured JSON with explicit status fields and stable workspace ids, so a calling agent never has to parse prose to learn what happened.
 

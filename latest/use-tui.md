@@ -61,6 +61,7 @@ Selection keys:
 | `m` | Send a message. Steer the running agent without attaching. |
 | `e` | Edit the selected workspace's title and description. |
 | `s` | Browse the workspace's recorded agent sessions. |
+| `x` | Remap session. Re-point the workspace at a live or recovered agent session, e.g. after `/clear` rotated the id. See [`screens/remap_session.py`](repo:src/grove/tui/screens/remap_session.py). |
 | `p` | Pause. Removes the worktree, keeps the branch. |
 | `R` | Resume. Recreates the worktree from the branch and restarts tmux. |
 | `o` | Respawn an OFFLINE workspace whose tmux session vanished. |
@@ -170,14 +171,23 @@ workspace.
 
 ### Create
 
-`n` opens a five-step modal.
+`n` opens a six-step modal.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal showing branch source variants and agent picker" /></div>
   <figcaption class="ms-shot__body">Create modal. Branch source on the left, agent picker, title input.</figcaption>
 </figure>
 
-1. **Branch source.** Pick *Auto* (Grove names the branch), *New named* (you
+1. **Agent.** Radio list of every agent the cascade resolved.
+2. **Model** (blank = agent default). Free text, e.g. `sonnet`/`opus`/`haiku`
+   for claude, `gpt-5.5` for codex. The placeholder hints at the union of
+   every configured agent's resolved model catalog, but the field never
+   validates against it: whatever you type is forwarded to the agent
+   verbatim, same as `grove create --model` on the CLI. See
+   [`screens/create.py`](repo:src/grove/tui/screens/create.py).
+3. **Title.** Free text. Pre-fills with the chosen branch name when one is
+   available.
+4. **Branch source.** Pick *Auto* (Grove names the branch), *New named* (you
    type the name), *Existing local* (pick from your repo's branches),
    *Track remote* (pick a remote-only branch and create a tracking local),
    or *Root* (no worktree at all; the workspace runs in the repo root on
@@ -185,14 +195,11 @@ workspace.
    in the DOM with the inactive ones hidden, so values persist across mode
    switches. Root workspaces have their own rules; see
    [root workspaces](features-workspace-lifecycle.md#root-workspaces).
-2. **Agent.** Radio list of every agent the cascade resolved.
-3. **Title.** Free text. Pre-fills with the chosen branch name when one is
-   available.
-4. **Skip init script.** A checkbox that skips the
+5. **Skip init script.** A checkbox that skips the
    [init script](configure-init-scripts.md) for this one create. Picking
    *Root* checks it for you, since init scripts are built to bootstrap
    fresh worktrees. You can uncheck it.
-5. **Confirm** with `Enter`. `Esc` cancels.
+6. **Confirm** with `Enter`. `Esc` cancels.
 
 The branch-source plumbing is documented in
 [branch provenance](features-branch-provenance.md).

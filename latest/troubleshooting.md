@@ -181,6 +181,50 @@ any remaining tmux session. If the branch still exists in your repo,
 create a fresh workspace against it via the create modal's *Existing
 local* path.
 
+## Workspace shows a blank transcript / wrong session
+
+**Symptom.** A workspace's transcript is empty, or replays a conversation
+that is not the one running in its pane.
+
+**Cause.** The Grove-minted session died and a successor session started in
+the same directory, but Grove's pane-verified adoption gate rejected it (the
+transcript birth and the workspace's live pane didn't agree), so the
+workspace's session pointer is stale. See [`sessions.py`](repo:src/grove/core/sessions.py)
+for the adoption gate and [Session adoption and recovery](features-activity.md#adoption-and-recovery).
+
+**Fix.** Re-point the workspace at the correct live session:
+
+```bash
+grove sessions remap WORKSPACE SESSION
+```
+
+Or use the TUI's `x` key on the workspace, or the remap picker in the web
+dashboard's session-picker empty state.
+
+## A Grove update killed my other tmux sessions
+
+**Symptom.** Restarting or updating Grove's daemon tears down every tmux
+session on the box, not just the ones Grove manages.
+
+**Cause.** The `grove-daemon` systemd unit was installed before the
+`KillMode=process` fix landed. The daemon forks the shared default tmux
+server into its own cgroup, and systemd's default `KillMode=control-group`
+kills that whole cgroup, tmux server included, on every
+`systemctl restart grove-daemon`.
+
+> [!WARNING] Check before you restart
+> If your unit predates this fix, any daemon restart is destructive to
+> unrelated tmux sessions. Apply the fix first.
+
+**Fix.** Re-render the unit with the fix baked in, then reload systemd:
+
+```bash
+make systemd
+systemctl --user daemon-reload
+```
+
+See [packaging](repo:packaging/CLAUDE.md) for the durable KillMode lesson.
+
 ## No agent state on the dashboard
 
 **Symptom.** A workspace shows up on the [Activity
