@@ -28,6 +28,7 @@ from grove.core import (
     TrackRemoteBranch,
     build,
 )
+from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.git import GitRepo
 from grove.tui.cli import app
 from grove.tui.cli_workspace import BranchFlags, _attach_argv
@@ -139,6 +140,43 @@ def test_create_unknown_agent_error(runner: CliRunner, project: Path) -> None:
     result = runner.invoke(app, ["create", "x", "--agent", "nope"])
     assert result.exit_code == 1
     assert "unknown agent" in result.output
+
+
+def test_create_model_flag_forwards_to_launch(
+    runner: CliRunner, project: Path, fake_tmux: FakeTmux
+) -> None:
+    """``--model`` rides ``CreateWorkspaceRequest.model`` verbatim onto the
+    agent's launch decoration (#96/#98 model-catalog work) — Grove never
+    validates the id, it just forwards it to the tool's ``--model`` flag."""
+    del project
+    result = runner.invoke(app, ["create", "model test", "--agent", "claude", "--model", "opus"])
+    assert result.exit_code == 0, result.output
+    _, decoration = fake_tmux.launch_decorations[-1]
+    assert "--model" in decoration
+    assert decoration[decoration.index("--model") + 1] == "opus"
+
+
+def test_create_model_short_flag(runner: CliRunner, project: Path, fake_tmux: FakeTmux) -> None:
+    """``-m`` is the short form of ``--model`` (verified free of collisions
+    with the other create flags: -a/-b/-c/-t/-d/-p)."""
+    del project
+    result = runner.invoke(app, ["create", "model short", "--agent", "claude", "-m", "sonnet"])
+    assert result.exit_code == 0, result.output
+    _, decoration = fake_tmux.launch_decorations[-1]
+    assert "--model" in decoration
+    assert decoration[decoration.index("--model") + 1] == "sonnet"
+
+
+def test_create_no_model_flag_omits_model_decoration(
+    runner: CliRunner, project: Path, fake_tmux: FakeTmux
+) -> None:
+    """Omitting ``--model`` leaves the launch decoration without a ``--model``
+    flag — the tool falls back to its own default (never a Grove-picked one)."""
+    del project
+    result = runner.invoke(app, ["create", "no model", "--agent", "claude"])
+    assert result.exit_code == 0, result.output
+    _, decoration = fake_tmux.launch_decorations[-1]
+    assert "--model" not in decoration
 
 
 # ─── grove message ──────────────────────────────────────────────────────────
@@ -262,6 +300,93 @@ def test_attach_resolves_then_execs_tmux(
     args = captured["args"]
     assert isinstance(args, list)
     assert args[0] == "tmux" and args[1] in {"attach", "switch-client"} and args[2] == "-t"
+
+
+# ─── #120 resume-into-workspace (grove create --resume-session) ──────────────
+
+
+def test_create_resume_session_flag_emits_resume(
+    runner: CliRunner,
+    project: Path,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--resume-session <id>` launches claude with `--resume <id>` (continue),
+    not `--session-id` (fresh)."""
+    claude_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    resume = "12345678-1111-2222-3333-444455556666"
+    _write_transcript(claude_home, project, resume)  # #F8: must resolve first
+    result = runner.invoke(
+        app, ["create", "resume me", "--agent", "claude", "--resume-session", resume]
+    )
+    assert result.exit_code == 0, result.output
+    _, decoration = fake_tmux.launch_decorations[-1]
+    assert decoration[:2] == ["--resume", resume]
+
+
+def test_create_resume_session_rejected_for_shell(runner: CliRunner, project: Path) -> None:
+    """A shell agent can't resume by id — clean one-line error, exit 1."""
+    del project
+    result = runner.invoke(app, ["create", "x", "--agent", "shell", "--resume-session", "a-b-c"])
+    assert result.exit_code == 1
+    assert "cannot resume" in result.output
+
+
+# ─── #120 grove sessions remap ───────────────────────────────────────────────
+
+
+def _write_transcript(claude_home: Path, cwd: Path, session_id: str) -> None:
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{session_id}.jsonl").write_text(
+        f'{{"type":"user","cwd":"{cwd}"}}\n', encoding="utf-8"
+    )
+
+
+def test_sessions_remap_pins_discovered_session(
+    runner: CliRunner,
+    project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claude_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    created = runner.invoke(app, ["create", "remap host", "--agent", "claude"])
+    assert created.exit_code == 0, created.output
+    ws_id = created.output.splitlines()[0].split("created ", 1)[1].strip()
+    worktree = next(
+        line.split("worktree:", 1)[1].strip()
+        for line in created.output.splitlines()
+        if "worktree:" in line
+    )
+    hand = "cafef00d-9999-8888-7777-666655554444"
+    _write_transcript(claude_home, Path(worktree), hand)
+
+    result = runner.invoke(app, ["sessions", "remap", ws_id[:8], "cafef00d"])
+    assert result.exit_code == 0, result.output
+    assert "remapped" in result.output
+    assert hand in result.output
+
+
+def test_sessions_remap_unknown_workspace_error(runner: CliRunner, project: Path) -> None:
+    del project
+    result = runner.invoke(app, ["sessions", "remap", "deadbeef", "whatever"])
+    assert result.exit_code == 1
+    assert "no workspace matches" in result.output
+
+
+def test_sessions_remap_unknown_session_error(runner: CliRunner, project: Path) -> None:
+    del project
+    created = runner.invoke(app, ["create", "host", "--agent", "claude"])
+    ws_id = created.output.splitlines()[0].split("created ", 1)[1].strip()
+    result = runner.invoke(app, ["sessions", "remap", ws_id[:8], "no-such-session"])
+    assert result.exit_code == 1
+    assert "no session matches" in result.output
 
 
 # ─── cwd binding (the build() seam) ───────────────────────────────────────────

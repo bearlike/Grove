@@ -28,6 +28,7 @@ import httpx
 from grove.client.backend import BackendConfig
 from grove.client.errors import NeedsPairingError, ProtocolError, TransportError
 from grove.client.transport import LocalTransport, Transport, UrlTransport
+from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import (
@@ -249,6 +250,15 @@ class GroveClient:
         body = await self._get("/branches", params={"repo": str(repo), "scope": scope})
         return [BranchInfo.model_validate(item) for item in body]
 
+    async def list_agents(self, repo: Path) -> list[AgentSummaryView]:
+        """The agents a client may offer for ``repo`` — one row per merged
+        ``cfg.agents`` entry, each carrying its per-agent model catalog
+        (``models``, ≤10) for a create-form picker. Mirrors ``GET /agents``;
+        read-only and non-git, so an arbitrary path yields the default cascade
+        rather than an error."""
+        body = await self._get("/agents", params={"repo": str(repo)})
+        return [AgentSummaryView.model_validate(item) for item in body]
+
     # ─── tickets ─────────────────────────────────────────────────────────────
 
     async def list_ticket_providers(self, repo: Path) -> list[TicketProviderView]:
@@ -285,6 +295,19 @@ class GroveClient:
         """Fetch one ticket by provider + canonical id, scoped to ``repo``."""
         body = await self._get(f"/tickets/{provider}/{ticket_id}", params={"repo": str(repo)})
         return TicketRef.model_validate(body)
+
+    async def remap_session(self, ws_id: str, session_ref: str) -> WorkspaceStateView:
+        """Pin an existing agent session as the workspace's tracked primary (#120).
+
+        Wraps ``POST /workspaces/{id}/session``. ``session_ref`` is a session id
+        or a unique id-prefix, resolved in the workspace's project scope by the
+        daemon. Returns the updated workspace state.
+        """
+        body = await self._post(
+            f"/workspaces/{ws_id}/session",
+            json_payload={"session_ref": session_ref},
+        )
+        return WorkspaceStateView.model_validate(body)
 
     async def attach_ticket(self, ws_id: str, selector: TicketSelector) -> WorkspaceStateView:
         """Associate a ticket with a workspace — returns the updated state."""

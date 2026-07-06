@@ -424,6 +424,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remap Workspace Session
+         * @description Pin an existing agent session as this workspace's tracked primary (#120).
+         *
+         *     The manual counterpart to Grove's automatic discovery/adoption: the
+         *     operator names a session (id or unique prefix, resolved in the
+         *     workspace's project scope) and it becomes the persisted
+         *     ``agent_session_id``. Trusted — no birth-gate, mirroring
+         *     ``attach_ticket``; idempotent by resolved id. Returns the updated
+         *     workspace. Refusals ride the envelope: 404 ``workspace_not_found`` /
+         *     ``agent_session_not_found`` (the ref resolves nowhere, or is ambiguous),
+         *     409 ``workspace_state_error`` (ORPHANED).
+         */
+        post: operations["remap_workspace_session_workspaces__ws_id__session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/attach": {
         parameters: {
             query?: never;
@@ -551,6 +580,13 @@ export interface paths {
          *     The scan full-parses each transcript in one cwd (the documented
          *     ``list_sessions`` cost model), so it runs in the executor like
          *     ``/activity``.
+         *
+         *     ``candidates=true`` flips the scan to the UNGATED
+         *     :meth:`SessionExplorer.candidates_for` — the remap-picker set (#132),
+         *     which keeps a session the adoption gate rejects (a dead-minted-pointer's
+         *     pre-birth successor, a foreign session in a shared ROOT cwd) so a UI can
+         *     offer it to pin via ``POST .../session``. The default gated view stays
+         *     the workspace's own attributed history.
          */
         get: operations["workspace_sessions_workspaces__ws_id__sessions_get"];
         put?: never;
@@ -634,7 +670,10 @@ export interface paths {
          *     dispatches like ``/branches`` (per-repo cascade), so a project-scoped agent
          *     defined in ``<repo>/.grove/config.json`` shows up here too. Read-only and
          *     non-git, so it can't raise — an arbitrary path just yields the default
-         *     cascade.
+         *     cascade. Each row's ``models`` catalog is resolved via the single
+         *     ``resolve_models`` seam (config override, else live adapter discovery);
+         *     Codex discovery shells out (``codex debug models``), so the whole list is
+         *     built in the executor to keep that subprocess off the event loop.
          */
         get: operations["list_agents_agents_get"];
         put?: never;
@@ -931,6 +970,11 @@ export interface components {
              * @default
              */
             description: string;
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
         };
         /**
          * AttachInstructionView
@@ -1054,6 +1098,8 @@ export interface components {
             ticket?: components["schemas"]["TicketSelector"] | null;
             /** Initial Prompt */
             initial_prompt?: string | null;
+            /** Resume Session Id */
+            resume_session_id?: string | null;
             /** Repo Root */
             repo_root?: string | null;
             /** Project Cwd */
@@ -1294,6 +1340,13 @@ export interface components {
          *     single-vs-multi and free-text-only-on-single-select rules can't be checked
          *     here (they need the question) — the manager checks them against the captured
          *     payload.
+         *
+         *     ``text`` is rejected outright if it carries any control byte (ord < 0x20 or
+         *     0x7f, including tab/newline/ESC) — #110. The Claude adapter types ``text``
+         *     verbatim into the pane via ``send-keys -l``; the whole design rests on a
+         *     closed key vocabulary (digits, Tab, Enter) driving the picker deterministically,
+         *     and a raw control byte reopens that surface (ESC cancels the question outright,
+         *     CR/LF act as an early Enter mid-sequence and desync the positional driver).
          */
         QuestionAnswerItem: {
             /** Selected Indexes */
@@ -1318,6 +1371,22 @@ export interface components {
             tool_use_id: string;
             /** Answers */
             answers: components["schemas"]["QuestionAnswerItem"][];
+        };
+        /**
+         * RemapSessionRequest
+         * @description Body for ``POST /workspaces/{id}/session`` — pin an existing agent session
+         *     as a workspace's tracked primary (#120).
+         *
+         *     ``session_ref`` is a session id or a unique id-prefix, resolved through the
+         *     workspace's project scope (the same resolution ``grove sessions show``
+         *     accepts). Lives here beside ``SessionSummaryView`` — it is a session-domain
+         *     write, not part of the create-workspace shape — mirroring the way
+         *     ``QuestionAnswerRequest`` sits with the question views. The daemon answers
+         *     with the updated ``WorkspaceStateView``, like the other mutation verbs.
+         */
+        RemapSessionRequest: {
+            /** Session Ref */
+            session_ref: string;
         };
         /**
          * RootBranch
@@ -2419,6 +2488,41 @@ export interface operations {
             };
         };
     };
+    remap_workspace_session_workspaces__ws_id__session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemapSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     attach_workspace_workspaces__ws_id__attach_get: {
         parameters: {
             query?: never;
@@ -2578,6 +2682,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                candidates?: boolean;
             };
             header?: never;
             path: {

@@ -37,6 +37,12 @@ export type SessionDetailView = components["schemas"]["SessionDetailView"];
 export type SessionTurnView = components["schemas"]["SessionTurnView"];
 export type DigestEntryView = components["schemas"]["DigestEntryView"];
 
+// Session picker + remap/resume (#121). `RemapSessionRequest` is the body for
+// `POST /workspaces/{id}/session` (pin an existing session as the tracked
+// primary); resume-into-workspace rides the existing `CreateWorkspaceRequest`
+// (see `resume_session_id` there) so it needs no separate wire type.
+export type RemapSessionRequest = components["schemas"]["RemapSessionRequest"];
+
 // Structured agent question carried on a `DigestEntryView` of role "question"
 // (epic #74) — rendered read-only as a choice card; options are a static list,
 // not interactive controls (answer-back is future).

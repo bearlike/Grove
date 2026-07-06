@@ -8,10 +8,13 @@ export function RelativeTime({ iso }: { iso: string | null }) {
     return () => clearInterval(t);
   }, []);
   if (!iso) return <span className="text-muted-foreground">—</span>;
-  return <span title={iso}>{format(iso)}</span>;
+  return <span title={iso}>{relativeTimeLabel(iso)}</span>;
 }
 
-function format(iso: string): string {
+/** The relative-time text ("5s ago" / "3h ago" / "2d ago"), shared with any
+ *  surface that needs the string form — e.g. a rail row's native `title`
+ *  tooltip where the time can no longer ride a visible `<RelativeTime>`. */
+export function relativeTimeLabel(iso: string): string {
   const then = new Date(iso).getTime();
   const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
   if (seconds < 60) return `${seconds}s ago`;

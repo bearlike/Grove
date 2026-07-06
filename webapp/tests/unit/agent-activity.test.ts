@@ -69,6 +69,22 @@ describe("AgentLiveStatus", () => {
     ).toBe("3t · 12⚒ · 188.0k↑ 12.4k↓");
   });
 
+  it("exposes the raw activity counts the card renders as discrete Stat atoms", () => {
+    const s = AgentLiveStatus.of(
+      activity({ human_turns: 3, tool_calls: 12, tokens_in: 188000, tokens_out: 12400 }),
+    );
+    expect(s.turns).toBe(3);
+    expect(s.toolCalls).toBe(12);
+    expect(s.tokensIn).toBe(188000);
+    expect(s.tokensOut).toBe(12400);
+    // Sessionless soft-fails to 0 (never undefined), so a zero self-suppresses.
+    const none = AgentLiveStatus.of(null);
+    expect(none.turns).toBe(0);
+    expect(none.toolCalls).toBe(0);
+    expect(none.tokensIn).toBe(0);
+    expect(none.tokensOut).toBe(0);
+  });
+
   it("subagents fall back to 0 for a pre-field payload", () => {
     const a = activity({ active_subagents: 2 });
     expect(AgentLiveStatus.of(a).subagents).toBe(2);

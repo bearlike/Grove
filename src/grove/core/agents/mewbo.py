@@ -451,6 +451,7 @@ class MewboAdapter:
 
     kind = "mewbo"
     remote = True
+    resumable = False
 
     def __init__(self, client: MewboClient | None = None) -> None:
         self._client = client
@@ -469,11 +470,13 @@ class MewboAdapter:
                 return None
         return self._client
 
-    def launch_decoration(self, session_id: str) -> list[str]:
+    def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         # No CLI to decorate: the tmux agent window runs whatever command the
         # AgentSpec names (typically a shell); the session itself lives
-        # server-side and its id is SERVER-minted at create (manager fork).
-        del session_id
+        # server-side and its id is SERVER-minted at create (manager fork). A
+        # remote session has no launch-time resume handle either — resume-by-id
+        # is rejected for mewbo at the manager gate (#120), so this stays empty.
+        del session_id, resume
         return []
 
     def model_decoration(self, model: str) -> list[str]:
@@ -481,6 +484,13 @@ class MewboAdapter:
         # the remote session is created, so there is no flag to decorate here.
         del model
         return []
+
+    def available_models(self, command: str) -> tuple[str, ...]:
+        # The remote orchestrator's model roster is a backend concern with no
+        # local-CLI catalog to read; a deployment pins its offered ids through
+        # ``AgentSpec.models`` (config), which the resolver prefers over this.
+        del command
+        return ()
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         # Remote sessions have no local backing file — empty by design (the
@@ -493,6 +503,14 @@ class MewboAdapter:
         # session can't be "hand-started in this cwd" invisibly to Grove —
         # anchoring to a worktree happens only through the API create Grove
         # itself issues, so there is nothing on this host to find.
+        del cwd, exclude_id
+        return []
+
+    def discover_births(
+        self, cwd: Path, *, exclude_id: str | None = None
+    ) -> list[tuple[str, datetime | None, float]]:
+        # No out-of-band discovery for a remote backend (see discover_sessions),
+        # so the cheap adoption pre-filter (#F5) has nothing to offer either.
         del cwd, exclude_id
         return []
 

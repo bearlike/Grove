@@ -11,34 +11,35 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import type { AgentKind, ModelOption } from "./models";
-import { MODELS_BY_KIND } from "./models";
 import { PillTrigger } from "./pill";
 
 /**
- * The `Model ▾` pill — only rendered by the container when the selected agent's
- * kind has a launch-time `--model` flag (claude_code / codex). The menu offers a
- * "Default" row (model=null, the tool's own default) at the top, the kind's
- * well-known ids/aliases in the middle, and a "Custom model id…" free-text row
- * pinned at the bottom — the always-available escape hatch. The custom row is an
- * <Input> embedded in the menu; we stop key/selection propagation so typing
- * doesn't drive menu navigation or dismiss the menu.
+ * The `Model ▾` pill — rendered by the container for any model-capable agent
+ * (every kind except a bare `generic` shell). `models` is the agent's offered
+ * catalog resolved DAEMON-SIDE (`AgentSummaryView.models`, ≤10 — Codex reads
+ * `codex debug models`, Claude Code its stable aliases, mewbo/pins from
+ * `AgentSpec.models`), so nothing is hard-coded client-side. The menu offers a
+ * "Default" row (model=null, the tool's own default), the offered ids, and a
+ * "Custom model id…" free-text row — the always-available escape hatch, since
+ * the catalog is a hint, never a closed set. The custom row is an <Input>
+ * embedded in the menu; we stop key/selection propagation so typing doesn't
+ * drive menu navigation or dismiss the menu. The value rides the wire verbatim
+ * as `CreateWorkspaceRequest.model`.
  */
 export function ModelPicker({
   value,
-  kind,
+  models,
   onChange,
 }: {
   /** Selected model id; null = the adapter's default. */
   value: string | null;
-  kind: AgentKind;
+  /** The agent's offered model ids (from the daemon); may be empty. */
+  models: readonly string[];
   onChange: (model: string | null) => void;
 }) {
-  const options: readonly ModelOption[] = MODELS_BY_KIND[kind] ?? [];
-  const known = options.find((o) => o.value === value);
-  // A value that isn't null and isn't a known option is a custom id the user typed.
-  const isCustom = value !== null && known === undefined;
-  const triggerLabel = value === null ? "Default model" : (known?.label ?? value);
+  // A non-null value not in the offered list is a custom id the user typed.
+  const isCustom = value !== null && !models.includes(value);
+  const triggerLabel = value ?? "Default model";
 
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -71,10 +72,10 @@ export function ModelPicker({
             <span className="ml-auto text-xs text-muted-foreground">tool default</span>
           ) : null}
         </DropdownMenuItem>
-        {options.map((o) => (
-          <DropdownMenuItem key={o.value} onSelect={() => onChange(o.value)}>
-            {o.label}
-            {value === o.value ? (
+        {models.map((id) => (
+          <DropdownMenuItem key={id} onSelect={() => onChange(id)}>
+            {id}
+            {value === id ? (
               <span className="ml-auto text-xs text-muted-foreground">selected</span>
             ) : null}
           </DropdownMenuItem>

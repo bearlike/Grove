@@ -30,6 +30,16 @@ async def test_get_workspace_passes_id(fake_client: FakeGroveClient) -> None:
     assert fake_client.calls == [("get_workspace", {"ws_id": "ws-42"})]
 
 
+async def test_list_agents_passes_repo_root_and_returns_roster(
+    fake_client: FakeGroveClient,
+) -> None:
+    tools = GroveTools(fake_client)
+    result = await tools.list_agents("/repo")
+    assert [a.name for a in result] == ["claude", "shell"]
+    assert result[0].models == ("opus", "sonnet")
+    assert fake_client.calls == [("list_agents", {"repo": Path("/repo")})]
+
+
 async def test_attach_instruction_builds_paste_ready_command(
     fake_client: FakeGroveClient,
 ) -> None:
@@ -84,6 +94,29 @@ async def test_create_workspace_builds_request_with_auto_default(
     assert req.repo_root == Path("/projects/demo")
     assert req.branch_plan.kind == "auto"
     assert req.skip_init is False
+
+
+async def test_create_workspace_threads_model_through(
+    fake_client: FakeGroveClient,
+) -> None:
+    tools = GroveTools(fake_client)
+    await tools.create_workspace(
+        repo_root="/projects/demo",
+        title="add tests",
+        agent_name="claude",
+        model="opus",
+    )
+    req = fake_client.calls[0][1]["req"]
+    assert req.model == "opus"
+
+
+async def test_create_workspace_model_defaults_to_none(
+    fake_client: FakeGroveClient,
+) -> None:
+    tools = GroveTools(fake_client)
+    await tools.create_workspace(repo_root="/projects/demo", title="add tests", agent_name="claude")
+    req = fake_client.calls[0][1]["req"]
+    assert req.model is None
 
 
 async def test_create_workspace_passes_branch_plan_through(
@@ -180,3 +213,38 @@ async def test_send_message_propagates_workspace_not_found(
     tools = GroveTools(fake_client)
     with pytest.raises(ProtocolError):
         await tools.send_workspace_message("ws-9", "hello")
+
+
+# ─── #120 resume + remap ─────────────────────────────────────────────────────
+
+
+async def test_create_workspace_threads_resume_session_id(
+    fake_client: FakeGroveClient,
+) -> None:
+    """The optional resume_session_id rides the request the tool builds."""
+    tools = GroveTools(fake_client)
+    await tools.create_workspace(
+        repo_root="/projects/demo",
+        title="resume",
+        agent_name="claude",
+        resume_session_id="sess-123",
+    )
+    ((name, kwargs),) = fake_client.calls
+    assert name == "create_workspace"
+    assert kwargs["req"].resume_session_id == "sess-123"
+
+
+async def test_create_workspace_resume_defaults_to_none(
+    fake_client: FakeGroveClient,
+) -> None:
+    tools = GroveTools(fake_client)
+    await tools.create_workspace(repo_root="/projects/demo", title="fresh", agent_name="claude")
+    ((_, kwargs),) = fake_client.calls
+    assert kwargs["req"].resume_session_id is None
+
+
+async def test_remap_workspace_session_passes_ref(fake_client: FakeGroveClient) -> None:
+    tools = GroveTools(fake_client)
+    result = await tools.remap_workspace_session("ws-7", "cafef00d")
+    assert result.id == "ws-7"
+    assert fake_client.calls == [("remap_session", {"ws_id": "ws-7", "session_ref": "cafef00d"})]

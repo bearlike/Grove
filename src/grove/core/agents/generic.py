@@ -7,6 +7,7 @@ activity. It exists so the dashboard treats a ``kind:"generic"`` agent uniformly
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from grove.core.agents.model import (
@@ -23,9 +24,10 @@ class GenericAdapter:
 
     kind = "generic"
     remote = False
+    resumable = False
 
-    def launch_decoration(self, session_id: str) -> list[str]:
-        del session_id
+    def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
+        del session_id, resume
         return []
 
     def model_decoration(self, model: str) -> list[str]:
@@ -33,11 +35,22 @@ class GenericAdapter:
         del model
         return []
 
+    def available_models(self, command: str) -> tuple[str, ...]:
+        # No model concept, so nothing to offer a picker.
+        del command
+        return ()
+
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         del cwd, session_id
         return []
 
     def discover_sessions(self, cwd: Path, *, exclude_id: str | None = None) -> list[str]:
+        del cwd, exclude_id
+        return []
+
+    def discover_births(
+        self, cwd: Path, *, exclude_id: str | None = None
+    ) -> list[tuple[str, datetime | None, float]]:
         del cwd, exclude_id
         return []
 

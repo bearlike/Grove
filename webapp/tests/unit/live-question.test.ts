@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { livePendingQuestions } from "@/lib/grove/live-question";
+import { livePendingQuestions, primarySessionId } from "@/lib/grove/live-question";
 import { snapshot, workspace } from "@/tests/_helpers/activity-fixtures";
-import type { AgentQuestionView } from "@/lib/grove/types";
+import type { AgentQuestionView, WorkspaceActivityView } from "@/lib/grove/types";
 
 const QUESTION: AgentQuestionView = {
   id: "g-1#0",
@@ -89,5 +89,65 @@ describe("livePendingQuestions", () => {
     const garbage = { turns: [] } as unknown as Parameters<typeof livePendingQuestions>[0];
     expect(() => livePendingQuestions(garbage, "a", "s-a")).not.toThrow();
     expect(livePendingQuestions(garbage, "a", "s-a")).toEqual([]);
+  });
+});
+
+describe("primarySessionId", () => {
+  it("returns null when there is no snapshot yet", () => {
+    expect(primarySessionId(null, "a")).toBeNull();
+  });
+
+  it("returns null for a workspace the snapshot doesn't have", () => {
+    const state = snapshot(workspace("a", "working"));
+    expect(primarySessionId(state, "zzz")).toBeNull();
+  });
+
+  it("returns the matched workspace's head session id", () => {
+    const state = snapshot(workspace("a", "working"));
+    expect(primarySessionId(state, "a")).toBe("s-a");
+  });
+
+  it("finds the right workspace among several", () => {
+    const state = snapshot(workspace("a", "working"), workspace("b", "idle"));
+    expect(primarySessionId(state, "b")).toBe("s-b");
+  });
+
+  // The engine's sessions_for() always places the daemon's tracked primary
+  // (agent_session_id — set at create, or repinned by a remap) FIRST, ahead
+  // of any concurrently-discovered session — regardless of which one is more
+  // recently modified. This is the property that makes `primarySessionId`
+  // useful at all: it's a different signal than "sort by modified_at".
+  it("reads sessions[0] as the primary even when a later entry looks newer", () => {
+    const base = workspace("a", "working");
+    const multi: WorkspaceActivityView = {
+      ...base,
+      sessions: [
+        {
+          session: {
+            session_id: "s-remapped",
+            adapter_kind: "claude_code",
+            provenance: "grove_launched",
+            tmux_window: "agent",
+          },
+          activity: base.sessions[0].activity,
+        },
+        {
+          session: {
+            session_id: "s-a",
+            adapter_kind: "claude_code",
+            provenance: "fs_discovered",
+            tmux_window: null,
+          },
+          activity: base.sessions[0].activity,
+        },
+      ],
+    };
+    expect(primarySessionId(snapshot(multi), "a")).toBe("s-remapped");
+  });
+
+  it("tolerates a malformed/garbage snapshot shape without throwing", () => {
+    const garbage = { turns: [] } as unknown as Parameters<typeof primarySessionId>[0];
+    expect(() => primarySessionId(garbage, "a")).not.toThrow();
+    expect(primarySessionId(garbage, "a")).toBeNull();
   });
 });

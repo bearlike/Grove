@@ -131,6 +131,28 @@ def test_project_agents_refine_builtins_instead_of_replacing(
     assert claude.kind == "claude_code"  # inherited from the built-in base
 
 
+def test_user_agent_override_inherits_builtin_kind(tmp_state_dir: Path, tmp_repo: Path) -> None:
+    """A USER config redeclaring a built-in agent by name inherits the built-in's
+    unspecified fields field-wise (#119b) — it must not silently drop `claude`
+    to kind="generic" and kill dashboard tracking. The mechanism is the layer-0
+    built-in roster (#105) resolved through field-level `_merge_agents`; this
+    pins the user-layer arm the issue names (the project-layer arm is covered by
+    `test_project_agents_refine_builtins_instead_of_replacing`)."""
+    del tmp_state_dir
+    user = paths_mod.user_config_path()
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text(
+        json.dumps({"agents": [{"name": "claude", "command": "my-claude"}]}),
+        encoding="utf-8",
+    )
+    cfg = load_config(tmp_repo, env={})
+    assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
+    claude = cfg.find_agent("claude")
+    assert claude is not None
+    assert claude.command == "my-claude"  # the override wins field-by-field
+    assert claude.kind == "claude_code"  # inherited from the built-in base
+
+
 # ─── load_config end-to-end ─────────────────────────────────────────────────
 
 

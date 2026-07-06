@@ -20,12 +20,12 @@ from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
 from grove.core import paths, tmux
-from grove.core.agents import AgentQuestion, AnswerSelection, get_adapter
+from grove.core.agents import AgentQuestion, AnswerSelection, all_adapters, get_adapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.hook import ClaudeHook, PendingQuestion
 from grove.core.config import AgentSpec, GroveConfig, load_config
@@ -44,6 +44,7 @@ from grove.core.errors import (
     PaneNotFound,
     QuestionAnswerInvalid,
     QuestionNotPending,
+    ResumeNotSupported,
     SteeringUnsupported,
     WorkspaceStateError,
 )
@@ -71,6 +72,11 @@ from grove.core.workspace import (
     ensure_can_update,
 )
 
+if TYPE_CHECKING:
+    # Local-imported at call time (sessions.py imports manager.py — a module-level
+    # import here would cycle); typed under TYPE_CHECKING for annotations only.
+    from grove.core.sessions import SessionExplorer
+
 # Module-scope alias so method return annotations don't resolve `list` to the
 # `WorkspaceManager.list` method (the class-scope shadowing mypy trap — see also
 # `primary_transcript`'s tuple return).
@@ -95,6 +101,16 @@ EventKindStr = Literal[
 # the single remote dispatch point. frozenset[str] rather than AgentKind:
 # the persisted agent_kind being matched is read back from JSON as plain str.
 _REMOTE_STEERED_KINDS: frozenset[str] = frozenset({"mewbo"})
+
+# Agent kinds that can resume an EXISTING session by explicit id at launch (#120):
+# a filesystem CLI adapter that carries a resume handle (`claude --resume <id>`,
+# `codex resume <id>`). DERIVED from the adapter layer's own `resumable` flag
+# (#F10d) rather than hand-listed, so a future resumable adapter is picked up
+# automatically instead of being silently missed. A remote (mewbo) session and a
+# generic shell have no launch resume handle, so create() rejects
+# `resume_session_id` for anything outside this set before any side effect.
+# frozenset[str] (not AgentKind) — matched against `agent.kind`.
+_RESUMABLE_KINDS: frozenset[str] = frozenset(a.kind for a in all_adapters() if a.resumable)
 
 
 class _Unset:
@@ -245,7 +261,7 @@ class WorkspaceManager:
         posix = rel.as_posix()
         return "" if posix == "." else posix
 
-    def create(self, request: CreateWorkspaceRequest) -> WorkspaceState:  # noqa: PLR0915
+    def create(self, request: CreateWorkspaceRequest) -> WorkspaceState:  # noqa: PLR0912, PLR0915
         """Spin up a fresh workspace from a validated client request.
 
         Validation order (no side effects until all pass):
@@ -267,6 +283,35 @@ class WorkspaceManager:
         agent = self._cfg.find_agent(request.agent_name)
         if agent is None:
             raise GroveError(f"unknown agent: {request.agent_name}")
+        # Resume-into-workspace (#120) is gated + validated HERE, before any side
+        # effect, so a bad request fails clean with no rollback work (mint runs
+        # post-worktree, too late). Three checks, in order:
+        #   1. the kind must carry a launch resume handle (claude_code/codex);
+        #   2. the ref (id OR unique prefix, #F8) must resolve in this project —
+        #      an unknown/ambiguous ref used to run ALL side effects and then
+        #      strand a fully-provisioned workspace pinned to a bogus id;
+        #   3. the resolved session's adapter kind must equal the agent's (#F4
+        #      parity) — a cross-kind pin is a permanent dead pointer.
+        # The RESOLVED full id (not the raw prefix) is what gets adopted.
+        resume_session_id = request.resume_session_id
+        if resume_session_id is not None:
+            if agent.kind not in _RESUMABLE_KINDS:
+                raise ResumeNotSupported(
+                    f"agent kind {agent.kind or 'generic'!r} cannot resume a session by id; "
+                    "resume is supported only for claude_code and codex agents"
+                )
+            try:
+                resume_listing = self._session_explorer().resolve(resume_session_id)
+            except GroveError as exc:
+                raise AgentSessionNotFound(str(exc)) from exc
+            if resume_listing.summary.adapter_kind != agent.kind:
+                raise AgentSessionNotFound(
+                    f"session {resume_listing.summary.session_id} is a "
+                    f"{resume_listing.summary.adapter_kind} session, but agent "
+                    f"{request.agent_name!r} is {agent.kind} whose adapter cannot read a "
+                    f"{resume_listing.summary.adapter_kind} transcript"
+                )
+            resume_session_id = resume_listing.summary.session_id
 
         ts = WorkspaceIdentity.timestamp()
         resolved = request.branch_plan.resolve(self._cfg, request.title, ts)
@@ -404,7 +449,11 @@ class WorkspaceManager:
         # loud and transactional, exactly like a fail_fast init.
         try:
             agent_session_id = self._mint_agent_session_id(
-                agent, worktree=agent_cwd, title=request.title, model=request.model
+                agent,
+                worktree=agent_cwd,
+                title=request.title,
+                model=request.model,
+                resume_session_id=resume_session_id,
             )
         except MewboError as exc:
             self._rollback_create(state)
@@ -416,12 +465,14 @@ class WorkspaceManager:
         # `initial_prompt` (#48) is create-only — never threaded into resume/respawn.
         # For claude_code it rides the launch argv (race-free); for mewbo it is
         # delivered after the workspace is persisted (below), so it isn't passed
-        # here (mewbo's decoration is empty anyway).
+        # here (mewbo's decoration is empty anyway). `resume` (#120) flips the
+        # session-id flag to the tool's resume form (`--resume` / `resume <uuid>`).
         launch_decoration = self._compose_launch(
             agent,
             agent_session_id,
             initial_prompt=request.initial_prompt,
             model=request.model,
+            resume=resume_session_id is not None,
         )
 
         try:
@@ -602,7 +653,17 @@ class WorkspaceManager:
         # Claude Code re-opens that transcript. respawn() takes the other branch
         # (a fresh id for a brand-new session); this is the one place that choice
         # is made, so the two verbs can't drift.
-        launch_decoration = self._compose_launch(agent, state.agent_session_id)
+        #
+        # One rule (#F2): continue what EXISTS, mint what doesn't. Flip to the
+        # tool's resume flag only when the pinned session has ALREADY materialized
+        # (a transcript is on disk) and the kind can resume by id — else keep the
+        # mint form, so a resume-created codex workspace doesn't relaunch a bare
+        # `codex` (new thread, stale pin) and a never-materialized minted claude id
+        # keeps `--session-id` so it can still mint fresh. Materialization is
+        # checked BEFORE the worktree is recreated; transcripts outlive worktrees
+        # (they live under the encoded-cwd projects folder), so the check is valid.
+        resume = agent.kind in _RESUMABLE_KINDS and self._pinned_session_materialized(agent, state)
+        launch_decoration = self._compose_launch(agent, state.agent_session_id, resume=resume)
 
         worktree = Path(state.worktree_path)
         try:
@@ -839,6 +900,71 @@ class WorkspaceManager:
         self._store.save(new_state)
         self._emit("updated", new_state.id, {"ticket_detached": f"{provider}:{ticket_id}"})
         return new_state
+
+    def remap_session(self, workspace_id: str, session_ref: str) -> WorkspaceState:
+        """Manually pin an existing agent session as this workspace's primary (#120).
+
+        The trusted-operator counterpart to the automatic discovery/adoption
+        path: when ``/clear`` rotated the id (the minted pointer went dead), or a
+        hand-started session should own the card, the user names it and Grove
+        records it as ``agent_session_id`` — the very field ``create()`` mints —
+        so every read path (the dashboard blend, ``sessions_for``, the CLI
+        inspector) tracks it by construction, no discovery heuristic needed.
+
+        Resolution runs through the project's :class:`SessionExplorer`
+        (``resolve`` accepts a unique id-prefix, scoped to this repo's worktrees),
+        so a typo or a foreign id fails loudly *before* the write — re-raised as
+        :class:`AgentSessionNotFound` (404) rather than the bare ``GroveError``
+        resolve emits. Idempotent by resolved id, mirroring ``attach_ticket``:
+        re-pinning the same session is a no-op (no re-persist, no event).
+
+        Manual pinning is TRUSTED: unlike discovery it applies **no** ``created_at``
+        birth-gate — the operator's explicit choice outranks the heuristic,
+        exactly as a ``grove_launched`` session is never gated. It DOES enforce
+        adapter-kind equality (#F4): pinning a codex session onto a claude_code
+        workspace would leave the workspace's adapter permanently unable to read
+        it (a dead pointer that returns 200) — so a kind mismatch is rejected as
+        ``AgentSessionNotFound`` naming both kinds. Permitted in any status except
+        ORPHANED (the ``attach_ticket`` gate — a doomed record gains nothing).
+        Emits ``updated`` with ``session_remapped: <id>``.
+        """
+        persisted = self._store.get(workspace_id)
+        ensure_can_update(self._reconcile_status(persisted))
+        try:
+            listing = self._session_explorer().resolve(session_ref)
+        except GroveError as exc:
+            # resolve() raises a bare GroveError for no-match / ambiguous-prefix;
+            # re-raise in the session domain so the daemon maps it to 404 rather
+            # than a generic 500. The original message (candidate ids on an
+            # ambiguous prefix) is preserved so the user can extend the prefix.
+            raise AgentSessionNotFound(str(exc)) from exc
+        resolved_id = listing.summary.session_id
+        kind = self.effective_kind(persisted)
+        if listing.summary.adapter_kind != kind:
+            raise AgentSessionNotFound(
+                f"session {resolved_id} is a {listing.summary.adapter_kind} session, but "
+                f"workspace {persisted.id} runs a {kind} agent whose adapter cannot read a "
+                f"{listing.summary.adapter_kind} transcript"
+            )
+        if persisted.agent_session_id == resolved_id:
+            return persisted  # idempotent: already pinned to this session
+        new_state = _replace(persisted, updated_at=_utcnow(), agent_session_id=resolved_id)
+        self._store.save(new_state)
+        self._emit("updated", new_state.id, {"session_remapped": resolved_id})
+        return new_state
+
+    def _session_explorer(self) -> SessionExplorer:
+        """A read-only :class:`SessionExplorer` over this same manager (#120).
+
+        Local import: ``sessions.py`` imports ``manager.py``, so a module-level
+        import here would cycle. Construction is cheap (no I/O — the explorer
+        only holds the manager); building one per ``remap_session`` call keeps the
+        session-ref resolution DRY with ``grove sessions`` instead of duplicating
+        the unique-prefix scan.
+        """
+        from grove.core.sessions import SessionExplorer  # noqa: PLC0415
+
+        return SessionExplorer(self)
 
     def attach(self, workspace_id: str) -> AttachInstruction:
         state = self._reconcile_status(self._store.get(workspace_id))
@@ -1201,8 +1327,47 @@ class WorkspaceManager:
             get_adapter(kind).locate_transcripts(Path(state.worktree_path), state.agent_session_id)
         )
 
+    def _pinned_session_materialized(self, agent: AgentSpec, state: WorkspaceState) -> bool:
+        """Whether ``state``'s pinned session already has a transcript on disk (#F2).
+
+        The materialization test the unpause path gates its resume-vs-mint choice
+        on: a session is materialized when the adapter locates at least one
+        transcript for the pinned id, scanning the ``scan_cwds`` union (#F7) so a
+        nested project's root-recorded transcript still counts. No pinned id → not
+        materialized (nothing to continue). Best-effort like every adapter read.
+        """
+        if not state.agent_session_id:
+            return False
+        adapter = get_adapter(agent.kind)
+        return any(
+            adapter.locate_transcripts(cwd, state.agent_session_id) for cwd in state.scan_cwds
+        )
+
+    def effective_kind(self, state: WorkspaceState) -> str:
+        """The adapter kind for ``state`` — persisted at create, else config (#F4).
+
+        Prefers the kind persisted at create (resolves a repo-scoped agent the
+        daemon's global config never loaded); falls back to a config lookup for
+        legacy records written before ``agent_kind`` existed, then ``generic``.
+        Mirrors ``ActivityService._effective_kind`` — the read path's copy — so
+        the remap/create kind gate matches what the dashboard will actually read.
+        Public because ``SessionExplorer`` also restricts its per-workspace scan
+        to this one kind (#164), so the picker never offers a foreign-kind session
+        the remap gate below would reject.
+        """
+        if state.agent_kind is not None:
+            return state.agent_kind
+        agent = self._cfg.find_agent(state.agent_name)
+        return agent.kind if agent is not None else "generic"
+
     def _mint_agent_session_id(
-        self, agent: AgentSpec, *, worktree: Path, title: str, model: str | None = None
+        self,
+        agent: AgentSpec,
+        *,
+        worktree: Path,
+        title: str,
+        model: str | None = None,
+        resume_session_id: str | None = None,
     ) -> str | None:
         """Mint the session id for a NEW agent run — the single fork create()
         and respawn() share so the verbs can't drift; resume() deliberately
@@ -1219,9 +1384,18 @@ class WorkspaceManager:
           an existing directory — callers therefore invoke this only after the
           worktree is on disk) and the RETURNED id is what Grove persists.
 
+        ``resume_session_id`` (#120) short-circuits both: adopt the chosen id
+        verbatim, no mint. The kind-support check already ran at create()'s gate
+        (before any side effect), so reaching here means a resumable kind. This
+        is why even codex — which normally mints nothing and relies on fs
+        discovery — becomes tracked by construction on a resume: its returned id
+        is persisted as ``agent_session_id``.
+
         Local kinds never raise; the remote kind raises the typed ``MewboError``
         and the caller treats it like a fail_fast init (loud, transactional).
         """
+        if resume_session_id is not None:
+            return resume_session_id
         if agent.kind == "mewbo":
             # `model` (create-only, #98) forwards to the remote session-create —
             # mewbo has no launch `--model` flag (the model is server-side), so
@@ -1243,6 +1417,7 @@ class WorkspaceManager:
         *,
         initial_prompt: str | None = None,
         model: str | None = None,
+        resume: bool = False,
     ) -> _Argv:
         """Full argv appended to the agent command at launch, for a known session id.
 
@@ -1268,11 +1443,18 @@ class WorkspaceManager:
         decoration — no second quoting site. Ignored for non-claude_code kinds: a
         generic shell has no prompt concept, and mewbo carries `[]` here and is
         re-engaged through its API instead (manager `create()`).
+
+        `resume` (create-only, #120) flips the base decoration to the tool's
+        resume form (`claude --resume <id>` / `codex resume <id>`) — the id is an
+        existing session to CONTINUE, not a fresh one to mint. Everything after
+        the base decoration (hooks `--settings`, `--model`, the trailing prompt
+        positional) is unchanged, so a resume launch composes identically bar the
+        one flag.
         """
         adapter = get_adapter(agent.kind)
         decoration: _Argv = []
         if session_id is not None:
-            decoration = adapter.launch_decoration(session_id)
+            decoration = adapter.launch_decoration(session_id, resume=resume)
             if decoration and agent.kind == "claude_code" and self._cfg.hooks.enabled:
                 settings = self._ensure_hook_settings()
                 if settings is not None:

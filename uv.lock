@@ -647,7 +647,7 @@ docs = [
     { name = "mike" },
     { name = "mkdocs" },
     { name = "mkdocs-callouts", specifier = ">=1.16.0" },
-    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.5.0/mkdocs_shadcn_mewbo-1.5.0-py3-none-any.whl" },
+    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl" },
     { name = "mkdocstrings", extras = ["python"] },
     { name = "pymdown-extensions", specifier = ">=10.20.1" },
 ]
@@ -1129,8 +1129,8 @@ wheels = [
 
 [[package]]
 name = "mkdocs-shadcn-mewbo"
-version = "1.5.0"
-source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.5.0/mkdocs_shadcn_mewbo-1.5.0-py3-none-any.whl" }
+version = "1.6.1"
+source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl" }
 dependencies = [
     { name = "bottle" },
     { name = "gitpython" },
@@ -1138,7 +1138,7 @@ dependencies = [
     { name = "pymdown-extensions" },
 ]
 wheels = [
-    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.5.0/mkdocs_shadcn_mewbo-1.5.0-py3-none-any.whl", hash = "sha256:315975ea34d9e8c6bae1b223ecd136efa3bdb93c763f1b6476101fd326be20e8" },
+    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl", hash = "sha256:c4968531904f28979ebc797d5520447cb55cfd8e6d268c5c36fc184c6c85a106" },
 ]
 
 [package.metadata]

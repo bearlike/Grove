@@ -20,6 +20,8 @@ export function workspace(
   state: AgentActivityState,
   observed_at = "2026-06-01T00:00:00Z",
   questions: AgentQuestionView[] = [],
+  /** Overrides onto the session's `AgentActivityView` — e.g. `turnsProgressFingerprint`'s tests need `assistant_replies`/`tool_calls`/`last_event_at` to vary independently of `state`. */
+  activityOverrides: Partial<AgentActivityView> = {},
 ): WorkspaceActivityView {
   const attention = state === "waiting" || state === "blocked" || state === "error";
   const activity: AgentActivityView = {
@@ -38,6 +40,7 @@ export function workspace(
     needs_attention: attention,
     error_detail: null,
     questions,
+    ...activityOverrides,
   };
   return {
     state: {

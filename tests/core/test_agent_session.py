@@ -15,10 +15,12 @@ from pathlib import Path
 
 import pytest
 
+from grove.core.agents import all_adapters
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.config import GroveConfig, _merge_agents
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.manager import WorkspaceManager
+from grove.core.errors import AgentSessionNotFound, ResumeNotSupported
+from grove.core.manager import _RESUMABLE_KINDS, WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
 from tests.conftest import FakeTmux
@@ -42,6 +44,27 @@ def _last_decoration(fake: FakeTmux, session: str) -> list[str]:
         if name == session:
             return decoration
     raise AssertionError(f"no launch decoration recorded for {session}")
+
+
+def _materialize_claude(cfg_home: Path, cwd: Path, session_id: str) -> None:
+    """A claude transcript recorded at ``cwd`` so SessionExplorer.resolve finds it
+    (the #F8 create-time resume-ref resolution scans the repo root)."""
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{session_id}.jsonl").write_text(
+        f'{{"type":"user","cwd":"{cwd}"}}\n', encoding="utf-8"
+    )
+
+
+def _materialize_codex(codex_home: Path, cwd: Path, session_id: str) -> None:
+    """A codex rollout recorded at ``cwd`` (session_meta head) so resolve finds it."""
+    folder = codex_home / "sessions" / "2026" / "04" / "28"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"rollout-2026-04-28T13-43-44-{session_id}.jsonl").write_text(
+        '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+        '"payload":{"id":"' + session_id + '","cwd":"' + str(cwd) + '"}}\n',
+        encoding="utf-8",
+    )
 
 
 # ─── AgentSpec.kind ─────────────────────────────────────────────────────────
@@ -235,6 +258,215 @@ def test_respawn_mints_fresh_session_id(manager: WorkspaceManager, fake_tmux: Fa
         "--session-id",
         respawned.agent_session_id,
     ]
+
+
+# ─── #120 resume-into-workspace ──────────────────────────────────────────────
+
+
+def test_create_claude_resume_emits_resume_flag_and_pins_id(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``resume_session_id`` adopts the resolved id (no mint) and the claude
+    launch carries ``--resume <id>`` INSTEAD of ``--session-id <id>`` — plain
+    ``--resume`` keeps the same session id/file, so pinning is correct."""
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    chosen = "11111111-2222-3333-4444-555555555555"
+    _materialize_claude(cfg_home, manager.repo_root, chosen)  # #F8: must resolve first
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="resume me", resume_session_id=chosen)
+    )
+
+    assert state.agent_session_id == chosen
+    assert _last_decoration(fake_tmux, state.tmux_session) == ["--resume", chosen]
+
+
+def test_create_claude_resume_keeps_settings_model_and_prompt(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hooks ``--settings`` decoration, ``--model``, and the trailing
+    ``initial_prompt`` positional all still apply on a resume launch."""
+    settings = tmp_path / "hooks-settings.json"
+    monkeypatch.setattr("grove.core.paths.agent_hooks_settings_path", lambda: settings)
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cfg = GroveConfig.model_validate(
+        {
+            "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "t/"},
+            "tmux": {"session_prefix": "test-"},
+            "hooks": {"enabled": True},
+        }
+    )
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    mgr = WorkspaceManager(repo_root=tmp_repo, cfg=cfg, store=store)
+
+    chosen = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    _materialize_claude(cfg_home, tmp_repo, chosen)  # #F8: must resolve first
+    state = mgr.create(
+        CreateWorkspaceRequest(
+            agent_name="claude",
+            title="resume rich",
+            resume_session_id=chosen,
+            model="opus",
+            initial_prompt="continue",
+        )
+    )
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--resume",
+        chosen,
+        "--settings",
+        str(settings),
+        "--model",
+        "opus",
+        "continue",
+    ]
+
+
+def test_create_codex_resume_emits_resume_subcommand_and_pins_id(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex normally mints nothing; on resume the chosen uuid is persisted and
+    the launch carries the ``resume <uuid>`` SUBCOMMAND (codex's grammar is
+    ``codex [OPTIONS] <COMMAND> [ARGS]`` so it rides after the command)."""
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    chosen = "99999999-8888-7777-6666-555555555555"
+    _materialize_codex(codex_home, manager.repo_root, chosen)  # #F8: must resolve first
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="codex", title="codex resume", resume_session_id=chosen)
+    )
+
+    assert state.agent_session_id == chosen
+    assert _last_decoration(fake_tmux, state.tmux_session) == ["resume", chosen]
+
+
+def test_create_shell_resume_rejected_before_side_effects(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """A generic/shell agent has no resume-by-id handle → clear GroveError,
+    raised before any worktree side effect (no session ever created)."""
+    before = set(fake_tmux.sessions)
+    with pytest.raises(ResumeNotSupported, match="generic"):
+        manager.create(
+            CreateWorkspaceRequest(agent_name="shell", title="nope", resume_session_id="x-y-z")
+        )
+    assert set(fake_tmux.sessions) == before  # no side effect
+
+
+def test_create_without_resume_is_byte_identical(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """No resume_session_id → the launch is exactly the pre-#120 mint path."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="fresh"))
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+    ]
+
+
+def test_create_resume_unknown_ref_rejected_before_side_effects(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#F8: an unresolvable resume ref fails (AgentSessionNotFound) BEFORE any
+    worktree/tmux side effect — never a fully-provisioned workspace pinned to a
+    bogus id (the old bug ran every side effect, then the agent exited)."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    before = set(fake_tmux.sessions)
+    with pytest.raises(AgentSessionNotFound, match="no session matches"):
+        manager.create(
+            CreateWorkspaceRequest(
+                agent_name="claude",
+                title="bogus",
+                resume_session_id="deadbeef-1111-2222-3333-444455556666",
+            )
+        )
+    assert set(fake_tmux.sessions) == before  # no side effect
+
+
+def test_create_resume_wrong_kind_rejected_before_side_effects(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#F8/#F4: resuming a codex session under a claude agent is rejected — its
+    adapter could never read the transcript — and no side effect runs."""
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    codex_sid = "77776666-5555-4444-3333-222211110000"
+    _materialize_codex(codex_home, manager.repo_root, codex_sid)
+    before = set(fake_tmux.sessions)
+    with pytest.raises(AgentSessionNotFound, match="cannot read a codex transcript"):
+        manager.create(
+            CreateWorkspaceRequest(
+                agent_name="claude", title="mismatch", resume_session_id=codex_sid
+            )
+        )
+    assert set(fake_tmux.sessions) == before  # no side effect
+
+
+def test_resume_materialized_session_uses_resume_flag(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#F2: unpause CONTINUES a session that has already materialized — the launch
+    carries the tool's ``--resume`` flag, not a fresh ``--session-id`` mint, so a
+    paused-then-resumed workspace re-opens its real transcript."""
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="mat"))
+    minted = state.agent_session_id
+    assert minted is not None
+    manager.pause(state.id)
+    # The session materialized while it ran (transcripts outlive the worktree).
+    _materialize_claude(cfg_home, Path(state.worktree_path), minted)
+    resumed = manager.resume(state.id)
+    assert _last_decoration(fake_tmux, resumed.tmux_session)[:2] == ["--resume", minted]
+
+
+def test_resume_unmaterialized_session_keeps_mint_flag(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#F2: a never-materialized minted id keeps ``--session-id`` on unpause, so
+    it can still mint fresh — continue what exists, mint what doesn't."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="unmat"))
+    minted = state.agent_session_id
+    assert minted is not None
+    manager.pause(state.id)
+    resumed = manager.resume(state.id)
+    assert _last_decoration(fake_tmux, resumed.tmux_session)[:2] == ["--session-id", minted]
+
+
+def test_resumable_kinds_derived_from_adapter_layer() -> None:
+    """#F10d: the resumable-kinds set is DERIVED from each adapter's ``resumable``
+    flag, not hand-listed — so a future resumable adapter can't be missed."""
+    derived = frozenset(a.kind for a in all_adapters() if a.resumable)
+    expected = {"claude_code", "codex"}
+    assert derived == _RESUMABLE_KINDS
+    assert set(_RESUMABLE_KINDS) == expected
 
 
 # ─── primary_transcript ─────────────────────────────────────────────────────

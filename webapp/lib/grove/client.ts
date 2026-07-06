@@ -69,11 +69,23 @@ export class GroveClient {
     return this._get<CommitSummaryView[]>(`/workspaces/${encodeURIComponent(id)}/commits`);
   }
 
-  /** Recorded agent sessions for one workspace, newest-first. */
-  async getSessions(id: string, limit?: number): Promise<SessionSummaryView[]> {
-    const qs = limit != null ? `?limit=${limit}` : "";
+  /**
+   * Recorded agent sessions for one workspace, newest-first. Default is the
+   * daemon's ATTRIBUTED history (adoption-gated). `candidates: true` flips the
+   * scan to the UNGATED cwd-scoped set (#132) — the remap-picker seam that KEEPS
+   * the sessions the gate drops (a dead-minted-pointer's live successor, a
+   * foreign session in a shared ROOT cwd) so a UI can offer them to pin.
+   */
+  async getSessions(
+    id: string,
+    opts?: { limit?: number; candidates?: boolean },
+  ): Promise<SessionSummaryView[]> {
+    const params = new URLSearchParams();
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    if (opts?.candidates) params.set("candidates", "true");
+    const qs = params.toString();
     return this._get<SessionSummaryView[]>(
-      `/workspaces/${encodeURIComponent(id)}/sessions${qs}`,
+      `/workspaces/${encodeURIComponent(id)}/sessions${qs ? `?${qs}` : ""}`,
     );
   }
 
@@ -195,6 +207,20 @@ export class GroveClient {
   async killWorkspace(id: string, deleteBranch: boolean | null): Promise<void> {
     await this._post(`/workspaces/${encodeURIComponent(id)}/kill`, {
       delete_branch: deleteBranch,
+    });
+  }
+
+  /**
+   * Pin an existing agent session as this workspace's tracked primary (#121) —
+   * POST `/workspaces/{id}/session`, 200 with the updated `WorkspaceStateView`.
+   * `sessionRef` is a full session id or a unique id-prefix, resolved in the
+   * workspace's project scope (engine-side, like `grove sessions show`).
+   * Refusals: 404 `workspace_not_found` / `agent_session_not_found` (the ref
+   * resolves nowhere, or is ambiguous), 409 `workspace_state_error` (ORPHANED).
+   */
+  async remapSession(id: string, sessionRef: string): Promise<WorkspaceStateView> {
+    return this._postJson<WorkspaceStateView>(`/workspaces/${encodeURIComponent(id)}/session`, {
+      session_ref: sessionRef,
     });
   }
 

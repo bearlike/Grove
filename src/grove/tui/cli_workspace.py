@@ -257,7 +257,7 @@ class WorkspaceInspection:
 
 
 @contextmanager
-def _clean_exit() -> Iterator[None]:
+def clean_exit() -> Iterator[None]:
     """Funnel any ``GroveError`` to a one-line red message + exit 1.
 
     The CLI's uniform error currency, wrapped around every verb body so each
@@ -272,12 +272,16 @@ def _clean_exit() -> Iterator[None]:
         raise typer.Exit(code=1) from exc
 
 
-def _resolve_workspace(manager: WorkspaceManager, ref: str) -> WorkspaceState:
+def resolve_workspace(manager: WorkspaceManager, ref: str) -> WorkspaceState:
     """The unique workspace whose id matches ``ref`` exactly or by prefix.
 
     Mirrors ``SessionExplorer.resolve`` — exact match wins, else a unique
     prefix; nothing / ambiguous raises :class:`GroveError` listing the
     candidates so the user can extend the prefix without re-running ``ls``.
+
+    Public (not ``_``-prefixed) because ``grove sessions remap`` resolves a
+    workspace ref the same way — one funnel, imported cleanly rather than
+    reaching across modules for a private symbol (#F10c).
     """
     states = manager.list()
     exact = [s for s in states if s.id == ref]
@@ -295,9 +299,9 @@ def _resolve_workspace(manager: WorkspaceManager, ref: str) -> WorkspaceState:
 def _resolve_or_infer_workspace(manager: WorkspaceManager, ref: str | None) -> WorkspaceState:
     """The workspace named by ``ref`` (id-prefix), or — when ref is omitted —
     the one whose worktree contains the cwd. Ambiguous/none → GroveError
-    listing candidates, same currency as :func:`_resolve_workspace`."""
+    listing candidates, same currency as :func:`resolve_workspace`."""
     if ref is not None:
-        return _resolve_workspace(manager, ref)
+        return resolve_workspace(manager, ref)
     cwd = Path.cwd().resolve()
     # Compare RESOLVED Path objects, never raw strings (git emits '/', str(Path)
     # emits '\\' on Windows — the per-repo cross-platform rule). A ROOT workspace's
@@ -329,6 +333,13 @@ def create_workspace(
         "-a",
         help="Agent to launch (must match a name in your config's agents list, "
         "e.g. claude). See `grove config show`.",
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model id for the agent tool (e.g. claude: sonnet/opus/haiku · codex: "
+        "gpt-5.5). Any id accepted; omit for the tool's default.",
     ),
     branch: str | None = typer.Option(
         None,
@@ -378,6 +389,13 @@ def create_workspace(
         "so the workspace starts working immediately instead of idling. "
         'Example: grove create "fix login" -a claude -p "make the failing test pass".',
     ),
+    resume_session: str | None = typer.Option(
+        None,
+        "--resume-session",
+        help="Continue an EXISTING agent session in the new workspace instead of "
+        "starting fresh (claude --resume / codex resume <id>). Pass a session id "
+        "or a unique id prefix (see `grove sessions list`). Only claude/codex agents.",
+    ),
 ) -> None:
     """Create a workspace and launch its agent (in-process, like the TUI).
 
@@ -396,7 +414,7 @@ def create_workspace(
     surfaces an engine error (unknown agent, branch conflict) with a clean
     message and a non-zero exit.
     """
-    with _clean_exit():
+    with clean_exit():
         plan = BranchFlags(
             branch=branch, checkout=checkout, track=track, root=root, base=base
         ).to_plan()
@@ -407,6 +425,8 @@ def create_workspace(
             branch_plan=plan,
             skip_init=no_init,
             initial_prompt=prompt,
+            resume_session_id=resume_session,
+            model=model,
         )
         state = build().create(request)
         typer.secho(f"created {state.id}", fg=typer.colors.GREEN)
@@ -435,9 +455,9 @@ def message_workspace(
     \b
       grove message a1b2 "now add a test for the empty case"
     """
-    with _clean_exit():
+    with clean_exit():
         manager = build()
-        state = _resolve_workspace(manager, workspace)
+        state = resolve_workspace(manager, workspace)
         manager.send_message(state.id, text)
         typer.secho(f"sent to {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -445,7 +465,7 @@ def message_workspace(
 # ─── lifecycle verbs (parity with the TUI keys + the MCP tools) ───────────────
 # Each is a thin shell over one WorkspaceManager method: resolve an id-prefix,
 # run the op, report. The engine owns every rule (a non-running pause, a root
-# pause, a missing worktree) and raises the typed error _clean_exit renders.
+# pause, a missing worktree) and raises the typed error clean_exit renders.
 
 _WORKSPACE_ARG = typer.Argument(
     ...,
@@ -468,9 +488,9 @@ def pause_workspace(
     \b
       grove pause a1b2
     """
-    with _clean_exit():
+    with clean_exit():
         manager = build()
-        state = _resolve_workspace(manager, workspace)
+        state = resolve_workspace(manager, workspace)
         manager.pause(state.id, force=force)
         typer.secho(f"paused {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -481,9 +501,9 @@ def resume_workspace(workspace: str = _WORKSPACE_ARG) -> None:
     \b
       grove resume a1b2
     """
-    with _clean_exit():
+    with clean_exit():
         manager = build()
-        state = _resolve_workspace(manager, workspace)
+        state = resolve_workspace(manager, workspace)
         manager.resume(state.id)
         typer.secho(f"resumed {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -498,9 +518,9 @@ def respawn_workspace(workspace: str = _WORKSPACE_ARG) -> None:
     \b
       grove respawn a1b2
     """
-    with _clean_exit():
+    with clean_exit():
         manager = build()
-        state = _resolve_workspace(manager, workspace)
+        state = resolve_workspace(manager, workspace)
         manager.respawn(state.id)
         typer.secho(f"respawned {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -526,9 +546,9 @@ def kill_workspace(
       grove kill a1b2
       grove kill a1b2 --keep-branch -y
     """
-    with _clean_exit():
+    with clean_exit():
         manager = build()
-        state = _resolve_workspace(manager, workspace)
+        state = resolve_workspace(manager, workspace)
         if not yes and not typer.confirm(f"kill {state.id} ({state.title})?"):
             raise typer.Abort()
         manager.kill(state.id, delete_branch=delete_branch)
@@ -558,11 +578,11 @@ def attach_workspace(workspace: str = _WORKSPACE_ARG) -> None:
     \b
       grove attach a1b2
     """
-    with _clean_exit():
+    with clean_exit():
         manager = build()
-        state = _resolve_workspace(manager, workspace)
+        state = resolve_workspace(manager, workspace)
         instruction = manager.attach(state.id)
-    # Outside _clean_exit: exec replaces this process, so it never returns and
+    # Outside clean_exit: exec replaces this process, so it never returns and
     # raises no GroveError. tmux is resolved off PATH by design (Grove's one
     # hard runtime dep; a missing tmux surfaces as the OS's exec error).
     argv = _attach_argv(instruction)
@@ -590,7 +610,7 @@ def show_workspace(
       grove show            # infer from the current worktree
       grove show a1b2 -l 20
     """
-    with _clean_exit():
+    with clean_exit():
         manager = build()
         state = _resolve_or_infer_workspace(manager, workspace)
         explorer = SessionExplorer.from_cwd(Path.cwd())
@@ -615,4 +635,4 @@ def register(app: typer.Typer) -> None:
     app.command("show")(show_workspace)
 
 
-__all__ = ["BranchFlags", "WorkspaceInspection", "register"]
+__all__ = ["BranchFlags", "WorkspaceInspection", "register", "resolve_workspace"]

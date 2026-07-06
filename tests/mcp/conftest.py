@@ -10,12 +10,14 @@ without a daemon.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from grove.client import GroveClient
 from grove.core.contracts import (
+    AgentSummaryView,
     AttachInstructionView,
     CreateWorkspaceRequest,
     WorkspacePeekView,
@@ -104,6 +106,17 @@ class FakeGroveClient(GroveClient):
         self.calls.append(("send_message", {"ws_id": ws_id, "text": text}))
         if self.send_message_error is not None:
             raise self.send_message_error
+
+    async def remap_session(self, ws_id: str, session_ref: str) -> WorkspaceStateView:
+        self.calls.append(("remap_session", {"ws_id": ws_id, "session_ref": session_ref}))
+        return make_state(ws_id)
+
+    async def list_agents(self, repo: Path) -> list[AgentSummaryView]:
+        self.calls.append(("list_agents", {"repo": repo}))
+        return [
+            AgentSummaryView(name="claude", kind="claude_code", models=("opus", "sonnet")),
+            AgentSummaryView(name="shell", kind="generic"),
+        ]
 
 
 @pytest.fixture

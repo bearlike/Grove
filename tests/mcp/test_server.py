@@ -15,6 +15,7 @@ from tests.mcp.conftest import FakeGroveClient
 EXPECTED_TOOLS = {
     "grove_list_workspaces",
     "grove_get_workspace",
+    "grove_list_agents",
     "grove_create_workspace",
     "grove_peek_workspace",
     "grove_pause_workspace",
@@ -23,6 +24,7 @@ EXPECTED_TOOLS = {
     "grove_kill_workspace",
     "grove_attach_instruction",
     "grove_send_workspace_message",
+    "grove_remap_workspace_session",
 }
 
 

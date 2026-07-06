@@ -24,6 +24,7 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
     ("m", "send_message", "Message"),
     ("e", "edit_workspace", "Edit"),
     ("s", "open_sessions", "Sessions"),
+    ("x", "remap_session", "Remap"),
     ("p", "pause_workspace", "Pause"),
     ("R", "resume_workspace", "Resume"),
     ("o", "respawn_workspace", "Respawn"),
@@ -35,7 +36,8 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
 
 LIST_GLOBAL_FOOTER_KEYS: Final[tuple[str, ...]] = ("q", "n", "d", "P", "r", "/", "?")
 # Order in the footer: attach (most common), message (steer without
-# attaching), edit (metadata), sessions (read-only history), pause/resume
+# attaching), edit (metadata), sessions (read-only history), remap (fix
+# session tracking — a recovery verb, sits with sessions), pause/resume
 # (lifecycle pair), respawn (recovery for offline), kill (destructive —
 # last). Each entry is dimmed by the screen when it's not currently
 # applicable to the selection.
@@ -44,6 +46,7 @@ LIST_SELECTION_FOOTER_KEYS: Final[tuple[str, ...]] = (
     "m",
     "e",
     "s",
+    "x",
     "p",
     "R",
     "o",

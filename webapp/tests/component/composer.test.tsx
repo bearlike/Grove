@@ -22,8 +22,8 @@ const mutate = vi.fn((_req: unknown, opts?: { onSuccess?: (ws: WorkspaceStateVie
 });
 
 let agentList: AgentSummaryView[] = [
-  { name: "claude", kind: "claude_code", description: "Anthropic" },
-  { name: "mewbo", kind: "mewbo", description: "research" },
+  { name: "claude", kind: "claude_code", description: "Anthropic", models: ["opus", "haiku"] },
+  { name: "mewbo", kind: "mewbo", description: "research", models: [] },
 ];
 
 vi.mock("@/lib/grove/hooks", () => ({
@@ -55,6 +55,7 @@ function resetComposer(overrides: Record<string, unknown> = {}) {
       remoteRef: "",
       remoteLocal: "",
       skipInit: false,
+      resumeSessionId: "",
       advancedOpen: false,
       ...overrides,
     },
@@ -65,8 +66,8 @@ beforeEach(() => {
   push.mockClear();
   mutate.mockClear();
   agentList = [
-    { name: "claude", kind: "claude_code", description: "Anthropic" },
-    { name: "mewbo", kind: "mewbo", description: "research" },
+    { name: "claude", kind: "claude_code", description: "Anthropic", models: ["opus", "haiku"] },
+    { name: "mewbo", kind: "mewbo", description: "research", models: [] },
   ];
   resetComposer();
 });
@@ -93,21 +94,22 @@ describe("Composer", () => {
     expect(push).toHaveBeenCalledWith("/w/ws-new");
   });
 
-  it("shows the Model pill for any kind with configured models (claude_code, mewbo); hides it for generic", () => {
+  it("shows the Model pill for any model-capable kind (claude_code, mewbo); hides it for a generic shell", () => {
     // Default agent is claude_code → Model pill present.
     const { unmount } = render(<Composer />);
     expect(screen.getByTestId("composer-model")).toBeInTheDocument();
     unmount();
 
-    // mewbo now has models in the config JSON (#98) → pill shows, selectable.
-    agentList = [{ name: "mewbo", kind: "mewbo", description: "research" }];
+    // mewbo takes a (server-side) model, so the pill shows even with an empty
+    // daemon-resolved catalog — the custom-id row is the escape hatch.
+    agentList = [{ name: "mewbo", kind: "mewbo", description: "research", models: [] }];
     resetComposer({ agentName: "mewbo" });
     const { unmount: unmount2 } = render(<Composer />);
     expect(screen.getByTestId("composer-model")).toBeInTheDocument();
     unmount2();
 
-    // A generic shell has no configured models → no Model pill.
-    agentList = [{ name: "shell", kind: "generic", description: "" }];
+    // A generic shell has no model concept → no Model pill.
+    agentList = [{ name: "shell", kind: "generic", description: "", models: [] }];
     resetComposer({ agentName: "shell" });
     render(<Composer />);
     expect(screen.queryByTestId("composer-model")).toBeNull();

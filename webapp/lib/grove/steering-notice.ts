@@ -2,11 +2,10 @@ import { GroveProtocolError } from "./client";
 
 /**
  * Map a steering failure (send a message / interrupt / answer a question) to
- * a quiet inline notice — refusals are expected, not exceptional. Shared by
- * `ChatPanel` and `TurnsView`'s live-question card (#111 review) so the same
- * daemon refusal reads identically wherever the live pending question
- * happens to be rendered, instead of each call site inventing its own
- * wording for the same 409/501 envelope.
+ * a quiet inline notice — refusals are expected, not exceptional. Used by the
+ * chat panel's runtime (`useGroveChatRuntime`) so every steering refusal —
+ * send, interrupt, or a live-question answer — reads identically instead of
+ * each call site inventing its own wording for the same 409/501 envelope.
  */
 export function refusalNotice(err: unknown, verb: "send" | "interrupt" | "answer"): string {
   if (err instanceof GroveProtocolError && (err.status === 409 || err.status === 501)) {

@@ -8,6 +8,8 @@ here plus its adapter module; nothing else in the engine changes.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from grove.core.agents.base import AgentAdapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.codex import CodexAdapter
@@ -45,3 +47,28 @@ def all_adapters() -> tuple[AgentAdapter, ...]:
     included — its scans are no-ops, so filtering it would be policy the
     no-op already provides."""
     return tuple(_ADAPTERS.values())
+
+
+MODEL_CATALOG_CAP = 10
+"""Max models any create-form picker OFFERS for one agent (the ≤10 rule). Config
+or live discovery may name more; the surface stays scannable. The cap is display
+only — a caller can still submit any id (the provider boundary)."""
+
+
+def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tuple[str, ...]:
+    """The single per-agent model catalog a picker offers: configured override,
+    else the adapter's live discovery — de-duped, order-preserving, capped.
+
+    ``configured`` (``AgentSpec.models``) wins WHOLESALE when non-empty — a
+    pin/curate/reorder seam (mechanism, not policy). Empty falls through to
+    ``get_adapter(kind).available_models(command)`` (Codex reads ``codex debug
+    models``; Claude Code offers its stable aliases; remote/shell offer none).
+    This is the ONE place the catalog is composed, so every surface (webapp,
+    TUI, CLI, MCP) shows the same list. Never an allowlist: create still
+    forwards any model id verbatim, so an id absent here is valid."""
+    raw = tuple(configured) if configured else get_adapter(kind).available_models(command)
+    seen: dict[str, None] = {}
+    for model in raw:
+        if model and model not in seen:
+            seen[model] = None
+    return tuple(seen)[:MODEL_CATALOG_CAP]

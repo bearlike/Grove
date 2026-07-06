@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GroveClient } from "./client";
 import { applyDashboardEvent, snapshotHasWorkspace } from "./activity-stream";
 import type { QuestionAnswerItem } from "./question-plan";
@@ -95,6 +95,29 @@ export function useWorkspaceSessions(id: string) {
 }
 
 /**
+ * The UNGATED, cwd-scoped candidate sessions for a workspace — `GET
+ * /workspaces/{id}/sessions?candidates=true` (#132). Where `useWorkspaceSessions`
+ * returns the daemon's own ATTRIBUTED history (adoption-gated), this KEEPS the
+ * sessions the gate drops — a dead-minted-pointer's live successor, a foreign
+ * session sharing a ROOT cwd — so a remap picker can offer the session the
+ * workspace should actually follow when its tracked pointer is dead.
+ *
+ * Fetched LAZILY (caller passes `enabled`): it is an extra directory parse, so
+ * the page turns it on ONLY when the workspace has no usable tracked session —
+ * never on the healthy path. Its key is a child of the gated list's, so a
+ * `useRemapSession` invalidation (`["sessions", id]`, prefix-matched) refreshes
+ * both. Same 15 s history cadence as the gated list.
+ */
+export function useWorkspaceSessionCandidates(id: string, { enabled }: { enabled: boolean }) {
+  return useQuery<SessionSummaryView[]>({
+    queryKey: ["sessions", id, "candidates"],
+    queryFn: () => client.getSessions(id, { candidates: true }),
+    refetchInterval: 15_000,
+    enabled: Boolean(id) && enabled,
+  });
+}
+
+/**
  * Every recorded agent session across one project's worktrees — the home
  * page's per-repo Sessions section. Fetched on expand only: the section
  * mounts its body (and therefore this hook) when the user opens it, and
@@ -112,12 +135,43 @@ export function useProjectSessions(repo: string | null) {
 }
 
 /**
+ * The ADE session rail's batched reader (#140): every project's sessions at
+ * once, keyed identically to `useProjectSessions` so the two share one cache
+ * entry per repo (a rail refetch warms a later single-repo read and vice-versa).
+ * `useQueries` is the one idiomatic way to fan a dynamic-length list of repos
+ * into N parallel queries under the Rules of Hooks — a per-repo child component
+ * would re-mount its query on every reorder and couldn't feed the rail's
+ * cross-project attention group. Same 15 s history cadence; `combine` folds the
+ * results into a `repo → sessions` map plus an aggregate loading flag so the
+ * rail reads one value. The 15 s poll is the freshness backstop; the rail layers
+ * an SSE "refresh now" invalidation on top (see `SessionRail`).
+ */
+export function useProjectSessionsAll(repos: string[]) {
+  return useQueries({
+    queries: repos.map((repo) => ({
+      queryKey: ["project-sessions", repo],
+      queryFn: () => client.getProjectSessions(repo),
+      refetchInterval: 15_000,
+      enabled: Boolean(repo),
+    })),
+    combine: (results) => ({
+      byRepo: new Map(repos.map((repo, i) => [repo, results[i]?.data ?? []])),
+      isLoading: results.some((r) => r.isLoading),
+    }),
+  });
+}
+
+/**
  * One session's conversation digest, fetched on expand only (`sessionId` null →
- * disabled, zero requests). Turns never poll fast: the digest is a transcript
- * read, the heaviest per-request endpoint here, and the live signal already
- * comes from peek/activity — 30 s keeps an expanded view fresh without burning
- * the daemon on parses nobody is watching. The chat panel passes a hotter
- * `refetchMs` (it's a conversation surface, mounted only while in view) —
+ * disabled, zero requests). The digest is a transcript read, the heaviest
+ * per-request endpoint here, so `refetchMs` is a BACKSTOP, not the freshness
+ * mechanism (#166): the session page layers an SSE-driven invalidation on top,
+ * firing `queryClient.invalidateQueries(["turns", …])` the instant
+ * `turnsProgressFingerprint` (`activity-stream.ts`) shows the session's
+ * `assistant_replies`/`tool_calls`/`last_event_at` actually advanced — so a
+ * real turn lands immediately instead of waiting out the poll. The chat panel
+ * still passes a hotter `refetchMs` than the default (it's a conversation
+ * surface, mounted only while in view) as the floor under that invalidation —
  * cadence is the caller's policy, the hook is the mechanism.
  */
 export function useSessionTurns(id: string, sessionId: string | null, refetchMs = 30_000) {
@@ -199,6 +253,32 @@ export function useAnswerQuestion(workspaceId: string) {
       toolUseId: string;
       answers: QuestionAnswerItem[];
     }) => client.answerQuestion(workspaceId, sessionId, toolUseId, answers),
+  });
+}
+
+/**
+ * Pin an existing session as the workspace's tracked primary (#121) — POST
+ * `/workspaces/{id}/session`, `mutate(sessionId)`. `SessionSummaryView`
+ * carries no "is primary" flag and `useWorkspaceSessions` sorts purely by
+ * `modified_at`, so this mutation does NOT reorder or relabel that list — it
+ * updates the daemon's persisted `agent_session_id`, which surfaces instead
+ * through the activity snapshot's `sessions[0]` (see `primarySessionId` in
+ * `live-question.ts` — the actual confirmation signal, never the response
+ * body: `WorkspaceStateView` deliberately never exposes `agent_session_id`).
+ * Invalidating `["activity"]` here mirrors every other mutation's
+ * `invalidateWorkspace` convention — the daemon's `session_remapped` event
+ * also arrives over SSE, but invalidating client-side keeps the poll-fallback
+ * path (and any surface not currently streaming) in sync too.
+ */
+export function useRemapSession(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (sessionId: string) => client.remapSession(workspaceId, sessionId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions", workspaceId] });
+      void queryClient.invalidateQueries({ queryKey: ["workspace", workspaceId] });
+      void queryClient.invalidateQueries({ queryKey: ["activity"] });
+    },
   });
 }
 

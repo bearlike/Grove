@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { chatItemsFromTurns } from "@/lib/grove/chat-turns";
-import type { SessionTurnView } from "@/lib/grove/types";
+import { chatItemToThreadMessage, chatItemsFromTurns } from "@/lib/grove/chat-turns";
+import type { AgentQuestionView, SessionTurnView } from "@/lib/grove/types";
 
 const turn = (user_text: string, entries: SessionTurnView["entries"]): SessionTurnView => ({
   user_text,
@@ -232,5 +232,68 @@ describe("chatItemsFromTurns", () => {
       turn("go", [{ role: "question", text: "orphaned" }]),
     ]);
     expect(items).toEqual([{ kind: "message", role: "user", text: "go" }]);
+  });
+});
+
+const question = (group_id: string, id: string): AgentQuestionView => ({
+  id,
+  group_id,
+  kind: "single_select",
+  prompt: "Pick",
+  header: null,
+  options: [{ label: "A", description: null }],
+  multiselect: false,
+  answered: false,
+  answer: null,
+  source_tool: "AskUserQuestion",
+});
+
+describe("chatItemToThreadMessage", () => {
+  it("maps a user prompt to a native text part keyed by its flat index", () => {
+    const msg = chatItemToThreadMessage({ kind: "message", role: "user", text: "hi" }, 0);
+    expect(msg.role).toBe("user");
+    expect(msg.id).toBe("item-0");
+    expect(msg.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(msg.metadata?.custom).toEqual({ kind: "message" });
+    // User messages carry no status (assistant-only in assistant-ui).
+    expect(msg.status).toBeUndefined();
+  });
+
+  it("maps an agent reply to a completed text part carrying its text in custom (for copy)", () => {
+    const msg = chatItemToThreadMessage({ kind: "message", role: "assistant", text: "done" }, 3);
+    expect(msg.role).toBe("assistant");
+    expect(msg.id).toBe("item-3");
+    expect(msg.content).toEqual([{ type: "text", text: "done" }]);
+    expect(msg.status).toEqual({ type: "complete", reason: "stop" });
+    expect(msg.metadata?.custom).toEqual({ kind: "message", text: "done" });
+  });
+
+  it("maps a tool run to ONE data-tools part carrying the whole calls array", () => {
+    const calls = [
+      { name: "Edit", detail: "a.ts" },
+      { name: "Bash", detail: "npm test" },
+    ];
+    const msg = chatItemToThreadMessage({ kind: "tools", calls }, 1);
+    expect(msg.role).toBe("assistant");
+    expect(msg.content).toEqual([{ type: "data-tools", data: { calls } }]);
+  });
+
+  it("maps note / notification / question kinds to their own data-* parts", () => {
+    expect(
+      chatItemToThreadMessage({ kind: "note", tone: "status", text: "compacting" }, 2).content,
+    ).toEqual([{ type: "data-note", data: { tone: "status", text: "compacting" } }]);
+    expect(
+      chatItemToThreadMessage({ kind: "notification", summary: "s", detail: "d" }, 2).content,
+    ).toEqual([{ type: "data-notification", data: { summary: "s", detail: "d" } }]);
+    const q = question("g-1", "q-1");
+    expect(chatItemToThreadMessage({ kind: "question", question: q }, 2).content).toEqual([
+      { type: "data-question", data: { question: q } },
+    ]);
+  });
+
+  it("maps a continuation head to a data-continuation marker", () => {
+    expect(chatItemToThreadMessage({ kind: "continuation" }, 4).content).toEqual([
+      { type: "data-continuation", data: {} },
+    ]);
   });
 });

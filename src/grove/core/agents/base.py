@@ -23,6 +23,7 @@ the files (dump, transcript-path display).
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -44,17 +45,33 @@ class AgentAdapter(Protocol):
     happens on a backend service and the local tmux pane says nothing about it —
     the blend must trust the adapter's reported state instead of demoting a
     quiet pane to IDLE. Filesystem adapters are ``False``.
+
+    ``resumable`` declares whether the tool can CONTINUE an existing session by
+    id at launch (``launch_decoration(..., resume=True)`` yields a real handle) —
+    the single source of truth the manager derives its resumable-kinds set from
+    (#F10d), so a future resumable adapter can't be missed by a hand-maintained
+    list. Claude Code / Codex are ``True``; a remote (mewbo) session and a bare
+    shell have no launch resume handle, so ``False``.
     """
 
     kind: str
     remote: bool
+    resumable: bool
 
-    def launch_decoration(self, session_id: str) -> list[str]:
+    def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """Extra argv tokens appended to the agent command so Grove owns the
         session id by construction (Claude Code → ``["--session-id", uuid]``).
 
         Empty for tools with no deterministic correlation handle — the generic
         shell adapter returns ``[]`` and Grove tracks nothing for it.
+
+        ``resume=True`` asks the tool to CONTINUE an existing session rather than
+        start a fresh one (#120): Claude Code → ``["--resume", id]`` (plain resume
+        keeps the same session id/file), Codex → ``["resume", id]`` (a subcommand,
+        valid after the command since Codex's grammar is
+        ``codex [OPTIONS] <COMMAND> [ARGS]``). Kinds with no resume handle ignore
+        the flag and stay empty — the manager gates resume to resumable kinds
+        before ever calling this.
         """
         ...
 
@@ -65,6 +82,22 @@ class AgentAdapter(Protocol):
         so they fall back to the tool's own default. The provider-boundary rule:
         Grove forwards the parameter as the tool's flag — it never interprets the
         value.
+        """
+        ...
+
+    def available_models(self, command: str) -> tuple[str, ...]:
+        """The model ids/aliases this tool advertises for its ``--model`` flag — a
+        best-effort catalog a create-form picker OFFERS, never a validated
+        allowlist (any id is still forwarded verbatim on create; the same
+        provider boundary as :meth:`model_decoration`).
+
+        ``command`` is the agent's configured launch command; an adapter that
+        introspects a real CLI parses its binary from it (Codex runs ``<bin>
+        debug models``). Read-only and best-effort like every adapter method:
+        returns ``()`` when the tool exposes no catalog (a bare shell, a remote
+        orchestrator whose models are server-side) or when none can be read.
+        Adapters return their raw provider vocabulary — the engine
+        (``registry.resolve_models``) de-dups and caps the offered list.
         """
         ...
 
@@ -89,6 +122,24 @@ class AgentAdapter(Protocol):
         worktree. Read-only, best-effort (returns ``[]`` on error or when the tool
         has no discoverable transcripts). ``exclude_id`` drops the Grove-launched
         session so only the hand-started ones remain.
+        """
+        ...
+
+    def discover_births(
+        self, cwd: Path, *, exclude_id: str | None = None
+    ) -> list[tuple[str, datetime | None, float]]:
+        """``(session_id, birth, mtime)`` for sessions in ``cwd``, newest-first by mtime.
+
+        The CHEAP pre-filter behind the dashboard's adoption gate (#F5): the same
+        scan as :meth:`discover_sessions`, but each id paired with its session
+        BIRTH (first-record timestamp, from the bounded head read the scan
+        already does — never a full transcript parse) and the transcript mtime
+        (for newest-first ordering when a caller unions several cwds, #F7). The
+        service evaluates the birth-or-live-here gate on this cheap metadata
+        FIRST and pays a full activity parse only for candidates that pass, so
+        per-tick cost is O(new sessions), not O(history). ``birth`` is ``None``
+        for a transcript with no timestamped record. Best-effort: ``[]`` on error
+        or for tools with no discoverable transcripts (generic, remote).
         """
         ...
 

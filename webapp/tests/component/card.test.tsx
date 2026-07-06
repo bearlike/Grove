@@ -8,9 +8,15 @@ import type {
   WorkspaceActivityView,
 } from "@/lib/grove/types";
 
-// The ONE card (issue #89, redesigned #96): two scan lines — identity (state
-// mark · title · one status pill) and prompt (happening-now) — plus a demoted
-// footer (metrics · branch · diff · last commit). Repo identity moved up to the
+// The ONE card, rebuilt in the ADE language (#155), metadata torn down to one
+// `Stat` grammar (#161): a header (the canonical state glyph · title · time), a
+// one-line happening-now context, then a META zone of TWO aligned `Stat` rows —
+// provenance (branch · ahead · behind · dirty · placement) over activity (turns ·
+// tool calls · tokens in/out + Live toggle) — and the prose last-commit line.
+// Every stat is a `data-testid="stat"` + `data-stat="<label>"` icon+value that
+// renders NOTHING at zero (no "0 ahead 0 behind" noise). State is the leading
+// glyph (the rail's own atom), not a badge; a lifecycle StatusBadge returns only
+// when it is the signal (no session / orphaned / error). Repo identity is the
 // grid section header, so the card carries no project chip. It reads
 // `WorkspaceActivityView` directly.
 
@@ -97,8 +103,15 @@ function rerenderWrapped(rerender: (ui: React.ReactNode) => void, node: React.Re
   );
 }
 
-describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
-  it("line 1: title link + the agent-state badge; no repo chip", () => {
+// Every meta stat shares `data-testid="stat"` and is keyed by `data-stat`; a
+// suppressed (zero) stat is absent, so `stat(label)` returns null — the assertion
+// for zero-suppression is simply `expect(stat("behind")).toBeNull()`.
+function stat(label: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-stat="${label}"]`);
+}
+
+describe("WorkspaceCard (calm ADE card, repo-grouped)", () => {
+  it("header: title link + the leading state glyph; no repo chip, no pill on a healthy card", () => {
     r(<WorkspaceCard activity={activity("working")} />);
     expect(screen.getByRole("link", { name: "ship the dashboard" })).toHaveAttribute(
       "href",
@@ -106,33 +119,34 @@ describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
     );
     // Repo identity is the section header now — the card has no project chip.
     expect(screen.queryByTestId("project-chip")).toBeNull();
-    const badge = screen.getByTestId("agent-state-badge");
-    expect(badge).toHaveAttribute("data-state", "working");
-    expect(screen.getByTestId("agent-state-label")).toHaveTextContent("working");
-    // The agent axis replaces the lifecycle badge on a healthy sessioned card.
+    // State is the leading glyph (the rail's vocabulary), never a second badge.
+    const marks = screen.getAllByTestId("state-mark");
+    expect(marks[0]).toHaveAttribute("data-state", "working");
+    // A healthy sessioned card wears no lifecycle pill.
     expect(screen.queryByTestId("status-badge")).toBeNull();
   });
 
-  it("line 1: leads with the canonical agent-state mark", () => {
+  it("header: leads with the canonical agent-state mark", () => {
     r(<WorkspaceCard activity={activity("working")} />);
     const marks = screen.getAllByTestId("state-mark");
-    // The first state-mark on the card is line 1's identity glyph for the state.
+    // The first state-mark on the card is the header's identity glyph.
     expect(marks[0]).toHaveAttribute("data-state", "working");
   });
 
-  it("line 1: blocked reads 'action required'", () => {
+  it("header: blocked surfaces as the attention state glyph", () => {
     r(<WorkspaceCard activity={activity("blocked")} />);
-    expect(screen.getByTestId("agent-state-badge")).toHaveTextContent("action required");
+    const marks = screen.getAllByTestId("state-mark");
+    expect(marks[0]).toHaveAttribute("data-state", "blocked");
+    expect(screen.getByTestId("workspace-card")).toHaveAttribute("data-agent-state", "blocked");
   });
 
-  it("line 1: falls back to the workspace StatusBadge when there is no session", () => {
+  it("header: shows the workspace StatusBadge when there is no agent session", () => {
     r(<WorkspaceCard activity={activity("working", { sessions: [] })} />);
     expect(screen.getByTestId("status-badge")).toBeInTheDocument();
-    expect(screen.queryByTestId("agent-state-badge")).toBeNull();
     expect(screen.getByTestId("workspace-card")).toHaveAttribute("data-agent-state", "unknown");
   });
 
-  it("line 1: status badge also shows on orphaned / error lifecycle", () => {
+  it("header: status badge also shows on orphaned / error lifecycle", () => {
     r(<WorkspaceCard activity={activity("working", { state: { ...activity("working").state, status: "orphaned" } })} />);
     expect(screen.getByTestId("status-badge")).toBeInTheDocument();
   });
@@ -148,7 +162,7 @@ describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
     expect(screen.getByTestId("workspace-card").dataset.status).toBe("orphaned");
   });
 
-  it("footer: a root workspace shows the placement badge; worktree shows none", () => {
+  it("meta: a root workspace shows the placement badge; worktree shows none", () => {
     const { rerender } = r(
       <WorkspaceCard
         activity={activity("working", {
@@ -164,14 +178,14 @@ describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
     expect(screen.queryByTestId("placement-badge")).toBeNull();
   });
 
-  it("line 2: happening-now prefers current_task on every tier", () => {
+  it("context: happening-now prefers current_task on every tier", () => {
     const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
     expect(screen.getByTestId("happening-now")).toHaveTextContent("editing card.tsx");
     rerenderWrapped(rerender, <WorkspaceCard activity={activity("idle")} />);
     expect(screen.getByTestId("happening-now")).toHaveTextContent("editing card.tsx");
   });
 
-  it("line 2: happening-now falls back to the session self-name, then a placeholder", () => {
+  it("context: happening-now falls back to the session self-name, then a placeholder", () => {
     const { rerender } = r(
       <WorkspaceCard activity={activity("idle", {}, { current_task: null })} />,
     );
@@ -187,7 +201,7 @@ describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
     expect(screen.getByTestId("happening-now")).toHaveTextContent("no agent session");
   });
 
-  it("line 2: happening-now shows the background-subagent count only when > 0", () => {
+  it("context: happening-now shows the background-subagent count only when > 0", () => {
     const { rerender } = r(
       <WorkspaceCard activity={activity("working", {}, { active_subagents: 2 })} />,
     );
@@ -204,7 +218,7 @@ describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
     expect(screen.getByTestId("happening-now")).not.toHaveTextContent("bg agent");
   });
 
-  it("line 2: error_detail takes the slot while in error", () => {
+  it("context: error_detail takes the slot while in error", () => {
     const { rerender } = r(
       <WorkspaceCard
         activity={activity("error", {}, { error_detail: "transcript unreadable: bad JSON" })}
@@ -219,15 +233,27 @@ describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
     expect(screen.getByTestId("happening-now")).toHaveTextContent("editing card.tsx");
   });
 
-  it("footer: metrics one-liner — turns, tools, tokens", () => {
-    const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
-    expect(screen.getByTestId("metrics")).toHaveTextContent("3t · 11⚒ · 1.5k↑ 150↓");
-
-    rerenderWrapped(rerender, <WorkspaceCard activity={activity("idle", { sessions: [] })} />);
-    expect(screen.getByTestId("metrics")).toHaveTextContent("—");
+  it("meta: activity stats — turns, tool calls, compact tokens in/out", () => {
+    r(<WorkspaceCard activity={activity("working")} />);
+    // Raw fields render as discrete icon+value stats; tokens fold to the compact
+    // token shape (1500 → 1.5k), the rest pass through unchanged.
+    expect(stat("turns")).toHaveTextContent("3");
+    expect(stat("tool calls")).toHaveTextContent("11");
+    expect(stat("tokens in")).toHaveTextContent("1.5k");
+    expect(stat("tokens out")).toHaveTextContent("150");
+    // The unit is the tooltip / a11y name, never a sigil baked into the row.
+    expect(stat("tokens in")).toHaveAttribute("title", "1.5k tokens in");
   });
 
-  it("footer: a Live toggle shows only while the agent is working", () => {
+  it("meta: a sessionless card suppresses every activity stat", () => {
+    r(<WorkspaceCard activity={activity("idle", { sessions: [] })} />);
+    expect(stat("turns")).toBeNull();
+    expect(stat("tool calls")).toBeNull();
+    expect(stat("tokens in")).toBeNull();
+    expect(stat("tokens out")).toBeNull();
+  });
+
+  it("meta: a Live toggle shows only while the agent is working", () => {
     const onToggleLive = vi.fn();
     const { rerender } = r(
       <WorkspaceCard activity={activity("working")} onToggleLive={onToggleLive} />,
@@ -242,13 +268,24 @@ describe("WorkspaceCard (two-line, repo-grouped redesign)", () => {
     expect(screen.queryByTestId("live-toggle")).toBeNull(); // gated to WORKING
   });
 
-  it("footer: branch, the diff stat trio, and the parsed last commit (no emoji)", () => {
-    const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
+  it("meta: provenance stats — branch, ahead & dirty render, behind zero-suppressed", () => {
+    r(<WorkspaceCard activity={activity("working")} />); // ahead 2, behind 0, dirty 1
     expect(screen.getByText("feat/dash")).toBeInTheDocument();
-    expect(screen.getByTestId("stat-trio")).toBeInTheDocument();
-    expect(screen.getByTestId("stat-ahead")).toHaveTextContent("2");
-    expect(screen.getByTestId("stat-behind")).toHaveTextContent("0");
-    expect(screen.getByTestId("stat-dirty")).toHaveTextContent("1");
+    expect(stat("ahead")).toHaveTextContent("2");
+    expect(stat("dirty")).toHaveTextContent("1");
+    // behind is 0 → the atom renders nothing (no "0 behind" noise on the row).
+    expect(stat("behind")).toBeNull();
+  });
+
+  it("meta: zero-suppression — a fresh workspace with 0-ahead renders no ahead stat", () => {
+    r(<WorkspaceCard activity={activity("working", { base_ahead: 0 })} />);
+    expect(stat("ahead")).toBeNull();
+    // Its nonzero neighbours still render — suppression is per-stat, not per-row.
+    expect(stat("dirty")).toHaveTextContent("1");
+  });
+
+  it("meta: the parsed last commit (no emoji), latest only", () => {
+    const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
     // The gitmoji is stripped; the conventional type surfaces as a muted tag.
     const lastCommit = screen.getByTestId("last-commit");
     expect(lastCommit).toHaveTextContent("wire the SSE stream");

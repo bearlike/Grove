@@ -84,6 +84,22 @@ class CreateWorkspaceRequest(BaseModel):
     and ignores it. Create-only — never re-applied on resume/respawn, like
     ``skip_init``."""
 
+    resume_session_id: str | None = Field(default=None, max_length=200)
+    """Adopt an EXISTING agent session as this workspace's primary instead of
+    minting a fresh one (#120). ``None`` (the default) mints as usual. When set,
+    the id is persisted as ``agent_session_id`` (so the dashboard tracks the
+    resumed session by construction — no discovery needed) and the agent is
+    launched to CONTINUE it: ``claude --resume <id>`` (which keeps the same
+    session id/file) or ``codex resume <id>``. Only ``claude_code`` and ``codex``
+    agents can resume by id — a mewbo/generic agent rejects with a clear error
+    (``ResumeNotSupported``, 422) before any side effect. Create-only, never
+    re-applied on resume/respawn, like ``skip_init``. Accepts a full id OR a
+    unique id prefix scoped to the project (resolved through the same
+    ``SessionExplorer`` the remap verb uses, #F8); an unknown/ambiguous ref, or
+    one whose adapter kind mismatches the agent, fails with
+    ``AgentSessionNotFound`` (404) before any side effect — never a
+    fully-provisioned workspace stranded on a bogus id."""
+
     repo_root: Path | None = None
     """Repository root for the workspace. ``None`` for in-process callers
     (the TUI knows its own repo). The HTTP daemon requires this set so it

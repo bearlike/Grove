@@ -17,8 +17,9 @@ from typing import Any
 import humanize
 import typer
 
-from grove.core import GroveError, SessionExplorer, SessionListing
+from grove.core import GroveError, SessionExplorer, SessionListing, build
 from grove.core.agents import SessionTurn
+from grove.tui.cli_workspace import clean_exit, resolve_workspace
 
 sessions_app = typer.Typer(
     name="sessions",
@@ -262,6 +263,36 @@ def dump_session(
             indent=2,
         )
     )
+
+
+@sessions_app.command("remap")
+def remap_session(
+    workspace: str = typer.Argument(..., help="Workspace id or unique id prefix (see `grove ls`)."),
+    session: str = typer.Argument(
+        ..., help="Session id or unique id prefix to pin as this workspace's primary."
+    ),
+) -> None:
+    """Pin an existing agent session as a workspace's tracked primary.
+
+    The manual counterpart to Grove's automatic session tracking: point the
+    dashboard at the right session after ``/clear`` rotated the id, or adopt a
+    hand-started session as the workspace's own. Trusted and idempotent — the
+    session ref (id or unique prefix) is resolved in the workspace's project.
+
+    \b
+      grove sessions remap a1b2 cafef00d
+    """
+    # One error funnel (#F10b): reuse cli_workspace.clean_exit — the same
+    # GroveError → one-line-red + exit-1 contract every workspace verb uses —
+    # instead of a hand-rolled try/except duplicating its body.
+    with clean_exit():
+        manager = build()
+        state = resolve_workspace(manager, workspace)
+        updated = manager.remap_session(state.id, session)
+        typer.secho(
+            f"remapped {updated.id} ({updated.title}) → session {updated.agent_session_id}",
+            fg=typer.colors.GREEN,
+        )
 
 
 __all__ = ["sessions_app"]

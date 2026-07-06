@@ -49,6 +49,7 @@ from grove.core.contracts.questions import (
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import (
     DigestEntryView,
+    RemapSessionRequest,
     SessionDetailView,
     SessionSummaryView,
     SessionTurnView,
@@ -91,6 +92,7 @@ __all__ = [
     "ProjectGroupView",
     "QuestionAnswerItem",
     "QuestionAnswerRequest",
+    "RemapSessionRequest",
     "RootBranch",
     "SessionActivityView",
     "SessionDetailView",

@@ -14,6 +14,15 @@ ExecStart=@GROVE_BIN@ daemon serve --host @DAEMON_HOST@ --port @DAEMON_PORT@
 Environment=PATH=@DAEMON_PATH@
 Restart=on-failure
 RestartSec=2
+# The daemon talks to the shared user tmux server via libtmux's default
+# Server(), which forks that server into the daemon's own cgroup. With the
+# systemd default KillMode=control-group, `systemctl --user restart
+# grove-daemon` (run on every Grove update) SIGTERM/SIGKILLs the whole cgroup —
+# taking down the tmux server and EVERY session on it, Grove-managed and
+# external alike. `process` signals only the daemon's main PID and spares the
+# server: the daemon is a control plane, and agent tmux sessions are meant to
+# outlive its restarts. (Not `mixed`: its final SIGKILL still hits the cgroup.)
+KillMode=process
 # stdout/stderr -> journalctl --user -u grove-daemon
 StandardOutput=journal
 StandardError=journal

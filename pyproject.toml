@@ -1,6 +1,6 @@
 [project]
 name = "grove"
-version = "0.0.4"
+version = "0.0.5"
 description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -99,7 +99,7 @@ docs = [
     # theme ships a release. Tagged assets are permanent. To upgrade: pick
     # the new tag, update both the tag and the filename here, then
     #     uv lock --upgrade-package mkdocs-shadcn-mewbo
-    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.5.0/mkdocs_shadcn_mewbo-1.5.0-py3-none-any.whl",
+    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl",
     "mkdocstrings[python]",
     "pymdown-extensions>=10.20.1",
 ]

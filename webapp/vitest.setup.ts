@@ -13,6 +13,16 @@ if (typeof window !== "undefined" && !window.ResizeObserver) {
   });
 }
 
+// jsdom doesn't implement element scrolling; assistant-ui's thread viewport
+// (the chat transcript) calls `element.scrollTo` in its autoscroll rAF on every
+// mount + message change. Stub it (and its `scrollIntoView` sibling) so the
+// transcript renders in component tests instead of throwing an uncaught
+// `scrollTo is not a function`.
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollTo = Element.prototype.scrollTo || (() => {});
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || (() => {});
+}
+
 // jsdom doesn't ship `matchMedia`; next-themes calls it during mount.
 if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {

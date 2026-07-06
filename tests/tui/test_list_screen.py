@@ -10,6 +10,7 @@ import pytest
 
 from grove.core.activity import SessionActivity
 from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
+from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
@@ -18,10 +19,31 @@ from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceStatus
 from grove.tui.app import GroveApp
 from grove.tui.screens.list import WorkspaceListScreen
+from grove.tui.screens.remap_session import RemapSessionScreen
+from grove.tui.screens.sessions import SessionRow
 from grove.tui.widgets.card import WorkspaceCard
 from grove.tui.widgets.list import WorkspaceList
 from grove.tui.widgets.status import StatusBar
 from tests.conftest import FakeTmux
+
+
+def _write_transcript(
+    claude_home: Path, worktree: Path, session_id: str, *, cwd: Path | None = None
+) -> Path:
+    """Materialize a real claude transcript so SessionExplorer discovers it.
+
+    Mirrors ``tests/core/test_session_remap.py``'s helper — a genuine
+    on-disk session is what lets these tests drive the real
+    ``manager.remap_session`` write path (its own internal
+    ``SessionExplorer`` resolves session refs against real files, so a
+    faked listing id would just bounce as ``AgentSessionNotFound``).
+    """
+    where = cwd or worktree
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(where)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{session_id}.jsonl"
+    path.write_text(f'{{"type":"user","cwd":"{where}"}}\n', encoding="utf-8")
+    return path
 
 
 def _manager(tmp_repo: Path, tmp_path: Path) -> WorkspaceManager:
@@ -818,3 +840,131 @@ async def test_m_modal_cancel_sends_nothing(
         assert fake_tmux.sent_texts == []
         await pilot.press("q")
         await pilot.pause()
+
+
+# ─── remap session (manual session pin, issue #132) ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_x_opens_remap_picker_and_pinning_a_candidate_calls_manager(
+    tmp_repo: Path,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'x' offers `SessionExplorer.candidates_for`'s (ungated) listing; picking
+    one reaches the real `manager.remap_session`, which persists the pin and
+    fires the success flash via the `updated`/`session_remapped` event."""
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    manager = _manager(tmp_repo, tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="broken"))
+    hand_started = "cafef00d-1111-2222-3333-444455556666"
+    _write_transcript(cfg_home, Path(state.worktree_path), hand_started)
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, RemapSessionScreen)
+        rows = list(screen.query(SessionRow))
+        assert len(rows) == 1
+        assert hand_started[:8] in rows[0].body_text
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, WorkspaceListScreen)
+        assert manager.get(state.id).agent_session_id == hand_started
+        bar = app.screen.query_one(StatusBar)
+        assert bar.flash_message == f"session remapped to {hand_started[:8]}"
+        assert bar.flash_level == "success"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_x_modal_escape_cancels_without_remapping(
+    tmp_repo: Path,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    manager = _manager(tmp_repo, tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="broken"))
+    original_session_id = state.agent_session_id
+    _write_transcript(cfg_home, Path(state.worktree_path), "cafef00d-0000-0000-0000-000000000000")
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        assert isinstance(app.screen, RemapSessionScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, WorkspaceListScreen)
+        # Cancel must never write — the pin stays whatever it was pre-modal.
+        assert manager.get(state.id).agent_session_id == original_session_id
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_x_with_no_sessions_flashes_and_never_opens_picker(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A workspace with nothing in its directories (the common case — no
+    agent has ever run there) flashes rather than opening an empty modal."""
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="fresh"))
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        assert isinstance(app.screen, WorkspaceListScreen)
+        bar = app.screen.query_one(StatusBar)
+        assert bar.flash_message == "no sessions to remap"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_x_with_no_selection_flashes(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Empty list → 'x' is a no-op (modal does not open)."""
+    del fake_tmux
+    app = GroveApp(_manager(tmp_repo, tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        assert not isinstance(app.screen, RemapSessionScreen)
+        await pilot.press("q")
+        await pilot.pause()
+
+
+def test_key_available_remap_shares_edit_gate() -> None:
+    """Pure-function gate: 'x' (remap) is available everywhere 'e' (edit) is —
+    both ride the engine's `ensure_can_update` rule — and dimmed for ORPHANED."""
+    from grove.tui.screens.list import _key_available  # noqa: PLC0415
+
+    for status in (
+        WorkspaceStatus.ACTIVE,
+        WorkspaceStatus.IDLE,
+        WorkspaceStatus.RUNNING,
+        WorkspaceStatus.PAUSED,
+        WorkspaceStatus.OFFLINE,
+        WorkspaceStatus.ERROR,
+    ):
+        assert _key_available("x", status) is True
+    assert _key_available("x", WorkspaceStatus.ORPHANED) is False

@@ -20,6 +20,7 @@ import {
   useBranches,
   useCreateWorkspace,
 } from "@/lib/grove/hooks";
+import { computeFacets } from "@/lib/grove/dashboard-filter";
 import { useUiStore } from "@/lib/grove/ui-store";
 import { GroveProtocolError } from "@/lib/grove/client";
 import type { CreateWorkspaceRequest } from "@/lib/grove/types";
@@ -27,7 +28,6 @@ import { cn } from "@/lib/utils";
 import { AgentPicker } from "./agent-picker";
 import { ModelPicker } from "./model-picker";
 import { branchPlanReady, buildBranchPlan, ContextChips, type RepoOption } from "./context-chips";
-import { kindSupportsModel } from "./models";
 
 // The markdown preview rides streamdown — the chat panel's whole bundle cost.
 // Lazy-load it so the home surface pays NOTHING until the fullscreen preview is
@@ -106,9 +106,15 @@ export function Composer() {
   // Repos from the authoritative project list (the `/activity` snapshot), NOT the
   // workspace list — an empty / config-declared project (#95) has zero workspaces
   // but is still a valid create target, and each group carries name + root.
+  // Routed through `computeFacets` (the same seam the rail uses) so nested-project
+  // groups that share a `repo_root` (#101) collapse to one picker row instead of
+  // one per `cwd` (#151) — a create target is a repo, never a sub-cwd.
   const { snapshot } = useActivityStream();
   const repos: RepoOption[] = useMemo(
-    () => (snapshot?.projects ?? []).map((p) => ({ root: p.repo_root, name: p.repo_name })),
+    () =>
+      snapshot
+        ? computeFacets(snapshot).projects.map((p) => ({ root: p.repo_root, name: p.repo_name }))
+        : [],
     [snapshot],
   );
 
@@ -139,7 +145,11 @@ export function Composer() {
   }, [agents, composer.agentName, patch]);
 
   const selectedAgent = agents.find((a) => a.name === composer.agentName) ?? null;
-  const showModel = kindSupportsModel(selectedAgent?.kind);
+  // Every kind except a bare `generic` shell takes a model (claude/codex `--model`,
+  // mewbo server-side), so it gets the pill; the offered ids come from the
+  // daemon-resolved `selectedAgent.models` (may be empty — the custom-id row is
+  // the escape hatch). `generic` has no model concept, so no pill.
+  const showModel = selectedAgent !== null && selectedAgent.kind !== "generic";
 
   const create = useCreateWorkspace();
 
@@ -167,6 +177,7 @@ export function Composer() {
       model: showModel ? composer.model : null,
       branch_plan: buildBranchPlan(composer),
       skip_init: composer.skipInit,
+      resume_session_id: composer.resumeSessionId.trim() || null,
       repo_root: composer.repoRoot,
     };
     create.mutate(req, {
@@ -206,7 +217,8 @@ export function Composer() {
     <section aria-label="Create a workspace" className="mx-auto w-full max-w-3xl">
       <Card
         className={cn(
-          "rounded-xl bg-card p-3 transition-[border-color,transform] duration-200",
+          // 24px composer radius (design §4.8) — the calm centered hero card.
+          "rounded-3xl bg-card p-3 transition-[border-color,transform] duration-200",
           expanded ? "border-border" : "border-border/70",
         )}
       >
@@ -236,7 +248,7 @@ export function Composer() {
           {showModel && selectedAgent ? (
             <ModelPicker
               value={composer.model}
-              kind={selectedAgent.kind}
+              models={selectedAgent.models}
               onChange={(model) => patch({ model })}
             />
           ) : null}
@@ -263,8 +275,12 @@ export function Composer() {
               disabled={!canSubmit || create.isPending}
               onClick={submit}
               className={cn(
-                "inline-flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground",
-                "transition-colors duration-200 hover:bg-primary/90 active:bg-primary/95",
+                "inline-flex size-8 items-center justify-center rounded-md bg-primary-strong text-primary-foreground",
+                // The one moment terracotta gets physical feedback under a click:
+                // a quick scale-on-press (brand.md §4.4). transform is listed
+                // explicitly — never transition-all — and dropped under reduced motion.
+                "transition-[transform,background-color] duration-150 hover:bg-primary-strong/90",
+                "active:scale-[0.97] active:bg-primary-strong/95 motion-reduce:active:scale-100",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                 "disabled:pointer-events-none disabled:opacity-50",
               )}

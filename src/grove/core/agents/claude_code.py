@@ -210,27 +210,30 @@ class _ClaudeHome:
         with no Grove-minted id adopts the *live* session by taking the first
         result, so an arbitrary alphabetical order would surface a dead one.
         """
-        return [sid for sid, _, _ in cls.discover_paths(cwd, exclude_id=exclude_id)]
+        return [sid for sid, *_ in cls.discover_paths(cwd, exclude_id=exclude_id)]
 
     @classmethod
     def discover_paths(
         cls, cwd: Path, *, exclude_id: str | None = None
-    ) -> list[tuple[str, Path, float]]:
-        """``(session_id, transcript_path, mtime)`` for every session recorded
-        in ``cwd``, newest-first by mtime — the one scan behind both
-        ``discover`` (ids for the dashboard) and ``list_sessions`` (summaries
-        for the explorer).
+    ) -> list[tuple[str, Path, float, datetime | None]]:
+        """``(session_id, transcript_path, mtime, birth)`` for every session
+        recorded in ``cwd``, newest-first by mtime — the one scan behind
+        ``discover`` (ids for the dashboard), ``discover_births`` (the cheap
+        adoption pre-filter, #F5), and ``list_sessions`` (summaries for the
+        explorer).
 
         Scans the forward-encoded candidate folder under each config dir — a
         single directory listing, not a recursive glob — and confirms each by
         the in-line ``cwd`` rather than trusting the lossy folder name.
         Sub-agent files (in a ``<uuid>/subagents/`` subdir) are skipped; only
-        top-level ``<uuid>.jsonl`` session files count.
+        top-level ``<uuid>.jsonl`` session files count. ``birth`` rides out of
+        the SAME bounded head read that confirms the cwd — no extra I/O — so the
+        adoption gate can reject a historical transcript without a full parse.
         """
         encoded = cls.encode_cwd(cwd)
         target = str(cwd)
-        # id → (path, newest mtime) — one id can appear under multiple config dirs.
-        found: dict[str, tuple[Path, float]] = {}
+        # id → (path, newest mtime, birth) — one id can appear under multiple dirs.
+        found: dict[str, tuple[Path, float, datetime | None]] = {}
         for projects in cls.projects_dirs():
             folder = projects / encoded
             if not folder.is_dir():
@@ -239,7 +242,8 @@ class _ClaudeHome:
                 session_id = path.stem
                 if session_id == exclude_id or not path.is_file():
                     continue
-                if cls._first_cwd(path) != target:
+                recorded_cwd, birth = cls._head_cwd_and_birth(path)
+                if recorded_cwd != target:
                     continue
                 try:
                     mtime = path.stat().st_mtime
@@ -247,25 +251,43 @@ class _ClaudeHome:
                     mtime = 0.0
                 prior = found.get(session_id)
                 if prior is None or mtime > prior[1]:
-                    found[session_id] = (path, mtime)
+                    found[session_id] = (path, mtime, birth)
         # Newest first (the running session); ties broken by id for a stable order.
         return [
-            (sid, path, mtime)
-            for sid, (path, mtime) in sorted(found.items(), key=lambda kv: (-kv[1][1], kv[0]))
+            (sid, path, mtime, birth)
+            for sid, (path, mtime, birth) in sorted(
+                found.items(), key=lambda kv: (-kv[1][1], kv[0])
+            )
         ]
 
-    @staticmethod
-    def _first_cwd(path: Path, *, max_lines: int = 200) -> str | None:
+    @classmethod
+    def _first_cwd(cls, path: Path, *, max_lines: int = 200) -> str | None:
         """The ``cwd`` this session recorded, from the first line that carries one.
+
+        Kept for callers that want only the cwd (``locate`` tie-breaking); a
+        projection of :meth:`_head_cwd_and_birth`, whose docstring carries the
+        preamble-scan rationale."""
+        return cls._head_cwd_and_birth(path, max_lines=max_lines)[0]
+
+    @staticmethod
+    def _head_cwd_and_birth(
+        path: Path, *, max_lines: int = 200
+    ) -> tuple[str | None, datetime | None]:
+        """The ``(cwd, birth)`` this session recorded, from ONE bounded head read.
 
         Modern transcripts open with cwd-less preamble lines (``mode``,
         ``file-history-snapshot``, ``summary``); the ``cwd`` first appears a few
-        lines in (the first ``attachment``/``user`` record). Returning line 0's
-        cwd — as this used to — yields ``None`` for every real transcript, which
-        silently breaks all cwd-based discovery and locate tie-breaking. Bounded
-        by ``max_lines`` so a pathological file costs no more than a head-read;
-        the cwd is always near the top in practice.
+        lines in (the first ``attachment``/``user`` record) and the earliest
+        timestamped record (records are time-sorted) is the session BIRTH.
+        Returning line 0's cwd — as this used to — yields ``None`` for every real
+        transcript, which silently breaks all cwd-based discovery and locate
+        tie-breaking. Both facts ride out of one head read (bounded by
+        ``max_lines`` so a pathological file costs no more than a head-read; both
+        are near the top in practice), so the cheap adoption pre-filter (#F5)
+        never pays a full parse.
         """
+        first_cwd: str | None = None
+        first_birth: datetime | None = None
         try:
             with path.open(encoding="utf-8") as fh:
                 for index, line in enumerate(fh):
@@ -278,13 +300,19 @@ class _ClaudeHome:
                         rec = json.loads(stripped)
                     except json.JSONDecodeError:
                         continue
-                    if isinstance(rec, dict):
+                    if not isinstance(rec, dict):
+                        continue
+                    if first_cwd is None:
                         cwd = rec.get("cwd")
                         if isinstance(cwd, str) and cwd:
-                            return cwd
+                            first_cwd = cwd
+                    if first_birth is None:
+                        first_birth = _parse_timestamp(rec.get("timestamp"))
+                    if first_cwd is not None and first_birth is not None:
+                        break
         except OSError:
-            return None
-        return None
+            return (None, None)
+        return (first_cwd, first_birth)
 
 
 @dataclass(slots=True, frozen=True)
@@ -906,14 +934,42 @@ class ClaudeCodeAdapter:
 
     kind = "claude_code"
     remote = False
+    resumable = True
 
-    def launch_decoration(self, session_id: str) -> list[str]:
-        """``--session-id <uuid>`` — what makes correlation deterministic (#13)."""
+    def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
+        """``--session-id <uuid>`` for a fresh session — what makes correlation
+        deterministic (#13) — or ``--resume <uuid>`` to CONTINUE an existing one
+        (#120). Plain ``--resume`` keeps the same session id/file (it does NOT
+        rotate the id — that needs ``--fork-session``), so pinning
+        ``agent_session_id`` to the resumed id stays correct by construction."""
+        if resume:
+            return ["--resume", session_id]
         return ["--session-id", session_id]
 
     def model_decoration(self, model: str) -> list[str]:
         """``--model <id>`` — Claude Code's per-launch model selector (#96)."""
         return ["--model", model]
+
+    # Claude Code exposes NO CLI model enumeration — model discovery is the
+    # interactive ``/model`` picker only (there is no ``claude --list-models``).
+    # Its tier ALIASES, however, are the stable public ``--model`` vocabulary:
+    # each re-points to the current model for that tier every release (a new
+    # Opus keeps ``opus``), so offering them never goes stale the way a dated
+    # id would — exactly the "don't hard-code model ids" goal. A full id or a
+    # gateway model still works (forwarded verbatim); a deployment that wants a
+    # different set pins ``AgentSpec.models`` in config, which the resolver
+    # prefers over this default.
+    _MODEL_ALIASES: tuple[str, ...] = ("sonnet", "opus", "haiku")
+
+    def available_models(self, command: str) -> tuple[str, ...]:
+        """Claude Code's stable tier aliases (``sonnet``/``opus``/``haiku``).
+
+        Not read from the CLI (none enumerates models); the aliases are the
+        provider's durable ``--model`` vocabulary, so this is a mechanism
+        default, not a hard-coded dated id. Overridden by ``AgentSpec.models``.
+        """
+        del command
+        return self._MODEL_ALIASES
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         try:
@@ -938,6 +994,24 @@ class ClaudeCodeAdapter:
             logger.debug("discover_sessions({}) failed: {}", cwd, exc)
             return []
 
+    def discover_births(
+        self, cwd: Path, *, exclude_id: str | None = None
+    ) -> list[tuple[str, datetime | None, float]]:
+        """``(session_id, birth, mtime)`` for discovered sessions — the cheap
+        adoption pre-filter (#F5). Birth rides out of the same bounded head read
+        ``discover_sessions`` already does; no full transcript parse. Best-effort:
+        ``[]`` on any error."""
+        try:
+            return [
+                (sid, birth, mtime)
+                for sid, _path, mtime, birth in _ClaudeHome.discover_paths(
+                    cwd, exclude_id=exclude_id
+                )
+            ]
+        except OSError as exc:
+            logger.debug("discover_births({}) failed: {}", cwd, exc)
+            return []
+
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
         """Normalized summaries for every session recorded in ``cwd``, newest-first.
 
@@ -952,7 +1026,7 @@ class ClaudeCodeAdapter:
         except OSError as exc:
             logger.debug("list_sessions({}) failed: {}", cwd, exc)
             return []
-        return [self._summarize(sid, path, mtime) for sid, path, mtime in scanned]
+        return [self._summarize(sid, path, mtime) for sid, path, mtime, _ in scanned]
 
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None

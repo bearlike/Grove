@@ -1,44 +1,42 @@
 "use client";
 
-import { useMemo } from "react";
-import { Bell, FolderGit2, Layers, Search, X } from "lucide-react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Activity, ArrowUpCircle, Github, Search, Server, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
-import { AgentStateMark } from "@/components/shared/state-mark";
+import { SessionRail } from "@/components/layout/session-rail";
+import { SidebarFilter } from "@/components/layout/sidebar-filter";
 import { useActivityStream, useDaemonWhoami } from "@/lib/grove/hooks";
 import { computeFacets, type DashboardFacets } from "@/lib/grove/dashboard-filter";
-import { agentStateLabel } from "@/lib/grove/agent-state-tokens";
 import { useUiStore } from "@/lib/grove/ui-store";
 import { cn } from "@/lib/utils";
-import type { AgentActivityState } from "@/lib/grove/types";
+
+const REPO_URL = "https://github.com/bearlike/Grove";
 
 /**
- * The persistent left rail — a Devin-style navigation/scope surface (issue #96
- * deliverable B). It carries ONLY *view intent*: a search box, a repo SCOPE
- * switcher, agent-state filter chips, and the daemon-identity footer. It no
- * longer duplicates the workspace card grid; navigation to a workspace detail
- * page happens by clicking a card, not a rail row. Every control writes the one
- * Zustand UI store (`query`, `scopeRepo`, `hiddenStates`, `attentionOnly`); the
- * grid reads the same store and re-presents itself.
+ * The persistent left rail (ADE reframe, #140). Its scrollable BODY is now the
+ * per-project session tree (`SessionRail`) — Grove's fleet moved out of the
+ * center card grid into a "thread list" that is the fastest surface in the app.
+ * The old scope/state/attention filter rail is gone (design §4.9 drops the
+ * standalone filter rail); what survives folds in here: the search box (top,
+ * filters the tree AND the Overview grid via the one `query` store field) and
+ * the daemon/identity footer (bottom). The frozen shell contract is honored —
+ * search stays at the top, `RailFooter` at the bottom, and only the body between
+ * them changed.
  *
- * Live counts (per-repo + per-state + attention) come from `computeFacets` over
- * the authoritative `useActivityStream().snapshot.projects` — the same snapshot
- * the engine emits a group-per-`known_roots()` for, so empty / config-declared
- * repos (#95) still get a scope row and you can scope into a repo with zero
- * workspaces.
+ * Collapse is fully outside this component now (#152, modern-chat behavior): the
+ * shell layout animates the rail wrapper to `w-0` so the rail hides entirely —
+ * there is no collapsed icon-strip variant. This component always renders its
+ * full form; the header toggle + `[` shortcut own show/hide.
  *
- * Color discipline: terracotta `--primary` never appears here. Status hue shows
- * only as small `AgentStateMark` glyphs; the active scope/chip is carried by a
- * neutral `bg-accent` fill, structure not saturation.
- *
- * Positioning is the consumer's job (mechanism, not policy): the (shell) layout
- * passes the sticky desktop-rail classes via `className`, and renders a second
- * instance inside a mobile `Sheet` with `onClose`/`onNavigate` to dismiss the
- * drawer. Test seams: `workspace-sidebar`, `sidebar-search`, `sidebar-repo-all`,
- * `sidebar-repo` (+ `data-repo`), `sidebar-footer`.
+ * Data comes from the authoritative `useActivityStream().snapshot`
+ * (`computeFacets` → the project list + live counts) plus the per-project
+ * `GET /sessions?repo=` reads the `SessionRail` owns. Positioning is the
+ * consumer's job (the shell passes sticky rail classes; a second instance rides
+ * a mobile `Sheet`). Test seams: `workspace-sidebar`, `sidebar-search`,
+ * `sidebar-footer`, and the `session-rail*` seams the body owns.
  */
 export function WorkspaceSidebar({
   className,
@@ -48,7 +46,7 @@ export function WorkspaceSidebar({
   className?: string;
   /** Mobile (Sheet) only — renders the close control. Desktop rail omits it. */
   onClose?: () => void;
-  /** Called after a scope/filter click so the mobile drawer can dismiss itself. */
+  /** Called after a scope/filter/row click so the mobile drawer can dismiss itself. */
   onNavigate?: () => void;
 }) {
   const { snapshot } = useActivityStream();
@@ -56,6 +54,13 @@ export function WorkspaceSidebar({
     () => (snapshot ? computeFacets(snapshot) : null),
     [snapshot],
   );
+  const query = useUiStore((s) => s.query);
+  const hiddenStates = useUiStore((s) => s.hiddenStates);
+  const hiddenProjects = useUiStore((s) => s.hiddenProjects);
+  const attentionOnly = useUiStore((s) => s.attentionOnly);
+  const showUnmapped = useUiStore((s) => s.showUnmapped);
+  const setShowUnmapped = useUiStore((s) => s.setShowUnmapped);
+  const clearFilters = useUiStore((s) => s.clearFilters);
 
   return (
     <aside
@@ -64,6 +69,7 @@ export function WorkspaceSidebar({
     >
       <div className="flex items-center gap-2 px-3 pt-3">
         <SidebarSearch />
+        <SidebarFilter projects={facets?.projects ?? []} />
         {onClose && (
           <Button
             variant="ghost"
@@ -80,21 +86,35 @@ export function WorkspaceSidebar({
 
       <Separator className="mt-3 bg-sidebar-border" />
 
-      {/* `flex-1` claims the height between the search and footer; the ScrollArea
-          owns the overflow so a long repo list scrolls inside the rail. */}
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-5 px-2 py-3">
-          <ScopeList facets={facets} onNavigate={onNavigate} />
-          <StateFilters facets={facets} onNavigate={onNavigate} />
-        </div>
-      </ScrollArea>
+      {/* `flex-1` claims the height between the search and footer; native scroll
+          owns the overflow (the `ScrollArea` wrapper is retired app-wide — the
+          global `scrollbar-color` rule styles this, design §4.7). */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Suspense boundary for the rail's useSearchParams (`?s=`) so the
+            static prerender of `/` + `/activity` succeeds — see
+            app/login/page.tsx for the same pattern. */}
+        <Suspense fallback={null}>
+          <SessionRail
+            snapshot={snapshot}
+            facets={facets}
+            query={query}
+            hiddenStates={hiddenStates}
+            attentionOnly={attentionOnly}
+            hiddenProjects={hiddenProjects}
+            showUnmapped={showUnmapped}
+            onShowUnmapped={() => setShowUnmapped(true)}
+            onClearFilters={clearFilters}
+            onNavigate={onNavigate}
+          />
+        </Suspense>
+      </div>
 
-      <SidebarFooter />
+      <RailFooter facets={facets} />
     </aside>
   );
 }
 
-/** Free-text search → the store's `query` (the grid filters title/branch by it). */
+/** Free-text search → the store's `query` (filters the session tree AND grid). */
 function SidebarSearch(): React.ReactElement {
   const query = useUiStore((s) => s.query);
   const setQuery = useUiStore((s) => s.setQuery);
@@ -108,8 +128,8 @@ function SidebarSearch(): React.ReactElement {
         type="search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search workspaces"
-        aria-label="Search workspaces"
+        placeholder="Search sessions"
+        aria-label="Search sessions"
         data-testid="sidebar-search"
         className="h-8 border-sidebar-border bg-card pl-8 text-[13px] placeholder:text-muted-foreground/70"
       />
@@ -117,286 +137,137 @@ function SidebarSearch(): React.ReactElement {
   );
 }
 
-// ─── Repo scope switcher ─────────────────────────────────────────────────────
-
-const SECTION_LABEL =
-  "px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground";
-
-function ScopeList({
-  facets,
-  onNavigate,
-}: {
-  facets: DashboardFacets | null;
-  onNavigate?: () => void;
-}): React.ReactElement {
-  const scopeRepo = useUiStore((s) => s.scopeRepo);
-  const setScopeRepo = useUiStore((s) => s.setScopeRepo);
-
-  const select = (repo: string | null): void => {
-    setScopeRepo(repo);
-    onNavigate?.();
-  };
-
-  return (
-    <section aria-label="Repository scope">
-      <h2 className={SECTION_LABEL}>Repositories</h2>
-      {facets === null ? (
-        <ScopeSkeleton />
-      ) : (
-        <ul className="flex flex-col gap-0.5">
-          <ScopeRow
-            label="All workspaces"
-            icon={<Layers aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />}
-            count={facets.total}
-            active={scopeRepo === null}
-            onSelect={() => select(null)}
-            testid="sidebar-repo-all"
-          />
-          {facets.projects.map((p) => (
-            <ScopeRow
-              key={p.repo_root}
-              label={p.repo_name}
-              icon={
-                <FolderGit2 aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-              }
-              count={p.count}
-              active={scopeRepo === p.repo_root}
-              onSelect={() => select(p.repo_root)}
-              testid="sidebar-repo"
-              dataRepo={p.repo_root}
-            />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
+// ─── Footer: daemon system status + user identity ────────────────────────────
+// The deleted status bar's system context (daemon health + uptime, version +
+// update nudge, workspace count, GitHub link — ADE reframe, #138) lives here,
+// above the user-identity row. Testids preserved verbatim (`daemon-status`,
+// `daemon-uptime`, `daemon-version`, `update-available`, `sidebar-footer`).
 
 /**
- * One scope row. Active = a neutral `bg-accent` fill (structure, not status hue);
- * inactive is transparent and brightens on hover. The whole row is a focusable
- * button; the count is `tabular-nums` so the right edge never jitters.
+ * Compact uptime renderer: at most two units, largest non-zero first.
+ *
+ * Examples: 5 -> "5s", 65 -> "1m 5s", 3700 -> "1h 1m", 90061 -> "1d 1h",
+ * 0 / negative -> "0s". Two-unit cap keeps the footer strip tight.
  */
-function ScopeRow({
-  label,
-  icon,
-  count,
-  active,
-  onSelect,
-  testid,
-  dataRepo,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  count: number;
-  active: boolean;
-  onSelect: () => void;
-  testid: string;
-  dataRepo?: string;
-}): React.ReactElement {
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={onSelect}
-        data-testid={testid}
-        data-repo={dataRepo}
-        aria-pressed={active}
-        title={label}
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-          active
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-        )}
-      >
-        {icon}
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        <span className="shrink-0 tabular-nums text-xs text-muted-foreground/70">{count}</span>
-      </button>
-    </li>
-  );
+export function formatUptime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+  const s = Math.floor(seconds);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  if (m > 0) return sec > 0 ? `${m}m ${sec}s` : `${m}m`;
+  return `${sec}s`;
 }
 
-function ScopeSkeleton(): React.ReactElement {
-  return (
-    <div className="flex flex-col gap-1 px-2" data-testid="sidebar-scope-skeleton">
-      <Skeleton className="h-7 w-full" />
-      <Skeleton className="h-7 w-5/6" />
-      <Skeleton className="h-7 w-2/3" />
-    </div>
-  );
+/** Daemon reachability + live uptime, shared by both footers. */
+function useDaemonUptime() {
+  const { data: whoami, isError } = useDaemonWhoami();
+  const isReachable = !!whoami && !isError;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const liveUptime = whoami
+    ? Math.max(0, Math.floor((now - new Date(whoami.started_at).getTime()) / 1000))
+    : 0;
+  return { whoami, isReachable, liveUptime };
 }
 
-// ─── Agent-state filter chips + attention toggle ─────────────────────────────
+function RailFooter({ facets }: { facets: DashboardFacets | null }): React.ReactElement {
+  const { whoami, isReachable, liveUptime } = useDaemonUptime();
 
-function StateFilters({
-  facets,
-  onNavigate,
-}: {
-  facets: DashboardFacets | null;
-  onNavigate?: () => void;
-}): React.ReactElement | null {
-  const hiddenStates = useUiStore((s) => s.hiddenStates);
-  const toggleState = useUiStore((s) => s.toggleState);
-  const attentionOnly = useUiStore((s) => s.attentionOnly);
-  const setAttentionOnly = useUiStore((s) => s.setAttentionOnly);
-
-  // Nothing to filter until the snapshot resolves with at least one state.
-  if (facets === null || facets.states.length === 0) return null;
-
-  return (
-    <section aria-label="Agent-state filters">
-      <h2 className={SECTION_LABEL}>Agent state</h2>
-      <div className="flex flex-wrap gap-1.5 px-2">
-        <AttentionChip
-          count={facets.attention}
-          active={attentionOnly}
-          onToggle={() => {
-            setAttentionOnly(!attentionOnly);
-            onNavigate?.();
-          }}
-        />
-        {facets.states.map(({ state, count }) => (
-          <StateChip
-            key={state}
-            state={state}
-            count={count}
-            // The store records states to HIDE; a chip is "on" (showing) when the
-            // state is NOT in `hiddenStates`.
-            active={!hiddenStates.includes(state)}
-            onToggle={() => {
-              toggleState(state);
-              onNavigate?.();
-            }}
-          />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/**
- * Shared chip shell for the state + attention toggles. A pressed (active) chip
- * gets the neutral `bg-accent` fill; an inactive one is a quiet outline that
- * brightens on hover. Built on the `xs` Button so it inherits the focus-ring and
- * dense geometry — never a hand-rolled pill.
- */
-function FilterChip({
-  active,
-  onToggle,
-  label,
-  testid,
-  dataState,
-  children,
-}: {
-  active: boolean;
-  onToggle: () => void;
-  label: string;
-  testid: string;
-  dataState?: string;
-  children: React.ReactNode;
-}): React.ReactElement {
-  return (
-    <Button
-      type="button"
-      size="xs"
-      variant={active ? "secondary" : "ghost"}
-      onClick={onToggle}
-      aria-pressed={active}
-      aria-label={label}
-      title={label}
-      data-testid={testid}
-      data-state-key={dataState}
-      className={cn(
-        "rounded-full border",
-        active
-          ? "border-transparent bg-accent text-foreground"
-          : "border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-      )}
-    >
-      {children}
-    </Button>
-  );
-}
-
-function StateChip({
-  state,
-  count,
-  active,
-  onToggle,
-}: {
-  state: AgentActivityState;
-  count: number;
-  active: boolean;
-  onToggle: () => void;
-}): React.ReactElement {
-  const label = `${agentStateLabel(state)} (${count})`;
-  return (
-    <FilterChip
-      active={active}
-      onToggle={onToggle}
-      label={label}
-      testid="sidebar-state-chip"
-      dataState={state}
-    >
-      <AgentStateMark state={state} className="text-xs" />
-      <span className="capitalize">{agentStateLabel(state)}</span>
-      <span className="tabular-nums text-muted-foreground/70">{count}</span>
-    </FilterChip>
-  );
-}
-
-function AttentionChip({
-  count,
-  active,
-  onToggle,
-}: {
-  count: number;
-  active: boolean;
-  onToggle: () => void;
-}): React.ReactElement {
-  return (
-    <FilterChip
-      active={active}
-      onToggle={onToggle}
-      label={`Attention only (${count})`}
-      testid="sidebar-attention-toggle"
-    >
-      <Bell
-        aria-hidden
-        className="size-3.5"
-        style={{ color: "var(--ref-info)" }}
-      />
-      <span>Attention</span>
-      <span className="tabular-nums text-muted-foreground/70">{count}</span>
-    </FilterChip>
-  );
-}
-
-// ─── Footer: daemon identity (version lives in the status bar, not here) ──────
-
-function SidebarFooter(): React.ReactElement | null {
-  const { data: whoami } = useDaemonWhoami();
-  if (!whoami) return null;
   return (
     <>
       <Separator className="bg-sidebar-border" />
-      <div
-        data-testid="sidebar-footer"
-        className="flex items-center gap-2 px-3 py-2.5 text-xs text-muted-foreground"
-      >
-        <span
-          aria-hidden
-          className="grid size-6 shrink-0 place-items-center rounded-md bg-accent text-[11px] font-semibold uppercase leading-none text-foreground"
-        >
-          {whoami.user.slice(0, 1)}
+      <div className="flex flex-col gap-1.5 px-3 py-2.5 text-[11px] text-muted-foreground">
+        {/* Daemon health + uptime. */}
+        <span className="inline-flex items-center gap-1.5" data-testid="daemon-status">
+          <Server className="size-3 shrink-0" aria-hidden />
+          <span
+            aria-hidden
+            className="inline-block size-1.5 rounded-full"
+            style={{
+              backgroundColor: isReachable ? "var(--status-active)" : "var(--status-error)",
+            }}
+          />
+          <span className="font-medium text-foreground">
+            {isReachable ? "online" : "unreachable"}
+          </span>
+          {whoami && (
+            <>
+              <span className="text-muted-foreground/60">·</span>
+              <span className="tabular-nums" data-testid="daemon-uptime">
+                up {formatUptime(liveUptime)}
+              </span>
+            </>
+          )}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
-          {whoami.user}@{whoami.host}
+
+        {/* Version + update nudge + workspace count. */}
+        <span className="inline-flex items-center gap-2">
+          {whoami && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="font-mono text-[10px]" data-testid="daemon-version">
+                v{whoami.version}
+              </span>
+              {whoami.update_available && (
+                <Link
+                  href={`${REPO_URL}/releases/latest`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid="update-available"
+                  aria-label={`Grove ${whoami.latest_version ? `v${whoami.latest_version} ` : ""}is available — view the release`}
+                  className="inline-flex items-center gap-1 rounded-sm font-medium hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  style={{ color: "var(--status-orphaned)" }}
+                >
+                  <ArrowUpCircle className="size-3" aria-hidden />
+                  <span>{whoami.latest_version ? `v${whoami.latest_version}` : "update"}</span>
+                </Link>
+              )}
+            </span>
+          )}
+          {facets && (
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Activity className="size-3 shrink-0" aria-hidden />
+              {facets.total} ws
+            </span>
+          )}
         </span>
       </div>
+
+      {/* User identity row + external GitHub link. */}
+      {whoami && (
+        <>
+          <Separator className="bg-sidebar-border" />
+          <div
+            data-testid="sidebar-footer"
+            className="flex items-center gap-2 px-3 py-2.5 text-xs text-muted-foreground"
+          >
+            <span
+              aria-hidden
+              className="grid size-6 shrink-0 place-items-center rounded-md bg-accent text-[11px] font-semibold uppercase leading-none text-foreground"
+            >
+              {whoami.user.slice(0, 1)}
+            </span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
+              {whoami.user}@{whoami.host}
+            </span>
+            <Link
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Grove on GitHub"
+              className="inline-flex shrink-0 items-center rounded-sm p-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              <Github className="size-3.5" aria-hidden />
+            </Link>
+          </div>
+        </>
+      )}
     </>
   );
 }

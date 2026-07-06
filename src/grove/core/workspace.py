@@ -202,35 +202,70 @@ class WorkspaceState:
         base = Path(self.worktree_path)
         return base / self.project_subpath if self.project_subpath else base
 
-    def adopts_session(self, born_at: datetime | None) -> bool:
-        """Whether a *discovered* (non-minted) session born at ``born_at`` belongs here.
+    @property
+    def scan_cwds(self) -> tuple[Path, ...]:
+        """The cwds whose transcripts/sidecars may belong to this workspace (#F7).
 
-        A workspace's cwd can hold agent transcripts written before the
-        workspace ever existed — most commonly ROOT placement, where the cwd
-        is the shared repo root and every prior root-level session lives in
-        the same directory. Treating "newest transcript in the cwd" as a
-        proxy for "this workspace's session" (the pre-fix bug) then presents a
-        stale, unrelated transcript as if a brand-new workspace already had a
-        conversation. The correct test is birth, not recency: a session
-        belongs to this workspace only if its first record postdates (or is
-        concurrent with) this workspace's own ``created_at`` — mtime keeps
-        advancing on an old file that merely gets touched or re-read, but a
-        transcript's birth is immutable. Used by both discovery-adoption sites
-        (`ActivityService.sessions_for`, `SessionExplorer.for_workspace`); a
-        session Grove itself minted and launched never calls this — it is
-        unconditionally this workspace's, born or not.
-
-        ``born_at is None`` (birth unknown — e.g. an unreadable or empty
-        transcript) never adopts: an unproven birth can't be shown to postdate
-        creation. A tz-naive ``born_at`` is coerced to UTC defensively so a
-        malformed timestamp degrades the comparison rather than raising on the
-        poll path (the peek/best-effort discipline).
+        The union of ``agent_cwd`` (``worktree/subpath`` — where the agent is
+        configured to run, and where a nested project's transcripts record their
+        cwd) and the worktree ROOT (``worktree_path`` — where a session
+        hand-started at the repo/worktree root records *its* cwd). Re-keying
+        discovery from the worktree root to ``agent_cwd`` alone (#118) silently
+        dropped that root-recorded session for a nested project; scanning both
+        recovers it. Deduped when the subpath is empty (the flat-workspace common
+        case), so the second entry only exists for a genuinely nested project.
+        ``agent_cwd`` first — the primary project cwd; callers that need
+        newest-first across the union re-sort by mtime.
         """
-        if born_at is None:
+        base = Path(self.worktree_path)
+        agent = self.agent_cwd
+        return (agent,) if agent == base else (agent, base)
+
+    def adopts_session(
+        self, born_at: datetime | None, *, live_here_at: datetime | None = None
+    ) -> bool:
+        """Whether a *discovered* (non-minted) session belongs to this workspace.
+
+        Two independent kinds of evidence, either sufficient — each measured
+        against this workspace's own ``created_at`` (a session is ours only if
+        it was alive here at/after we came into being):
+
+        - ``born_at`` — the session's transcript BIRTH (first-record timestamp).
+          Immutable, so a stale file merely being touched or re-read can't fake
+          it. A workspace's cwd can hold transcripts written before it existed —
+          most commonly ROOT placement, whose cwd is the shared repo root — and
+          treating "newest transcript in the cwd" as "our session" (the pre-fix
+          bug) presented a stale, unrelated conversation as a brand-new
+          workspace's own. Birth, not recency, is the correct test.
+        - ``live_here_at`` — the timestamp of a hook sidecar proving the session
+          was live *in this workspace* (the caller attributes it by cwd/pane at
+          the boundary; this predicate stays pure and never reads a sidecar).
+          A session the user RESUMED inside this workspace's pane is born
+          *earlier* than the workspace, so birth can never adopt it — but its
+          post-create sidecar ts does. Birth alone silently dropped every
+          resumed session (the live 2026-07-05 incident); the ``>= created_at``
+          guard still rejects a previous tenant of a reused cwd, whose sidecar
+          predates this workspace.
+
+        Used by both discovery-adoption sites (`ActivityService.sessions_for`,
+        `SessionExplorer.for_workspace`); a session Grove itself minted and
+        launched never calls this — it is unconditionally ours, born or not.
+
+        Both timestamps are optional (unknown birth, no sidecar) and never adopt
+        when absent — unproven evidence can't be shown to postdate creation. A
+        tz-naive value is coerced to UTC defensively so a malformed timestamp
+        degrades the comparison rather than raising on the poll path (the
+        peek/best-effort discipline).
+        """
+        return self._is_after_create(born_at) or self._is_after_create(live_here_at)
+
+    def _is_after_create(self, ts: datetime | None) -> bool:
+        """``ts`` is present and at/after this workspace's ``created_at`` (UTC-coerced)."""
+        if ts is None:
             return False
-        if born_at.tzinfo is None:
-            born_at = born_at.replace(tzinfo=UTC)
-        return born_at >= self.created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return ts >= self.created_at
 
 
 @dataclass(slots=True, frozen=True)

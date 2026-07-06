@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -334,6 +334,32 @@ def test_discover_orders_most_recent_first(adapter: CodexAdapter, codex_home: Pa
         )
         os.utime(path, (mtime, mtime))
     assert adapter.discover_sessions(cwd) == [newer, older]
+
+
+def test_discover_births_reads_birth_from_meta_head(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """#F5: ``discover_births`` pairs each rollout with its BIRTH (first head
+    record timestamp) from the same bounded ``session_meta`` head read — no full
+    parse — so the adoption gate rejects history cheaply. Newest-first by mtime."""
+    cwd = Path("/home/dev/work/births")
+    older = "0aaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"
+    newer = "0fffffff-ffff-7fff-8fff-ffffffffffff"
+    births = {older: "2026-04-28T20:00:00.000Z", newer: "2026-04-29T09:15:00.000Z"}
+    for sid, mtime in ((older, 1000), (newer, 2000)):
+        path = _install_text(
+            codex_home,
+            sid,
+            '{"timestamp":"' + births[sid] + '","type":"session_meta",'
+            '"payload":{"id":"' + sid + '","cwd":"' + str(cwd) + '","model_provider":"openai"}}\n',
+        )
+        os.utime(path, (mtime, mtime))
+
+    result = adapter.discover_births(cwd)
+    assert [sid for sid, _birth, _mtime in result] == [newer, older]
+    by_id = {sid: birth for sid, birth, _mtime in result}
+    assert by_id[newer] == datetime(2026, 4, 29, 9, 15, tzinfo=UTC)
+    assert by_id[older] == datetime(2026, 4, 28, 20, 0, tzinfo=UTC)
 
 
 # ─── list_sessions (summaries for the explorer) ─────────────────────────────

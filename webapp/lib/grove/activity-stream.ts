@@ -71,6 +71,37 @@ function isStaleDelta(
   return Number.isFinite(have) && Number.isFinite(got) && got < have;
 }
 
+/**
+ * A cheap fingerprint of one session's transcript-progress signals, read
+ * straight off the SSE-fed snapshot the session page already holds — no
+ * second EventSource, no fetch, just a string the page diffs to know when to
+ * invalidate the `["turns", …]` query (#166).
+ *
+ * Deliberately narrower than the session-rail's fingerprint (`state` alone,
+ * `SessionRail`): a transcript can grow — a new tool call, a new assistant
+ * reply — WITHOUT the coarse `state` changing (an agent can stay "working"
+ * through several tool calls in a row), so `assistant_replies`/`tool_calls`/
+ * `last_event_at` are the fields that actually correlate with turn progress.
+ *
+ * Returns `""` (a stable, comparable value) when the session isn't in the
+ * snapshot yet — pre-connect, or a workspace/session the daemon hasn't
+ * reported — so a caller's skip-first-run effect never fires on that gap.
+ */
+export function turnsProgressFingerprint(
+  snapshot: DashboardSnapshotView | null,
+  workspaceId: string,
+  sessionId: string | null,
+): string {
+  if (!snapshot || !sessionId) return "";
+  const ws = snapshot.projects
+    .flatMap((g) => g.workspaces)
+    .find((w) => w.state.id === workspaceId);
+  const session = ws?.sessions.find((s) => s.session.session_id === sessionId);
+  if (!session) return "";
+  const { state, assistant_replies, tool_calls, last_event_at } = session.activity;
+  return `${state}:${assistant_replies}:${tool_calls}:${last_event_at ?? ""}`;
+}
+
 function patchWorkspace(
   state: DashboardSnapshotView | null,
   changed: WorkspaceActivityView,

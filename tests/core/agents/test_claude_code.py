@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -623,6 +623,36 @@ def test_discover_skips_cwdless_preamble(adapter: ClaudeCodeAdapter, claude_home
     )
 
     assert adapter.discover_sessions(cwd) == [sid]
+
+
+def test_discover_births_reads_birth_from_head(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """#F5: ``discover_births`` pairs each id with its BIRTH (first timestamped
+    record) from the SAME bounded head read that confirms the cwd — no full parse
+    — so the adoption gate rejects history cheaply. Ordered newest-first by mtime
+    like ``discover_sessions``, and the cwdless/timestampless preamble is skipped."""
+    cwd = Path("/home/kk/work/births")
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    older = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    newer = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    births = {older: "2026-06-01T10:00:00.000Z", newer: "2026-06-02T11:30:00.000Z"}
+    for sid, mtime in ((older, 1000), (newer, 2000)):
+        path = folder / f"{sid}.jsonl"
+        path.write_text(
+            '{"type":"mode","mode":"default"}\n'  # preamble: no cwd, no timestamp
+            f'{{"type":"user","cwd":"{cwd}","timestamp":"{births[sid]}",'
+            '"message":{"role":"user","content":"hi"}}\n',
+            encoding="utf-8",
+        )
+        os.utime(path, (mtime, mtime))
+
+    result = adapter.discover_births(cwd)
+    assert [sid for sid, _birth, _mtime in result] == [newer, older]  # newest-first by mtime
+    by_id = {sid: birth for sid, birth, _mtime in result}
+    assert by_id[newer] == datetime(2026, 6, 2, 11, 30, tzinfo=UTC)
+    assert by_id[older] == datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
 
 
 # ─── encode_cwd (the documented folder rule) ────────────────────────────────

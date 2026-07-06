@@ -169,8 +169,13 @@ export function startFakeDaemon(port: number): Promise<Server> {
         return;
       }
       res.json([
-        { name: "claude", kind: "claude_code", description: "Anthropic Claude Code" },
-        { name: "shell", kind: "generic", description: "Plain shell" },
+        {
+          name: "claude",
+          kind: "claude_code",
+          description: "Anthropic Claude Code",
+          models: ["claude-sonnet-4-6", "opus", "haiku"],
+        },
+        { name: "shell", kind: "generic", description: "Plain shell", models: [] },
       ]);
     });
     app.get("/branches", (req, res) => {
@@ -309,6 +314,39 @@ export function startFakeDaemon(port: number): Promise<Server> {
         return;
       }
       res.status(204).end();
+    });
+
+    // ─── Session remap (#121) ───────────────────────────────────────────
+    // Mirrors the daemon contract: 404 workspace_not_found, 404
+    // agent_session_not_found (the ref matches zero or more-than-one
+    // session), else 200 with the WorkspaceStateView. `agent_session_id`
+    // isn't on that wire view (#121 gap — see webapp/CLAUDE.md), so there's
+    // nothing to mutate in the fixture; this only exercises the
+    // request/response shape + refusal envelope, read-only against
+    // FIXTURE_WORKSPACES.
+    app.post("/workspaces/:id/session", (req, res) => {
+      const ws = FIXTURE_WORKSPACES.find((w) => w.id === req.params.id);
+      if (!ws) {
+        res.status(404).json({ detail: { error: "workspace_not_found", message: "missing" } });
+        return;
+      }
+      const ref = String(req.body?.session_ref ?? "");
+      const candidates = buildSessions(ws);
+      // Exact id wins outright — some fixture ids are literal prefixes of a
+      // sibling's (`s-w-grove-1` / `s-w-grove-1-prior`), so a naive prefix
+      // filter alone would call an exact match "ambiguous".
+      const exact = candidates.find((s) => s.session_id === ref);
+      const matches = exact ? [exact] : candidates.filter((s) => s.session_id.startsWith(ref));
+      if (matches.length !== 1) {
+        res.status(404).json({
+          detail: {
+            error: "agent_session_not_found",
+            message: `no unique session for "${ref}"`,
+          },
+        });
+        return;
+      }
+      res.json(ws);
     });
 
     // ─── Live question answer-back (Gitea #111) ─────────────────────────
@@ -620,6 +658,14 @@ function buildTurns(ws: (typeof FIXTURE_WORKSPACES)[number]) {
           },
         },
       ],
+    },
+    // A long user paste (#127): renders past the 6-line clamp in every
+    // viewport so the SmartCollapse fade + Show more toggle appear. NO tool
+    // entries here — chat.spec pins the tool-group count at 3.
+    {
+      user_text: `requirements dump: ${"the workspace page must show as much transcript as possible on every device we support, without wasting a single row of chrome on decoration. ".repeat(8)}`,
+      started_at: ws.updated_at,
+      entries: [{ role: "assistant", text: "Understood — density first." }],
     },
     // Filler so the transcript overflows its viewport in e2e — the
     // opens-at-the-tail assertion needs a genuinely scrollable conversation.
