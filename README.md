@@ -12,20 +12,13 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
-<p align="center">
-  <img src="docs/img/mockups/hero-laptop.gif" alt="Grove on a MacBook, swapping between the terminal UI and the web dashboard" height="316" />
-  &nbsp;&nbsp;
-  <img src="docs/img/mockups/webapp-phone-mockup.png" alt="Grove web dashboard on a phone, showing the workspace surface" height="316" />
-</p>
-<p align="center">
-  <sub>Grove in the terminal and the browser, and on your phone. One agent, one worktree, one window.</sub>
-</p>
-
 ## 🌳 Overview
 
 Grove runs several AI coding agents at once, each in its own isolated **workspace**: a dedicated git worktree on its own branch, paired with a tmux session and a window. The rule is one agent, one worktree, one window. Agents are productive in parallel but chaotic in the same folder, where they overwrite each other's files and collide on the same branch. Grove gives each one its own bench.
 
 Every workspace is reachable asynchronously, from the terminal TUI, the CLI, the web IDE on any device, or another agent over [MCP](https://bearlike.github.io/Grove/latest/use-mcp/). The same isolated-workspace primitive backs human and agent orchestration alike. Through all of it your git history stays yours: Grove never commits, never pushes, and never touches a remote branch.
+
+https://github.com/user-attachments/assets/21a67df2-8a27-412b-9c79-f86ce95c3212
 
 ## ✨ Features
 
@@ -96,6 +89,8 @@ Grove is a terminal program first. Run `grove` in a repo to see only its workspa
 - **[Session recovery](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/).** Grove pane-verifies each agent session and re-adopts it across daemon restarts and a different user attaching. A stale pointer remaps to the recovered session in a click.
 - **[Ticket providers](https://bearlike.github.io/Grove/latest/features-ticket-providers/).** Branch-aware Gitea, GitHub, and Linear context, surfaced next to the workspace.
 - **[Push notifications](https://bearlike.github.io/Grove/latest/features-notifications/).** Get pinged when an agent finishes a turn or needs you.
+
+https://github.com/user-attachments/assets/256714c5-37e5-4c9d-8b2d-47422d5aae0f
 
 ## 🚀 Get started
 

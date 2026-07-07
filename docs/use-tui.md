@@ -3,6 +3,10 @@
 The TUI is the primary way to drive Grove. This page names every region
 and lists every key.
 
+<video autoplay muted loop playsinline preload="auto" poster="../img/posters/terminal-still.png" style="width:100%;max-width:960px;height:auto;display:block;margin:0 auto 1.75rem;">
+  <source src="../videos/1-grove-terminal.mp4" type="video/mp4" />
+</video>
+
 ## Screen anatomy
 
 The list screen has three vertical zones with a status bar and contextual
