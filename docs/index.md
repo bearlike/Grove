@@ -19,16 +19,10 @@ title: Grove
   </div>
 </div>
 
-<div class="ms-devices">
-  <img class="no-border" src="img/mockups/hero-laptop.gif" alt="Grove on a MacBook, swapping between the terminal UI and the web dashboard" />
-  <img class="no-border" src="img/mockups/webapp-phone-mockup.png" alt="Grove web dashboard on a phone, showing the composer-first workspace surface" />
-  <p class="ms-devices__caption">Grove in your terminal and in the browser. Run agents in parallel, each in its own workspace, and reach any of them asynchronously from anywhere.</p>
-</div>
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="img/screenshots/tui-list.png" alt="The Grove TUI: a project-scoped workspace list with a live agent peek rail showing the summary, recent commits, and transcript" /></div>
-  <figcaption class="ms-shot__body">The terminal UI. A workspace list on the left, a live agent peek rail on the right. Every agent, one glance.</figcaption>
-</figure>
+<video autoplay muted loop playsinline preload="auto" poster="img/posters/terminal-still.png" style="width:100%;max-width:960px;height:auto;display:block;margin:0 auto 1.75rem;">
+  <source src="videos/1-grove-terminal.mp4" type="video/mp4" />
+</video>
 
 ## What is Grove? { .ms-h2-icon data-icon="target" }
 
@@ -43,10 +37,9 @@ agent over MCP. The same isolated-workspace primitive backs human and agent orch
 tends the worktrees and the sessions. Your git history stays yours. Grove never commits, never pushes,
 and never touches a remote branch.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="img/screenshots/webapp-home.png" alt="Grove's web IDE: a session rail on the left listing every agent thread by recency, a composer at the center to start a workspace, on a dark space-black canvas" /></div>
-  <figcaption class="ms-shot__body">The Grove web IDE. A session rail lists every agent thread on the left; the landing is a composer, so a prompt starts a workspace. Dark-first, on a space-black canvas.</figcaption>
-</figure>
+<video autoplay muted loop playsinline preload="auto" poster="img/posters/web-still.png" style="width:100%;max-width:960px;height:auto;display:block;margin:0 auto 1.75rem;">
+  <source src="videos/2-grove-web.mp4" type="video/mp4" />
+</video>
 
 The landing defaults to the composer. A toggle flips to Overview, a card grid grouped by repository. A repo that hosts several projects gets one section per project.
 

@@ -11,10 +11,9 @@ The mental model is "work in a session, switch sessions in a rail," not "watch a
 route shares one shell: a persistent left session rail (your thread list) and a slim header. Nothing
 sits along the bottom.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="The Grove web dashboard landing page: a centered Hero composer for starting a workspace, a persistent left session rail listing recent sessions with per-row provenance, and a slim header on top" /></div>
-  <figcaption class="ms-shot__body">The landing surface. A centered composer is the default, with the session rail down the left carrying every session and its provenance. There is no bottom status bar.</figcaption>
-</figure>
+<video autoplay muted loop playsinline preload="auto" poster="../img/posters/web-still.png" style="width:100%;max-width:960px;height:auto;display:block;margin:0 auto 1.75rem;">
+  <source src="../videos/2-grove-web.mp4" type="video/mp4" />
+</video>
 
 ---
 

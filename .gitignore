@@ -262,3 +262,7 @@ __marimo__/
 # never live under `/webapp/` anyway.
 !/webapp/lib
 !/webapp/lib/**
+
+# macOS filesystem cruft (Finder metadata + AppleDouble resource forks)
+.DS_Store
+._*
