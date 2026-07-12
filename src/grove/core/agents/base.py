@@ -29,9 +29,12 @@ from typing import Protocol
 
 from grove.core.agents.model import (
     AgentActivity,
+    FinalResult,
     OrderedDigest,
+    SessionControls,
     SessionSummary,
     SessionTurn,
+    TodoList,
 )
 
 
@@ -82,6 +85,36 @@ class AgentAdapter(Protocol):
         so they fall back to the tool's own default. The provider-boundary rule:
         Grove forwards the parameter as the tool's flag — it never interprets the
         value.
+        """
+        ...
+
+    def offline_decoration(self) -> list[str]:
+        """Extra argv tokens that disallow network-facing tools for this launch
+        (#148: Claude Code → ``["--disallowedTools", "WebFetch,WebSearch"]``,
+        Codex → its workspace-write-no-network sandbox flags). Empty for tools
+        with no local network-tool gate (mewbo runs server-side, the generic
+        shell has no tool concept). Gated by the caller on `AgentSpec.tools_offline`
+        — the provider boundary: Grove forwards the tool's own flag shape, it
+        never re-derives which tools are "network" from behavior.
+        """
+        ...
+
+    def telemetry_env(self) -> dict[str, str]:
+        """The tool's OWN native-telemetry *enable* env vars (#170 passthrough).
+
+        The provider-boundary sibling of :meth:`offline_decoration`: the manager
+        already injects the generic OTLP endpoint/headers (``TelemetryConfig.
+        derive_env``), but *turning the tool's native exporter on* is a
+        provider-specific flag the adapter owns — Claude Code →
+        ``{"CLAUDE_CODE_ENABLE_TELEMETRY": "1", "OTEL_METRICS_EXPORTER": "otlp",
+        "OTEL_LOGS_EXPORTER": "otlp"}`` (its usage/cost/tool metrics + api_request
+        events stream to whatever OTLP endpoint the env already carries). Empty
+        for a tool with no env-driven telemetry switch (Codex configures OTel
+        through ``config.toml [otel]``, mewbo is server-side, the generic shell
+        emits nothing). Gated by the caller on telemetry being enabled AND the
+        endpoint actually resolving, so the tool never enables an exporter with
+        nowhere to send. Grove forwards the tool's own flag names — it never
+        invents telemetry semantics (the same boundary as ``offline_decoration``).
         """
         ...
 
@@ -184,5 +217,51 @@ class AgentAdapter(Protocol):
         Minimal in the MVP; the seam exists so #20 never has to reshape the
         adapter contract. Best-effort: an empty or missing session yields an
         empty digest.
+        """
+        ...
+
+    def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
+        """The session's available input controls — TIER 1 filesystem scan (#178).
+
+        Enumerates the invokable affordances reachable in ``cwd`` with NO running
+        session needed: the provider-specific slash commands, skills, and
+        configured MCP servers on disk (Claude Code scans the worktree's
+        ``.claude/commands`` + skills dirs + ``.mcp.json`` plus the user-level
+        cascade; Codex its ``prompts/`` + ``config.toml`` MCP servers). Fills
+        ONLY the filesystem-scanned lists — the ``models`` / ``current_model`` /
+        ``permission_mode`` dimensions are config concerns the composing manager
+        adds (``registry.resolve_models`` etc.), so this stays a pure per-cwd
+        read. Remote/shell adapters return
+        :meth:`SessionControls.empty` — no local control surface. Best-effort
+        like every read here: returns an empty surface on any error, never raises.
+        """
+        ...
+
+    def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
+        """The session's terminal outcome — the last assistant turn plus
+        whether it is truly final (#149).
+
+        A PROJECTION, never a second parser: the filesystem adapters build it
+        from their own ``read_messages`` spine via
+        ``model.final_result_from_messages``; a remote adapter without a
+        message spine (mewbo) derives it from whatever it already parses.
+        Best-effort like every read here: ``None`` when no assistant has
+        replied yet or the session/transcript can't be read — never raises.
+        """
+        ...
+
+    def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
+        """The session's CURRENT todo/checklist state (#194).
+
+        The ``latest_todo`` sibling of :meth:`final_result` — same shape, same
+        reason: a PROJECTION over the already-parsed spine, never a second
+        parser. Filesystem adapters build it from ``model.
+        latest_todo_from_messages(self.read_messages(...))``, reusing the
+        identical ``TaskBoard`` fold their turn renderer already performs (a
+        "last N turns" tail read is wrong for Claude's split-call Task
+        system: a late ``TaskUpdate`` can reference an id whose ``TaskCreate``
+        sits arbitrarily far back, so the fold must run from session start).
+        Best-effort like every read here: ``None`` when no todo/Task tool has
+        been called yet, or the session/transcript can't be read.
         """
         ...

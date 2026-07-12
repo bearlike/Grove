@@ -255,13 +255,20 @@ class PeekRail(Vertical):
         plain = content.plain
         if plain == self._transcript_text:
             return
+        # Stick to the tail ONLY when the viewer is already there. A busy
+        # session's digest changes on every slow tick, and unconditionally
+        # scrolling yanked a user who had scrolled up to read older turns
+        # back to the bottom on each update (the cloud-session scroll-reset
+        # bug, 2026-07-11). Read the position BEFORE the update — the
+        # content swap moves max_scroll_y. After-refresh because the
+        # Static's new height isn't laid out yet at update() time (same
+        # lesson as the sessions screen).
+        scroll = self.query_one("#transcript-scroll", VerticalScroll)
+        at_tail = scroll.is_vertical_scroll_end
         self._transcript_text = plain
         card.update(content.renderable)
-        # The newest exchange is what the user glances for — land at the
-        # tail. After-refresh because the Static's new height isn't laid
-        # out yet at update() time (same lesson as the sessions screen).
-        scroll = self.query_one("#transcript-scroll", VerticalScroll)
-        self.call_after_refresh(lambda: scroll.scroll_end(animate=False))
+        if at_tail:
+            self.call_after_refresh(lambda: scroll.scroll_end(animate=False))
 
     def _update_pane(self, content: Text) -> None:
         plain = content.plain

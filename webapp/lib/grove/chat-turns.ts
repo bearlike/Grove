@@ -1,6 +1,11 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { QuestionInteraction } from "./question-plan";
-import type { AgentQuestionView, DigestEntryView, SessionTurnView } from "./types";
+import type {
+  AgentQuestionView,
+  DigestEntryView,
+  SessionTurnView,
+  TodoListView,
+} from "./types";
 
 /**
  * Pure mapper from the wire's session turns to chat-panel render items —
@@ -29,6 +34,16 @@ export type ChatItem =
   | { kind: "notification"; summary: string; detail: string }
   // One historical entry from `/turns` — always read-only (epic #74).
   | { kind: "question"; question: AgentQuestionView }
+  // One file mutation a tool performed — an ALWAYS-visible standalone diff,
+  // never folded into the `tools` accordion (that's the whole point). `path` is
+  // the full path (tooltip); `displayPath` is worktree-relative (header).
+  | {
+      kind: "file-edit";
+      path: string;
+      displayPath: string;
+      oldText: string;
+      newText: string;
+    }
   | { kind: "continuation" };
 
 // The LIVE pending question GROUP (Gitea #111) is deliberately NOT a `ChatItem`:
@@ -69,6 +84,26 @@ export function chatItemsFromTurns(turns: SessionTurnView[]): ChatItem[] {
   return items;
 }
 
+/**
+ * The LATEST todo/plan list across the loaded turns, or null when none — the
+ * agent's current plan (Claude `TodoWrite` / Codex `update_plan`), pinned as a
+ * card above the composer (#184). Derived purely from the fetch-on-demand
+ * `/turns` payload (a `DigestEntryView` of role "todo"), the unit-test seam kept
+ * apart from the React layer exactly like {@link chatItemsFromTurns}. Todo
+ * entries are excluded from the message stream (see `itemFromEntry`), so this is
+ * the ONLY surface they reach — the newest write wins (a `TodoWrite` is a full
+ * rewrite of the list, so the last one is the current state).
+ */
+export function latestTodoFromTurns(turns: SessionTurnView[]): TodoListView | null {
+  let latest: TodoListView | null = null;
+  for (const turn of turns) {
+    for (const entry of turn.entries) {
+      if (entry.role === "todo" && entry.todo) latest = entry.todo;
+    }
+  }
+  return latest;
+}
+
 function itemFromEntry(entry: DigestEntryView): ChatItem | null {
   // A "question" entry carries its render payload in `question`, not `text`
   // (the prompt may be empty for a bare confirm), so it's handled before the
@@ -91,6 +126,27 @@ function itemFromEntry(entry: DigestEntryView): ChatItem | null {
           : { name: entry.text.slice(0, space), detail: entry.text.slice(space + 1) };
       return { kind: "tools", calls: [call] };
     }
+    case "file_edit":
+      // The wire's structured file mutation → a standalone always-visible diff
+      // card. A payload-less entry degrades to the same quiet note the default
+      // case emits (the render-hardening posture every role case carries).
+      return entry.file_edit
+        ? {
+            kind: "file-edit",
+            path: entry.file_edit.path,
+            displayPath: entry.file_edit.display_path,
+            oldText: entry.file_edit.old_text,
+            newText: entry.file_edit.new_text,
+          }
+        : { kind: "note", tone: "status", text: entry.text };
+    case "todo":
+      // The agent's todo/plan list (Claude `TodoWrite` / Codex `update_plan`) is
+      // NOT an in-stream row: the panel pins only the LATEST one as a card above
+      // the composer (see `latestTodoFromTurns` + `useGroveChatRuntime`), the
+      // same sibling treatment the live pending-question group gets. Returning
+      // null here keeps every historical update out of the transcript flow (and
+      // off the default-note fallback below) while the pinned card stays current.
+      return null;
     case "summary":
     case "status":
       return { kind: "note", tone: entry.role, text: entry.text };
@@ -130,6 +186,7 @@ export const CHAT_DATA_PART = {
   note: "data-note",
   notification: "data-notification",
   question: "data-question",
+  fileEdit: "data-file-edit",
   continuation: "data-continuation",
 } as const;
 
@@ -140,6 +197,7 @@ export const CHAT_DATA_NAME = {
   note: "note",
   notification: "notification",
   question: "question",
+  fileEdit: "file-edit",
   continuation: "continuation",
 } as const;
 
@@ -160,6 +218,15 @@ export interface NotificationPartData {
 /** Data payload for a `data-question` part — a read-only historical question. */
 export interface QuestionPartData {
   question: AgentQuestionView;
+}
+/** Data payload for a `data-file-edit` part — one file mutation, drawn as an
+ * always-visible inline diff (never the collapsible tool accordion). `path` is
+ * the full path (tooltip); `displayPath` is worktree-relative (header). */
+export interface FileEditPartData {
+  path: string;
+  displayPath: string;
+  oldText: string;
+  newText: string;
 }
 
 /** A completed assistant status — every Grove transcript row is post-hoc, so
@@ -213,6 +280,18 @@ export function chatItemToThreadMessage(item: ChatItem, index: number): ThreadMe
       );
     case "question":
       return dataMessage(index, CHAT_DATA_PART.question, { question: item.question }, custom);
+    case "file-edit":
+      return dataMessage(
+        index,
+        CHAT_DATA_PART.fileEdit,
+        {
+          path: item.path,
+          displayPath: item.displayPath,
+          oldText: item.oldText,
+          newText: item.newText,
+        },
+        custom,
+      );
     case "continuation":
       return dataMessage(index, CHAT_DATA_PART.continuation, {}, custom);
   }

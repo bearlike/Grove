@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from grove.core.config import GiteaTicketConfig, GitHubTicketConfig, LinearTicketConfig
-from grove.core.errors import TicketProviderError
+from grove.core.errors import TicketCommentsUnsupported, TicketProviderError
 from grove.core.tickets.gitea import GiteaProvider
 from grove.core.tickets.github import GitHubProvider
 from grove.core.tickets.linear import LinearProvider
@@ -295,3 +295,193 @@ def test_linear_uses_raw_authorization_header() -> None:
     )
     p.list_assigned()
     assert seen["auth"] == "lin_api_key"  # raw, no "Bearer "
+
+
+# ─── comment I/O (#193) ───────────────────────────────────────────────────
+
+
+def test_gitea_list_comments_normalizes() -> None:
+    routes = {
+        "/api/v1/repos/o/r/issues/5/comments": [
+            {
+                "id": 100,
+                "body": "hello",
+                "user": {"login": "alice"},
+                "created_at": "2026-07-01T00:00:00Z",
+            }
+        ]
+    }
+    p = GiteaProvider(
+        GiteaTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=_transport(routes),
+    )
+    comments = p.list_comments("5")
+    assert len(comments) == 1
+    c = comments[0]
+    assert (c.id, c.body, c.author) == ("100", "hello", "alice")
+    assert c.created_at is not None
+
+
+def test_gitea_post_comment_returns_id() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = request.content
+        return httpx.Response(
+            200,
+            json={"id": 200, "body": "posted", "user": {"login": "bot"}, "created_at": None},
+        )
+
+    p = GiteaProvider(
+        GiteaTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=httpx.MockTransport(handler),
+    )
+    comment = p.post_comment("5", "posted")
+    assert comment.id == "200"
+    assert seen["path"] == "/api/v1/repos/o/r/issues/5/comments"
+    assert b"posted" in seen["body"]
+
+
+def test_gitea_edit_comment_patches_body() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"id": 200, "body": "edited"})
+
+    p = GiteaProvider(
+        GiteaTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=httpx.MockTransport(handler),
+    )
+    assert p.edit_comment("200", "edited") is None
+    assert seen["method"] == "PATCH"
+    assert seen["path"] == "/api/v1/repos/o/r/issues/comments/200"
+
+
+def test_gitea_react_posts_content() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = request.content
+        return httpx.Response(200, json=[{"content": "rocket"}])
+
+    p = GiteaProvider(
+        GiteaTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=httpx.MockTransport(handler),
+    )
+    assert p.react("200", "rocket") is None
+    assert seen["path"] == "/api/v1/repos/o/r/issues/comments/200/reactions"
+    assert b"rocket" in seen["body"]
+
+
+def test_gitea_comment_ops_need_owner_repo() -> None:
+    p = GiteaProvider(GiteaTicketConfig(enabled=True, token_env="T"), env={"T": "tok"})
+    with pytest.raises(TicketProviderError, match="owner\\+repo"):
+        p.list_comments("5")
+    with pytest.raises(TicketProviderError, match="owner\\+repo"):
+        p.post_comment("5", "x")
+    with pytest.raises(TicketProviderError, match="owner\\+repo"):
+        p.edit_comment("200", "x")
+    with pytest.raises(TicketProviderError, match="owner\\+repo"):
+        p.react("200", "eyes")
+
+
+def test_github_list_comments_normalizes() -> None:
+    routes = {
+        "/repos/o/r/issues/42/comments": [
+            {
+                "id": 300,
+                "body": "hi",
+                "user": {"login": "carol"},
+                "created_at": "2026-07-01T00:00:00Z",
+            }
+        ]
+    }
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=_transport(routes),
+    )
+    comments = p.list_comments("42")
+    assert [(c.id, c.body, c.author) for c in comments] == [("300", "hi", "carol")]
+
+
+def test_github_post_comment_returns_id() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"id": 400, "body": "posted", "user": None})
+
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=httpx.MockTransport(handler),
+    )
+    comment = p.post_comment("42", "posted")
+    assert comment.id == "400"
+    assert comment.author is None
+    assert seen["path"] == "/repos/o/r/issues/42/comments"
+
+
+def test_github_edit_comment_patches_body() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"id": 400, "body": "edited"})
+
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=httpx.MockTransport(handler),
+    )
+    assert p.edit_comment("400", "edited") is None
+    assert seen["method"] == "PATCH"
+    assert seen["path"] == "/repos/o/r/issues/comments/400"
+
+
+def test_github_react_posts_content() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = request.content
+        return httpx.Response(200, json={"content": "eyes"})
+
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=httpx.MockTransport(handler),
+    )
+    assert p.react("400", "eyes") is None
+    assert seen["path"] == "/repos/o/r/issues/comments/400/reactions"
+    assert b"eyes" in seen["body"]
+
+
+def test_github_comment_ops_need_owner_repo() -> None:
+    p = GitHubProvider(GitHubTicketConfig(enabled=True, token_env="T"), env={"T": "tok"})
+    with pytest.raises(TicketProviderError, match="owner\\+repo"):
+        p.list_comments("42")
+
+
+def test_linear_comment_methods_raise_capability_gap() -> None:
+    p = LinearProvider(
+        LinearTicketConfig(enabled=True, team_key="ENG", token_env="T"), env={"T": "lin_xxx"}
+    )
+    with pytest.raises(TicketCommentsUnsupported):
+        p.list_comments("ENG-1")
+    with pytest.raises(TicketCommentsUnsupported):
+        p.post_comment("ENG-1", "x")
+    with pytest.raises(TicketCommentsUnsupported):
+        p.edit_comment("c1", "x")
+    with pytest.raises(TicketCommentsUnsupported):
+        p.react("c1", "eyes")

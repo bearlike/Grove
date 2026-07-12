@@ -1,0 +1,16 @@
+# actionlint config (#198). actionlint is GitHub-only, so it can't model two
+# things this repo legitimately does on Gitea: a custom self-hosted runner
+# label, and Gitea's `https://host/owner/repo@ref` absolute-URL `uses:`
+# extension (verified against docs.gitea.com — not a typo in our YAML).
+self-hosted-runner:
+  labels:
+    - grove-issueops
+
+# No `config-variables:` list — that flag turns on strict vars-checking
+# repo-wide (every workflow, not just this one), which would break existing
+# workflows' vars unrelated to issue-ops. Leave it unset (default: no check).
+
+paths:
+  docs/examples/issue-ops-gitea-caller.yml:
+    ignore:
+      - 'specifying action ".+" in invalid format'

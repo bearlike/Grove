@@ -157,8 +157,30 @@ class GroveClient:
         body = await self._get("/whoami")
         return WhoamiView.model_validate(body)
 
-    async def list_workspaces(self) -> list[WorkspaceStateView]:
-        body = await self._get("/workspaces")
+    async def list_workspaces(
+        self,
+        *,
+        repo: Path | None = None,
+        ticket_provider: TicketProviderName | None = None,
+        ticket_id: str | None = None,
+    ) -> list[WorkspaceStateView]:
+        """Cross-repo (default) or single-repo (``repo``) workspace listing.
+
+        ``ticket_provider``/``ticket_id`` narrow to the single workspace
+        tracking that ticket (``WorkspaceManager.find_by_ticket`` on the
+        daemon) — the issue-ops "does a workspace already exist for this
+        ticket" lookup. Both must be given together (a ticket id alone is
+        ambiguous across providers); the wire is a single ``ticket=<provider>:
+        <id>`` query param.
+        """
+        if (ticket_provider is None) != (ticket_id is None):
+            raise ValueError("ticket_provider and ticket_id must be given together")
+        params: dict[str, str] = {}
+        if repo is not None:
+            params["repo"] = str(repo)
+        if ticket_provider is not None and ticket_id is not None:
+            params["ticket"] = f"{ticket_provider}:{ticket_id}"
+        body = await self._get("/workspaces", params=params or None)
         return [WorkspaceStateView.model_validate(item) for item in body]
 
     async def create_workspace(self, req: CreateWorkspaceRequest) -> WorkspaceStateView:

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
@@ -24,8 +25,17 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
-from grove.core import paths, tmux
-from grove.core.agents import AgentQuestion, AnswerSelection, all_adapters, get_adapter
+from grove.core import channel, native, paths, permission, tmux
+from grove.core.agents import (
+    AgentAdapter,
+    AgentQuestion,
+    AnswerSelection,
+    SessionControls,
+    TodoList,
+    all_adapters,
+    get_adapter,
+    resolve_models,
+)
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.hook import ClaudeHook, PendingQuestion
 from grove.core.config import AgentSpec, GroveConfig, load_config
@@ -39,6 +49,7 @@ from grove.core.errors import (
     BranchAlreadyCheckedOut,
     BranchConflict,
     BranchNotFound,
+    CapabilityUnavailable,
     GroveError,
     MewboError,
     PaneNotFound,
@@ -49,6 +60,7 @@ from grove.core.errors import (
     WorkspaceStateError,
 )
 from grove.core.git import GitRepo
+from grove.core.launch import LaunchBackend, LaunchSpec, TmuxLaunchBackend
 from grove.core.mewbo import MewboClient
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tickets import TicketProviderRegistry
@@ -91,6 +103,7 @@ EventKindStr = Literal[
     "updated",
     "message_sent",
     "question_answered",
+    "control_invoked",
     "error",
     "offline_detected",
     "orphaned_detected",
@@ -102,6 +115,14 @@ EventKindStr = Literal[
 # the persisted agent_kind being matched is read back from JSON as plain str.
 _REMOTE_STEERED_KINDS: frozenset[str] = frozenset({"mewbo"})
 
+# Agent kinds whose tools expose an in-session SLASH-CONTROL surface (#178) — a
+# ``/name`` command/skill invocation and the interactive ``/model <id>`` switch,
+# delivered through the ordinary steer path. The filesystem CLI adapters
+# (claude_code, codex); a remote (mewbo) session or a bare shell has none, so the
+# trigger verbs raise `CapabilityUnavailable` for those. frozenset[str] (not
+# AgentKind) — matched against the effective kind read back as plain str.
+_CONTROL_KINDS: frozenset[str] = frozenset({"claude_code", "codex"})
+
 # Agent kinds that can resume an EXISTING session by explicit id at launch (#120):
 # a filesystem CLI adapter that carries a resume handle (`claude --resume <id>`,
 # `codex resume <id>`). DERIVED from the adapter layer's own `resumable` flag
@@ -111,6 +132,16 @@ _REMOTE_STEERED_KINDS: frozenset[str] = frozenset({"mewbo"})
 # `resume_session_id` for anything outside this set before any side effect.
 # frozenset[str] (not AgentKind) — matched against `agent.kind`.
 _RESUMABLE_KINDS: frozenset[str] = frozenset(a.kind for a in all_adapters() if a.resumable)
+
+# The env var each filesystem adapter resolves its config-dir cascade from —
+# a provider-protocol fact (see grove.core.agents.claude_code/codex), not user
+# policy, so it's fine to name here rather than in config. Backs
+# `transcript_config_dir_scope` (#147): a kind absent from this map (mewbo,
+# generic) has no config-dir concept, so a context override is a no-op for it.
+_TRANSCRIPT_CONFIG_DIR_ENV: dict[str, str] = {
+    "claude_code": "CLAUDE_CONFIG_DIR",
+    "codex": "CODEX_HOME",
+}
 
 
 class _Unset:
@@ -147,6 +178,8 @@ class WorkspaceManager:
         cfg: GroveConfig,
         store: JsonWorkspaceStore,
         mewbo_client: MewboClient | None = None,
+        native_steer: native.NativeSteerClient | None = None,
+        launch_backend: LaunchBackend | None = None,
         ticket_registry: TicketProviderRegistry | None = None,
     ) -> None:
         self._repo_root = repo_root
@@ -155,6 +188,15 @@ class WorkspaceManager:
         # Injected for tests (DI at the I/O boundary); production passes None
         # and the first mewbo launch builds one from cfg.mewbo.
         self._mewbo_client = mewbo_client
+        # The paneless-steering delivery seam (#172): a workspace with no tmux
+        # pane routes send/answer/interrupt here instead of into a pane. Injected
+        # for tests like `mewbo_client`; production builds the channel-backed
+        # default lazily on first native steer.
+        self._native_steer_client = native_steer
+        # The swappable "start the assembled command in the workspace" seam
+        # (#145). Default is tmux; a container/headless runtime injects its own
+        # backend without touching the AgentSpec/adapter/decoration composition.
+        self._launch_backend = launch_backend or TmuxLaunchBackend()
         # Lazily built from cfg.tickets on first access; injectable for tests so
         # an httpx.MockTransport / fake env reaches every provider.
         self._ticket_registry = ticket_registry
@@ -178,6 +220,17 @@ class WorkspaceManager:
     @property
     def store(self) -> JsonWorkspaceStore:
         return self._store
+
+    @property
+    def provides_pane(self) -> bool:
+        """Whether the launch backend hosts a tmux pane (False = headless, #146).
+
+        The one seam every tmux-only path consults: reconciliation skips the
+        has-session/pane-activity derivation when False, the activity blend
+        treats the workspace like a remote adapter (pane not authoritative), and
+        pane-bound steering/snapshot raise ``CapabilityUnavailable``.
+        """
+        return self._launch_backend.provides_pane
 
     @property
     def ticket_providers(self) -> TicketProviderRegistry:
@@ -476,17 +529,8 @@ class WorkspaceManager:
         )
 
         try:
-            tmux.create_session(
-                session,
-                cwd=agent_cwd,
-                history_limit=self._cfg.tmux.history_limit,
-            )
-            tmux.build_workspace_layout(
-                session,
-                cfg=self._cfg,
-                worktree=agent_cwd,
-                agent=agent,
-                launch_decoration=launch_decoration,
+            self._launch_backend.launch(
+                self._launch_spec(session, agent_cwd, agent, launch_decoration)
             )
         except Exception as exc:
             self._rollback_create(state)
@@ -695,17 +739,8 @@ class WorkspaceManager:
             )
 
         try:
-            tmux.create_session(
-                state.tmux_session,
-                cwd=state.agent_cwd,
-                history_limit=self._cfg.tmux.history_limit,
-            )
-            tmux.build_workspace_layout(
-                state.tmux_session,
-                cfg=self._cfg,
-                worktree=state.agent_cwd,
-                agent=agent,
-                launch_decoration=launch_decoration,
+            self._launch_backend.launch(
+                self._launch_spec(state.tmux_session, state.agent_cwd, agent, launch_decoration)
             )
         except Exception as exc:
             self._git.worktree_remove(worktree, force=True)
@@ -901,6 +936,32 @@ class WorkspaceManager:
         self._emit("updated", new_state.id, {"ticket_detached": f"{provider}:{ticket_id}"})
         return new_state
 
+    def find_by_ticket(self, provider: str, ticket_id: str) -> WorkspaceState | None:
+        """Resolve the workspace tracking ticket ``(provider, ticket_id)``, if any.
+
+        The issue-ops routing seam: "does a workspace already exist for this
+        ticket, so steer it instead of creating a new one." Scans ``list()``
+        (already reconciled to each workspace's displayed status) for a
+        ``ticket_refs`` match — no new persisted state, no separate index.
+
+        ``kill()`` deletes the persisted record outright rather than marking
+        it KILLED, so a killed workspace can never surface here — "the newest
+        non-killed match" is true of everything ``list()`` returns by
+        construction. When more than one live workspace tracks the same
+        ticket (hand-attached twice, or a fresh workspace opened for a ticket
+        an older one already tracks), the tie-break is the NEWEST by
+        ``created_at`` — the most recent workspace is the one issue-ops
+        should steer.
+        """
+        matches = [
+            state
+            for state in self.list()
+            if any(r.provider == provider and r.id == ticket_id for r in state.ticket_refs)
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda s: s.created_at)
+
     def remap_session(self, workspace_id: str, session_ref: str) -> WorkspaceState:
         """Manually pin an existing agent session as this workspace's primary (#120).
 
@@ -989,6 +1050,12 @@ class WorkspaceManager:
         if state.agent_kind is not None and state.agent_kind in _REMOTE_STEERED_KINDS:
             self._steer_remote(state, "message", text)
             return
+        if not self._launch_backend.provides_pane:
+            # Paneless runtime (#146): no tmux pane to type into, so deliver over
+            # the agent's native channel instead of raising (#172). Same
+            # dispatch-point pattern as the remote arm — one seam, not a fork.
+            self._steer_native(state, "message", text)
+            return
         ensure_can_steer(state)
         target = self._pane_target(state)
         if target is None:
@@ -996,7 +1063,7 @@ class WorkspaceManager:
                 f"no tmux pane resolved for workspace {state.id} "
                 f"(session {state.tmux_session!r} reports no windows)"
             )
-        tmux.send_text(target, text)
+        tmux.send_text(target, text, settle_ms=self._cfg.tmux.steer_settle_ms)
         self._emit(
             "message_sent",
             state.id,
@@ -1016,6 +1083,13 @@ class WorkspaceManager:
         state = self._store.get(workspace_id)
         if state.agent_kind is not None and state.agent_kind in _REMOTE_STEERED_KINDS:
             self._steer_remote(state, "interrupt")
+            return
+        if not self._launch_backend.provides_pane:
+            # Paneless runtime (#146): no pane to signal, so route the interrupt
+            # over the native channel (#172) instead of raising. Best-effort — a
+            # native interrupt primitive is still landing (stream-json control),
+            # but this no longer refuses the op the way the old capability gap did.
+            self._steer_native(state, "interrupt")
             return
         raise SteeringUnsupported(
             f"agent kind {state.agent_kind or 'generic'!r} has no safe interrupt: "
@@ -1050,6 +1124,38 @@ class WorkspaceManager:
             )
         else:
             self._mewbo().interrupt(session_id)
+
+    def _steer_native(
+        self,
+        state: WorkspaceState,
+        op: Literal["message", "interrupt"],
+        text: str | None = None,
+    ) -> None:
+        """THE single dispatch point for paneless (headless) agents (#172).
+
+        The ``_steer_remote`` mirror for a runtime that has no tmux pane
+        (``provides_pane`` False, #146): deliver over the agent's native channel
+        instead of typing into a pane. Best-effort like the client it delegates to
+        — a delivery failure logs and returns, never raising into the caller's
+        path (steering a paneless runtime is fire-and-forget, not a transaction).
+        The audit event mirrors the tmux/remote arms (target + text length, never
+        content). A workspace with no recorded session (a generic detached shell)
+        has nothing to steer — the same ``AgentSessionNotFound`` as the remote arm.
+        """
+        session_id = state.agent_session_id
+        if not session_id:
+            raise AgentSessionNotFound(
+                f"workspace {state.id} has no recorded agent session to steer natively"
+            )
+        if op == "message":
+            self._native_steer().send_message(session_id, text or "")
+            self._emit(
+                "message_sent",
+                state.id,
+                {"target": f"native:{session_id}", "text_length": str(len(text or ""))},
+            )
+        else:
+            self._native_steer().interrupt(session_id)
 
     def answer_question(self, workspace_id: str, request: QuestionAnswerRequest) -> None:
         """Drive a pending ``AskUserQuestion`` to resolution by keystroke (#109).
@@ -1087,6 +1193,23 @@ class WorkspaceManager:
             AnswerSelection(indexes=tuple(a.selected_indexes or ()), text=a.text)
             for a in request.answers
         ]
+        if not self._launch_backend.provides_pane:
+            # Paneless runtime (#146/#172): no pane to keystroke the picker, so
+            # render the answer to text and deliver it over the native channel.
+            # The keystroke grammar's picker-only rejections (confirm / optionless
+            # free-text / multiSelect+text) don't apply — plain text can answer
+            # any question — so this arm skips `build_answer_keys` deliberately.
+            self._steer_native(state, "message", native.render_answer(questions, selections))
+            self._emit(
+                "question_answered",
+                state.id,
+                {
+                    "target": f"native:{request.session_id}",
+                    "tool_use_id": pending.tool_use_id,
+                    "answers": str(len(selections)),
+                },
+            )
+            return
         try:
             ops = ClaudeCodeAdapter.build_answer_keys(questions, selections)
         except ValueError as exc:
@@ -1099,7 +1222,7 @@ class WorkspaceManager:
             )
         # Re-check the capture right before the send to shrink the terminal race.
         self._pending_capture(request.session_id, request.tool_use_id)
-        tmux.send_keys(target, ops)
+        tmux.send_keys(target, ops, settle_ms=self._cfg.tmux.steer_settle_ms)
         self._emit(
             "question_answered",
             state.id,
@@ -1109,6 +1232,131 @@ class WorkspaceManager:
                 "answers": str(len(selections)),
             },
         )
+
+    def session_controls(self, workspace_id: str) -> SessionControls:
+        """Enumerate the input controls available to this workspace's session (#178).
+
+        The read behind the webapp's control panel: TIER 1 filesystem scan via the
+        workspace's adapter (slash commands / skills / MCP servers — cheap, works
+        with NO running session), plus the config-derived model catalog
+        (``resolve_models`` — the single catalog seam every surface shares) and
+        the Grove-hosted permission posture. ``current_model`` is a best-effort
+        transcript read (the running session's model), guarded so a parse hiccup
+        just leaves it ``None``.
+
+        Best-effort by contract — it feeds a render panel, so a scan/parse failure
+        degrades the surface rather than raising (the ``peek`` discipline). The
+        workspace must exist (``store.get`` raises ``WorkspaceNotFound``); past
+        that, everything is guarded.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        kind = self.effective_kind(state)
+        adapter = get_adapter(kind)
+        agent = self._cfg.find_agent(state.agent_name)
+        session_id = state.agent_session_id or ""
+        try:
+            scanned = adapter.session_controls(state.agent_cwd, session_id)
+        except Exception as exc:  # best-effort panel read, must never raise
+            logger.debug("session_controls scan failed for {}: {}", state.id, exc)
+            scanned = SessionControls.empty()
+        models = resolve_models(
+            kind=kind,
+            command=agent.command if agent is not None else "",
+            configured=agent.models if agent is not None else (),
+        )
+        permission_mode = self._cfg.permission.default if self._cfg.permission.enabled else None
+        return _dc_replace(
+            scanned,
+            models=models,
+            current_model=self._current_model(adapter, state, session_id),
+            permission_mode=permission_mode,
+        )
+
+    def _current_model(
+        self, adapter: AgentAdapter, state: WorkspaceState, session_id: str
+    ) -> str | None:
+        """The model the running session is on, from a best-effort activity parse
+        (the transcript records it). ``None`` when sessionless or on any read
+        failure — never raises into the controls read."""
+        if not session_id:
+            return None
+        try:
+            return adapter.parse_activity(state.agent_cwd, session_id).model
+        except Exception as exc:  # best-effort; a parse miss is not fatal
+            logger.debug("current-model read failed for {}: {}", state.id, exc)
+            return None
+
+    def latest_todo(self, workspace_id: str) -> TodoList | None:
+        """The workspace's current todo/checklist state (#194) — the engine
+        seam both the issueops sticky-comment publisher (in-process) and the
+        ``GET /workspaces/{id}/todo`` daemon route read.
+
+        Resolves the workspace's primary session exactly like
+        :meth:`session_controls` (state → effective kind → adapter), but
+        RAISES ``AgentSessionNotFound`` for a sessionless workspace instead of
+        degrading — the same convention ``_steer_remote``/``_steer_native``
+        use, so a caller can tell "no session yet" (404) apart from "a session
+        exists but no todo tool has been called yet" (``None``, a real
+        answer). The adapter read itself stays best-effort (never raises) like
+        every projection here.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        session_id = state.agent_session_id
+        if not session_id:
+            raise AgentSessionNotFound(f"workspace {state.id} has no recorded agent session")
+        adapter = get_adapter(self.effective_kind(state))
+        return adapter.latest_todo(state.agent_cwd, session_id)
+
+    def invoke_control(self, workspace_id: str, name: str) -> None:
+        """Invoke a named session control — a slash command or a skill (#178).
+
+        Thin trigger: composes the tool's ``/name`` invocation and delivers it
+        through the EXISTING steer path (:meth:`send_message` → tmux keystroke /
+        native channel / remote), so it reuses the whole dispatch, the settle
+        window, and the audit trail rather than adding a second delivery
+        mechanism. Kind-gated to the tools that actually expose a slash-control
+        surface (``_CONTROL_KINDS``); a generic shell or a remote orchestrator
+        raises ``CapabilityUnavailable`` (well-formed, but the runtime can't act
+        on it). Best-effort dispatch semantics like ``send_message`` — 204/return
+        is "delivered", not "ran"."""
+        self._deliver_control(workspace_id, name)
+
+    def switch_model(self, workspace_id: str, model: str) -> None:
+        """Switch the running session's model where the agent exposes a switch
+        control (#178).
+
+        claude_code/codex expose it as the interactive ``/model <id>`` slash
+        command, delivered through the same steer path as :meth:`invoke_control`
+        (the provider boundary — the command shape is the tool's, the id forwarded
+        verbatim, never interpreted). A kind with no model-switch channel (a bare
+        shell, a remote session whose model is fixed at create) raises
+        ``CapabilityUnavailable``."""
+        cleaned = model.strip()
+        if not cleaned:
+            raise CapabilityUnavailable("cannot switch to an empty model id")
+        self._deliver_control(workspace_id, f"model {cleaned}")
+
+    def _deliver_control(self, workspace_id: str, invocation: str) -> None:
+        """Deliver a ``/invocation`` slash control through the steer path (#178) —
+        the one dispatch both ``invoke_control`` and ``switch_model`` share, so
+        they can't drift on gating or event shape. ``/`` is the slash-control
+        syntax both enabled tools use; a future tool with a different prefix would
+        move this to an adapter seam (YAGNI: two real impls, one prefix)."""
+        state = self._reconcile_status(self._store.get(workspace_id))
+        kind = self.effective_kind(state)
+        cleaned = invocation.strip().lstrip("/").strip()
+        if kind not in _CONTROL_KINDS:
+            raise CapabilityUnavailable(
+                f"agent kind {kind!r} exposes no in-session slash-control surface"
+            )
+        if not cleaned:
+            raise CapabilityUnavailable("cannot invoke an empty control")
+        # Reuse send_message wholesale (pane/native/remote dispatch + settle +
+        # message_sent audit); add a distinct control_invoked event carrying only
+        # the control NAME (its first token) — never trailing args, mirroring the
+        # never-log-content rule the steer events already hold.
+        self.send_message(workspace_id, f"/{cleaned}")
+        self._emit("control_invoked", state.id, {"control": cleaned.split(" ", 1)[0]})
 
     def _pending_capture(self, session_id: str, tool_use_id: str) -> PendingQuestion:
         """The standing captured question for ``session_id``, or raise (#109).
@@ -1145,8 +1393,22 @@ class WorkspaceManager:
         deliberate create-time choice and must not fire unattended in the user's
         real repo root.
         """
-        state = self._reconcile_status(self._store.get(workspace_id))
-        ensure_can_respawn(state)
+        raw = self._store.get(workspace_id)
+        if self._launch_backend.provides_pane:
+            state = self._reconcile_status(raw)
+            ensure_can_respawn(state)
+        else:
+            # Headless (#146): no tmux session can vanish to OFFLINE, so the
+            # OFFLINE gate doesn't apply — respawn simply relaunches the detached
+            # process. Only a live record (RUNNING intent, worktree recreated at
+            # create) qualifies; a PAUSED (no worktree) / ERROR one has no runtime
+            # to restart, same spirit as `ensure_can_respawn`.
+            if raw.status != WorkspaceStatus.RUNNING:
+                raise WorkspaceStateError(
+                    f"cannot respawn headless workspace {raw.id}: status is "
+                    f"{raw.status}, expected running"
+                )
+            state = raw
         agent = self._cfg.find_agent(state.agent_name)
         if agent is None:
             raise GroveError(
@@ -1200,17 +1462,8 @@ class WorkspaceManager:
             )
 
         try:
-            tmux.create_session(
-                state.tmux_session,
-                cwd=state.agent_cwd,
-                history_limit=self._cfg.tmux.history_limit,
-            )
-            tmux.build_workspace_layout(
-                state.tmux_session,
-                cfg=self._cfg,
-                worktree=state.agent_cwd,
-                agent=agent,
-                launch_decoration=launch_decoration,
+            self._launch_backend.launch(
+                self._launch_spec(state.tmux_session, state.agent_cwd, agent, launch_decoration)
             )
         except Exception as exc:
             self._emit("error", state.id, {"phase": "respawn.tmux", "error": str(exc)})
@@ -1317,31 +1570,75 @@ class WorkspaceManager:
         A tuple (point-in-time snapshot), matching ``list_local_branches`` — the
         files on disk may change after the call, so an immutable return can't
         mislead the caller about live state.
+
+        Honors ``state.transcript_context`` (#147): a container-launched session
+        records a cwd the host's own ``worktree_path`` can never equal, so an
+        override substitutes that recorded cwd and scopes the adapter's
+        config-dir env var to the override's host directory for this one call.
+        No override (the default) is byte-for-byte the pre-#147 behavior.
         """
         state = self._store.get(workspace_id)
         if not state.agent_session_id:
             return ()
         agent = self._cfg.find_agent(state.agent_name)
         kind = agent.kind if agent is not None else "generic"
-        return tuple(
-            get_adapter(kind).locate_transcripts(Path(state.worktree_path), state.agent_session_id)
-        )
+        ctx = state.transcript_context
+        cwd = Path(ctx.agent_cwd) if ctx is not None else Path(state.worktree_path)
+        with self.transcript_config_dir_scope(kind, ctx.config_dir if ctx is not None else None):
+            return tuple(get_adapter(kind).locate_transcripts(cwd, state.agent_session_id))
+
+    @staticmethod
+    @contextlib.contextmanager
+    def transcript_config_dir_scope(kind: str, config_dir: str | None) -> Iterator[None]:
+        """Point ``kind``'s config-dir env var at ``config_dir`` for one read (#147).
+
+        Filesystem adapters resolve ``CLAUDE_CONFIG_DIR``/``CODEX_HOME``
+        ambiently from ``os.environ`` on every call — never a parameter, since
+        threading one through would be adapter parsing, off-limits for #147 —
+        so honoring a workspace's ``transcript_context.config_dir`` override
+        means scoping the process env around the read itself. A no-op (and
+        the true default-behavior path) when there is no override
+        (``config_dir is None``) or ``kind`` has no config-dir env
+        (``_TRANSCRIPT_CONFIG_DIR_ENV`` — mewbo/generic). Restores the prior
+        value (or its absence) on exit. Best-effort like every adapter read;
+        callers should hold this for the shortest span — one locate/read call,
+        never across a whole request — since the env is process-global.
+        """
+        var = _TRANSCRIPT_CONFIG_DIR_ENV.get(kind)
+        if config_dir is None or var is None:
+            yield
+            return
+        prior = os.environ.get(var)
+        os.environ[var] = config_dir
+        try:
+            yield
+        finally:
+            if prior is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = prior
 
     def _pinned_session_materialized(self, agent: AgentSpec, state: WorkspaceState) -> bool:
         """Whether ``state``'s pinned session already has a transcript on disk (#F2).
 
         The materialization test the unpause path gates its resume-vs-mint choice
         on: a session is materialized when the adapter locates at least one
-        transcript for the pinned id, scanning the ``scan_cwds`` union (#F7) so a
-        nested project's root-recorded transcript still counts. No pinned id → not
+        transcript for the pinned id, scanning the ``transcript_scan_cwds`` union
+        (#F7) so a nested project's root-recorded transcript still counts — or,
+        with a ``transcript_context`` override (#147), the one recorded cwd it
+        names instead, under its scoped config dir. No pinned id → not
         materialized (nothing to continue). Best-effort like every adapter read.
         """
         if not state.agent_session_id:
             return False
         adapter = get_adapter(agent.kind)
-        return any(
-            adapter.locate_transcripts(cwd, state.agent_session_id) for cwd in state.scan_cwds
-        )
+        ctx = state.transcript_context
+        config_dir = ctx.config_dir if ctx is not None else None
+        with self.transcript_config_dir_scope(agent.kind, config_dir):
+            return any(
+                adapter.locate_transcripts(cwd, state.agent_session_id)
+                for cwd in state.transcript_scan_cwds
+            )
 
     def effective_kind(self, state: WorkspaceState) -> str:
         """The adapter kind for ``state`` — persisted at create, else config (#F4).
@@ -1410,6 +1707,63 @@ class WorkspaceManager:
             self._mewbo_client = MewboClient(self._cfg.mewbo)
         return self._mewbo_client
 
+    def _native_steer(self) -> native.NativeSteerClient:
+        """The paneless-steering client (#172): injected (tests) or built once.
+
+        Default is the channel-backed :class:`~grove.core.native.ChannelSteerClient`
+        — the ``_mewbo`` pattern for the native (non-tmux) delivery path.
+        """
+        if self._native_steer_client is None:
+            self._native_steer_client = native.ChannelSteerClient()
+        return self._native_steer_client
+
+    def _launch_spec(
+        self, session_name: str, agent_cwd: Path, agent: AgentSpec, decoration: _Argv
+    ) -> LaunchSpec:
+        """Assemble the `LaunchSpec` handed to the launch backend (#145).
+
+        One builder for all three launch sites (create/resume/respawn) so the
+        spec can't drift between them. `agent_cwd` roots both the session and the
+        layout windows: the worktree/branch anchor at the repo root, the agent
+        session only *starts* here (the nested-cwd split, #101). The composed
+        `decoration` comes from `_compose_launch` + the adapter — this only
+        packages the assembled command as structured data for the backend.
+        """
+        # Compose the launch env: the agent's own `env` plus the opt-in
+        # instrumentation passthroughs derived at the boundary (#170). Telemetry
+        # (#176) contributes the generic OTLP endpoint/headers (LangFuse), and —
+        # only when that endpoint actually resolves — the adapter's OWN native
+        # telemetry switch (`telemetry_env`; provider boundary: Claude Code flips
+        # its exporter on, Codex/mewbo/generic no-op), so the tool streams its own
+        # usage/cost to LangFuse with no per-agent hand-wiring. Gating the switch
+        # on a resolved endpoint means a tool never enables an exporter pointed at
+        # nowhere. The gateway proxy (#177) points the tool at Grove's loopback
+        # proxy. All derive from config + the process env, never stored pre-built;
+        # a disabled knob yields `{}` (no-op default). Agent `env` wins any
+        # collision (the explicit user override).
+        telemetry = (
+            self._cfg.telemetry.derive_env(os.environ)
+            if agent.kind in self._cfg.telemetry.passthrough_kinds
+            else {}
+        )
+        if telemetry.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            telemetry = {**telemetry, **get_adapter(agent.kind).telemetry_env()}
+        env = {
+            **telemetry,
+            **self._cfg.proxy.proxy_env(agent.kind),
+            **agent.env,
+        }
+        return LaunchSpec(
+            session_name=session_name,
+            cwd=agent_cwd,
+            command=agent.command,
+            decoration=tuple(decoration),
+            env=env,
+            env_unset=agent.env_unset,
+            cfg=self._cfg,
+            worktree=agent_cwd,
+        )
+
     def _compose_launch(
         self,
         agent: AgentSpec,
@@ -1450,6 +1804,12 @@ class WorkspaceManager:
         the base decoration (hooks `--settings`, `--model`, the trailing prompt
         positional) is unchanged, so a resume launch composes identically bar the
         one flag.
+
+        `agent.tools_offline` (#148) appends the adapter's network-tool-gating
+        flags (`--disallowedTools WebFetch,WebSearch` for claude_code; a
+        no-network sandbox for codex). Unlike `model`/`initial_prompt` it is not
+        a per-create request field but a persisted `AgentSpec` toggle, so it
+        rides every launch path (create/resume/respawn) uniformly.
         """
         adapter = get_adapter(agent.kind)
         decoration: _Argv = []
@@ -1465,6 +1825,40 @@ class WorkspaceManager:
         # with no launch-time model flag (mewbo, generic) return [] — a no-op.
         if model:
             decoration = [*decoration, *adapter.model_decoration(model)]
+        # `--channels` (#182) declares Grove as a native Claude Code channel so a
+        # RUNNING session can act on messages Grove delivers (and relay a
+        # permission decision). Opt-in + auth-gated research preview, claude_code
+        # only, mirroring the hook `--settings` append above — additive, never
+        # touching the user's own config, a no-op when `cfg.channels.enabled` is
+        # False. Appended BEFORE the initial-prompt positional so that stays last.
+        if agent.kind == "claude_code" and session_id is not None and self._cfg.channels.enabled:
+            channel_settings = self._ensure_channel_settings()
+            if channel_settings is not None:
+                decoration = [*decoration, "--channels", str(channel_settings)]
+        # `tools_offline` (#148) is a persisted per-agent policy, not a per-create
+        # request field like `model` — it rides every launch (create/resume/
+        # respawn) whenever the configured agent opts in, forwarded verbatim
+        # (provider boundary: Grove never decides which tools are "network").
+        if agent.tools_offline:
+            decoration = [*decoration, *adapter.offline_decoration()]
+        # `--permission-prompt-tool` (#172) routes Claude Code's "allow this tool
+        # call?" gate to a Grove-hosted MCP tool that answers allow/deny JSON — the
+        # native replacement for a human typing a permission answer into the pane,
+        # essential for a paneless/headless session with no TTY to block on. Opt-in
+        # + claude_code only, mirroring the hook `--settings` / channel `--channels`
+        # appends above: additive, never touching the user's own config, a no-op
+        # when `cfg.permission.enabled` is False. Appended BEFORE the initial-prompt
+        # positional so that stays last.
+        if agent.kind == "claude_code" and session_id is not None and self._cfg.permission.enabled:
+            perm_config = self._ensure_permission_settings()
+            if perm_config is not None:
+                decoration = [
+                    *decoration,
+                    "--mcp-config",
+                    str(perm_config),
+                    "--permission-prompt-tool",
+                    permission.permission_tool_ref(),
+                ]
         # `initial_prompt` stays the trailing POSITIONAL, claude_code only, after
         # every flag (incl. --model) — same race-free launch path as before.
         if agent.kind == "claude_code" and session_id is not None and initial_prompt:
@@ -1484,6 +1878,49 @@ class WorkspaceManager:
             path.write_text(json.dumps(ClaudeHook.settings(), indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("could not write hook settings; launching without push status: {}", exc)
+            return None
+        return path
+
+    def _ensure_channel_settings(self) -> Path | None:
+        """Write Grove's channel settings file; return its path (#182).
+
+        The channel counterpart of `_ensure_hook_settings`: rendered fresh each
+        launch (so a Grove upgrade self-heals the declaration) and best-effort —
+        a write failure logs and returns `None`, so the agent still launches,
+        just without the channel (graceful degradation, exactly like the hook).
+        The rendered shape (`channel.channel_settings`) declares Grove's channel
+        MCP server; the manager only owns *when* to write + append the flag.
+        """
+        path = channel.channel_settings_path()
+        try:
+            paths.ensure_dir(path.parent)
+            path.write_text(json.dumps(channel.channel_settings(), indent=2), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("could not write channel settings; launching without channel: {}", exc)
+            return None
+        return path
+
+    def _ensure_permission_settings(self) -> Path | None:
+        """Write Grove's permission MCP-config file; return its path (#172).
+
+        The permission counterpart of `_ensure_channel_settings`: rendered fresh
+        each launch (so a Grove upgrade self-heals the registration) and
+        best-effort — a write failure logs and returns `None`, so the agent still
+        launches, just without the prompt tool (graceful degradation, exactly like
+        the hook/channel writes). The rendered shape
+        (`permission.permission_mcp_config`) registers Grove's permission MCP
+        server; the manager only owns *when* to write + append the flags.
+        """
+        path = permission.permission_mcp_config_path()
+        try:
+            paths.ensure_dir(path.parent)
+            path.write_text(
+                json.dumps(permission.permission_mcp_config(), indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            logger.warning(
+                "could not write permission config; launching without prompt tool: {}", exc
+            )
             return None
         return path
 
@@ -1530,7 +1967,15 @@ class WorkspaceManager:
         and `peek_pane()` so the "what counts as a snapshot" rule lives in
         exactly one place. Target resolution is delegated to `_pane_target`
         so capture and resize stay symmetric on reorganized sessions.
+
+        Headless workspaces (#146) have no pane: return the empty snapshot
+        without touching tmux. peek()/peek_pane() stay best-effort (they never
+        raise), so a headless card renders its transcript-derived state with no
+        pane preview — the loud typed ``CapabilityUnavailable`` is reserved for
+        the write path (send_message/interrupt), not this render helper.
         """
+        if not self._launch_backend.provides_pane:
+            return (None, None)
         target = self._pane_target(state)
         if target is None:
             return (None, None)
@@ -1560,14 +2005,23 @@ class WorkspaceManager:
         layer; tmux.py supplies mechanism. Returns a fresh state with the
         promoted ``status``; never mutates the input.
         """
-        if state.status in {WorkspaceStatus.PAUSED, WorkspaceStatus.ERROR}:
-            return state
         if state.status != WorkspaceStatus.RUNNING:
-            # Already promoted (ACTIVE/IDLE/OFFLINE/ORPHANED) — return as-is.
+            # Not a live RUNNING intent: PAUSED/ERROR are terminal user-visible
+            # statuses, and an already-computed one (ACTIVE/IDLE/OFFLINE/ORPHANED,
+            # e.g. a respawn round-trip) passes through unchanged. Either way
+            # there is nothing to derive from live signals.
             return state
 
         if not Path(state.worktree_path).is_dir():
             return _with_status(state, WorkspaceStatus.ORPHANED)
+        if not self._launch_backend.provides_pane:
+            # Headless runtime (#146): there is deliberately no tmux session, so
+            # `has_session` (→ OFFLINE) and pane activity (→ ACTIVE/IDLE) probe a
+            # pane that doesn't exist. Mark the workspace operational (ACTIVE) and
+            # let the activity blend derive the live agent state from the
+            # transcript/adapter — the remote-adapter precedent where the pane is
+            # not authoritative. The worktree/ORPHANED check above still applies.
+            return _with_status(state, WorkspaceStatus.ACTIVE)
         if not tmux.has_session(state.tmux_session):
             return _with_status(state, WorkspaceStatus.OFFLINE)
 

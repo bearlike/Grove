@@ -37,6 +37,12 @@ export type SessionDetailView = components["schemas"]["SessionDetailView"];
 export type SessionTurnView = components["schemas"]["SessionTurnView"];
 export type DigestEntryView = components["schemas"]["DigestEntryView"];
 
+// Session control surface (#178) — the enumerated slash commands / skills /
+// MCP servers / model catalog behind the work panel's Controls tab, fetched
+// on demand from `GET /workspaces/{id}/controls`.
+export type SessionControlsView = components["schemas"]["SessionControlsView"];
+export type SessionControlView = components["schemas"]["SessionControlView"];
+
 // Session picker + remap/resume (#121). `RemapSessionRequest` is the body for
 // `POST /workspaces/{id}/session` (pin an existing session as the tracked
 // primary); resume-into-workspace rides the existing `CreateWorkspaceRequest`
@@ -48,3 +54,9 @@ export type RemapSessionRequest = components["schemas"]["RemapSessionRequest"];
 // not interactive controls (answer-back is future).
 export type AgentQuestionView = components["schemas"]["AgentQuestionView"];
 export type AgentQuestionOptionView = components["schemas"]["AgentQuestionOptionView"];
+
+// Structured agent todo/plan list carried on a `DigestEntryView` of role "todo"
+// (#184) — Claude `TodoWrite` / Codex `update_plan` — rendered as a checklist
+// card pinned above the composer (the latest one in the loaded turns).
+export type TodoListView = components["schemas"]["TodoListView"];
+export type TodoItemView = components["schemas"]["TodoItemView"];

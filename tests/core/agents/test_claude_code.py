@@ -9,6 +9,7 @@ No network, no tmux, no real ``~/.claude``.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from datetime import UTC, datetime
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from grove.core.agents import AgentActivityState, get_adapter
+from grove.core.agents import AgentActivityState, TokenUsage, get_adapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome, _TranscriptParser
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -512,6 +513,334 @@ def test_regular_tool_still_renders_as_tool(adapter: ClaudeCodeAdapter, claude_h
     assert all(e.role != "question" for e in turn.entries)
 
 
+# ─── structured FileEdit entries in turns (diff viewer) ─────────────────────
+
+
+def test_edit_tool_emits_one_file_edit_entry(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
+    """An ``Edit`` tool_use (direct ``old_string``/``new_string`` fields, the
+    real Claude Code 2.1.x shape) renders one ``role="file_edit"`` entry
+    carrying the structured :class:`FileEdit`, with the one-liner ``text`` set
+    to ``"<name> <path>"`` for a role-unaware consumer."""
+    sid = "f0000000-0000-4000-8000-000000000001"
+    cwd = Path("/home/kk/work/edit")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"tweak it"}}'
+    )
+    edit_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"e1","name":"Edit",'
+        '"input":{"file_path":"/repo/app.py","old_string":"foo","new_string":"bar",'
+        '"replace_all":false}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, edit_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    edits = [e for e in turn.entries if e.role == "file_edit"]
+    assert len(edits) == 1
+    assert edits[0].text == "Edit /repo/app.py"
+    assert edits[0].file_edit is not None
+    assert edits[0].file_edit.path == "/repo/app.py"
+    assert edits[0].file_edit.old_text == "foo"
+    assert edits[0].file_edit.new_text == "bar"
+
+
+def test_multi_edit_emits_one_file_edit_entry_per_edit(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A ``MultiEdit`` batch (``edits: [...]`` on one file) renders one
+    ``role="file_edit"`` row per edit, in order — the file-edit analogue of a
+    batched ``AskUserQuestion`` yielding N question rows."""
+    sid = "f0000000-0000-4000-8000-000000000002"
+    cwd = Path("/home/kk/work/multiedit")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"batch it"}}'
+    )
+    multi_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"m1","name":"MultiEdit",'
+        '"input":{"file_path":"/repo/app.py","edits":['
+        '{"old_string":"foo","new_string":"bar"},'
+        '{"old_string":"baz","new_string":"qux"}]}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, multi_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    edits = [e for e in turn.entries if e.role == "file_edit"]
+    assert len(edits) == 2
+    assert all(e.text == "MultiEdit /repo/app.py" for e in edits)
+    assert [(e.file_edit.old_text, e.file_edit.new_text) for e in edits if e.file_edit] == [
+        ("foo", "bar"),
+        ("baz", "qux"),
+    ]
+
+
+def test_write_tool_emits_file_edit_with_empty_old_text(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A ``Write`` (``content`` only, no ``old_string``) renders one
+    ``file_edit`` whose ``old_text`` is empty — an honest all-additions diff,
+    never backfilled from disk."""
+    sid = "f0000000-0000-4000-8000-000000000003"
+    cwd = Path("/home/kk/work/write")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"make it"}}'
+    )
+    write_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"w1","name":"Write",'
+        '"input":{"file_path":"/repo/new.py","content":"print(1)"}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, write_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    edits = [e for e in turn.entries if e.role == "file_edit"]
+    assert len(edits) == 1
+    assert edits[0].text == "Write /repo/new.py"
+    assert edits[0].file_edit is not None
+    assert edits[0].file_edit.old_text == ""
+    assert edits[0].file_edit.new_text == "print(1)"
+
+
+def test_non_edit_tool_unaffected_by_file_edit_branch(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A read-only tool (``Read``) still renders ``role="tool"`` — the file-edit
+    branch only fires for the edit tools, never a bystander tool_use."""
+    sid = "f0000000-0000-4000-8000-000000000004"
+    cwd = Path("/home/kk/work/read")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"look at it"}}'
+    )
+    read_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"r1","name":"Read",'
+        '"input":{"file_path":"/repo/app.py"}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, read_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    assert [(e.role, e.text) for e in turn.entries] == [("tool", "Read")]
+    assert all(e.role != "file_edit" for e in turn.entries)
+
+
+def test_question_tool_unaffected_by_file_edit_branch(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A question tool still routes to ``role="question"`` — the file-edit branch
+    sits right next to the question branch, so guard that it didn't steal it."""
+    sid = "f0000000-0000-4000-8000-000000000005"
+    cwd = Path("/home/kk/work/ask-guard")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"decide"}}'
+    )
+    question_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion",'
+        '"input":{"questions":[{"question":"Merge or rebase?"}]}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, question_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    assert [e.role for e in turn.entries] == ["question"]
+    assert all(e.role != "file_edit" for e in turn.entries)
+
+
+def test_todowrite_emits_one_todo_entry_carrying_the_list(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A ``TodoWrite`` tool_use (the real Claude Code shape: ``input.todos[]`` with
+    ``content``/``status``/``activeForm``) renders ONE ``role="todo"`` entry
+    carrying the whole normalized list, with ``text`` set to the progress summary
+    for a role-unaware consumer. Before #184 this fell through to a bare
+    ``role="tool"`` "TodoWrite" and the list was discarded."""
+    sid = "f0000000-0000-4000-8000-000000000006"
+    cwd = Path("/home/kk/work/todo")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"plan it"}}'
+    )
+    todo_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"t1","name":"TodoWrite",'
+        '"input":{"todos":['
+        '{"content":"Read the code","status":"completed","activeForm":"Reading"},'
+        '{"content":"Write the fix","status":"in_progress","activeForm":"Writing"}]}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, todo_line])
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    todos = [e for e in turn.entries if e.role == "todo"]
+    assert len(todos) == 1
+    assert todos[0].text == "1/2 done · Write the fix"
+    assert todos[0].todo is not None
+    assert [(i.content, i.status, i.active_form) for i in todos[0].todo.items] == [
+        ("Read the code", "completed", "Reading"),
+        ("Write the fix", "in_progress", "Writing"),
+    ]
+    # It must NOT double-render as a generic tool.
+    assert all(e.role != "tool" for e in turn.entries)
+
+
+def test_taskcreate_and_taskupdate_reconstruct_a_todo_board(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Claude Code's Jan-2026 Task system (#188) splits ``TodoWrite`` into
+    per-item ``TaskCreate`` + per-change ``TaskUpdate`` calls, each correlated
+    by a server-assigned id that rides back only in ``TaskCreate``'s own
+    ``tool_result`` (``"Task #<n> created successfully: …"``). Every mutating
+    call renders its own ``role="todo"`` entry carrying the BOARD'S CURRENT
+    snapshot — the same shape ``TodoWrite`` renders — so the existing pinned
+    card needs no changes to pick up either provider shape."""
+    sid = "f0000000-0000-4000-8000-000000000007"
+    cwd = Path("/home/kk/work/tasks")
+    lines = [
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"track the work"}}',
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tc1","name":"TaskCreate",'
+        '"input":{"subject":"Fix the bug","activeForm":"Fixing the bug"}}]}}',
+        '{"type":"user","uuid":"u2","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"tc1",'
+        '"content":"Task #1 created successfully: Fix the bug"}]}}',
+        '{"type":"assistant","uuid":"a2","requestId":"r2","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:03.000Z","message":{"id":"m2","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tc2","name":"TaskCreate",'
+        '"input":{"subject":"Write the test"}}]}}',
+        '{"type":"user","uuid":"u3","timestamp":"2026-06-01T10:00:04.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"tc2",'
+        '"content":"Task #2 created successfully: Write the test"}]}}',
+        '{"type":"assistant","uuid":"a3","requestId":"r3","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:05.000Z","message":{"id":"m3","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tu1","name":"TaskUpdate",'
+        '"input":{"taskId":"1","status":"in_progress"}}]}}',
+    ]
+    _write_lines(claude_home, cwd, sid, lines)
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    todos = [e for e in turn.entries if e.role == "todo"]
+    assert len(todos) == 3  # one snapshot per mutating call
+    assert todos[0].todo is not None and todos[1].todo is not None and todos[2].todo is not None
+    assert [(i.content, i.status, i.active_form) for i in todos[0].todo.items] == [
+        ("Fix the bug", "pending", "Fixing the bug"),
+    ]
+    assert [(i.content, i.status) for i in todos[1].todo.items] == [
+        ("Fix the bug", "pending"),
+        ("Write the test", "pending"),
+    ]
+    final = todos[2].todo.items
+    assert [(i.content, i.status) for i in final] == [
+        ("Fix the bug", "in_progress"),
+        ("Write the test", "pending"),
+    ]
+    # Neither TaskCreate nor TaskUpdate double-renders as a generic tool.
+    assert all(e.role != "tool" for e in turn.entries)
+
+
+def test_taskcreate_with_unresolvable_id_falls_back_to_generic_tool(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A ``TaskCreate`` whose ``tool_result`` never arrived (or didn't match
+    the expected confirmation shape) can't be assigned an id — the call falls
+    back to the ordinary ``role="tool"`` entry rather than a fabricated or
+    dropped task."""
+    sid = "f0000000-0000-4000-8000-000000000008"
+    cwd = Path("/home/kk/work/tasks-unresolved")
+    lines = [
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"track it"}}',
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tc1","name":"TaskCreate",'
+        '"input":{"subject":"Orphaned create"}}]}}',
+    ]
+    _write_lines(claude_home, cwd, sid, lines)
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    assert [(e.role, e.text) for e in turn.entries] == [("tool", "TaskCreate")]
+
+
+def test_taskupdate_for_untracked_id_falls_back_to_generic_tool(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A ``TaskUpdate`` referencing an id this board never resolved a create
+    for (its create call may be outside the loaded window) degrades to the
+    generic tool entry rather than fabricating a task out of thin air."""
+    sid = "f0000000-0000-4000-8000-000000000009"
+    cwd = Path("/home/kk/work/tasks-untracked-update")
+    lines = [
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"mark it done"}}',
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tu1","name":"TaskUpdate",'
+        '"input":{"taskId":"5","status":"completed"}}]}}',
+    ]
+    _write_lines(claude_home, cwd, sid, lines)
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    assert [(e.role, e.text) for e in turn.entries] == [("tool", "TaskUpdate")]
+
+
+def test_tasklist_and_taskget_render_as_generic_tool_calls(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """``TaskList``/``TaskGet`` are read-only queries of the same board and
+    surface no new state — deliberately unrecognized (see ``TASK_TOOL_NAMES``),
+    so they render like any other bystander tool call, never touching the
+    board or absorbing into a todo entry."""
+    sid = "f0000000-0000-4000-8000-00000000000a"
+    cwd = Path("/home/kk/work/tasks-reads")
+    lines = [
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"what is left?"}}',
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tl1","name":"TaskList","input":{}}]}}',
+        '{"type":"user","uuid":"u2","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"tl1","content":"[]"}]}}',
+        '{"type":"assistant","uuid":"a2","requestId":"r2","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:03.000Z","message":{"id":"m2","role":"assistant",'
+        '"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tg1","name":"TaskGet",'
+        '"input":{"taskId":"1"}}]}}',
+    ]
+    _write_lines(claude_home, cwd, sid, lines)
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    assert [(e.role, e.text) for e in turn.entries] == [
+        ("tool", "TaskList"),
+        ("tool", "TaskGet"),
+    ]
+    assert all(e.role != "todo" for e in turn.entries)
+
+
 def test_missing_session_yields_unknown(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
     """No transcript on disk for the id (the STARTING window, or a vanished
     file) → an empty UNKNOWN activity, never a raise."""
@@ -804,6 +1133,8 @@ def test_generic_adapter_is_benign() -> None:
     assert generic.parse_activity(Path("/x"), "uuid").state is AgentActivityState.UNKNOWN
     assert generic.list_sessions(Path("/x")) == []
     assert generic.read_turns(Path("/x"), "uuid") == ()
+    assert generic.final_result(Path("/x"), "uuid") is None
+    assert generic.offline_decoration() == []
 
 
 def test_mewbo_adapter_registers_with_noop_local_surfaces() -> None:
@@ -817,7 +1148,970 @@ def test_mewbo_adapter_registers_with_noop_local_surfaces() -> None:
     assert mewbo.launch_decoration("uuid") == []
     assert mewbo.locate_transcripts(Path("/x"), "uuid") == []
     assert mewbo.discover_sessions(Path("/x")) == []
+    assert mewbo.offline_decoration() == []
 
 
 def test_claude_launch_decoration() -> None:
     assert get_adapter("claude_code").launch_decoration("abc-123") == ["--session-id", "abc-123"]
+
+
+# ─── the agentic-loop spine (#179) ──────────────────────────────────────────
+
+
+def test_read_messages_maps_roles_content_ids_and_usage(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The spine is the lineage-preserving parse ``read_turns`` / ``digest``
+    project from: one message per logical record, metadata records dropped,
+    stable ids and per-message usage carried. Cache fields stay SEPARATE (never
+    folded into one number) and ``reasoning`` is ``None`` (Claude reports no
+    reasoning-token count) — an absent count is never fabricated."""
+    _install(claude_home, BASIC_CWD, BASIC_SID, BASIC)
+    messages = adapter.read_messages(BASIC_CWD, BASIC_SID)
+
+    # ai-title / last-prompt are metadata, not loop messages → dropped.
+    assert [m.role for m in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+    first_user, first_assistant = messages[0], messages[1]
+    assert first_user.text() == "Add a healthcheck endpoint to the service"
+    assert first_user.usage is None  # a human turn carries no usage
+    assert first_user.message_id is None
+    assert first_user.timestamp == datetime.fromisoformat("2026-06-01T10:00:00.000Z")
+
+    assert first_assistant.message_id == "msg-1"
+    assert first_assistant.model == "claude-opus-4-8"
+    assert [b.type for b in first_assistant.content] == ["text", "tool_use"]
+    assert first_assistant.usage == TokenUsage(input=100, output=10)
+
+    # A reported 0 is a real count, distinct from an absent (None) field, and a
+    # cache read stays in its own field rather than being folded into `input`.
+    assert messages[3].usage == TokenUsage(input=0, output=20, cache_read=200)
+
+    # A tool-result carrier maps to a `tool` message whose block names the call.
+    tool_result = messages[2].content[0]
+    assert tool_result.type == "tool_result"
+    assert tool_result.tool_use_id
+
+
+def test_read_messages_preserves_subagent_lineage(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A sub-agent transcript is a SEPARATE file (``<sid>/subagents/agent-*.jsonl``)
+    whose records carry ``isSidechain`` + ``agentId`` + ``sourceToolAssistantUUID``
+    (on-host, Claude Code 2.1.x). The spine keeps those messages with their
+    lineage — ``is_sidechain`` / ``thread_id`` (= agentId) / ``parent_tool_use_id``
+    (= the spawning assistant uuid) — while the main-thread turn projection
+    excludes them (byte-identical: sub-agent threads never were turns)."""
+    cwd = Path("/home/kk/work/fleet-spine")
+    sid = "12121212-1212-4121-8121-121212121212"
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"delegate it"}}',
+            '{"type":"assistant","uuid":"main-a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+            '"content":[{"type":"tool_use","id":"tu1","name":"Task",'
+            '"input":{"description":"probe","subagent_type":"Explore","prompt":"go"}}]}}',
+        ],
+    )
+    sub_dir = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd) / sid / "subagents"
+    sub_dir.mkdir(parents=True)
+    (sub_dir / "agent-a99.jsonl").write_text(
+        '{"type":"assistant","uuid":"s1","isSidechain":true,"agentId":"a99",'
+        '"sourceToolAssistantUUID":"main-a1","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"message":{"id":"sm1","role":"assistant","stop_reason":"end_turn",'
+        '"content":[{"type":"text","text":"sub-agent working"}]}}\n',
+        encoding="utf-8",
+    )
+
+    messages = adapter.read_messages(cwd, sid)
+    sidechain = [m for m in messages if m.is_sidechain]
+    assert len(sidechain) == 1
+    assert sidechain[0].role == "assistant"
+    assert sidechain[0].thread_id == "a99"
+    assert sidechain[0].parent_tool_use_id == "main-a1"
+    assert sidechain[0].text() == "sub-agent working"
+    # Main-thread messages leave the lineage fields unset.
+    assert all(m.thread_id is None and m.parent_tool_use_id is None for m in messages[:2])
+
+    # The turn projection excludes the sub-agent thread — one main-thread turn.
+    (turn,) = adapter.read_turns(cwd, sid)
+    assert all("sub-agent working" not in e.text for e in turn.entries)
+
+
+def test_read_messages_notification_carries_spawning_tool_id(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A delivered ``<task-notification>`` maps to a ``notification`` message
+    whose ``tool_use_id`` is the spawning tool it reports on (so a fleet view
+    closes the right in-flight id), with the cooked summary as its text — never
+    raw XML."""
+    sid = "13131313-1313-4131-8131-131313131313"
+    cwd = Path("/home/kk/work/notify-spine")
+    notice = (
+        "<task-notification><tool-use-id>tu_bg</tool-use-id><status>completed</status>"
+        "<summary>Explore done</summary><result>found it</result></task-notification>"
+    )
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"go"}}',
+            f'{{"type":"user","uuid":"n1","timestamp":"2026-06-01T10:00:05.000Z",'
+            f'"isSidechain":false,"message":{{"role":"user","content":"{notice}"}}}}',
+        ],
+    )
+    messages = adapter.read_messages(cwd, sid)
+    notifications = [m for m in messages if m.role == "notification"]
+    assert len(notifications) == 1
+    assert notifications[0].tool_use_id == "tu_bg"
+    assert "Explore done" in notifications[0].text()
+    assert "<task-notification>" not in notifications[0].text()
+
+
+def test_read_turns_and_digest_are_projections_of_read_messages(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The public projections read from the SAME spine (one parse, many
+    projections): every user prompt in the spine appears verbatim as a turn's
+    ``user_text``, and every digest ``user`` line is a truncation of one."""
+    _install(claude_home, BASIC_CWD, BASIC_SID, BASIC)
+    messages = adapter.read_messages(BASIC_CWD, BASIC_SID)
+    spine_prompts = [m.text() for m in messages if m.role == "user"]
+    turn_prompts = [t.user_text for t in adapter.read_turns(BASIC_CWD, BASIC_SID)]
+    assert turn_prompts == spine_prompts
+
+
+# ─── typed final-result extraction (#149) ───────────────────────────────────
+
+
+def test_final_result_complete_on_a_tail_text_only_reply(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The BASIC fixture's tail is an ``end_turn`` assistant reply with no
+    tool_use block — the terminal-result shape — so ``final_result`` reports
+    it complete with the reply's own text, mirroring the tail's own
+    ``stop_reason in (end_turn, stop_sequence)`` without needing that field."""
+    _install(claude_home, BASIC_CWD, BASIC_SID, BASIC)
+    result = adapter.final_result(BASIC_CWD, BASIC_SID)
+    assert result is not None
+    assert result.is_complete is True
+    assert result.text == adapter.read_messages(BASIC_CWD, BASIC_SID)[-1].text()
+
+
+def test_final_result_none_before_any_assistant_reply(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """No assistant has spoken yet (a lone human turn) — degrade to ``None``
+    rather than a misleading empty result."""
+    cwd = Path("/home/kk/work/final-result-none")
+    sid = "21212121-2121-4121-8121-212121212121"
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"go"}}',
+        ],
+    )
+    assert adapter.final_result(cwd, sid) is None
+
+
+def test_final_result_incomplete_while_a_tool_call_is_open(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A tail assistant message still holding a ``tool_use`` block (the
+    ``stop_reason == "tool_use"`` shape) is not a final answer — working or
+    blocked-on-a-question either way."""
+    cwd = Path("/home/kk/work/final-result-open-tool")
+    sid = "22222222-2222-4222-8222-222222222222"
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"go"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tu1",'
+            '"name":"Bash","input":{"command":"ls"}}]}}',
+        ],
+    )
+    result = adapter.final_result(cwd, sid)
+    assert result is not None
+    assert result.is_complete is False
+
+
+def test_final_result_incomplete_when_a_tool_result_trails_the_assistant(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Once the tool returns, the TAIL is the ``tool`` message, not the
+    assistant that called it — ``is_complete`` stays ``False`` even though
+    that assistant message alone carries no unresolved question, because the
+    agent still owes a reply to the tool result."""
+    cwd = Path("/home/kk/work/final-result-tool-trails")
+    sid = "23232323-2323-4232-8232-232323232323"
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"go"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tu1",'
+            '"name":"Bash","input":{"command":"ls"}}]}}',
+            '{"type":"user","uuid":"u2","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:02.000Z","message":{"role":"user","content":'
+            '[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]}}',
+        ],
+    )
+    result = adapter.final_result(cwd, sid)
+    assert result is not None
+    assert result.is_complete is False
+    # The last ASSISTANT turn's text still surfaces (empty here — a bare tool
+    # call carries no prose), never the unrelated tool-result carrier's text.
+    assert result.text == ""
+
+
+def test_final_result_skips_a_trailing_sidechain_message(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A sub-agent reply is not the main thread's final answer even when it is
+    the newest record on disk — the projection must look past it to the
+    real main-thread tail."""
+    cwd = Path("/home/kk/work/final-result-sidechain")
+    sid = "24242424-2424-4242-8242-242424242424"
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"go"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}',
+        ],
+    )
+    sub_dir = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd) / sid / "subagents"
+    sub_dir.mkdir(parents=True)
+    (sub_dir / "agent-a99.jsonl").write_text(
+        '{"type":"assistant","uuid":"s1","isSidechain":true,"agentId":"a99",'
+        '"sourceToolAssistantUUID":"a1","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"message":{"id":"sm1","role":"assistant","stop_reason":"end_turn",'
+        '"content":[{"type":"text","text":"sub-agent reply"}]}}\n',
+        encoding="utf-8",
+    )
+    result = adapter.final_result(cwd, sid)
+    assert result is not None
+    assert result.is_complete is True
+    assert result.text == "done"
+
+
+# ─── latest-todo projection (#194) ──────────────────────────────────────────
+
+
+def test_latest_todo_none_before_any_todo_tool_is_called(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A session that never called a todo/Task tool projects to ``None`` —
+    never a misleading empty card."""
+    cwd = Path("/home/kk/work/latest-todo-none")
+    sid = "31313131-3131-4131-8131-313131313131"
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"go"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tu1",'
+            '"name":"Bash","input":{"command":"ls"}}]}}',
+        ],
+    )
+    assert adapter.latest_todo(cwd, sid) is None
+
+
+def test_latest_todo_from_a_todowrite_call(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
+    """A single ``TodoWrite`` call is the whole list — the projection reads
+    straight through to it, mirroring the ``final_result_from_messages``
+    recipe over the same spine."""
+    cwd = Path("/home/kk/work/latest-todo-todowrite")
+    sid = "32323232-3232-4232-8232-323232323232"
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"track it"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tw1",'
+            '"name":"TodoWrite","input":{"todos":['
+            '{"content":"Read the code","status":"completed","activeForm":"Reading"},'
+            '{"content":"Write the fix","status":"in_progress","activeForm":"Writing"}'
+            "]}}]}}",
+        ],
+    )
+    todo = adapter.latest_todo(cwd, sid)
+    assert todo is not None
+    assert [(i.content, i.status, i.active_form) for i in todo.items] == [
+        ("Read the code", "completed", "Reading"),
+        ("Write the fix", "in_progress", "Writing"),
+    ]
+
+
+def test_latest_todo_reflects_the_boards_final_snapshot(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Multiple ``TaskCreate``/``TaskUpdate`` calls fold onto one running
+    board (#188) — the projection reports the board's state AFTER the last
+    mutating call, not the first one it ever saw."""
+    cwd = Path("/home/kk/work/latest-todo-board")
+    sid = "33333333-3333-4333-8333-333333333333"
+    lines = [
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"track the work"}}',
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tc1","name":"TaskCreate",'
+        '"input":{"subject":"Fix the bug","activeForm":"Fixing the bug"}}]}}',
+        '{"type":"user","uuid":"u2","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"tc1",'
+        '"content":"Task #1 created successfully: Fix the bug"}]}}',
+        '{"type":"assistant","uuid":"a2","requestId":"r2","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:03.000Z","message":{"id":"m2","role":"assistant",'
+        '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tc2","name":"TaskCreate",'
+        '"input":{"subject":"Write the test"}}]}}',
+        '{"type":"user","uuid":"u3","timestamp":"2026-06-01T10:00:04.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"tc2",'
+        '"content":"Task #2 created successfully: Write the test"}]}}',
+        '{"type":"assistant","uuid":"a3","requestId":"r3","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:05.000Z","message":{"id":"m3","role":"assistant",'
+        '"stop_reason":"end_turn","content":[{"type":"tool_use","id":"tu1","name":"TaskUpdate",'
+        '"input":{"taskId":"1","status":"in_progress"}}]}}',
+    ]
+    _write_lines(claude_home, cwd, sid, lines)
+    todo = adapter.latest_todo(cwd, sid)
+    assert todo is not None
+    assert [(i.content, i.status) for i in todo.items] == [
+        ("Fix the bug", "in_progress"),
+        ("Write the test", "pending"),
+    ]
+
+
+def test_latest_todo_folds_a_taskupdate_correlated_many_turns_after_its_taskcreate(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """THE LOAD-BEARING CASE (#194): a ``TaskUpdate`` near the tail references
+    an id whose owning ``TaskCreate`` (and the ``tool_result`` carrying its
+    server-assigned id, see ``TaskBoard.created_task_id``) sits dozens of
+    turns earlier. Correctness requires folding the WHOLE transcript from
+    session start — a "last N turns" tail read would prune the original
+    ``TaskCreate``/``tool_result`` pair out of its window, so ``TaskUpdate``'s
+    ``taskId`` would never resolve against a tracked task and the projection
+    would wrongly report ``None`` (or a stale board) instead of the real
+    final state.
+    """
+    cwd = Path("/home/kk/work/latest-todo-many-turns")
+    sid = "34343434-3434-4343-8343-343434343434"
+    lines = [
+        '{"type":"user","uuid":"u0","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"track the work"}}',
+        '{"type":"assistant","uuid":"a0","requestId":"r0","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m0","role":"assistant",'
+        '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tc1","name":"TaskCreate",'
+        '"input":{"subject":"Fix the bug","activeForm":"Fixing the bug"}}]}}',
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"tc1",'
+        '"content":"Task #1 created successfully: Fix the bug"}]}}',
+    ]
+    # Dozens of unrelated human/assistant turns between the create and the
+    # eventual update — far past any plausible bounded tail window.
+    for n in range(2, 42):
+        minute = f"{10 + n // 60:02d}:{n % 60:02d}"
+        lines.append(
+            f'{{"type":"user","uuid":"u{n}","timestamp":"2026-06-01T{minute}:00.000Z",'
+            f'"isSidechain":false,"message":{{"role":"user","content":"continue step {n}"}}}}'
+        )
+        lines.append(
+            f'{{"type":"assistant","uuid":"a{n}","requestId":"r{n}","isSidechain":false,'
+            f'"timestamp":"2026-06-01T{minute}:01.000Z","message":{{"id":"m{n}",'
+            '"role":"assistant","stop_reason":"end_turn",'
+            f'"content":[{{"type":"text","text":"working on step {n}"}}]}}}}'
+        )
+    lines.append(
+        '{"type":"assistant","uuid":"aLast","requestId":"rLast","isSidechain":false,'
+        '"timestamp":"2026-06-01T10:59:59.000Z","message":{"id":"mLast","role":"assistant",'
+        '"stop_reason":"end_turn","content":[{"type":"tool_use","id":"tuLast","name":"TaskUpdate",'
+        '"input":{"taskId":"1","status":"completed"}}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, lines)
+
+    todo = adapter.latest_todo(cwd, sid)
+
+    assert todo is not None
+    assert [(i.content, i.status, i.active_form) for i in todo.items] == [
+        ("Fix the bug", "completed", "Fixing the bug"),
+    ]
+
+
+# ─── fleet reader (#173) ─────────────────────────────────────────────────────
+
+
+def _write_subagent(
+    claude_home: Path,
+    cwd: Path,
+    sid: str,
+    agent_id: str,
+    lines: list[str],
+    *,
+    meta: dict[str, object] | None = None,
+) -> Path:
+    """Drop one sub-agent transcript (+ optional sibling ``.meta.json``) where
+    the fleet reader finds it: ``<sid>/subagents/agent-{agent_id}.jsonl`` —
+    verified on-host layout (real ``~/.claude/projects`` transcripts, 2026-07-08)."""
+    sub_dir = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd) / sid / "subagents"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+    path = sub_dir / f"agent-{agent_id}.jsonl"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if meta is not None:
+        (sub_dir / f"agent-{agent_id}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    return path
+
+
+def test_fleet_activity_empty_when_no_subagents(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A session with no ``subagents/`` dir is the common case — cheap ``()``,
+    no message read paid."""
+    _install(claude_home, BASIC_CWD, BASIC_SID, BASIC)
+    assert adapter.fleet_activity(BASIC_CWD, BASIC_SID) == []
+
+
+def test_fleet_activity_identity_status_turns_model(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """One sub-agent thread, itemized: identity from the ``.meta.json`` sidecar
+    (``agentType``/``description`` → ``title``/``current_task``), the
+    parent/child link back to the primary session, per-thread turn counts, and
+    the thread's OWN model (verified on-host: a sub-agent frequently runs a
+    DIFFERENT model than the main thread, e.g. an ``Explore`` worker on haiku
+    under an opus primary) — a status derived from the tail's own block SHAPE,
+    since the spine deliberately carries no raw ``stop_reason``."""
+    sid = "14141414-1414-4141-8141-141414141414"
+    cwd = Path("/home/kk/work/fleet-basic")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"tu1","name":"Agent",'
+            '"input":{"description":"Explore the auth flow","subagent_type":"Explore"}}]}}',
+        ],
+    )
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agent01",
+        [
+            '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"agent01",'
+            '"timestamp":"2026-06-01T10:00:02.000Z",'
+            '"message":{"role":"user","content":"Explore the auth flow, report back."}}',
+            '{"type":"assistant","uuid":"sa1","isSidechain":true,"agentId":"agent01",'
+            '"timestamp":"2026-06-01T10:00:03.000Z","message":{"id":"sm1","role":"assistant",'
+            '"model":"claude-haiku-4-5-20251001","stop_reason":"tool_use",'
+            '"usage":{"input_tokens":10,"output_tokens":5},'
+            '"content":[{"type":"tool_use","id":"stu1","name":"Read",'
+            '"input":{"file_path":"auth.py"}}]}}',
+            '{"type":"user","uuid":"sr1","isSidechain":true,"agentId":"agent01",'
+            '"timestamp":"2026-06-01T10:00:04.000Z","message":{"role":"user","content":['
+            '{"type":"tool_result","tool_use_id":"stu1","content":"def login(): ..."}]}}',
+            '{"type":"assistant","uuid":"sa2","isSidechain":true,"agentId":"agent01",'
+            '"timestamp":"2026-06-01T10:00:05.000Z","message":{"id":"sm2","role":"assistant",'
+            '"model":"claude-haiku-4-5-20251001","stop_reason":"end_turn",'
+            '"usage":{"input_tokens":20,"output_tokens":15},'
+            '"content":[{"type":"text","text":"Auth uses session cookies."}]}}',
+        ],
+        meta={
+            "agentType": "Explore",
+            "description": "Explore the auth flow",
+            "toolUseId": "tu1",
+        },
+    )
+
+    fleet = adapter.fleet_activity(cwd, sid)
+    assert len(fleet) == 1
+    session, act = fleet[0]
+    assert session.session_id == "agent01"
+    assert session.adapter_kind == "claude_code"
+    assert session.parent_session_id == sid
+    assert act.title == "Explore"
+    assert act.current_task == "Explore the auth flow"
+    assert act.human_turns == 1
+    assert act.assistant_replies == 2
+    assert act.tool_calls == 1
+    assert act.model == "claude-haiku-4-5-20251001"
+    assert act.tokens_in == 30
+    assert act.tokens_out == 20
+    # The tail assistant reply ends in plain text (no tool_use) — its own turn
+    # closed, mirroring the main thread's end_turn → WAITING rule.
+    assert act.state is AgentActivityState.WAITING
+    assert act.started_at == datetime.fromisoformat("2026-06-01T10:00:02.000Z")
+    assert act.last_event_at == datetime.fromisoformat("2026-06-01T10:00:05.000Z")
+
+
+def test_fleet_activity_working_when_tail_holds_a_tool_call(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A sub-agent whose tail is still mid tool-loop reads WORKING, not WAITING."""
+    sid = "15151515-1515-4151-8151-151515151515"
+    cwd = Path("/home/kk/work/fleet-working")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out"}}',
+        ],
+    )
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agent02",
+        [
+            '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"agent02",'
+            '"timestamp":"2026-06-01T10:00:01.000Z",'
+            '"message":{"role":"user","content":"dig in"}}',
+            '{"type":"assistant","uuid":"sa1","isSidechain":true,"agentId":"agent02",'
+            '"timestamp":"2026-06-01T10:00:02.000Z","message":{"id":"sm1","role":"assistant",'
+            '"stop_reason":"tool_use",'
+            '"content":[{"type":"tool_use","id":"stu1","name":"Grep","input":{"pattern":"x"}}]}}',
+        ],
+    )
+    fleet = adapter.fleet_activity(cwd, sid)
+    assert len(fleet) == 1
+    _, act = fleet[0]
+    assert act.state is AgentActivityState.WORKING
+
+
+def test_fleet_activity_falls_back_when_meta_json_missing(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """No ``.meta.json`` sidecar (Claude Code writes it fire-and-forget, so it
+    can be absent) → identity degrades honestly: no title, and ``current_task``
+    falls back to the truncated first task prompt rather than nothing."""
+    sid = "16161616-1616-4161-8161-161616161616"
+    cwd = Path("/home/kk/work/fleet-no-meta")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out"}}',
+        ],
+    )
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agent03",
+        [
+            '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"agent03",'
+            '"timestamp":"2026-06-01T10:00:01.000Z",'
+            '"message":{"role":"user","content":"Investigate the flaky test."}}',
+            '{"type":"assistant","uuid":"sa1","isSidechain":true,"agentId":"agent03",'
+            '"timestamp":"2026-06-01T10:00:02.000Z","message":{"id":"sm1","role":"assistant",'
+            '"stop_reason":"end_turn","content":[{"type":"text","text":"It is a race."}]}}',
+        ],
+        meta=None,
+    )
+    fleet = adapter.fleet_activity(cwd, sid)
+    assert len(fleet) == 1
+    session, act = fleet[0]
+    assert session.transcript_path is not None
+    assert act.title is None
+    assert act.current_task == "Investigate the flaky test."
+
+
+def test_fleet_activity_ignores_malformed_meta_json(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A malformed sidecar degrades to the same fallback as a missing one —
+    never raises."""
+    sid = "17171717-1717-4171-8171-171717171717"
+    cwd = Path("/home/kk/work/fleet-bad-meta")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out"}}',
+        ],
+    )
+    path = _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agent04",
+        [
+            '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"agent04",'
+            '"timestamp":"2026-06-01T10:00:01.000Z",'
+            '"message":{"role":"user","content":"Look at the config loader."}}',
+        ],
+    )
+    path.with_name("agent-agent04.meta.json").write_text("{not json", encoding="utf-8")
+    fleet = adapter.fleet_activity(cwd, sid)
+    assert len(fleet) == 1
+    _, act = fleet[0]
+    assert act.current_task == "Look at the config loader."
+
+
+def test_fleet_activity_multiple_threads_grouped_independently(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Two concurrent sub-agents stay in separate entries, each with its own
+    turns/model — a fan-out fleet, not a merged blob."""
+    sid = "18181818-1818-4181-8181-181818181818"
+    cwd = Path("/home/kk/work/fleet-multi")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out"}}',
+        ],
+    )
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agentA",
+        [
+            '{"type":"user","uuid":"a-u1","isSidechain":true,"agentId":"agentA",'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"role":"user","content":"probe A"}}',
+            '{"type":"assistant","uuid":"a-a1","isSidechain":true,"agentId":"agentA",'
+            '"timestamp":"2026-06-01T10:00:02.000Z","message":{"id":"a-m1","role":"assistant",'
+            '"model":"claude-opus-4-8","stop_reason":"end_turn",'
+            '"content":[{"type":"text","text":"A done"}]}}',
+        ],
+        meta={"agentType": "general-purpose", "description": "probe A", "toolUseId": "tuA"},
+    )
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agentB",
+        [
+            '{"type":"user","uuid":"b-u1","isSidechain":true,"agentId":"agentB",'
+            '"timestamp":"2026-06-01T10:00:01.500Z","message":{"role":"user","content":"probe B"}}',
+            '{"type":"assistant","uuid":"b-a1","isSidechain":true,"agentId":"agentB",'
+            '"timestamp":"2026-06-01T10:00:02.500Z","message":{"id":"b-m1","role":"assistant",'
+            '"model":"claude-haiku-4-5-20251001","stop_reason":"end_turn",'
+            '"content":[{"type":"text","text":"B done"}]}}',
+        ],
+        meta={"agentType": "Explore", "description": "probe B", "toolUseId": "tuB"},
+    )
+    fleet = adapter.fleet_activity(cwd, sid)
+    by_id = {session.session_id: (session, act) for session, act in fleet}
+    assert set(by_id) == {"agentA", "agentB"}
+    assert by_id["agentA"][1].model == "claude-opus-4-8"
+    assert by_id["agentB"][1].model == "claude-haiku-4-5-20251001"
+    assert all(session.parent_session_id == sid for session, _ in fleet)
+
+
+def test_claude_offline_decoration_disallows_web_tools() -> None:
+    """#148: `tools_offline` maps to Claude Code's `--disallowedTools` flag,
+    dropping the two network-facing built-ins."""
+    assert get_adapter("claude_code").offline_decoration() == [
+        "--disallowedTools",
+        "WebFetch,WebSearch",
+    ]
+
+
+# ─── session controls (#178): TIER-1 filesystem enumeration ─────────────────
+
+
+def test_session_controls_enumerates_commands_skills_mcp(
+    adapter: ClaudeCodeAdapter, claude_home: Path, tmp_path: Path
+) -> None:
+    cwd = tmp_path / "wt"
+    commands = cwd / ".claude" / "commands"
+    (commands / "git").mkdir(parents=True)
+    (commands / "review.md").write_text(
+        "---\ndescription: Review the diff\n---\nbody", encoding="utf-8"
+    )
+    (commands / "git" / "commit.md").write_text("plain body", encoding="utf-8")
+    skill_dir = cwd / ".claude" / "skills" / "brainstorming"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\ndescription: Explore ideas\n---\n", encoding="utf-8")
+    (cwd / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"gitea": {}, "playwright": {}}}), encoding="utf-8"
+    )
+    # A user-scoped command under the CLAUDE_CONFIG_DIR base (the cascade).
+    (claude_home / "commands").mkdir(parents=True)
+    (claude_home / "commands" / "userdoc.md").write_text("u", encoding="utf-8")
+
+    controls = adapter.session_controls(cwd, "sid")
+
+    by_name = {c.name: c for c in controls.commands}
+    assert {"review", "git:commit", "userdoc"} <= set(by_name)
+    assert by_name["review"].detail == "Review the diff"  # front-matter
+    assert by_name["review"].scope == "project"
+    assert by_name["userdoc"].scope == "user"
+    assert by_name["git:commit"].detail is None  # no front-matter → None
+    assert {c.name for c in controls.skills} == {"brainstorming"}
+    assert {c.name for c in controls.mcp_servers} == {"gitea", "playwright"}
+    # The adapter fills only the fs-scanned lists — model/permission are the
+    # manager's to add.
+    assert controls.models == ()
+    assert controls.current_model is None
+    assert controls.permission_mode is None
+
+
+def test_session_controls_empty_when_no_dot_claude(
+    adapter: ClaudeCodeAdapter, claude_home: Path, tmp_path: Path
+) -> None:
+    del claude_home
+    controls = adapter.session_controls(tmp_path / "bare", "sid")
+    assert controls.commands == ()
+    assert controls.skills == ()
+    assert controls.mcp_servers == ()
+
+
+def test_session_controls_tolerates_malformed_mcp_json(
+    adapter: ClaudeCodeAdapter, claude_home: Path, tmp_path: Path
+) -> None:
+    del claude_home
+    cwd = tmp_path / "wt"
+    cwd.mkdir()
+    (cwd / ".mcp.json").write_text("{ not json", encoding="utf-8")
+    # Best-effort: a junk file drops that source, never raises.
+    assert adapter.session_controls(cwd, "sid").mcp_servers == ()
+
+
+# ─── incremental re-reads (transcript-cache integration, daemon-CPU fix) ────
+
+INC_SID = "33333333-3333-4333-8333-333333333333"
+INC_CWD = Path("/home/kk/work/inc")
+
+
+def _write_session(claude_home: Path, cwd: Path, sid: str, lines: list[dict]) -> Path:
+    target_dir = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{sid}.jsonl"
+    target.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return target
+
+
+def _append(target: Path, lines: list[dict]) -> None:
+    with target.open("a", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(json.dumps(line) + "\n")
+
+
+def _user(uuid: str, ts: str, text: str) -> dict:
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": ts,
+        "isSidechain": False,
+        "cwd": str(INC_CWD),
+        "sessionId": INC_SID,
+        "message": {"role": "user", "content": text},
+    }
+
+
+def _assistant_block(uuid: str, ts: str, msg_id: str, block: dict, *, stop: str) -> dict:
+    return {
+        "type": "assistant",
+        "uuid": uuid,
+        "timestamp": ts,
+        "isSidechain": False,
+        "sessionId": INC_SID,
+        "requestId": f"req-{msg_id}",
+        "message": {
+            "id": msg_id,
+            "role": "assistant",
+            "model": "claude-opus-4-8",
+            "stop_reason": stop,
+            "usage": {"input_tokens": 100, "output_tokens": 10},
+            "content": [block],
+        },
+    }
+
+
+def test_memo_returns_identical_objects_while_unchanged(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    _write_session(
+        claude_home,
+        INC_CWD,
+        INC_SID,
+        [
+            _user("u1", "2026-06-01T10:00:00.000Z", "hello"),
+            _assistant_block(
+                "a1",
+                "2026-06-01T10:00:01.000Z",
+                "m1",
+                {"type": "text", "text": "hi"},
+                stop="end_turn",
+            ),
+        ],
+    )
+    act = adapter.parse_activity(INC_CWD, INC_SID)
+    assert adapter.parse_activity(INC_CWD, INC_SID) is act
+    msgs = adapter.read_messages(INC_CWD, INC_SID)
+    assert adapter.read_messages(INC_CWD, INC_SID) is msgs
+
+
+def test_incremental_append_advances_activity(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    target = _write_session(
+        claude_home,
+        INC_CWD,
+        INC_SID,
+        [
+            _user("u1", "2026-06-01T10:00:00.000Z", "first ask"),
+            _assistant_block(
+                "a1",
+                "2026-06-01T10:00:01.000Z",
+                "m1",
+                {"type": "text", "text": "done"},
+                stop="end_turn",
+            ),
+        ],
+    )
+    first = adapter.parse_activity(INC_CWD, INC_SID)
+    assert first.human_turns == 1
+    assert first.state is AgentActivityState.WAITING
+
+    _append(
+        target,
+        [
+            _user("u2", "2026-06-01T10:01:00.000Z", "second ask"),
+            _assistant_block(
+                "a2",
+                "2026-06-01T10:01:01.000Z",
+                "m2",
+                {"type": "tool_use", "id": "t9", "name": "Bash", "input": {}},
+                stop="tool_use",
+            ),
+        ],
+    )
+    second = adapter.parse_activity(INC_CWD, INC_SID)
+    assert second.human_turns == 2
+    assert second.state is AgentActivityState.WORKING
+    # Usage is counted once per logical message across the whole history.
+    assert second.tokens_in == 200
+
+
+def test_split_block_siblings_absorb_once_across_appends(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The absorb-merge (one line per content block) stays correct when the
+    sibling lands in a LATER incremental read — and repeated reads never
+    re-absorb (the duplicate-blocks hazard the private-dict fold design
+    exists to prevent)."""
+    target = _write_session(
+        claude_home,
+        INC_CWD,
+        INC_SID,
+        [
+            _user("u1", "2026-06-01T10:00:00.000Z", "go"),
+            _assistant_block(
+                "a1",
+                "2026-06-01T10:00:01.000Z",
+                "m1",
+                {"type": "text", "text": "thinking about it"},
+                stop="tool_use",
+            ),
+        ],
+    )
+    adapter.parse_activity(INC_CWD, INC_SID)
+
+    # The split-block sibling: same (message.id, requestId), distinct uuid.
+    _append(
+        target,
+        [
+            _assistant_block(
+                "a1-sibling",
+                "2026-06-01T10:00:01.500Z",
+                "m1",
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+                stop="tool_use",
+            ),
+        ],
+    )
+    merged = adapter.parse_activity(INC_CWD, INC_SID)
+    assert merged.assistant_replies == 1
+    assert merged.tool_calls == 1
+    assert merged.tokens_in == 100  # sibling usage folds, never double-counts
+
+    # Re-reads (memo hit AND a forced re-walk after touching the file) must
+    # not re-absorb the sibling into the kept record.
+    again = adapter.parse_activity(INC_CWD, INC_SID)
+    assert again.tool_calls == 1
+    _append(target, [_user("u2", "2026-06-01T10:02:00.000Z", "and then")])
+    moved = adapter.parse_activity(INC_CWD, INC_SID)
+    assert moved.tool_calls == 1
+    assert moved.human_turns == 2
+
+
+def test_truncated_rewrite_reparses_from_scratch(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    target = _write_session(
+        claude_home,
+        INC_CWD,
+        INC_SID,
+        [
+            _user("u1", "2026-06-01T10:00:00.000Z", "one"),
+            _user("u2", "2026-06-01T10:01:00.000Z", "two"),
+        ],
+    )
+    assert adapter.parse_activity(INC_CWD, INC_SID).human_turns == 2
+    # A shorter rewrite (compaction/cleanup) resets the fold state.
+    target.write_text(
+        json.dumps(_user("u9", "2026-06-01T11:00:00.000Z", "fresh")) + "\n",
+        encoding="utf-8",
+    )
+    assert adapter.parse_activity(INC_CWD, INC_SID).human_turns == 1

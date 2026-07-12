@@ -16,6 +16,7 @@ adapter automatically.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,11 +91,14 @@ class SessionExplorer:
         Union of the live ``git worktree list`` (main first; covers hand-made
         worktrees Grove never managed), every workspace's persisted ``agent_cwd``
         (worktree/subpath — where a nested project's agent actually runs and
-        records its transcript's cwd, #101/#118), and its ``worktree_path``
+        records its transcript's cwd, #101/#118), its ``worktree_path``
         (covers paused workspaces whose directory is gone — their transcripts
-        still live under the encoded-cwd projects folder). ``agent_cwd`` collapses
-        to the worktree root for the common empty-subpath case, so the extra
-        entry only matters for nested projects.
+        still live under the encoded-cwd projects folder), and, for a workspace
+        with a ``transcript_context`` override (#147), the recorded cwd it names
+        instead — a container-launched agent's real cwd, which can never equal
+        either host path. ``agent_cwd`` collapses to the worktree root for the
+        common empty-subpath case, so the extra entries only matter for nested
+        or overridden projects.
         """
         out: list[Path] = []
         seen: set[str] = set()
@@ -103,6 +107,11 @@ class SessionExplorer:
             *GitRepo(self._manager.repo_root).worktree_paths(),
             *(state.agent_cwd for state in states),
             *(Path(state.worktree_path) for state in states),
+            *(
+                Path(state.transcript_context.agent_cwd)
+                for state in states
+                if state.transcript_context is not None
+            ),
         ]
         for path in candidates:
             key = str(path)
@@ -127,12 +136,16 @@ class SessionExplorer:
         result after sorting.
         """
         states = self._manager.list()
-        # A scanned root binds to its workspace by cwd — key on both agent_cwd
-        # (a nested project's real cwd, #118) and worktree_path so a session found
-        # under either resolves to its workspace. First-wins on collision.
+        # A scanned root binds to its workspace by cwd — key on agent_cwd (a
+        # nested project's real cwd, #118), worktree_path, and a
+        # transcript_context override's recorded cwd (#147) so a session found
+        # under any resolves to its workspace. First-wins on collision.
         by_cwd: dict[str, WorkspaceState] = {}
         for s in states:
-            for cwd_key in (str(s.agent_cwd), s.worktree_path):
+            cwd_keys = [str(s.agent_cwd), s.worktree_path]
+            if s.transcript_context is not None:
+                cwd_keys.append(s.transcript_context.agent_cwd)
+            for cwd_key in cwd_keys:
                 by_cwd.setdefault(cwd_key, s)
         minted: dict[str, WorkspaceState] = {
             s.agent_session_id: s for s in states if s.agent_session_id
@@ -141,44 +154,65 @@ class SessionExplorer:
         # legacy records): the cwd fallback below tags a session only when its
         # kind matches, so it's read per state, not per session.
         eff_kind: dict[str, str] = {s.id: self._manager.effective_kind(s) for s in states}
+        # Root → (kind, config_dir) for a workspace's transcript_context
+        # override (#147) — scopes the adapter's config-dir env var while
+        # scanning that one root, so its bind-mounted host directory is what
+        # `list_sessions` actually searches.
+        override_by_root: dict[str, tuple[str, str]] = {
+            s.transcript_context.agent_cwd: (eff_kind[s.id], s.transcript_context.config_dir)
+            for s in states
+            if s.transcript_context is not None
+        }
 
         listings: list[SessionListing] = []
         seen: set[tuple[str, str]] = set()
         for root in self.scan_roots():
-            for adapter in all_adapters():
-                for summary in adapter.list_sessions(root):
-                    key = (summary.adapter_kind, summary.session_id)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    # Minted-id equality is authoritative (Grove launched it here,
-                    # and the id was minted by this workspace's own adapter, so the
-                    # kind matches by construction). The cwd fallback is NOT: a ROOT
-                    # workspace's cwd is the shared repo root, so a foreign-kind
-                    # session there (a codex rollout under a claude_code workspace)
-                    # sits in the same dir — annotating it with this workspace's
-                    # id/title would mis-attribute a session the workspace can never
-                    # own (its adapter can't read it; remap rejects a kind mismatch).
-                    # So the cwd fallback tags only a same-kind session; otherwise
-                    # the browse row stays unmapped, honest history (#164).
-                    state = minted.get(summary.session_id)
-                    if state is None:
-                        candidate = by_cwd.get(str(root))
-                        if candidate is not None and summary.adapter_kind == eff_kind[candidate.id]:
-                            state = candidate
-                    listings.append(
-                        SessionListing(
-                            summary=summary,
-                            provenance=(
-                                "grove_launched"
-                                if summary.session_id in minted
-                                else "fs_discovered"
-                            ),
-                            workspace_id=state.id if state else None,
-                            workspace_title=state.title if state else None,
-                            workspace_branch=state.branch if state else None,
+            override = override_by_root.get(str(root))
+            scope = (
+                self._manager.transcript_config_dir_scope(*override)
+                if override is not None
+                else contextlib.nullcontext()
+            )
+            with scope:
+                for adapter in all_adapters():
+                    for summary in adapter.list_sessions(root):
+                        key = (summary.adapter_kind, summary.session_id)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        # Minted-id equality is authoritative (Grove launched it
+                        # here, and the id was minted by this workspace's own
+                        # adapter, so the kind matches by construction). The cwd
+                        # fallback is NOT: a ROOT workspace's cwd is the shared
+                        # repo root, so a foreign-kind session there (a codex
+                        # rollout under a claude_code workspace) sits in the same
+                        # dir — annotating it with this workspace's id/title
+                        # would mis-attribute a session the workspace can never
+                        # own (its adapter can't read it; remap rejects a kind
+                        # mismatch). So the cwd fallback tags only a same-kind
+                        # session; otherwise the browse row stays unmapped,
+                        # honest history (#164).
+                        state = minted.get(summary.session_id)
+                        if state is None:
+                            candidate = by_cwd.get(str(root))
+                            if (
+                                candidate is not None
+                                and summary.adapter_kind == eff_kind[candidate.id]
+                            ):
+                                state = candidate
+                        listings.append(
+                            SessionListing(
+                                summary=summary,
+                                provenance=(
+                                    "grove_launched"
+                                    if summary.session_id in minted
+                                    else "fs_discovered"
+                                ),
+                                workspace_id=state.id if state else None,
+                                workspace_title=state.title if state else None,
+                                workspace_branch=state.branch if state else None,
+                            )
                         )
-                    )
 
         if agent is not None:
             listings = [ls for ls in listings if ls.summary.adapter_kind == agent]
@@ -261,10 +295,10 @@ class SessionExplorer:
         """The shared one-cwd scan behind :meth:`for_workspace` (``adopt_gate``
         True) and :meth:`candidates_for` (False).
 
-        Scans the ``state.scan_cwds`` union **through the single adapter for this
-        workspace's effective kind**, dedupes by ``(kind, id)``, tags provenance
-        by minted-id equality, sorts newest-first by mtime. Only when
-        ``adopt_gate`` does it drop a discovered listing ``ClaudeHook.adopts``
+        Scans the ``state.transcript_scan_cwds`` union **through the single
+        adapter for this workspace's effective kind**, dedupes by ``(kind, id)``,
+        tags provenance by minted-id equality, sorts newest-first by mtime. Only
+        when ``adopt_gate`` does it drop a discovered listing ``ClaudeHook.adopts``
         rejects (birth ≥ ``created_at`` OR a pane-verified live-here sidecar,
         #F1) — the minted (``grove_launched``) listing is never gated either way.
         One derivation so the gated and ungated reads can't drift.
@@ -280,8 +314,15 @@ class SessionExplorer:
         to ``mgr.effective_kind`` keeps the picker in agreement with the pin and
         matches the read path (``ActivityService.sessions_for`` discovers through
         this same one adapter).
+
+        Honors ``state.transcript_context`` (#147): ``transcript_scan_cwds``
+        substitutes the container-recorded cwd for the union above, and the
+        whole scan is wrapped in the matching config-dir env scope so the
+        adapter searches the override's host directory instead of the ambient
+        one. No override (the default) is byte-for-byte the pre-#147 scan.
         """
-        adapter = get_adapter(self._manager.effective_kind(state))
+        kind = self._manager.effective_kind(state)
+        adapter = get_adapter(kind)
         # Reference pane from the minted session's sidecar (#F1): the pane this
         # workspace owns, against which a discovered session's live-here evidence
         # is verified. Read once, before the scan loop — and only when gating.
@@ -293,38 +334,42 @@ class SessionExplorer:
             reference_pane = ref.tmux_pane if ref is not None else None
         listings: list[SessionListing] = []
         seen: set[tuple[str, str]] = set()
-        for cwd in state.scan_cwds:
-            for summary in adapter.list_sessions(cwd):
-                key = (summary.adapter_kind, summary.session_id)
-                if key in seen:
-                    continue
-                seen.add(key)
-                provenance: SessionProvenance = (
-                    "grove_launched"
-                    if summary.session_id == state.agent_session_id
-                    else "fs_discovered"
-                )
-                if adopt_gate and provenance != "grove_launched":
-                    candidate = ClaudeHook.read(
-                        summary.session_id, sidecar_dir=core_paths.agent_sidecar_dir()
-                    )
-                    if not ClaudeHook.adopts(
-                        state,
-                        summary.created_at,
-                        candidate=candidate,
-                        reference_pane=reference_pane,
-                        cwd=cwd,
-                    ):
+        ctx = state.transcript_context
+        with self._manager.transcript_config_dir_scope(
+            kind, ctx.config_dir if ctx is not None else None
+        ):
+            for cwd in state.transcript_scan_cwds:
+                for summary in adapter.list_sessions(cwd):
+                    key = (summary.adapter_kind, summary.session_id)
+                    if key in seen:
                         continue
-                listings.append(
-                    SessionListing(
-                        summary=summary,
-                        provenance=provenance,
-                        workspace_id=state.id,
-                        workspace_title=state.title,
-                        workspace_branch=state.branch,
+                    seen.add(key)
+                    provenance: SessionProvenance = (
+                        "grove_launched"
+                        if summary.session_id == state.agent_session_id
+                        else "fs_discovered"
                     )
-                )
+                    if adopt_gate and provenance != "grove_launched":
+                        candidate = ClaudeHook.read(
+                            summary.session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                        )
+                        if not ClaudeHook.adopts(
+                            state,
+                            summary.created_at,
+                            candidate=candidate,
+                            reference_pane=reference_pane,
+                            cwd=cwd,
+                        ):
+                            continue
+                    listings.append(
+                        SessionListing(
+                            summary=summary,
+                            provenance=provenance,
+                            workspace_id=state.id,
+                            workspace_title=state.title,
+                            workspace_branch=state.branch,
+                        )
+                    )
         listings.sort(key=lambda ls: ls.summary.modified_at or _EPOCH, reverse=True)
         return tuple(listings)
 
@@ -350,10 +395,37 @@ class SessionExplorer:
     def transcripts(self, listing: SessionListing) -> tuple[Path, ...]:
         """Every transcript file for the session — main thread first, then
         sub-agent files — via the owning adapter's locator. Empty for a
-        remote-backed session (no local files)."""
+        remote-backed session (no local files).
+
+        Scoped to the owning workspace's ``transcript_context.config_dir``
+        override, if any (#147) — ``_session_cwd`` already resolves to the
+        session's own recorded cwd (a container path, when relevant), so only
+        the adapter's config-dir env needs redirecting to find that host
+        directory at all.
+        """
         summary = listing.summary
         adapter = get_adapter(summary.adapter_kind)
-        return tuple(adapter.locate_transcripts(self._session_cwd(listing), summary.session_id))
+        with self._manager.transcript_config_dir_scope(
+            summary.adapter_kind, self._transcript_config_dir(listing)
+        ):
+            return tuple(adapter.locate_transcripts(self._session_cwd(listing), summary.session_id))
+
+    def _transcript_config_dir(self, listing: SessionListing) -> str | None:
+        """The config-dir override for reading ``listing``'s session (#147).
+
+        ``None`` (today's behavior) when the listing isn't attributed to a
+        workspace, that workspace has since vanished (a kill racing a read —
+        best-effort, degrades to no override rather than raising), or it has
+        no override set.
+        """
+        if listing.workspace_id is None:
+            return None
+        try:
+            state = self._manager.get(listing.workspace_id)
+        except GroveError:
+            return None
+        ctx = state.transcript_context
+        return ctx.config_dir if ctx is not None else None
 
     def turns_for(
         self, listing: SessionListing, *, last: int | None = None
@@ -363,9 +435,17 @@ class SessionExplorer:
         Split from :meth:`turns` so a caller holding a listing (the daemon's
         turns endpoint, fed by :meth:`for_workspace`) skips the full-project
         :meth:`resolve` scan.
+
+        Scoped to the owning workspace's config-dir override, if any — same
+        reasoning as :meth:`transcripts` (#147).
         """
         adapter = get_adapter(listing.summary.adapter_kind)
-        return adapter.read_turns(self._session_cwd(listing), listing.summary.session_id, last=last)
+        with self._manager.transcript_config_dir_scope(
+            listing.summary.adapter_kind, self._transcript_config_dir(listing)
+        ):
+            return adapter.read_turns(
+                self._session_cwd(listing), listing.summary.session_id, last=last
+            )
 
     def _session_cwd(self, listing: SessionListing) -> Path:
         """The cwd key the owning adapter resolves this session under.

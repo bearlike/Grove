@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { chatItemToThreadMessage, chatItemsFromTurns } from "@/lib/grove/chat-turns";
-import type { AgentQuestionView, SessionTurnView } from "@/lib/grove/types";
+import {
+  chatItemToThreadMessage,
+  chatItemsFromTurns,
+  latestTodoFromTurns,
+} from "@/lib/grove/chat-turns";
+import type { AgentQuestionView, SessionTurnView, TodoListView } from "@/lib/grove/types";
 
 const turn = (user_text: string, entries: SessionTurnView["entries"]): SessionTurnView => ({
   user_text,
@@ -233,6 +237,70 @@ describe("chatItemsFromTurns", () => {
     ]);
     expect(items).toEqual([{ kind: "message", role: "user", text: "go" }]);
   });
+
+  it("maps a file_edit entry to a standalone file-edit item carrying the payload", () => {
+    const items = chatItemsFromTurns([
+      turn("edit it", [
+        {
+          role: "file_edit",
+          text: "Edit lib/foo.ts",
+          file_edit: {
+            path: "/repo/lib/foo.ts",
+            display_path: "lib/foo.ts",
+            old_text: "const a = 1;",
+            new_text: "const a = 2;",
+          },
+        },
+      ]),
+    ]);
+    expect(items[1]).toEqual({
+      kind: "file-edit",
+      path: "/repo/lib/foo.ts",
+      displayPath: "lib/foo.ts",
+      oldText: "const a = 1;",
+      newText: "const a = 2;",
+    });
+  });
+
+  it("never folds a file-edit into a surrounding tool run — it stays standalone", () => {
+    // The core product invariant: a file edit is ALWAYS visible, never swallowed
+    // into the collapsible "Used N tools" accordion. It also breaks the tool run
+    // like any other rendered non-tool item.
+    const items = chatItemsFromTurns([
+      turn("go", [
+        { role: "tool", text: "Read lib/foo.ts" },
+        {
+          role: "file_edit",
+          text: "Edit lib/foo.ts",
+          file_edit: {
+            path: "/repo/lib/foo.ts",
+            display_path: "lib/foo.ts",
+            old_text: "a",
+            new_text: "b",
+          },
+        },
+        { role: "tool", text: "Bash npm test" },
+      ]),
+    ]);
+    expect(items.slice(1)).toEqual([
+      { kind: "tools", calls: [{ name: "Read", detail: "lib/foo.ts" }] },
+      {
+        kind: "file-edit",
+        path: "/repo/lib/foo.ts",
+        displayPath: "lib/foo.ts",
+        oldText: "a",
+        newText: "b",
+      },
+      { kind: "tools", calls: [{ name: "Bash", detail: "npm test" }] },
+    ]);
+  });
+
+  it("a file_edit entry with no payload degrades to a quiet note, never a throw", () => {
+    const items = chatItemsFromTurns([
+      turn("go", [{ role: "file_edit", text: "Edit lib/foo.ts" }]),
+    ]);
+    expect(items[1]).toEqual({ kind: "note", tone: "status", text: "Edit lib/foo.ts" });
+  });
 });
 
 const question = (group_id: string, id: string): AgentQuestionView => ({
@@ -291,9 +359,69 @@ describe("chatItemToThreadMessage", () => {
     ]);
   });
 
+  it("maps a file-edit item to its own data-file-edit part", () => {
+    expect(
+      chatItemToThreadMessage(
+        {
+          kind: "file-edit",
+          path: "/repo/lib/foo.ts",
+          displayPath: "lib/foo.ts",
+          oldText: "a",
+          newText: "b",
+        },
+        2,
+      ).content,
+    ).toEqual([
+      {
+        type: "data-file-edit",
+        data: { path: "/repo/lib/foo.ts", displayPath: "lib/foo.ts", oldText: "a", newText: "b" },
+      },
+    ]);
+  });
+
   it("maps a continuation head to a data-continuation marker", () => {
     expect(chatItemToThreadMessage({ kind: "continuation" }, 4).content).toEqual([
       { type: "data-continuation", data: {} },
     ]);
+  });
+});
+
+describe("todo entries (#184)", () => {
+  const list = (n: string): TodoListView => ({
+    items: [{ content: n, status: "in_progress", active_form: null }],
+  });
+
+  it("never renders a todo entry inline — it's pinned above the composer", () => {
+    // A todo entry has non-empty text (its summary), so guard it isn't picked up
+    // by the default-note fallback: it must drop out of the flat item stream.
+    const items = chatItemsFromTurns([
+      turn("plan it", [
+        { role: "assistant", text: "Here's the plan." },
+        { role: "todo", text: "0/1 done · Ship it", todo: list("Ship it") },
+      ]),
+    ]);
+    expect(items).toEqual([
+      { kind: "message", role: "user", text: "plan it" },
+      { kind: "message", role: "assistant", text: "Here's the plan." },
+    ]);
+  });
+
+  it("latestTodoFromTurns returns the newest todo across turns", () => {
+    const first = list("first plan");
+    const second = list("second plan");
+    const latest = latestTodoFromTurns([
+      turn("a", [{ role: "todo", text: "…", todo: first }]),
+      turn("b", [
+        { role: "assistant", text: "revising" },
+        { role: "todo", text: "…", todo: second },
+      ]),
+    ]);
+    expect(latest).toBe(second);
+  });
+
+  it("degrades to null when no turn carries a todo", () => {
+    expect(latestTodoFromTurns([turn("a", [{ role: "assistant", text: "hi" }])])).toBeNull();
+    // A malformed todo entry (role but no payload) is ignored, never crashes.
+    expect(latestTodoFromTurns([turn("a", [{ role: "todo", text: "x" }])])).toBeNull();
   });
 });

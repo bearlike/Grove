@@ -430,7 +430,7 @@ The toggle itself (`landing-view-toggle`) is a quiet two-button segmented contro
 
 ### Session page (`/w/[id]`) — three zones
 
-`rail (shared shell) | transcript column (~704px, centered) | work panel (Terminal · Diff · Info, resizable + collapsible + full-screen)`.
+`rail (shared shell) | transcript column (704px in split, 1280px single-pane, centered) | work panel (Terminal · Diff · Info, resizable + collapsible + full-screen)`.
 
 - The session's **identity cluster** (`ContextBar` — a state-led title trigger opening the session popover) is built by the page and portaled into the shared header's middle slot at every breakpoint — exactly one `context-bar` mount, no separate below-`lg` band. Its `session-state-live` sr-only `aria-live` region announces the state WORD on change (never the raw task/prompt text — the #136 bound); the old in-page `context-task` subheader is deleted, so the panes get the full column below the header.
 - The **work panel** replaces the old bare terminal pane with three tabs — Terminal (the live tmux pane, D2 differentiator, permanent live-pulse dot on its tab), Diff (StatTrio + line-delta + full commit list — the "Changes"/"Commits" sections that used to live in a popover), Info (metrics one-liner, agent/model identity, placement, created/paused timestamps). Full-screen is a plain CSS overlay, not a portal, so it composes with the resizable split underneath.
@@ -440,7 +440,7 @@ The toggle itself (`landing-view-toggle`) is a quiet two-button segmented contro
 
 - Landing content: `max-w-[100rem]` (ultrawide-friendly), rail flush-left, full-bleed shell.
 - Workspace grid (Overview): fluid columns, `minmax(22rem, 1fr)`.
-- Transcript column: `max-w-[44rem]` (704px) — the assistant-ui/Claude reading measure — shared by transcript content, the notice row, and the composer via one `CHAT_COLUMN` constant in `chat-panel.tsx` so the three never drift.
+- Transcript column: `max-w-[var(--thread-max-width)]`, shared by transcript content, the notice row, and the composer via one `CHAT_COLUMN` constant in `chat-panel.tsx` so the three never drift. The token is 44rem (704px, the assistant-ui/Claude reading measure) while the transcript shares the row with the work panel in split view; single-pane (no work panel on screen) it widens to 80rem (1280px) so the column fills the freed-up width instead of framing it in empty gutters — set via `ChatPanel`'s `wide` prop, which `AgentWorkspace` derives from `!showSplit`.
 - User bubbles cap at `max-w-[85%]`.
 
 ---
@@ -499,7 +499,7 @@ Calm, short, ease-out (150-250ms), nothing bounces, everything honors `prefers-r
 
 Both `grove-shimmer` and `grove-ring` are the ONLY two places terracotta *moves* across a whole surface — both decay within ~1s so neither becomes a steady-state fill (accent scarcity holds).
 
-**Transcript rhythm — three-tier, line-free** (`GroveMessage` in `chat-message.tsx`, mirroring design-direction.md §4.6 exactly): a top margin keyed to position — **56px** (`mt-14`) before a turn head (a new user prompt or a continuation marker), **24px** (`mt-6`) before an agent reply, **12px** (`mt-3`) before an intra-turn part (tool group, note, notification, question). The turn boundary stays ≥2× the inter-message gap so the transcript reads as distinct exchanges without a drawn divider — carried by space + the `RoleLabel`, never a line.
+**Transcript rhythm — three-tier, line-free** (`GroveMessage` in `chat-message.tsx`, mirroring design-direction.md §4.6): a top margin keyed to position — **56px** (`mt-14`) before a turn head (a new user prompt or a continuation marker), **24px** (`mt-6`) before an agent reply, **20px** (`mt-5`) before an intra-turn part (tool group, note, notification, question, **file-edit diff card**). The turn boundary stays ≥2× the inter-message gap so the transcript reads as distinct exchanges without a drawn divider — carried by space + the `RoleLabel`, never a line. (The intra-turn tier was raised 12→20px in the transparent-edits follow-up: diff cards read cramped at 12px, and 12px let the agent reply's hover copy button overlap the next part — paired with taming that copy button's reserve pull-back to `-mb-5`; see webapp/CLAUDE.md.)
 
 **Press tactility:** the composer send buttons (both create and steer) carry `active:scale-[0.97] motion-reduce:active:scale-100`, transform listed explicitly — never `transition-all`.
 

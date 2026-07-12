@@ -40,9 +40,13 @@ from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
     DigestEntry,
+    FileEdit,
+    FinalResult,
     OrderedDigest,
+    SessionControls,
     SessionSummary,
     SessionTurn,
+    TodoList,
 )
 from grove.core.config import load_config
 from grove.core.errors import MewboError
@@ -156,6 +160,14 @@ class _Event:
         return value if isinstance(value, str) and value else None
 
     @property
+    def operation(self) -> str | None:
+        """The underlying tool NAME (``Edit``/``Write``/``Bash``/…) the step ran
+        — distinct from ``tool_id`` (a per-step identifier), and the name
+        file-edit recognition keys off. Narrowed at the edge like ``tool_id``."""
+        value = self.payload.get("operation")
+        return value if isinstance(value, str) and value else None
+
+    @property
     def is_tool_call(self) -> bool:
         """Call-side tool event only — result events carry ``tool_id`` too,
         and counting both would double every step."""
@@ -172,9 +184,8 @@ class _Event:
         return ""
 
     def tool_label(self) -> str:
-        operation = self.payload.get("operation")
-        if isinstance(operation, str) and operation and self.tool_id:
-            return f"{self.tool_id}: {operation}"
+        if self.operation and self.tool_id:
+            return f"{self.tool_id}: {self.operation}"
         return self.tool_id or ""
 
     def tool_input_text(self) -> str:
@@ -402,6 +413,49 @@ class _EventLog:
                 entries.append(DigestEntry(entry.role, _truncate(entry.text, _DIGEST_TEXT_CAP)))
         return OrderedDigest(tuple(entries[-_DIGEST_MAX_ENTRIES:]))
 
+    def final_result(self) -> FinalResult | None:
+        """The session's terminal outcome (#149), ``None`` before any reply.
+
+        Mewbo has no message spine to project (#179 never touched the remote
+        adapter) — but ``GET /events`` is already AUTHORITATIVE on completion
+        (the module's own status-mapping rule), so ``is_complete`` reuses
+        :meth:`state` directly rather than re-deriving it from the raw event
+        tail: WAITING is Mewbo's "turn over, human's move" (this class's own
+        ``_STATUS_STATE`` convention), the exact analogue of Claude's
+        ``stop_reason in (end_turn, stop_sequence)``. ``text`` is the last
+        assistant-reply event seen, regardless of completion.
+        """
+        last_reply: _Event | None = None
+        for event in self._events:
+            if event.is_assistant_reply:
+                last_reply = event
+        if last_reply is None:
+            return None
+        return FinalResult(
+            text=last_reply.text(),
+            is_complete=self.state() is AgentActivityState.WAITING,
+            timestamp=last_reply.ts,
+        )
+
+    def latest_todo(self) -> TodoList | None:
+        """The session's current todo/checklist state (#194), ``None`` before
+        any todo-shaped tool call.
+
+        Mewbo has no message spine either (same caveat as :meth:`final_result`),
+        but it already recognizes a todo writer via :meth:`_turn_entries`
+        (gated on ``operation``) for the turns/digest render — this projects
+        over that SAME fold rather than re-deriving recognition, keeping the
+        LAST recognized list across the whole event log (a tail read would
+        miss an earlier list overwritten by a later, unrelated event)."""
+        latest: TodoList | None = None
+        for event in self._events:
+            if event.is_user:
+                continue
+            for entry in self._turn_entries(event):
+                if entry.role == "todo" and entry.todo is not None:
+                    latest = entry.todo
+        return latest
+
     @staticmethod
     def _turn_entries(event: _Event) -> list[DigestEntry]:
         """The rule mapping one non-user event to its rendered entries.
@@ -418,6 +472,23 @@ class _EventLog:
             role, body = "assistant", _truncate(text, _TURN_TEXT_CAP) if text.strip() else ""
         elif event.is_tool_call:
             label = event.tool_label()
+            # A recognized file-edit operation renders as structured diff cards
+            # (one per edit) instead of the generic tool line — best-effort by
+            # contract: an unrecognized name or a shape from_tool_call can't read
+            # (e.g. a bare-string shell tool_input) yields no edits and falls
+            # through to the generic rendering below, never raises.
+            operation = event.operation
+            if operation is not None and FileEdit.recognizes(operation):
+                edits = FileEdit.from_tool_call(operation, event.payload.get("tool_input"))
+                if edits:
+                    return [
+                        DigestEntry("file_edit", f"{label} {edit.path}".strip(), file_edit=edit)
+                        for edit in edits
+                    ]
+            if operation is not None and TodoList.recognizes(operation):
+                todos = TodoList.from_tool_call(operation, event.payload.get("tool_input"))
+                if todos:
+                    return [DigestEntry("todo", lst.summary, todo=lst) for lst in todos]
             summary = event.tool_input_text()
             role = "tool"
             body = f"{label} {_truncate(summary, _TURN_TEXT_CAP)}" if label and summary else label
@@ -484,6 +555,16 @@ class MewboAdapter:
         # the remote session is created, so there is no flag to decorate here.
         del model
         return []
+
+    def offline_decoration(self) -> list[str]:
+        # No local CLI to gate: tool access is a backend/server-side concern
+        # for a remote session, so there is no launch flag to decorate here.
+        return []
+
+    def telemetry_env(self) -> dict[str, str]:
+        # A remote session is instrumented server-side; there is no local
+        # process to hand telemetry env to — no-op.
+        return {}
 
     def available_models(self, command: str) -> tuple[str, ...]:
         # The remote orchestrator's model roster is a backend concern with no
@@ -584,6 +665,21 @@ class MewboAdapter:
     def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
         log = self._fetch_log(cwd, session_id)
         return log.digest() if log is not None else OrderedDigest()
+
+    def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
+        log = self._fetch_log(cwd, session_id)
+        return log.final_result() if log is not None else None
+
+    def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
+        log = self._fetch_log(cwd, session_id)
+        return log.latest_todo() if log is not None else None
+
+    def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
+        # A remote orchestrator's controls (commands / skills / MCP servers) live
+        # server-side, with no local filesystem surface to scan — honestly empty,
+        # exactly like ``locate_transcripts``/``discover_sessions`` here.
+        del cwd, session_id
+        return SessionControls.empty()
 
     # ── internal ────────────────────────────────────────────────────────────
 

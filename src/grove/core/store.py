@@ -28,6 +28,7 @@ from grove.core.workspace import (
     BranchProvenance,
     InitStatus,
     Placement,
+    TranscriptContext,
     WorkspaceState,
     WorkspaceStatus,
 )
@@ -201,7 +202,27 @@ class JsonWorkspaceStore:
             # existed; re-validated through the Pydantic model so a corrupt
             # on-disk ref fails loudly here rather than mid-render.
             ticket_refs=[TicketRef.model_validate(r) for r in (data.get("ticket_refs") or [])],
+            # `.get()` — absent on every record until a runtime-context override
+            # is set (#147); None is the default, current-behavior path for
+            # every legacy and non-container workspace.
+            transcript_context=_decode_transcript_context(data.get("transcript_context")),
         )
+
+
+def _decode_transcript_context(raw: Any) -> TranscriptContext | None:
+    """``None`` for a legacy/no-override record, else the persisted override (#147).
+
+    Defensive like every other optional-field decode here: a malformed value
+    (wrong shape, missing key) degrades to ``None`` rather than raising —
+    losing an override falls back to the current, still-correct default
+    behavior instead of breaking `load_all` for the whole store.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return TranscriptContext(config_dir=raw["config_dir"], agent_cwd=raw["agent_cwd"])
+    except (KeyError, TypeError):
+        return None
 
 
 def _decode_status(raw: str) -> WorkspaceStatus:

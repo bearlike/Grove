@@ -1,0 +1,32 @@
+# Example caller for a repo that wants Grove's issue-ops on Gitea, where the
+# action lives on a different repo/instance than the one running this workflow.
+# NOT an active workflow — copy this into your own `.gitea/workflows/`, and
+# replace the fictional host/owner below with wherever you mirror or fork
+# bearlike/Grove.
+#
+# Prereqs on this repo (Settings > Actions):
+#   - a runner labeled `grove-issueops`, registered as a `:host`-schema
+#     runner (act_runner config `labels: ["grove-issueops:host"]`) — a
+#     dockerized runner can't reach the daemon's host loopback
+#   - Actions variable  GROVE_DAEMON_URL   (e.g. http://127.0.0.1:43110)
+#   - Actions secret    GROVE_DAEMON_TOKEN
+name: Grove issue-ops
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  grove:
+    if: contains(github.event.comment.body, '@grove')
+    runs-on: grove-issueops
+    steps:
+      - name: Run grove-issue-ops
+        uses: https://gitea.example.com/your-org/grove/actions/issue-ops@v1
+        with:
+          daemon-url: ${{ vars.GROVE_DAEMON_URL }}
+          daemon-token: ${{ secrets.GROVE_DAEMON_TOKEN }}

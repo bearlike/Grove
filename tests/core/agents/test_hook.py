@@ -162,6 +162,93 @@ def test_settings_installs_a_command_per_event() -> None:
     assert entry == {"type": "command", "command": "grove agent-hook"}
 
 
+def test_settings_registers_subagent_events_with_no_state_mapping() -> None:
+    """#171: SubagentStart/Stop are registered (so the daemon push path fires
+    on sub-agent lifecycle) even though `state_for` still returns `None` for
+    both — a sub-agent never flips the main thread's state."""
+    hooks = ClaudeHook.settings("grove agent-hook")["hooks"]
+    assert "SubagentStart" in hooks
+    assert "SubagentStop" in hooks
+    assert ClaudeHook.state_for("SubagentStart", {}) is None
+    assert ClaudeHook.state_for("SubagentStop", {}) is None
+
+
+def test_settings_notification_registers_all_three_matchers() -> None:
+    """#171: the Notification event is split into its three known sub-kinds as
+    distinct matcher entries rather than one untyped catch-all."""
+    hooks = ClaudeHook.settings("grove agent-hook")["hooks"]
+    matchers = {entry["matcher"] for entry in hooks["Notification"]}
+    assert matchers == {"permission_prompt", "idle_prompt", "agent_needs_input"}
+    # Every matcher still routes to the same handlers, and the mapped state is
+    # unaffected — the split is registration-only.
+    for entry in hooks["Notification"]:
+        assert entry["hooks"][0] == {"type": "command", "command": "grove agent-hook"}
+    assert ClaudeHook.state_for("Notification", {}) is AgentActivityState.BLOCKED
+
+
+def test_settings_adds_an_http_handler_carrying_the_bearer_token() -> None:
+    """#171: the http handler POSTs to the daemon's ingest route with the
+    same-host ingest token as its bearer — the daemon push half."""
+    hooks = ClaudeHook.settings("grove agent-hook")["hooks"]
+    handlers = hooks["Stop"][0]["hooks"]
+    assert handlers[0] == {"type": "command", "command": "grove agent-hook"}
+    http_handler = handlers[1]
+    assert http_handler["type"] == "http"
+    assert http_handler["url"].endswith("/hooks/agent-events")
+    token = ClaudeHook.ensure_ingest_token()
+    assert http_handler["headers"] == {"Authorization": f"Bearer {token}"}
+
+
+def test_settings_daemon_url_none_omits_the_http_handler() -> None:
+    """The pre-#171 command-only shape is still reachable (the test seam)."""
+    hooks = ClaudeHook.settings("grove agent-hook", daemon_url=None)["hooks"]
+    assert hooks["Stop"][0]["hooks"] == [{"type": "command", "command": "grove agent-hook"}]
+
+
+def test_ensure_ingest_token_is_stable_across_calls() -> None:
+    """The same secret round-trips off disk rather than re-minting each call —
+    otherwise the daemon and the rendered settings file would disagree."""
+    first = ClaudeHook.ensure_ingest_token()
+    second = ClaudeHook.ensure_ingest_token()
+    assert first == second
+    assert len(first) > 20  # a real secrets.token_urlsafe, not a placeholder
+
+
+# ─── #171 VERIFICATION-ONLY: Stop-hook decision:block is NOT acted on here ───
+
+
+def test_stop_hook_decision_block_is_not_yet_a_delivery_channel(tmp_path: Path) -> None:
+    """VERIFICATION-ONLY note (#171): pins today's scope so #172 (native
+    answer path) has a clean baseline to diff against.
+
+    Claude Code's ``Stop`` hook accepts a ``{"decision": "block", "reason":
+    ...}`` reply on the hook's OWN stdout to make the agent keep going with
+    ``reason`` injected as additional context — a genuine continuation
+    mechanism, distinct from a status push. This issue is detection + push
+    only: an incoming ``Stop`` event (which never carries ``decision``/
+    ``additionalContext`` — those are the hook's *response* shape, not its
+    input) still maps to plain WAITING, and `grove agent-hook` never emits a
+    stdout reply for Claude Code to parse as a Stop-hook decision. Building
+    Stop-as-delivery (answering a captured question by replying to its own
+    Stop invocation, instead of the tmux-keystroke path in #109) is out of
+    scope here — tracked as the #171 follow-up (#172).
+    """
+    payload = {
+        "hook_event_name": "Stop",
+        "session_id": "s",
+        # Included only to document that unknown payload keys never change
+        # the mapping today (`state_for`'s `del payload`) — a real Stop event
+        # never carries these; they'd be the hook's OWN reply shape.
+        "decision": "block",
+        "reason": "keep going",
+    }
+    rec = ClaudeHook.record_event(payload, sidecar_dir=tmp_path, tmux_pane=None, now=NOW)
+    assert rec is not None
+    assert rec.state is AgentActivityState.WAITING
+    # `record_event` returns a `HookRecord | None` — never a string `grove
+    # agent-hook` could echo to stdout, so there is no delivery channel yet.
+
+
 def test_run_hook_from_stdin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sidecar = tmp_path / "sidecars"
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar)

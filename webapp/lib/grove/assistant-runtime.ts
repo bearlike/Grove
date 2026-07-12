@@ -9,6 +9,7 @@ import {
 import {
   chatItemToThreadMessage,
   chatItemsFromTurns,
+  latestTodoFromTurns,
   type ChatItem,
   type PendingQuestionGroup,
 } from "./chat-turns";
@@ -16,7 +17,7 @@ import { livePendingQuestions } from "./live-question";
 import { refusalNotice } from "./steering-notice";
 import { useAnswerQuestion, useInterrupt, useSendMessage, useSessionTurns } from "./hooks";
 import type { QuestionAnswerItem, QuestionInteraction } from "./question-plan";
-import type { AgentActivityState, DashboardSnapshotView } from "./types";
+import type { AgentActivityState, DashboardSnapshotView, TodoListView } from "./types";
 
 /** Chat-tier transcript cadence — a conversation surface someone is watching. */
 const CHAT_TURNS_REFETCH_MS = 5_000;
@@ -36,6 +37,10 @@ export interface GroveChatState {
   /** The LIVE pending question group, rendered as a sibling of the message
    * stream (never a message — it would remount on transcript growth). */
   pending: PendingQuestionGroup | null;
+  /** The agent's CURRENT todo/plan list (the latest `role="todo"` across the
+   * loaded turns), pinned as a card above the composer; null degrades to
+   * nothing (#184). Sourced from `/turns`, parallel to `pending`. */
+  todo: TodoListView | null;
   /** A steering refusal (send / interrupt), rendered as a quiet inline notice. */
   notice: string | null;
   /** The agent is WORKING — the emergency interrupt is offered only then. */
@@ -128,6 +133,11 @@ export function useGroveChatRuntime({
     return { items, startedAts };
   }, [turns]);
 
+  // The agent's current plan — the newest todo write in the loaded turns. Pinned
+  // above the composer (not a message), the same sibling treatment `pending`
+  // gets; null when the session has no todo list yet (degrade to nothing).
+  const todo = useMemo(() => latestTodoFromTurns(turns ?? []), [turns]);
+
   // The live pending group's answer controls. Memoized so its identity (and
   // therefore the pending message's) is stable while the group + submit state
   // are unchanged — the card stays mounted and clickable until something real
@@ -208,6 +218,7 @@ export function useGroveChatRuntime({
     // Empty state only when there is no transcript AND no live question.
     isEmpty: base.items.length === 0 && pending === null,
     pending,
+    todo,
     notice,
     // Mirror the dashboard live-toggle: interrupting an idle agent is a 409.
     canInterrupt: agentState === "working",

@@ -21,6 +21,7 @@ import { LandingRing } from "@/components/shared/landing-ring";
 import { AgentLiveStatus } from "@/lib/grove/agent-activity";
 import { tierForActivity } from "@/lib/grove/activity-tier";
 import { parseCommitSubject } from "@/lib/grove/commit-format";
+import { humanTokens } from "@/lib/grove/format";
 import { cn } from "@/lib/utils";
 import type { WorkspaceActivityView } from "@/lib/grove/types";
 
@@ -49,6 +50,13 @@ import type { WorkspaceActivityView } from "@/lib/grove/types";
  *     an icon + tabular value via `Stat` — the unit lives in the tooltip, a zero
  *     renders NOTHING (no "0 ahead" noise). No footer well: tone breaks belong to
  *     the page, not every card.
+ *
+ *     The tokens-in/out slot is itself live (#181): while `AgentLiveStatus
+ *     .isGenerating` is true (a fast side-channel is actively reporting —
+ *     `live` on the wire, `None`/absent until #177's proxy lands) it swaps to
+ *     a pulsing `live-token-flow` readout of the IN-FLIGHT counts, settling
+ *     back to the cumulative `Stat`s the moment generation stops. Never both
+ *     at once, so the row never grows or jitters.
  *
  * Quiet-chrome discipline (design-system.md): the surface is `rounded-xl bg-card`
  * on a `border-border/60` hairline; hover is a tonal shift + border-strengthen —
@@ -169,12 +177,37 @@ export function WorkspaceCard({
           <Stat icon={FileDiff} value={activity.dirty_files} label="dirty" />
           <PlacementBadge placement={s.placement} size="sm" className="ml-auto shrink-0" />
         </div>
-        {/* Row 2 — activity: turns, tool calls, tokens; Live toggle pinned right. */}
+        {/* Row 2 — activity: turns, tool calls, tokens; Live toggle pinned right.
+            Tokens in/out are the settled cumulative totals UNLESS a live tier
+            (#181) is actively reporting, in which case the live in-flight
+            counts take that same slot — never both at once, so the row never
+            grows. `live.isGenerating` is `false` whenever no fast side-channel
+            is wired (the #177 proxy is the primary source), so this reads
+            exactly like the pre-#181 card until one lands. */}
         <div className="flex h-5 items-center gap-3">
           <Stat icon={MessagesSquare} value={live.turns} label="turns" />
           <Stat icon={Wrench} value={live.toolCalls} label="tool calls" />
-          <Stat icon={ArrowDownToLine} value={live.tokensIn} label="tokens in" />
-          <Stat icon={ArrowUpFromLine} value={live.tokensOut} label="tokens out" />
+          {live.isGenerating ? (
+            <span
+              data-testid="live-token-flow"
+              title={`generating — ${live.liveTokensIn ?? 0} in / ${live.liveTokensOut ?? 0} out`}
+              className="inline-flex items-center gap-1 whitespace-nowrap tabular-nums text-[var(--agent-working)]"
+            >
+              <span
+                aria-hidden
+                className="size-1.5 shrink-0 animate-grove-pulse rounded-full bg-[var(--agent-working)] motion-reduce:animate-none"
+              />
+              <ArrowDownToLine aria-hidden className="size-3 shrink-0" />
+              {humanTokens(live.liveTokensIn ?? 0)}
+              <ArrowUpFromLine aria-hidden className="size-3 shrink-0" />
+              {humanTokens(live.liveTokensOut ?? 0)}
+            </span>
+          ) : (
+            <>
+              <Stat icon={ArrowDownToLine} value={live.tokensIn} label="tokens in" />
+              <Stat icon={ArrowUpFromLine} value={live.tokensOut} label="tokens out" />
+            </>
+          )}
           {canGoLive && (
             <button
               type="button"

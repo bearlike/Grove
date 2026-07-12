@@ -9,8 +9,9 @@ client re-parses or re-links. A provider has two faces:
   only entry point (the branch name is the source of truth); they must never
   touch the network so ``create()`` stays deterministic and offline-safe.
 * **I/O** — ``list_assigned`` / ``get_ticket`` reach the tracker's REST/GraphQL
-  API. Side effects at the edge: only the daemon's ``/tickets`` routes call
-  these, never the engine.
+  API, and so do the comment-thread methods below. Side effects at the edge:
+  only the daemon's ``/tickets`` routes and the issue-ops engine call these,
+  never the lifecycle engine.
 
 ``HttpTicketProvider`` carries the shared wire plumbing (lazy ``httpx`` client,
 one typed-error ``_request``) exactly as ``core/mewbo.py`` does. Concrete
@@ -18,6 +19,15 @@ providers normalize *shape* into the neutral :class:`TicketRef`, never semantics
 (the provider-boundary rule). ``NumberTicketProvider`` factors the branch
 grammar shared by the two numeric trackers (Gitea, GitHub); Linear's keyed
 grammar lives in its own class.
+
+Comment-thread I/O (``list_comments`` / ``post_comment`` / ``edit_comment`` /
+``react``, #193) is a capability only Gitea and GitHub back today.
+``HttpTicketProvider`` gives all four a concrete base default that raises
+:class:`TicketCommentsUnsupported` — a NotImplementedError-style default, but
+narrowed to the tickets error family so callers handle one exception type
+rather than a bare ``NotImplementedError``. Gitea/GitHub override the four;
+Linear inherits the default untouched, so a non-implementing provider needs no
+per-method stub.
 """
 
 from __future__ import annotations
@@ -29,8 +39,13 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 import httpx
 from loguru import logger
 
-from grove.core.contracts.tickets import TicketProviderName, TicketRef
-from grove.core.errors import TicketProviderError
+from grove.core.contracts.tickets import (
+    TicketComment,
+    TicketProviderName,
+    TicketReactionKind,
+    TicketRef,
+)
+from grove.core.errors import TicketCommentsUnsupported, TicketProviderError
 from grove.core.workspace import slug
 
 
@@ -67,6 +82,30 @@ class TicketProvider(Protocol):
 
     def get_ticket(self, ticket_id: str) -> TicketRef:
         """Fetch one ticket by its canonical key. Network I/O."""
+        ...
+
+    def list_comments(self, ticket_id: str) -> list[TicketComment]:
+        """Every comment on the ticket thread, in provider order. Network I/O.
+
+        Used to detect Grove's own marker comment on a cold start (issue-ops
+        looks for its sticky comment before deciding to post vs. edit).
+        """
+        ...
+
+    def post_comment(self, ticket_id: str, body: str) -> TicketComment:
+        """Post a new thread comment; the returned id anchors edit/react. Network I/O."""
+        ...
+
+    def edit_comment(self, comment_id: str, body: str) -> None:
+        """Update an existing comment's body in place (sticky-comment update). Network I/O."""
+        ...
+
+    def react(self, comment_id: str, reaction: TicketReactionKind) -> None:
+        """Add a reaction to a comment as a best-effort ack. Network I/O.
+
+        Callers must swallow failures here — an ack is cosmetic, never a
+        reason to fail the command that triggered it.
+        """
         ...
 
 
@@ -117,6 +156,27 @@ class HttpTicketProvider(ABC):
 
     @abstractmethod
     def get_ticket(self, ticket_id: str) -> TicketRef: ...
+
+    # ─── comment I/O: NotImplementedError-style base default (#193) ─────────
+    #
+    # Not @abstractmethod: only Gitea/GitHub override these. A provider that
+    # doesn't (Linear) inherits the raise below untouched rather than needing
+    # its own four-method stub.
+
+    def list_comments(self, ticket_id: str) -> list[TicketComment]:  # noqa: ARG002
+        raise self._comments_unsupported("list_comments")
+
+    def post_comment(self, ticket_id: str, body: str) -> TicketComment:  # noqa: ARG002
+        raise self._comments_unsupported("post_comment")
+
+    def edit_comment(self, comment_id: str, body: str) -> None:  # noqa: ARG002
+        raise self._comments_unsupported("edit_comment")
+
+    def react(self, comment_id: str, reaction: TicketReactionKind) -> None:  # noqa: ARG002
+        raise self._comments_unsupported("react")
+
+    def _comments_unsupported(self, op: str) -> TicketCommentsUnsupported:
+        return TicketCommentsUnsupported(f"{self.name} provider does not implement {op}")
 
     # ─── wire plumbing (mirrors core/mewbo.py) ──────────────────────────────
 

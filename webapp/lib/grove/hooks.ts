@@ -12,6 +12,7 @@ import type {
   CreateWorkspaceRequest,
   DashboardEvent,
   DashboardSnapshotView,
+  SessionControlsView,
   SessionDetailView,
   SessionSummaryView,
   WhoamiView,
@@ -76,6 +77,23 @@ export function useWorkspaceCommits(id: string) {
     queryKey: ["commits", id],
     queryFn: () => client.getCommits(id),
     refetchInterval: 15_000,
+    enabled: Boolean(id),
+  });
+}
+
+/**
+ * The session's available input controls (#178) — the work panel's Controls
+ * tab reader. Slash commands / skills / MCP servers / model catalog change
+ * rarely (a config edit, a model switch), so the poll is a slow backstop; the
+ * tab mounts this only when opened (conditional render), so idle tabs cost
+ * nothing. A `switchModel` mutation invalidates this key to refresh
+ * `current_model` promptly.
+ */
+export function useSessionControls(id: string) {
+  return useQuery<SessionControlsView>({
+    queryKey: ["controls", id],
+    queryFn: () => client.getControls(id),
+    refetchInterval: 30_000,
     enabled: Boolean(id),
   });
 }
@@ -230,6 +248,33 @@ export function useSendMessage(workspaceId: string, sessionId: string | null) {
 export function useInterrupt(workspaceId: string) {
   return useMutation({
     mutationFn: () => client.interrupt(workspaceId),
+  });
+}
+
+/**
+ * Invoke a named session control — a slash command or a skill (#178). Mirrors
+ * `useSendMessage`/`useInterrupt`: dispatch-only, no optimistic cache write (the
+ * result rides the transcript stream, not a refetch here). A 501
+ * `capability_unavailable` / 409 refusal surfaces as a quiet inline notice.
+ */
+export function useInvokeControl(workspaceId: string) {
+  return useMutation({
+    mutationFn: (name: string) => client.invokeControl(workspaceId, name),
+  });
+}
+
+/**
+ * Switch the running session's model (#178). On success, invalidate the
+ * controls key so `current_model` refreshes (its poll backstop is slow); the
+ * actual switch takes effect on the agent's side and rides the transcript.
+ */
+export function useSwitchModel(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (model: string) => client.switchModel(workspaceId, model),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["controls", workspaceId] });
+    },
   });
 }
 

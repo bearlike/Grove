@@ -20,22 +20,26 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from grove import __version__ as _GROVE_VERSION
 from grove.core.activity import ActivityService
 from grove.core.agents import resolve_models
+from grove.core.agents.hook import HOOK_INGEST_ROUTE
 from grove.core.auth import SessionStore
 from grove.core.config import GroveConfig, load_config
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
+from grove.core.contracts.issueops import IssueOpsEvent, IssueOpsOutcome
 from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import (
     RemapSessionRequest,
+    SessionControlsView,
     SessionDetailView,
     SessionSummaryView,
+    TodoListView,
 )
 from grove.core.contracts.tickets import (
     TicketProviderName,
@@ -58,6 +62,7 @@ from grove.core.errors import (
     BranchConflict,
     BranchError,
     BranchNotFound,
+    CapabilityUnavailable,
     GroveError,
     PaneNotFound,
     QuestionAnswerInvalid,
@@ -69,6 +74,7 @@ from grove.core.errors import (
     WorkspaceNotFound,
     WorkspaceStateError,
 )
+from grove.core.issueops import IssueOpsEngine, TicketStatusPublisher
 from grove.core.manager import WorkspaceManager
 from grove.core.notifications import NotificationBroker
 from grove.core.release import ReleaseChecker, ReleaseStatus
@@ -76,7 +82,7 @@ from grove.core.sessions import SessionExplorer, SessionListing
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon._pane_stream import _PaneStreamer
 from grove.daemon._sse import _SseHub
-from grove.daemon.auth import build_auth_router, make_require_session
+from grove.daemon.auth import build_auth_router, make_require_hook_token, make_require_session
 from grove.daemon.repos import RepoRegistry
 
 # How often the lifespan task recomputes activity and emits ``session_activity``
@@ -146,6 +152,42 @@ class _SendMessageBody(BaseModel):
     text: str = Field(min_length=1)
 
 
+class _InvokeControlBody(BaseModel):
+    """Trigger a named session control — a slash command or a skill (#178).
+
+    ``name`` is a control name from ``GET .../controls`` (a command/skill is
+    invoked as ``/name``); the leading slash is optional (the engine strips it).
+    Module-scope for the same forward-ref reason as ``_SendMessageBody``.
+    """
+
+    name: str = Field(min_length=1)
+
+
+class _SwitchModelBody(BaseModel):
+    """Switch the running session's model (#178) — ``model`` is any id, forwarded
+    verbatim (the provider boundary; the engine never validates it against the
+    offered catalog). Module-scope for the same forward-ref reason above."""
+
+    model: str = Field(min_length=1)
+
+
+class _HookIngestBody(BaseModel):
+    """Native Claude Code http-hook payload (#171) — permissive by design.
+
+    The payload shape varies per event (``session_id``/``cwd``/``tool_name``/
+    ``tool_use_id``/...); this route only needs enough to confirm a real hook
+    fired, never a full parse — that's the sidecar the command handler
+    already wrote. ``extra="allow"`` lets every other Claude Code field ride
+    through untouched rather than pinning a contract that drifts with each
+    event type Anthropic adds. Module-scope for the same forward-ref reason as
+    ``_PauseBody`` above.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    session_id: str = Field(min_length=1)
+
+
 def _sse_frame(event: DashboardEvent) -> str:
     """Format one ``DashboardEvent`` as an SSE wire frame.
 
@@ -195,6 +237,8 @@ def build_app(  # noqa: PLR0915
     auth_store: SessionStore | None = None,
     notification_broker: NotificationBroker | None = None,
     release_checker: ReleaseChecker | None = None,
+    issue_ops_engine: IssueOpsEngine | None = None,
+    status_publisher: TicketStatusPublisher | None = None,
 ) -> FastAPI:
     """Construct the daemon's FastAPI app.
 
@@ -203,6 +247,9 @@ def build_app(  # noqa: PLR0915
     inject one with a fake clock when they need to control TTLs.
     ``notification_broker`` is built from ``cfg.notifications`` if not supplied —
     tests inject one with a capturing channel to assert the edge-trigger wiring.
+    ``status_publisher`` is built from ``cfg.issueops`` if not supplied (``None``
+    when issue-ops is disabled) — tests inject a capturing one to assert the
+    lifespan bind/close wiring, mirroring ``notification_broker``.
     ``release_checker`` defaults to a real GitHub-backed one — tests inject one
     with a fake fetcher so ``/whoami`` never touches the network.
 
@@ -216,6 +263,19 @@ def build_app(  # noqa: PLR0915
     # and would be invisible to `create` without the per-repo loader (#46/#47).
     registry = RepoRegistry(cfg=cfg, store=store, config_loader=load_config)
     activity_service = ActivityService(registry=registry)
+    # The outbound face (#197): the live sticky status comment. Built from
+    # `cfg.issueops` (None when disabled), bound to the activity bus in the
+    # lifespan like `notification_broker`, and injected into the engine below so
+    # the `@grove status` verb forces an immediate re-render. Injectable for tests.
+    if status_publisher is None:
+        status_publisher = TicketStatusPublisher.from_config(cfg.issueops, registry=registry)
+    # The issue-ops router (#196): resolves an event's repo through the SAME
+    # per-repo registry every other route dispatches on, so a forwarded comment
+    # steers/creates against the target repo's own cascade. The status publisher
+    # rides its `StatusPublisher` seam (structural, no engine↔publisher import).
+    # Injectable for tests.
+    if issue_ops_engine is None:
+        issue_ops_engine = IssueOpsEngine(registry=registry, status_publisher=status_publisher)
     sse_hub = _SseHub(activity_service)
     if notification_broker is None:
         notification_broker = NotificationBroker.from_config(cfg.notifications)
@@ -230,6 +290,9 @@ def build_app(  # noqa: PLR0915
         )
     require_session = make_require_session(auth_store=auth_store, enabled=cfg.auth.enabled)
     auth_dep = [Depends(require_session)]
+    # Same config flag, a DIFFERENT mechanism (#171): the hook-ingest route
+    # can't ask a human to approve a pairing challenge (see `make_require_hook_token`).
+    require_hook_token = make_require_hook_token(enabled=cfg.auth.enabled)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -252,6 +315,12 @@ def build_app(  # noqa: PLR0915
         if notification_broker is not None:
             notification_broker.bind(activity_service.subscribe)
             app.state.notification_broker = notification_broker
+        # The issue-ops status publisher (#197) is the bus's third subscriber
+        # (alongside the SSE hub + notification broker) — same discipline: bind
+        # after `sse_hub.start`, close on shutdown. None when issue-ops is off.
+        if status_publisher is not None:
+            status_publisher.bind(activity_service.subscribe)
+            app.state.status_publisher = status_publisher
         stop_event = asyncio.Event()
         poll_task = asyncio.create_task(
             _poll_loop(activity_service, _POLL_INTERVAL_SECONDS, stop_event)
@@ -265,6 +334,8 @@ def build_app(  # noqa: PLR0915
                 await poll_task
             if notification_broker is not None:
                 notification_broker.close()
+            if status_publisher is not None:
+                status_publisher.close()
             sse_hub.stop()
             activity_service.close()
 
@@ -307,6 +378,10 @@ def build_app(  # noqa: PLR0915
             # exactly the false promise a 409 would make.
             PaneNotFound: (409, "pane_not_found"),
             SteeringUnsupported: (501, "steering_unsupported"),
+            # Control triggers (#178). Capability-based like SteeringUnsupported —
+            # the runtime (a generic shell / remote session) has no in-session
+            # slash-control surface, so no state change makes a retry succeed. 501.
+            CapabilityUnavailable: (501, "capability_unavailable"),
             # Live-question answering (#109). QuestionNotPending is 409, like the
             # state errors: the request was well-formed, the live question just
             # moved on (answered in the terminal, or superseded) — the client
@@ -401,6 +476,32 @@ def build_app(  # noqa: PLR0915
         snap = await loop.run_in_executor(None, activity_service.snapshot)
         return DashboardSnapshotView.from_snapshot(snap)
 
+    @app.post(
+        HOOK_INGEST_ROUTE,
+        status_code=204,
+        dependencies=[Depends(require_hook_token)],
+    )
+    async def ingest_agent_hook(body: _HookIngestBody) -> None:
+        """Native Claude Code http-hook push (#171) — the live half of the #18 sidecar.
+
+        Claude Code dispatches the ``command`` and ``http`` handlers registered
+        on the SAME event independently (`ClaudeHook.settings`), so by the time
+        this request lands the command handler has already written the
+        sidecar — this route's only job is collapsing the ~2s poll-tick lag
+        into an immediate recompute, never a second sidecar write (this
+        payload carries no ``$TMUX_PANE``, so writing here would race the
+        command handler's more complete record). ``poll_once`` already diffs
+        per-workspace by fingerprint and emits a delta only for what changed,
+        so this is a scoped refresh by construction, not a blanket resnapshot.
+
+        Gated by the same-host hook-ingest token (`make_require_hook_token`),
+        not the `SessionStore` pairing bearer every other route uses — see its
+        docstring for why.
+        """
+        del body  # session_id only justifies the call; poll_once() rescans everyone
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, activity_service.poll_once)
+
     @app.get(
         "/events",
         dependencies=auth_dep,
@@ -469,10 +570,56 @@ def build_app(  # noqa: PLR0915
         )
 
     @app.get("/workspaces", response_model=list[WorkspaceStateView], dependencies=auth_dep)
-    async def list_workspaces() -> list[WorkspaceStateView]:
+    async def list_workspaces(
+        repo: Annotated[Path, Query()] | None = None,
+        ticket: Annotated[str, Query()] | None = None,
+    ) -> list[WorkspaceStateView]:
+        """Cross-repo (default) or single-repo (``repo=``) workspace listing.
+
+        ``repo`` dispatches like ``/branches``: given, it scopes to that repo
+        and validates it — an unrecognized root is 404 ``unknown_repo_root``
+        (the ``/sessions`` precedent) rather than an empty list, so a typo'd
+        path can't masquerade as "no workspaces". ``ticket`` (wire format
+        ``<provider>:<id>``) narrows to the single workspace
+        ``WorkspaceManager.find_by_ticket`` resolves for that ticket — the
+        issue-ops "does a workspace already exist for this ticket" lookup —
+        scanned within ``repo`` when given, else across every known repo.
+        """
+        ticket_filter: tuple[str, str] | None = None
+        if ticket is not None:
+            provider, sep, ticket_id = ticket.partition(":")
+            if not sep or not provider or not ticket_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "invalid_ticket_filter",
+                        "message": f"ticket filter must be '<provider>:<id>', got {ticket!r}",
+                    },
+                )
+            ticket_filter = (provider, ticket_id)
+
+        if repo is not None:
+            root = repo.resolve()
+            if root not in {known.resolve() for known in registry.known_roots()}:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": "unknown_repo_root",
+                        "message": f"no Grove workspaces recorded under {repo}",
+                    },
+                )
+            roots = [root]
+        else:
+            roots = list(registry.known_roots())
+
         out: list[WorkspaceStateView] = []
-        for repo_root in registry.known_roots():
+        for repo_root in roots:
             mgr = registry.get(repo_root)
+            if ticket_filter is not None:
+                match = mgr.find_by_ticket(*ticket_filter)
+                if match is not None:
+                    out.append(WorkspaceStateView.from_state(match))
+                continue
             for state in mgr.list():
                 out.append(WorkspaceStateView.from_state(state))
         return out
@@ -493,6 +640,33 @@ def build_app(  # noqa: PLR0915
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
         return WorkspaceStateView.from_state(state)
+
+    @app.post(
+        "/issue-ops/events",
+        status_code=202,
+        response_model=IssueOpsOutcome,
+        dependencies=auth_dep,
+    )
+    async def ingest_issue_ops_event(event: IssueOpsEvent) -> IssueOpsOutcome:
+        """Ingest one forwarded issue-comment event and route it to a workspace action (#196).
+
+        The CI forwarder (a stateless composite action on a ``:host`` runner)
+        POSTs a normalized :class:`IssueOpsEvent`; the engine dedupes, gates, and
+        routes it to the target repo's Manager, returning an
+        :class:`IssueOpsOutcome` the action reflects into a comment reaction. 202
+        (accepted-and-acted) because the real work — a create/steer, a reply — is
+        already done synchronously in the engine; the code only signals the CI
+        that this is a fire-and-forget ingest, not a resource creation with a
+        canonical URL.
+
+        ``handle`` does blocking git/tmux/network I/O (``find_by_ticket`` scans,
+        ``create``, the reply comment), so it runs in the executor to keep the
+        loop responsive — the same discipline as ``/activity``. It catches its own
+        lifecycle errors and turns them into ``refused`` outcomes, so it returns an
+        outcome rather than raising for an ordinary refusal.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, issue_ops_engine.handle, event)
 
     @app.get("/workspaces/{ws_id}", response_model=WorkspaceStateView, dependencies=auth_dep)
     async def get_workspace(ws_id: str) -> WorkspaceStateView:
@@ -595,6 +769,59 @@ def build_app(  # noqa: PLR0915
         mgr = _manager_for(ws_id)
         try:
             mgr.answer_question(ws_id, body)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/workspaces/{ws_id}/controls",
+        response_model=SessionControlsView,
+        dependencies=auth_dep,
+    )
+    async def workspace_controls(ws_id: str) -> SessionControlsView:
+        """Enumerate the session's available input controls (#178).
+
+        Slash commands, skills, MCP servers, the model catalog + current model,
+        and the permission posture — the read behind the webapp's control panel.
+        Fetch-on-demand by design (never SSE, like the session-history reads). The
+        scan touches disk and the current-model read parses a transcript, so it
+        runs in the executor like ``/sessions``. ``session_controls`` is
+        best-effort (the ``peek`` discipline): a fs/parse hiccup yields an empty
+        surface rather than a 500 — a bad workspace id is still the 404 from
+        ``_manager_for``.
+        """
+        mgr = _manager_for(ws_id)
+        loop = asyncio.get_running_loop()
+        controls = await loop.run_in_executor(None, mgr.session_controls, ws_id)
+        return SessionControlsView.from_controls(controls)
+
+    @app.post("/workspaces/{ws_id}/controls/invoke", status_code=204, dependencies=auth_dep)
+    async def invoke_workspace_control(ws_id: str, body: _InvokeControlBody) -> None:
+        """Invoke a named session control — a slash command or a skill (#178).
+
+        Composes the tool's ``/name`` invocation and delivers it through the same
+        steer path as ``/message`` — 204 on dispatch (delivered, not "ran"; the
+        result rides the transcript later). Refusals ride the typed envelope: 501
+        ``capability_unavailable`` (a shell/remote kind has no slash-control
+        surface), 409 ``pane_not_found`` / ``workspace_state_error``.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            mgr.invoke_control(ws_id, body.name)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post("/workspaces/{ws_id}/controls/model", status_code=204, dependencies=auth_dep)
+    async def switch_workspace_model(ws_id: str, body: _SwitchModelBody) -> None:
+        """Switch the running session's model (#178).
+
+        Delivered as the interactive ``/model <id>`` control through the steer
+        path — 204 on dispatch. The id is forwarded verbatim (the provider
+        boundary). Refusals: 501 ``capability_unavailable`` (a kind with no
+        model-switch channel), 409 ``pane_not_found`` / ``workspace_state_error``.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            mgr.switch_model(ws_id, body.model)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
 
@@ -845,6 +1072,31 @@ def build_app(  # noqa: PLR0915
             return await loop.run_in_executor(None, _read)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/workspaces/{ws_id}/todo",
+        response_model=TodoListView,
+        dependencies=auth_dep,
+    )
+    async def workspace_todo(ws_id: str) -> TodoListView:
+        """The workspace's current todo/checklist state (#194).
+
+        Fetch-on-demand like the sibling session-history routes above, bounded
+        to one workspace and resolved through ``WorkspaceManager.latest_todo``
+        — the same engine seam the issueops sticky-comment publisher calls
+        in-process. That method folds a full transcript parse, so it runs in
+        the executor. 404 ``agent_session_not_found`` when the workspace has
+        no recorded agent session; a session with no todo/Task tool called yet
+        answers 200 with an empty ``TodoListView`` (a real, not-yet-populated
+        state — never conflated with the 404).
+        """
+        mgr = _manager_for(ws_id)
+        loop = asyncio.get_running_loop()
+        try:
+            todo = await loop.run_in_executor(None, mgr.latest_todo, ws_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return TodoListView.from_todo(todo) if todo is not None else TodoListView()
 
     @app.get("/sessions", response_model=list[SessionSummaryView], dependencies=auth_dep)
     async def project_sessions(

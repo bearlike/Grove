@@ -20,7 +20,22 @@ async def test_list_workspaces_returns_state_views(fake_client: FakeGroveClient)
     tools = GroveTools(fake_client)
     result = await tools.list_workspaces()
     assert [w.id for w in result] == ["ws-1", "ws-2"]
-    assert fake_client.calls == [("list_workspaces", {})]
+    assert fake_client.calls == [
+        ("list_workspaces", {"repo": None, "ticket_provider": None, "ticket_id": None})
+    ]
+
+
+async def test_list_workspaces_threads_repo_root_and_ticket_filter(
+    fake_client: FakeGroveClient,
+) -> None:
+    tools = GroveTools(fake_client)
+    await tools.list_workspaces(repo_root="/repo", ticket_provider="github", ticket_id="42")
+    assert fake_client.calls == [
+        (
+            "list_workspaces",
+            {"repo": Path("/repo"), "ticket_provider": "github", "ticket_id": "42"},
+        )
+    ]
 
 
 async def test_get_workspace_passes_id(fake_client: FakeGroveClient) -> None:

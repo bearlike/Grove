@@ -92,4 +92,34 @@ describe("AgentLiveStatus", () => {
     delete (a as Partial<AgentActivityView>).active_subagents;
     expect(AgentLiveStatus.of(a).subagents).toBe(0);
   });
+
+  describe("live token counters (#181)", () => {
+    it("hides — not zeroes — when no live tier is reporting", () => {
+      const s = AgentLiveStatus.of(activity({ tokens_in: 500, tokens_out: 40 }));
+      expect(s.isGenerating).toBe(false);
+      expect(s.liveTokensIn).toBeNull();
+      expect(s.liveTokensOut).toBeNull();
+      expect(s.generatingSince).toBeNull();
+    });
+
+    it("hides for a pre-field daemon payload (field entirely absent)", () => {
+      const a = activity();
+      delete (a as Partial<AgentActivityView>).live;
+      const s = AgentLiveStatus.of(a);
+      expect(s.isGenerating).toBe(false);
+      expect(s.liveTokensIn).toBeNull();
+    });
+
+    it("surfaces the live block while a fast side-channel is reporting", () => {
+      const s = AgentLiveStatus.of(
+        activity({
+          live: { tokens_in: 120, tokens_out: 8, generating_since: "2026-07-08T00:00:00Z" },
+        }),
+      );
+      expect(s.isGenerating).toBe(true);
+      expect(s.liveTokensIn).toBe(120);
+      expect(s.liveTokensOut).toBe(8);
+      expect(s.generatingSince).toEqual(new Date("2026-07-08T00:00:00Z"));
+    });
+  });
 });

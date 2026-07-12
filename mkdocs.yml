@@ -46,6 +46,7 @@ theme:
     "Web Dashboard": lucide:monitor-smartphone
     "Authentication & Pairing": lucide:key-round
     "MCP Server": lucide:plug
+    "Issue Ops": lucide:message-square-code
     "Daily Workflow": lucide:workflow
 
     Capabilities: lucide:sparkles
@@ -131,6 +132,7 @@ nav:
           - Web Dashboard: use-webapp.md
           - Authentication & Pairing: use-auth.md
           - MCP Server: use-mcp.md
+          - Issue Ops: issue-ops.md
           - Daily Workflow: use-workflow.md
       - Capabilities:
           - Workspace Lifecycle: features-workspace-lifecycle.md

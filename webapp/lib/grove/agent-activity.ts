@@ -88,4 +88,31 @@ export class AgentLiveStatus {
     const a = this.activity;
     return `${a.human_turns}t · ${a.tool_calls}⚒ · ${humanTokens(a.tokens_in)}↑ ${humanTokens(a.tokens_out)}↓`;
   }
+
+  /**
+   * Whether a live token tier is actively reporting right now (#181). `false`
+   * for a pre-field daemon payload or whenever no fast side-channel is wired
+   * (the #177 proxy is the primary source) — the whole `live` block is absent
+   * rather than zeroed, so a caller gates the indicator on this rather than on
+   * a truthy-but-zero token count.
+   */
+  get isGenerating(): boolean {
+    return this.activity?.live != null;
+  }
+
+  /** Live in-flight tokens fed to the model; `null` while not generating. */
+  get liveTokensIn(): number | null {
+    return this.activity?.live?.tokens_in ?? null;
+  }
+
+  /** Live in-flight tokens the model has streamed out; `null` while not generating. */
+  get liveTokensOut(): number | null {
+    return this.activity?.live?.tokens_out ?? null;
+  }
+
+  /** When the current generation started, or `null` while not generating. */
+  get generatingSince(): Date | null {
+    const iso = this.activity?.live?.generating_since;
+    return iso ? new Date(iso) : null;
+  }
 }

@@ -51,7 +51,9 @@ async def test_list_workspaces_round_trips_through_fastmcp(
     # output; the text content carries the same items serialized one by one.
     assert [item["id"] for item in structured["result"]] == ["ws-1", "ws-2"]
     assert json.loads(content[0].text)["id"] == "ws-1"
-    assert fake_client.calls == [("list_workspaces", {})]
+    assert fake_client.calls == [
+        ("list_workspaces", {"repo": None, "ticket_provider": None, "ticket_id": None})
+    ]
 
 
 async def test_kill_without_delete_branch_is_rejected_at_the_schema(

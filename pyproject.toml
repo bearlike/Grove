@@ -45,6 +45,15 @@ mcp = [
     "mcp>=1.2",
     "grove[client]",
 ]
+telemetry = [
+    # LangFuse ingestion via raw OTLP (issue #175) — deliberately NOT the
+    # `langfuse` SDK package (its `start_observation()` has no `start_time`
+    # param, so it can't backfill a session that already happened). Off by
+    # default: `TelemetryConfig.enabled` gates it, and `grove.core.trace`
+    # imports these lazily so core stays importable without the extra.
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+]
 all = [
     "grove[daemon]",
     "grove[client]",
@@ -82,6 +91,8 @@ dev = [
     "httpx>=0.27",
     "asyncssh>=2.14",
     "mcp>=1.2",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
 ]
 docs = [
     "mike",

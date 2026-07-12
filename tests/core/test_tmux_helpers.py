@@ -23,7 +23,13 @@ from grove.core.errors import TmuxError
 
 @pytest.fixture
 def fake_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """Capture every subprocess.run argv emitted by grove.core.tmux."""
+    """Capture every subprocess.run argv emitted by grove.core.tmux.
+
+    Also neutralizes `time.sleep` (the settle/verify delays in
+    `send_text`/`send_keys`, #180) so these tests don't actually block —
+    dedicated timing tests monkeypatch `tmux.time.sleep` themselves to
+    assert on the delay.
+    """
     calls: list[list[str]] = []
 
     def _run(argv: list[str], **kwargs: Any) -> Any:
@@ -39,6 +45,7 @@ def fake_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
     monkeypatch.setattr(tmux.subprocess, "run", _run)
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr(tmux.time, "sleep", lambda _seconds: None)
     return calls
 
 
@@ -352,9 +359,13 @@ def test_send_text_emits_literal_payload_then_separate_enter(
     """
     tmux.send_text("sess:agent", "-please continue, then press Enter")
 
+    # A third call follows: the post-Enter verify-and-retry snapshot (#180).
+    # The fixture's fake pane ("line1\nline2\n") never echoes the sent text,
+    # so no residual is detected and no second Enter fires.
     assert fake_run == [
         ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "-please continue, then press Enter"],
         ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+        ["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"],
     ]
 
 
@@ -405,6 +416,93 @@ def test_send_text_wraps_subprocess_errors(
         tmux.send_text("sess:agent", "hello")
 
 
+def test_send_text_settles_before_enter_and_before_verify(
+    fake_run: list[list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The settle delay (#180) fires twice: once before the submitting Enter
+    (so it lands after the paste-accumulation window closes) and once more
+    before the post-Enter verify snapshot — both using the configured
+    `settle_ms`, converted to seconds."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(tmux.time, "sleep", sleeps.append)
+
+    tmux.send_text("sess:agent", "hi", settle_ms=250)
+
+    assert sleeps == [0.25, 0.25]
+
+
+def test_send_text_settle_ms_zero_skips_delay(
+    fake_run: list[list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(tmux.time, "sleep", sleeps.append)
+
+    tmux.send_text("sess:agent", "hi", settle_ms=0)
+
+    assert sleeps == []
+
+
+def test_send_text_retries_enter_once_when_composer_holds_residual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the post-Enter snapshot shows the composer still holding the sent
+    text's tail — the swallowed-Enter race — resend Enter exactly once."""
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: Any) -> Any:
+        calls.append(argv)
+
+        class _R:
+            returncode = 0
+            stdout = "some prompt\nplease continue" if argv[1] == "capture-pane" else ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr(tmux.time, "sleep", lambda _seconds: None)
+
+    tmux.send_text("sess:agent", "please continue")
+
+    assert calls == [
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "please continue"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+        ["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Enter"],  # the single retry
+    ]
+
+
+def test_send_text_never_retries_more_than_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exactly one retry — never a loop — even though the fake pane keeps
+    reporting the same residual text after the retry fires."""
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: Any) -> Any:
+        calls.append(argv)
+
+        class _R:
+            returncode = 0
+            stdout = "still here" if argv[1] == "capture-pane" else ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr(tmux.time, "sleep", lambda _seconds: None)
+
+    tmux.send_text("sess:agent", "still here")
+
+    # payload, Enter, one capture-pane check, one retry Enter — no second check.
+    assert calls.count(["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"]) == 1
+    assert calls.count(["tmux", "send-keys", "-t", "sess:agent", "Enter"]) == 2
+
+
 # ─── send_keys (#109) ────────────────────────────────────────────────────────
 
 
@@ -421,12 +519,16 @@ def test_send_keys_dispatches_literal_runs_and_named_keys(
         ["2", "1", "3", tmux.SendKey.TAB, tmux.SendKey.ENTER],
     )
 
+    # The sequence ends in Enter, so a verify-and-retry snapshot follows it
+    # (#180); the fixture pane never echoes "3" (the last literal run sent),
+    # so no residual is detected and no second Enter fires.
     assert fake_run == [
         ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "2"],
         ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "1"],
         ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "3"],
         ["tmux", "send-keys", "-t", "sess:agent", "Tab"],
         ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+        ["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"],
     ]
 
 
@@ -439,6 +541,65 @@ def test_send_keys_types_free_text_literally(fake_run: list[list[str]]) -> None:
         ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "3"],
         ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "Enter please"],
         ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+        ["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"],
+    ]
+
+
+def test_send_keys_settles_only_before_a_terminal_enter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-terminal Enter (mid-sequence) is neither delayed nor verified —
+    only the sequence's LAST op, if it's Enter, gets the send_text treatment."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(tmux.time, "sleep", sleeps.append)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    def _run(_argv: list[str], **_kwargs: Any) -> Any:
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+
+    # No trailing Enter: nothing "submits", so no settle/verify at all.
+    tmux.send_keys("sess:agent", ["1", tmux.SendKey.TAB], settle_ms=250)
+    assert sleeps == []
+
+    sleeps.clear()
+    # Trailing Enter: settle before it, then the verify wait.
+    tmux.send_keys("sess:agent", ["1", tmux.SendKey.ENTER], settle_ms=250)
+    assert sleeps == [0.25, 0.25]
+
+
+def test_send_keys_retries_terminal_enter_once_on_residual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: Any) -> Any:
+        calls.append(argv)
+
+        class _R:
+            returncode = 0
+            stdout = "> 2" if argv[1] == "capture-pane" else ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr(tmux.time, "sleep", lambda _seconds: None)
+
+    tmux.send_keys("sess:agent", ["2", tmux.SendKey.ENTER])
+
+    assert calls == [
+        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "2"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
+        ["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"],
+        ["tmux", "send-keys", "-t", "sess:agent", "Enter"],  # the single retry
     ]
 
 
@@ -528,8 +689,17 @@ def fake_pane(monkeypatch: pytest.MonkeyPatch) -> _FakePane:
 
 
 def _layout(pane_fixture: _FakePane, agent: AgentSpec) -> list[str]:
+    # The layout takes structured primitives, not an AgentSpec (it sits below the
+    # LaunchBackend seam, #145); unpack the fixture's agent the way the manager's
+    # TmuxLaunchBackend does, so these #82 hermetic-env assertions still pin the
+    # real keystroke sequence.
     tmux.build_workspace_layout(
-        "test-sess", cfg=GroveConfig(), worktree=Path("/tmp/wt"), agent=agent
+        "test-sess",
+        cfg=GroveConfig(),
+        worktree=Path("/tmp/wt"),
+        command=agent.command,
+        env=agent.env,
+        env_unset=agent.env_unset,
     )
     return pane_fixture.keys
 

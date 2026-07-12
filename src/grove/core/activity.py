@@ -39,6 +39,7 @@ from grove.core.agents import (
     get_adapter,
 )
 from grove.core.agents.base import AgentAdapter
+from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook, HookRecord
 from grove.core.git import GitRepo
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
@@ -52,11 +53,35 @@ DeltaKind = Literal["workspace_changed", "session_activity"]
 
 
 @dataclass(slots=True, frozen=True)
+class LiveCounters:
+    """In-flight token counters for a session mid-generation (#181).
+
+    Distinct from ``AgentActivity.tokens_in``/``tokens_out`` (the
+    transcript-derived totals, settled once a turn flushes): this is a
+    *faster* tier a client renders WHILE generating, sourced from whatever
+    live side-channel is active — the #177 wire-truth proxy is the primary
+    source, with partial-message deltas or OTel metrics as fallbacks. The
+    whole block is ``None`` on ``SessionActivity.live`` when no such tier is
+    reporting (hidden, never zeroed) — see ``ActivityService._live_counters``.
+    """
+
+    tokens_in: int
+    tokens_out: int
+    generating_since: datetime
+
+
+@dataclass(slots=True, frozen=True)
 class SessionActivity:
-    """One agent session paired with its computed activity."""
+    """One agent session paired with its computed activity.
+
+    ``live`` is the optional #181 live-counters block — ``None`` until a live
+    tier is wired (#177); the wire mirror hides the whole block rather than
+    showing zeros.
+    """
 
     session: AgentSession
     activity: AgentActivity
+    live: LiveCounters | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -98,7 +123,17 @@ class WorkspaceActivity:
 
     @property
     def needs_attention(self) -> bool:
-        return any(s.activity.needs_attention for s in self.sessions)
+        # Sub-agent fleet entries (#173, ``AgentSession.parent_session_id`` set)
+        # are itemized DETAIL, not separate top-level conversations: a worker
+        # that finished normally settles to WAITING, which is exactly an
+        # ATTENTION_STATE for a real human-facing session but means nothing of
+        # the sort for a sub-agent — every workspace that ever ran one to
+        # completion would otherwise spuriously ping "needs me". Only a
+        # top-level session (grove_launched or a hand-started/discovered extra)
+        # can raise this.
+        return any(
+            s.activity.needs_attention for s in self.sessions if s.session.parent_session_id is None
+        )
 
     @property
     def fingerprint(self) -> tuple[object, ...]:
@@ -130,6 +165,12 @@ class WorkspaceActivity:
                     # once — it can arrive without a state change (the capturing
                     # PreToolUse is WORKING, like the tool call it gates).
                     tuple(q.id for q in s.activity.questions),
+                    # Live counters (#181): included so a client sees the token
+                    # count tick up ~1Hz while generating, and sees the block
+                    # disappear the moment a live tier stops reporting (e.g. the
+                    # turn flushed and the transcript's own totals took over).
+                    s.live.tokens_in if s.live is not None else None,
+                    s.live.tokens_out if s.live is not None else None,
                 )
                 for s in self.sessions
             ),
@@ -442,25 +483,29 @@ class ActivityService:
                 sidecar=minted_sidecar,
                 cwd=state.agent_cwd,
             )
+            minted_fleet = self._fleet_entries(kind, state.agent_session_id, state.agent_cwd)
             # Only the adopted concurrent sessions ride along; the cheap pre-filter
             # already dropped history, so a full parse is paid per NEW session, not
             # per historical transcript in the cwd (#F5).
-            extras = [
-                self._session_activity(
-                    mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
+            extras: list[SessionActivity] = []
+            extras_fleet: list[SessionActivity] = []
+            for sid, cwd, sidecar in self._adopted_candidates(
+                adapter, state, reference_pane=reference_pane, exclude_id=state.agent_session_id
+            ):
+                extras.append(
+                    self._session_activity(
+                        mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
+                    )
                 )
-                for sid, cwd, sidecar in self._adopted_candidates(
-                    adapter, state, reference_pane=reference_pane, exclude_id=state.agent_session_id
-                )
-            ]
+                extras_fleet.extend(self._fleet_entries(kind, sid, cwd))
             if self._minted_unmaterialized(adapter, minted, minted_sidecar, now) and extras:
                 # The minted --session-id is a dead pointer (rotated by `/clear`,
                 # hand-restarted, or ended). Extras are already adoption-filtered
                 # and newest-first, so the head is the live session to promote;
                 # the minted entry rides behind and reclaims primary the moment
                 # it materializes.
-                return [*extras, minted]
-            return [minted, *extras]
+                return [*extras, *extras_fleet, minted, *minted_fleet]
+            return [minted, *minted_fleet, *extras, *extras_fleet]
 
         # No minted id: recover the *live* session by discovery — birth-only, as
         # there is no minted session to source a reference pane from (#F1). The
@@ -469,12 +514,34 @@ class ActivityService:
         for sid, cwd, sidecar in self._adopted_candidates(
             adapter, state, reference_pane=None, exclude_id=None
         ):
-            return [
-                self._session_activity(
-                    mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
-                )
-            ]
+            primary = self._session_activity(
+                mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
+            )
+            return [primary, *self._fleet_entries(kind, sid, cwd)]
         return []
+
+    @staticmethod
+    def _fleet_entries(kind: str, session_id: str, cwd: Path) -> list[SessionActivity]:
+        """Itemized in-session sub-agent fleet members for one session (#173) —
+        additional ``WorkspaceActivityView.sessions`` rows alongside the
+        primary/adopted-extra entries, each an ordinary ``SessionActivity`` (its
+        ``AgentSession.parent_session_id`` points back at ``session_id``) so no
+        new wire shape is needed. The existing ``active_subagents`` COUNT is
+        untouched — it stays derived inside ``parse_activity`` — this only adds
+        the itemized detail alongside it.
+
+        Claude-only by construction (the in-session sidechain fleet is a Claude
+        Code transcript concept, like ``build_answer_keys``'s direct
+        ``ClaudeCodeAdapter`` reference in ``manager.py``); every other kind is
+        a cheap no-op. A CLI ``--bg`` background run is a separate top-level
+        session, not a sub-agent thread, so it is out of scope here.
+        """
+        if kind != "claude_code":
+            return []
+        return [
+            SessionActivity(session=session, activity=fleet_activity)
+            for session, fleet_activity in ClaudeCodeAdapter().fleet_activity(cwd, session_id)
+        ]
 
     @staticmethod
     def _effective_kind(mgr: WorkspaceManager, state: WorkspaceState) -> str:
@@ -601,12 +668,19 @@ class ActivityService:
         # can't mean "a file exists" — UNKNOWN-and-fileless is the only true
         # STARTING window.
         has_transcript = bool(paths) or transcript.state is not AgentActivityState.UNKNOWN
+        # A headless workspace (#146) has no tmux pane, exactly like a remote
+        # adapter: the local pane says nothing about the agent's work, so the
+        # transcript/adapter is the sole live-state authority. Fold it into the
+        # blend's `remote` (pane-not-authoritative) arm — but ONLY the blend;
+        # `_minted_unmaterialized` still uses `adapter.remote` directly, since a
+        # headless claude_code transcript can still rotate (`/clear`) and recover.
+        pane_not_authoritative = adapter.remote or not mgr.provides_pane
         blended = self._blend(
             state.status,
             transcript,
             has_transcript=has_transcript,
             provenance=provenance,
-            remote=adapter.remote,
+            remote=pane_not_authoritative,
             now=now,
         )
         # Push-status override (#18): a sidecar from the managed hook is the
@@ -624,6 +698,7 @@ class ActivityService:
         # the state override above and cross-checked against the transcript so a
         # resolved batch never lingers on the stream.
         questions = self._pending_questions(adapter, cwd, session_id, sidecar, transcript)
+        live = self._live_counters(state=blended, transcript=transcript)
         session = AgentSession(
             session_id=session_id,
             transcript_path=paths[0] if paths else None,
@@ -632,8 +707,35 @@ class ActivityService:
             tmux_window=mgr.config.tmux.agent_window_name,
         )
         return SessionActivity(
-            session=session, activity=replace(transcript, state=blended, questions=questions)
+            session=session,
+            activity=replace(transcript, state=blended, questions=questions),
+            live=live,
         )
+
+    @staticmethod
+    def _live_counters(
+        *, state: AgentActivityState, transcript: AgentActivity
+    ) -> LiveCounters | None:
+        """The in-flight token block for a session mid-generation (#181 seam).
+
+        No fast side-channel is wired yet — the #177 wire-truth proxy is the
+        primary source, with partial-message deltas or OTel metrics as
+        fallbacks — so this degrades to ``None`` (hidden, never zeroed) until
+        one lands. This call site is where it plugs in: called once per
+        session per poll tick, i.e. throttled to the existing ~1-2s
+        ``poll_once`` cadence — no separate timer, no new SSE frame type, it
+        rides the same ``session_activity`` delta the fingerprint above already
+        emits.
+
+        The reconciliation rule for whoever wires a real source: only report
+        while ``state is WORKING`` (mid-generation); the instant a turn flushes
+        the transcript's own ``tokens_in``/``tokens_out`` become authoritative
+        again, so the live block must stop appearing rather than being reset —
+        a client that keeps seeing it after settling would show a stale count
+        fighting the cumulative total instead of yielding to it.
+        """
+        del state, transcript  # reserved for the #177 wiring
+        return None
 
     def _pending_questions(
         self,

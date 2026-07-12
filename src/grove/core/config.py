@@ -11,6 +11,7 @@ config can serve every repo without re-validation per invocation.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 from collections.abc import Mapping
@@ -102,6 +103,16 @@ class AgentSpec(BaseModel):
 
     description: str = ""
 
+    tools_offline: bool = False
+    """Launch this agent with network-facing tools disallowed (#148): Claude
+    Code drops ``WebFetch``/``WebSearch``, Codex flips its sandbox to
+    workspace-write with networking off. Mechanism, not policy — a deployment
+    that wants a hermetic/offline agent profile sets this per `AgentSpec`
+    rather than Grove hard-coding a tool list; the adapter owns the actual
+    flag shape (`AgentAdapter.offline_decoration`), same provider-boundary
+    split as `model_decoration`. `generic`/`mewbo` have no local tool gate, so
+    it's a no-op for those kinds."""
+
 
 class InitScriptConfig(BaseModel):
     """Optional setup script run in its own tmux window before the agent starts."""
@@ -168,22 +179,157 @@ class TmuxConfig(BaseModel):
     that signal, so the flicker surfaced on every dashboard card.
     """
 
+    steer_settle_ms: int = Field(default=200, ge=0)
+    """Delay (ms) `tmux.send_text`/`send_keys` wait between typing steered
+    text and sending the submitting Enter (#180). The TUI's bracketed paste
+    buffers everything landing inside its accumulation window as literal
+    text, so an Enter sent immediately after a paste can be coalesced into
+    that same window and read as a literal newline rather than a lone
+    submitting keypress — only a lone `return` keypress submits. Waiting
+    this long first lets the window close before Enter lands. The same
+    value also bounds the post-Enter verify-and-retry wait (one settle
+    period is enough for the composer to render either the reset prompt or
+    the still-pasted text). 0 disables both delays.
+    """
+
 
 class HooksConfig(BaseModel):
-    """Opt-in Grove-managed Claude Code status hooks (#18).
+    """Grove-managed Claude Code status hooks (#18; on by default since #171).
 
     When ``enabled``, Grove launches ``claude_code`` agents with
     ``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact
     lifecycle status (``WORKING`` / ``WAITING`` / ``BLOCKED`` / ``IDLE``) into a
     per-session sidecar that the Activity Dashboard prefers over polled status —
-    giving precise *blocked-on-a-permission-prompt* that polling can't see. Off
-    by default (mechanism, not policy); the user's own ``.claude/settings.json``
-    is never touched, so uninstalling is just flipping this back to ``false``.
+    giving precise *blocked-on-a-permission-prompt* that polling can't see, plus
+    an immediate daemon refresh over the native http hook (#171) instead of
+    waiting out the poll tick. On by default now that the sidecar is the
+    primary live signal rather than a dormant opt-in sidecar (still a
+    mechanism knob, not policy); the user's own ``.claude/settings.json`` is
+    never touched, so disabling is just flipping this back to ``false``.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = True
+
+
+class ContainerConfig(BaseModel):
+    """Run the agent inside a container instead of directly on the host (#65).
+
+    Off by default (mechanism, not policy): a workspace opts in and its
+    ``DockerExecLaunchBackend`` builds/starts the container, bind-mounts the
+    worktree at ``workspace_mount``, and runs the assembled agent command via
+    ``docker exec`` inside it. Every value cascades like the rest of the config;
+    a future Podman driver reads the SAME submodel behind the same protocol —
+    ``docker_bin`` names the CLI, it is not the driver-swap seam.
     """
 
     model_config = _FROZEN
 
     enabled: bool = False
+    """Master switch. ``False`` keeps the default host tmux launch untouched."""
+
+    image: str = ""
+    """Image the container runs (e.g. ``python:3.12``). When ``dockerfile`` is
+    set this doubles as the build tag; otherwise it is pulled as-is. Required
+    (non-empty) for a container launch — an empty image is a config error the
+    driver surfaces at launch, not here, so the cascade can persist a partial
+    config before the image is chosen."""
+
+    dockerfile: str = ""
+    """Worktree-relative Dockerfile to build into ``image`` before first run.
+    Empty (default) pulls ``image`` as-is — no build step."""
+
+    build_context: str = "."
+    """Worktree-relative build context passed to ``docker build`` when
+    ``dockerfile`` is set."""
+
+    workspace_mount: str = "/workspace"
+    """Absolute path INSIDE the container where the worktree is bind-mounted;
+    the agent's container workdir is this plus its ``project_subpath``."""
+
+    exec_user: str = ""
+    """``docker exec -u`` value (``uid``/``name``/``uid:gid``). Empty keeps the
+    image's default user."""
+
+    mounts: tuple[str, ...] = ()
+    """Extra ``-v`` bind specs (``host:container[:opts]``) passed verbatim to
+    ``docker run`` — passthrough mechanism, never parsed or validated here."""
+
+    network: str = ""
+    """``docker run --network`` value. Empty keeps the engine default network."""
+
+    run_args: tuple[str, ...] = ()
+    """Extra args spliced into ``docker run`` before the image (``--gpus``,
+    ``--cpus``, an ``--env-file`` …). Pure passthrough — the mechanism seam that
+    keeps container knobs out of Grove's own field set."""
+
+    docker_bin: str = "docker"
+    """The container CLI binary/path (``docker``, or an absolute path / drop-in
+    shim). NOT the Podman-driver seam — a different runtime is a different
+    ``ContainerDriver`` class, this only points at a docker-compatible CLI."""
+
+
+class ChannelsConfig(BaseModel):
+    """Grove-managed Claude Code *channel* delivery (#182; research preview).
+
+    A channel is Claude Code's native seam for pushing a message a **running,
+    interactive** session acts on (and relaying permission decisions), unlike a
+    hook (status push, one way) or steering (raw pane keystrokes). When
+    ``enabled``, Grove launches ``claude_code`` agents with ``--channels
+    <grove-channel-settings>`` so the agent connects to the Grove channel MCP
+    server; the daemon then POSTs queued messages to that server's loopback
+    receiver and the agent receives them as ``notifications/claude/channel``.
+
+    Off by default on purpose: channels are an auth-gated Claude Code research
+    preview, so this stays a deliberately-flipped mechanism knob (not policy).
+    Disabling is just flipping ``enabled`` back — the launch flag disappears and
+    the whole path degrades to a no-op, exactly like the hook ``--settings``.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+
+    allowed_senders: list[str] = Field(default_factory=list)
+    """Sender allowlist for inbound channel deliveries. Each entry is a sender
+    identifier (a Grove client/device label) permitted to POST a message into a
+    running session's channel. **Empty means allow all** — enabling the feature
+    is the deliberate opt-in, so a bare enable is permissive; populate this to
+    RESTRICT which senders may drive a running agent. Mechanism, not policy: the
+    server matches an inbound message's declared sender against this list."""
+
+
+class PermissionConfig(BaseModel):
+    """Grove-hosted Claude Code ``--permission-prompt-tool`` answering (#172).
+
+    A *permission prompt* is the "allow this tool call?" gate a headless / paneless
+    session hits with no interactive terminal to answer it. When ``enabled``, Grove
+    launches ``claude_code`` agents with a Grove-owned MCP server registered
+    (``--mcp-config <grove-permission-mcp>``) plus
+    ``--permission-prompt-tool mcp__grove_permission__permission_prompt`` — so
+    Claude Code calls that Grove tool instead of blocking on a TTY, and the tool
+    answers with allow/deny JSON. It is the native replacement for typing a
+    permission answer into the tmux pane (which only works with a human attached).
+
+    Off by default on purpose (mechanism, not policy), and **fail-closed**:
+    ``default = "deny"`` means an un-relayed prompt is denied, never silently
+    allowed — flipping ``enabled`` on can't widen what an unattended agent may do
+    without an explicit ``default: "allow"``. Disabling is just flipping
+    ``enabled`` back — the launch flags disappear and the whole path is a no-op,
+    exactly like the hook ``--settings`` / channel ``--channels`` appends.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+
+    default: Literal["allow", "deny"] = "deny"
+    """The decision the prompt tool returns while no interactive human/daemon
+    relay is wired. ``deny`` is fail-closed (the safe default for an unattended
+    agent); ``allow`` is the deliberate permissive opt-in for a trusted sandbox
+    (a container workspace whose blast radius is bounded). Mechanism, not policy:
+    the tool answers whatever this names, verbatim."""
 
 
 class AuthConfig(BaseModel):
@@ -313,6 +459,102 @@ class TicketsConfig(BaseModel):
     linear: LinearTicketConfig = Field(default_factory=LinearTicketConfig)
 
 
+# The built-in initial prompt an issue-ops-created workspace boots on. Placeholders
+# (``{title} {body} {number} {url} {command_text}``) are filled at the engine
+# boundary via ``str.format_map`` with a missing-key-tolerant map, so a
+# user-overridden template that references an unknown name renders it literally
+# rather than crashing the router. Mechanism, not policy: every deployment can
+# override the whole string via ``issueops.prompt_template`` and it cascades like
+# any other config value — this is only the sensible default.
+_DEFAULT_ISSUEOPS_PROMPT = """\
+You are handling tracker issue #{number}: "{title}".
+
+Issue description:
+{body}
+
+The human triggered you with this comment:
+{command_text}
+
+Drive it to a merged PR autonomously: read the issue and map the affected
+components (read the nearest owning CLAUDE.md before editing), implement the
+change, run the project's gates, open a PR that closes the issue, and reply on
+the issue with what changed and a link to the PR. Ask only about genuinely
+ambiguous decisions; bias to action.
+
+Issue link: {url}
+"""
+
+
+class IssueOpsConfig(BaseModel):
+    """Turn issue-comment mentions into workspace actions (#196) + mirror progress back (#197).
+
+    One submodel, two faces. INBOUND (#196): a commenter mentions the ``trigger``
+    token as the first word of an issue comment; the forwarder (a stateless CI
+    action) POSTs the event to the daemon, and the engine parses the grammar,
+    enforces the permission policy, and routes to a workspace verb. OUTBOUND
+    (#197): when ``enabled``, the daemon runs a status publisher that mirrors each
+    workspace's progress onto its ticket as one live sticky comment. Every knob
+    here is mechanism, not policy — the trigger word, who may drive it, the boot
+    prompt, and the mirror's cadence are all data the deployment owns, never baked
+    into the engine.
+
+    ``enabled`` gates ONLY the outbound status mirror. The inbound command routing
+    has no on/off flag of its own — its real opt-in is installing the CI workflow
+    AND enabling the matching ticket provider (``tickets.<provider>``) with the
+    repo's ``owner``/``repo`` (with neither, no event ever reaches the engine and
+    no repo resolves for one that does). So a deployment can route commands without
+    the status mirror, mirror without routing, or run both.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    """Master switch for the OUTBOUND live status comment (#197) — the sticky
+    per-workspace comment the publisher mirrors onto its ticket. Off by default;
+    the daemon builds and binds the publisher only when this is ``True``.
+    Independent of inbound command routing, which opts in via the CI workflow plus
+    an enabled ticket provider (see the class docstring)."""
+
+    trigger: str = "@grove"
+    """The mention token that must OPEN a comment (word-boundary, first token) for
+    the engine to act. A mention-style ``@``-prefixed token by default — a bare
+    ``/`` prefix collides with the forge's own markdown slash commands. Compared
+    case-insensitively; everything after it is the command (a fixed verb or free
+    prompt text)."""
+
+    allowed_actors: list[str] = Field(default_factory=list)
+    """The opt-in WIDENING knob on the permission policy. By default a command is
+    honored only when the forwarder asserts the commenter has repo write access;
+    listing a login here lets that user drive issue-ops REGARDLESS of their repo
+    permission (a trusted bot account, an external collaborator). Empty (default)
+    keeps the strict write-access-only policy. Matched case-insensitively. Never a
+    NARROWING knob — write access always suffices; this only adds to it."""
+
+    agent: str = "claude"
+    """Which configured agent an issue-ops-created workspace spawns. Must name an
+    entry in ``agents``; ``create`` raises (and the engine replies) if it doesn't.
+    Defaults to the built-in ``claude`` agent — override per deployment to route
+    issue work to a different tool. Mechanism, not policy."""
+
+    prompt_template: str = _DEFAULT_ISSUEOPS_PROMPT
+    """The initial prompt a newly-created workspace boots on, with ``{title}``,
+    ``{body}``, ``{number}``, ``{url}``, and ``{command_text}`` placeholders filled
+    from the event. Cascades like all config; the built-in default instructs the
+    agent on the autonomous issue→PR loop."""
+
+    update_window_seconds: float = Field(default=5.0, ge=0)
+    """Coalescing window for the OUTBOUND status comment (#197) — at most one
+    comment PATCH per workspace per window. Forges apply secondary rate limits to
+    same-comment edit storms, so the publisher folds every render-relevant change
+    into per-workspace state and flushes the merged result once the window
+    elapses. ``0`` flushes every change (no coalescing)."""
+
+    deep_link_base_url: str = ""
+    """The webapp base (e.g. ``https://grove.example.com``); a status comment
+    deep-links to ``{base}/w/{id}``. Reuses the ``notifications`` deep-link
+    convention verbatim. Empty (default) omits the link."""
+
+
 # Which agent-state edges may fire a push. String values mirror
 # ``AgentActivityState`` (waiting/blocked/error/idle) — kept a Literal here, not
 # the imported enum, so ``config.py`` never imports ``grove.core.agents`` (which
@@ -385,6 +627,173 @@ class NotificationsConfig(BaseModel):
     webhook: WebhookChannelConfig = Field(default_factory=WebhookChannelConfig)
 
 
+class TelemetryConfig(BaseModel):
+    """LangFuse credentials + OpenTelemetry passthrough knobs (issue #176).
+
+    Secret-free like every other integration submodel (the ``mewbo.api_key_env``
+    discipline): the three canonical values are env-var NAMES, never secret
+    literals, so committed config stays publishable — the actual host/keys live
+    only in the consuming process's environment. Off by default (mechanism, not
+    policy); a deployment opts in by setting ``enabled: true`` and pointing the
+    three ``*_env`` fields at whatever names its host actually exports (exact
+    key names per environment are TBD — this holds regardless of what a given
+    host calls them).
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+
+    host_env: str = "LANGFUSE_HOST"
+    """NAME of the env var holding the Langfuse host (e.g. a self-hosted or
+    ``https://cloud.langfuse.com`` URL) — never the URL itself."""
+
+    public_key_env: str = "LANGFUSE_PUBLIC_KEY"
+    """NAME of the env var holding the Langfuse public key."""
+
+    secret_key_env: str = "LANGFUSE_SECRET_KEY"
+    """NAME of the env var holding the Langfuse secret key — never the secret
+    itself."""
+
+    passthrough_kinds: tuple[AgentKind, ...] = ("claude_code", "codex")
+    """Which agent runtimes get the derived telemetry env exported into their
+    launch env — an allow-list, mechanism not policy (mirrors
+    ``NotificationsConfig.on``'s "which transitions" shape). ``mewbo`` runs
+    server-side (no local pane to export into) and a bare ``generic`` shell has
+    no instrumentation to feed, so both are excluded by default; set explicitly
+    to opt in."""
+
+    def derive_env(self, env: Mapping[str, str]) -> dict[str, str]:
+        """Derive the launch-env vars from the canonical three, read out of `env`.
+
+        Pure function over a caller-supplied mapping — never `os.environ`
+        directly — so it stays testable and composes with the launch
+        boundary's own env resolution (`LaunchSpec.env`); the actual
+        `os.environ` read happens at that boundary, not here. Returns BOTH
+        derivable shapes at once and lets the launch boundary pick per
+        `passthrough_kinds`:
+
+        1. the native Langfuse SDK trio (`LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY`
+           / `LANGFUSE_SECRET_KEY`) — for a runtime whose own code reads these
+           directly;
+        2. the generic OTEL exporter pair — `OTEL_EXPORTER_OTLP_ENDPOINT`
+           (`{host}/api/public/otel`) and `OTEL_EXPORTER_OTLP_HEADERS`
+           (`Authorization=Basic <b64(public:secret)>,x-langfuse-ingestion-version=4`)
+           — for a runtime that only speaks OTLP. The header is assembled here
+           at call time and never stored — only the three source values are
+           config.
+
+        A name that resolves to nothing in `env` is silently omitted (a
+        partial credential set derives whatever it can); the OTEL pair needs
+        all three source values, so it's only emitted when all resolve.
+        Disabled (`enabled=False`) always derives nothing.
+        """
+        if not self.enabled:
+            return {}
+
+        host = env.get(self.host_env)
+        public_key = env.get(self.public_key_env)
+        secret_key = env.get(self.secret_key_env)
+
+        derived: dict[str, str] = {}
+        if host:
+            derived["LANGFUSE_HOST"] = host
+        if public_key:
+            derived["LANGFUSE_PUBLIC_KEY"] = public_key
+        if secret_key:
+            derived["LANGFUSE_SECRET_KEY"] = secret_key
+
+        if host and public_key and secret_key:
+            token = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+            derived["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{host.rstrip('/')}/api/public/otel"
+            derived["OTEL_EXPORTER_OTLP_HEADERS"] = (
+                f"Authorization=Basic {token},x-langfuse-ingestion-version=4"
+            )
+        return derived
+
+
+def _default_proxy_upstreams() -> dict[AgentKind, str]:
+    return {"claude_code": "https://api.anthropic.com", "codex": "https://api.openai.com/v1"}
+
+
+def _default_proxy_base_url_env() -> dict[AgentKind, str]:
+    return {"claude_code": "ANTHROPIC_BASE_URL", "codex": "OPENAI_BASE_URL"}
+
+
+class ProxyConfig(BaseModel):
+    """Loopback LLM-gateway passthrough proxy for wire-truth capture (issue #177).
+
+    Off by default (mechanism, not policy). When a deployment opts in and the
+    orchestrator serves the proxy (``grove.core.proxy.ProxyApp``), an agent is
+    pointed at it through :meth:`proxy_env` at the launch boundary and every
+    provider request/response is forwarded VERBATIM while telemetry (true TTFT,
+    token usage, latency) is teed off the stream. Nothing here holds a secret —
+    upstreams are public API base URLs and the env-var NAMES that carry the
+    proxy address to each runtime; auth flows untouched through the proxy, never
+    into config.
+
+    Two per-kind maps do the wiring, keyed by ``AgentKind`` (the map keys are the
+    opt-in set, the ``TelemetryConfig.passthrough_kinds`` analogue expressed as
+    membership): ``upstreams`` = where the proxy forwards that kind's traffic;
+    ``base_url_env`` = the env var whose value :meth:`proxy_env` sets to the proxy
+    URL (``claude_code`` reads ``ANTHROPIC_BASE_URL``; ``codex`` reads its
+    ``model_providers`` base-url env, ``OPENAI_BASE_URL`` by default). Both
+    cascade and merge like every other config value.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    """Master switch. ``False`` leaves launch env and traffic untouched."""
+
+    host: str = "127.0.0.1"
+    """Loopback interface the proxy listens on — never a routable address; the
+    proxy relays provider credentials, so it must stay same-host only."""
+
+    port: int = Field(default=8788, ge=1, le=65535)
+    """Port the proxy listens on. The value :meth:`proxy_env` hands the agent is
+    ``http://{host}:{port}``."""
+
+    upstreams: dict[AgentKind, str] = Field(default_factory=_default_proxy_upstreams)
+    """Per-kind real upstream base URL the proxy forwards to (verbatim). The keys
+    are the opt-in set; a kind absent here is not proxied."""
+
+    base_url_env: dict[AgentKind, str] = Field(default_factory=_default_proxy_base_url_env)
+    """Per-kind NAME of the env var that points that runtime at the proxy — the
+    documented gateway seam each provider exposes (Claude:
+    ``ANTHROPIC_BASE_URL``; Codex: its ``model_providers`` base-url env). Never a
+    URL literal here — :meth:`proxy_env` assembles ``{name: proxy_url}``."""
+
+    log_bodies: bool = False
+    """Content-gating: capture the REQUEST body into the telemetry event. Off by
+    default — a captured body can hold prompt content, so opting in is deliberate.
+    Response bodies are NEVER captured; only their token ``usage`` is extracted.
+    Headers (auth included) are never captured or logged regardless."""
+
+    max_body_bytes: int = Field(default=8192, ge=0)
+    """Truncation cap (bytes) applied to a captured request body when
+    ``log_bodies`` is set — bounds the telemetry payload."""
+
+    def proxy_env(self, kind: AgentKind) -> dict[str, str]:
+        """Derive the launch-env that points a ``kind`` agent at the proxy.
+
+        The proxy sibling of ``TelemetryConfig.derive_env``: pure, returns the
+        ``{env_var_name: proxy_url}`` the launch boundary merges into an agent's
+        env so its provider client dials the loopback proxy instead of the real
+        upstream (Claude honors ``ANTHROPIC_BASE_URL``; Codex its
+        ``model_providers`` base-url env). Disabled, or a kind with no configured
+        ``base_url_env`` entry, derives nothing. The proxy URL is the same
+        ``host``/``port`` for every kind — a deployment fronting multiple
+        providers on distinct ports overrides at the orchestration seam.
+        """
+        if not self.enabled:
+            return {}
+        env_name = self.base_url_env.get(kind)
+        if not env_name:
+            return {}
+        return {env_name: f"http://{self.host}:{self.port}"}
+
+
 class UIConfig(BaseModel):
     """Client-facing UI knobs. The TUI consumes these; core ignores them."""
 
@@ -442,9 +851,15 @@ class GroveConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
+    container: ContainerConfig = Field(default_factory=ContainerConfig)
+    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    permission: PermissionConfig = Field(default_factory=PermissionConfig)
     mewbo: MewboConfig = Field(default_factory=MewboConfig)
     tickets: TicketsConfig = Field(default_factory=TicketsConfig)
+    issueops: IssueOpsConfig = Field(default_factory=IssueOpsConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    proxy: ProxyConfig = Field(default_factory=ProxyConfig)
 
     def find_agent(self, name: str) -> AgentSpec | None:
         for spec in self.agents:
@@ -514,6 +929,38 @@ def load_config(
 
     logger.debug("config loaded: {} layers merged", len(layers))
     return cfg
+
+
+def add_known_project(repo_root: Path, *, target: Path | None = None) -> bool:
+    """Append ``repo_root`` to the user config's ``projects`` list (idempotent).
+
+    Read-modify-write on the raw JSON layer (:func:`_read_json`, the same seam
+    :func:`load_config` reads) rather than round-tripping through a merged
+    ``GroveConfig`` — a full merge would bake every cascade default back into
+    the user file. Targets the *user* config by default: ``projects`` is a
+    user-level concern (#95's ``known_roots()`` union), so a repo becomes
+    visible cross-project without needing its own committed
+    ``.grove/config.json``. Returns ``False`` (no write) when already listed.
+    """
+    target = target or paths.user_config_path()
+    raw = _read_json(target) if target.exists() else {}
+    existing = raw.get("projects", [])
+    if not isinstance(existing, list):
+        raise ConfigError(f"{target}: 'projects' must be a list")
+    resolved = str(repo_root.resolve())
+    already_known = {str(Path(p).expanduser().resolve()) for p in existing if isinstance(p, str)}
+    if resolved in already_known:
+        return False
+    raw["projects"] = [*existing, resolved]
+    try:
+        GroveConfig.model_validate(raw)
+    except ValidationError as exc:
+        raise ConfigError(f"Invalid configuration: {exc}") from exc
+    paths.ensure_dir(target.parent)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8", newline="\n")
+    os.replace(tmp, target)
+    return True
 
 
 def dump_schema_json() -> str:

@@ -17,6 +17,7 @@ import pytest
 from rich.console import Console
 from rich.style import Style
 from rich.text import Text
+from textual.containers import VerticalScroll
 from textual.widgets import Static, TabbedContent, TabPane
 
 from grove.core import (
@@ -1377,5 +1378,77 @@ async def test_cursor_move_updates_rail(
         # Rail re-rendered (no empty placeholder) for both selections.
         assert "(no workspace selected)" not in first_rail
         assert "(no workspace selected)" not in second_rail
+        await pilot.press("q")
+        await pilot.pause()
+
+
+# ─── transcript scroll anchoring (cloud-session flicker fix, 2026-07-11) ─────
+
+
+def _many_turns(count: int) -> tuple[SessionTurn, ...]:
+    return tuple(
+        SessionTurn(
+            user_text=f"ask {i}",
+            started_at=datetime(2026, 6, 11, tzinfo=UTC),
+            entries=(DigestEntry(role="assistant", text=f"reply {i}"),),
+        )
+        for i in range(count)
+    )
+
+
+@pytest.mark.asyncio
+async def test_transcript_update_preserves_scroll_when_user_scrolled_up(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A digest update landing while the user has scrolled up must NOT yank
+    the viewport back to the tail (the busy-cloud-session scroll-reset bug):
+    new content lands below; the rows they're reading stay put."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        rail.set_peek(_stub_peek(), turns=_many_turns(30))
+        await pilot.pause()
+        await pilot.pause()
+        scroll = rail.query_one("#transcript-scroll", VerticalScroll)
+        assert scroll.max_scroll_y > 0  # content must overflow the viewport
+        scroll.scroll_home(animate=False)
+        await pilot.pause()
+        assert scroll.scroll_offset.y == 0
+
+        rail.set_peek(_stub_peek(), turns=_many_turns(31))
+        await pilot.pause()
+        await pilot.pause()
+        assert scroll.scroll_offset.y == 0
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_transcript_update_sticks_to_tail_when_at_end(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The glance behavior is preserved: a viewer already at the tail keeps
+    following it as new turns land."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        rail.set_peek(_stub_peek(), turns=_many_turns(30))
+        await pilot.pause()
+        await pilot.pause()
+        scroll = rail.query_one("#transcript-scroll", VerticalScroll)
+        assert scroll.is_vertical_scroll_end
+
+        rail.set_peek(_stub_peek(), turns=_many_turns(31))
+        await pilot.pause()
+        await pilot.pause()
+        assert scroll.is_vertical_scroll_end
         await pilot.press("q")
         await pilot.pause()

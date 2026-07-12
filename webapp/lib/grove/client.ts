@@ -6,6 +6,7 @@ import type {
   CreateWorkspaceRequest,
   DashboardSnapshotView,
   HealthView,
+  SessionControlsView,
   SessionDetailView,
   SessionSummaryView,
   WhoamiView,
@@ -115,6 +116,35 @@ export class GroveClient {
   /** One-shot cross-project activity snapshot — the SSE-stream fallback. */
   async getActivity(): Promise<DashboardSnapshotView> {
     return this._get<DashboardSnapshotView>("/activity");
+  }
+
+  /**
+   * The session's available input controls (#178) — enumerated slash commands,
+   * skills, MCP servers, the model catalog + current model, permission posture.
+   * Fetch-on-demand (never SSE); read-only display is the core value. Best-effort
+   * daemon-side: an agent with no control surface yields empty lists, not an error.
+   */
+  async getControls(id: string): Promise<SessionControlsView> {
+    return this._get<SessionControlsView>(`/workspaces/${encodeURIComponent(id)}/controls`);
+  }
+
+  /**
+   * Invoke a named session control — a slash command or a skill (#178). The
+   * daemon composes `/name` and delivers it through the steer path (204 on
+   * dispatch — "delivered", not "ran"; the result rides the transcript later).
+   * Refusals: 501 `capability_unavailable` (a shell/remote kind), 409 pane/state.
+   */
+  async invokeControl(id: string, name: string): Promise<void> {
+    await this._post(`/workspaces/${encodeURIComponent(id)}/controls/invoke`, { name });
+  }
+
+  /**
+   * Switch the running session's model (#178) — delivered as the interactive
+   * `/model <id>` control. `model` is forwarded verbatim (the provider boundary).
+   * Refusals mirror `invokeControl`.
+   */
+  async switchModel(id: string, model: string): Promise<void> {
+    await this._post(`/workspaces/${encodeURIComponent(id)}/controls/model`, { model });
   }
 
   /** One-shot agent-pane ANSI snapshot — the focused live pane's poll fallback. */

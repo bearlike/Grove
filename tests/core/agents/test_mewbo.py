@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from grove.core.agents.mewbo import MewboAdapter
-from grove.core.agents.model import AgentActivityState
+from grove.core.agents.model import AgentActivityState, FileEdit, TodoItem
 from grove.core.config import MewboConfig
 from grove.core.errors import MewboError
 from grove.core.mewbo import MewboClient
@@ -203,6 +203,101 @@ def test_failed_status_surfaces_error_detail_from_done_reason() -> None:
     assert activity.error_detail == "tool_crash"
 
 
+# ─── typed final-result extraction (#149) ───────────────────────────────────
+
+
+def test_final_result_reflects_authoritative_status_not_the_raw_event_type() -> None:
+    """``EVENTS_RUNNING``'s last assistant-authored event is a ``completion``
+    record, but the top-level status is still ``running`` — Mewbo's own
+    AUTHORITATIVE-status rule (module docstring) means ``is_complete`` tracks
+    ``status``, never the incidental fact the tail event looks terminal."""
+    adapter = _adapter(_transport(events=EVENTS_RUNNING))
+    result = adapter.final_result(CWD, "sess-1")
+    assert result is not None
+    assert result.text == "Done."
+    assert result.is_complete is False
+
+
+def test_final_result_complete_when_status_settles() -> None:
+    payload = {**EVENTS_RUNNING, "status": "completed", "done_reason": "completed"}
+    adapter = _adapter(_transport(events=payload))
+    result = adapter.final_result(CWD, "sess-1")
+    assert result is not None
+    assert result.is_complete is True
+    assert result.text == "Done."
+
+
+def test_final_result_none_when_no_assistant_reply_yet() -> None:
+    payload = {
+        "status": "running",
+        "done_reason": None,
+        "events": [
+            {"ts": "2026-06-11T10:00:00+00:00", "type": "user", "payload": {"text": "go"}},
+        ],
+    }
+    adapter = _adapter(_transport(events=payload))
+    assert adapter.final_result(CWD, "sess-1") is None
+
+
+# ─── latest-todo projection (#194) ──────────────────────────────────────────
+
+
+def test_latest_todo_reads_the_last_recognized_todo_event() -> None:
+    """Mewbo has no message spine (#179 never touched the remote adapter), so
+    the projection is over the SAME ``_turn_entries`` fold ``read_turns``
+    already builds — a second ``TodoWrite`` overwrites the first."""
+    events = {
+        "status": "running",
+        "events": [
+            {
+                "ts": "2026-07-08T10:00:00+00:00",
+                "type": "tool",
+                "payload": {
+                    "tool_id": "plan-1",
+                    "operation": "TodoWrite",
+                    "tool_input": {"todos": [{"content": "Scope it", "status": "completed"}]},
+                },
+            },
+            {
+                "ts": "2026-07-08T10:00:01+00:00",
+                "type": "tool",
+                "payload": {
+                    "tool_id": "plan-2",
+                    "operation": "TodoWrite",
+                    "tool_input": {
+                        "todos": [
+                            {"content": "Scope it", "status": "completed"},
+                            {"content": "Ship it", "status": "in_progress"},
+                        ]
+                    },
+                },
+            },
+        ],
+    }
+    adapter = _adapter(_transport(events=events))
+    todo = adapter.latest_todo(CWD, "sess-1")
+    assert todo is not None
+    assert todo.items == (
+        TodoItem(content="Scope it", status="completed"),
+        TodoItem(content="Ship it", status="in_progress"),
+    )
+
+
+def test_latest_todo_none_when_no_todo_event() -> None:
+    adapter = _adapter(_transport(events=EVENTS_RUNNING))
+    assert adapter.latest_todo(CWD, "sess-1") is None
+
+
+def test_latest_todo_none_when_events_fetch_fails() -> None:
+    adapter = _adapter(_transport())  # /events 404s
+    assert adapter.latest_todo(CWD, "sess-1") is None
+
+
+def test_final_result_none_when_events_fetch_fails() -> None:
+    adapter = _adapter(_transport())  # no /events route registered → 404
+    assert adapter.final_result(CWD, "sess-1") is None
+
+
 # ─── read_turns / digest ─────────────────────────────────────────────────────
 
 
@@ -346,6 +441,163 @@ def test_enriched_rendering_leaves_metrics_unchanged() -> None:
     assert activity.tool_calls == 1  # the call side only — result not doubled
     assert activity.tokens_in == 1500  # peak, not the 2500 sum
     assert activity.tokens_out == 1000  # sum of outputs
+
+
+# ─── file-edit recognition (structured diff cards, #diff-viewer) ─────────────
+
+
+def test_read_turns_renders_recognized_file_edit_as_structured_entry() -> None:
+    events = {
+        "status": "running",
+        "title": "Rename a symbol",
+        "events": [
+            {
+                "ts": "2026-07-08T10:00:00+00:00",
+                "type": "user",
+                "payload": {"text": "Rename foo to bar"},
+            },
+            {
+                "ts": "2026-07-08T10:00:01+00:00",
+                "type": "tool",
+                "payload": {
+                    "tool_id": "edit-1",
+                    "operation": "Edit",
+                    "tool_input": {"path": "a.py", "old_string": "foo", "new_string": "bar"},
+                },
+            },
+        ],
+    }
+    adapter = _adapter(_transport(events=events))
+    turns = adapter.read_turns(CWD, "sess-1")
+
+    assert len(turns) == 1
+    (entry,) = turns[0].entries
+    assert entry.role == "file_edit"
+    assert entry.file_edit == FileEdit(path="a.py", old_text="foo", new_text="bar")
+    # The one-liner text still carries the label + path for a role-unaware reader.
+    assert entry.text == "edit-1: Edit a.py"
+
+
+def test_read_turns_renders_multiedit_batch_as_one_entry_per_edit() -> None:
+    events = {
+        "status": "running",
+        "events": [
+            {
+                "ts": "2026-07-08T10:00:00+00:00",
+                "type": "tool",
+                "payload": {
+                    "tool_id": "edit-2",
+                    "operation": "MultiEdit",
+                    "tool_input": {
+                        "file_path": "b.py",
+                        "edits": [
+                            {"old_string": "a", "new_string": "b"},
+                            {"old_string": "c", "new_string": "d"},
+                        ],
+                    },
+                },
+            },
+        ],
+    }
+    adapter = _adapter(_transport(events=events))
+    turns = adapter.read_turns(CWD, "sess-1")
+
+    assert len(turns) == 1
+    entries = turns[0].entries
+    assert [e.role for e in entries] == ["file_edit", "file_edit"]
+    assert [e.file_edit for e in entries] == [
+        FileEdit(path="b.py", old_text="a", new_text="b"),
+        FileEdit(path="b.py", old_text="c", new_text="d"),
+    ]
+
+
+def test_read_turns_non_file_edit_operation_stays_generic_tool() -> None:
+    """Regression guard: an operation outside FILE_EDIT_TOOL_NAMES renders
+    exactly as today's generic tool line, with no structured file_edit."""
+    events = {
+        "status": "running",
+        "events": [
+            {
+                "ts": "2026-07-08T10:00:00+00:00",
+                "type": "tool",
+                "payload": {
+                    "tool_id": "shell",
+                    "operation": "Bash",
+                    "tool_input": {"command": "ls"},
+                },
+            },
+        ],
+    }
+    adapter = _adapter(_transport(events=events))
+    turns = adapter.read_turns(CWD, "sess-1")
+
+    (entry,) = turns[0].entries
+    assert entry.role == "tool"
+    assert entry.file_edit is None
+    assert entry.text == "shell: Bash command='ls'"
+
+
+def test_read_turns_file_edit_operation_with_string_input_falls_through() -> None:
+    """A shell-style bare-string tool_input under an edit-shaped operation can't
+    be normalized (from_tool_call returns ()), so it degrades to the generic
+    tool line rather than raising — Mewbo's tool_input shape is polymorphic."""
+    events = {
+        "status": "running",
+        "events": [
+            {
+                "ts": "2026-07-08T10:00:00+00:00",
+                "type": "tool",
+                "payload": {
+                    "tool_id": "edit-3",
+                    "operation": "str_replace",
+                    "tool_input": "apply this patch somehow",
+                },
+            },
+        ],
+    }
+    adapter = _adapter(_transport(events=events))
+    turns = adapter.read_turns(CWD, "sess-1")
+
+    (entry,) = turns[0].entries
+    assert entry.role == "tool"
+    assert entry.file_edit is None
+    assert entry.text == "edit-3: str_replace apply this patch somehow"
+
+
+def test_read_turns_renders_recognized_todo_write_as_structured_entry() -> None:
+    """A Mewbo tool event whose ``operation`` is a todo writer renders one
+    ``role="todo"`` entry carrying the normalized list — the todo sibling of the
+    file-edit branch, gated on ``operation`` before the generic tool line."""
+    events = {
+        "status": "running",
+        "events": [
+            {
+                "ts": "2026-07-08T10:00:00+00:00",
+                "type": "tool",
+                "payload": {
+                    "tool_id": "plan-1",
+                    "operation": "TodoWrite",
+                    "tool_input": {
+                        "todos": [
+                            {"content": "Scope the change", "status": "completed"},
+                            {"content": "Ship it", "status": "in_progress"},
+                        ]
+                    },
+                },
+            },
+        ],
+    }
+    adapter = _adapter(_transport(events=events))
+    turns = adapter.read_turns(CWD, "sess-1")
+
+    (entry,) = turns[0].entries
+    assert entry.role == "todo"
+    assert entry.text == "1/2 done · Ship it"
+    assert entry.todo is not None
+    assert entry.todo.items == (
+        TodoItem(content="Scope the change", status="completed"),
+        TodoItem(content="Ship it", status="in_progress"),
+    )
 
 
 # ─── error paths: degrade, never raise (adapter); typed raise (client) ───────

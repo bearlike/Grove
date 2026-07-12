@@ -12,6 +12,10 @@ this — never semantics (the provider-boundary rule).
 reused by both workspace-create (the optional ``ticket`` input) and the manual
 attach route, so there is one way to name a ticket on the wire.
 
+``TicketComment`` (#193) is the provider-neutral comment-thread shape the
+issue-ops write-back path reads and returns — the I/O-face counterpart to
+``TicketRef``'s read-only enrichment.
+
 Pydantic, here in ``contracts/``, because every field travels to a non-Python
 client. ``WorkspaceState`` (the dataclass) holds a ``list[TicketRef]`` and
 imports this class under ``TYPE_CHECKING`` only — the engine state stays on the
@@ -21,6 +25,7 @@ references engine dataclasses without creating a cycle.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +33,10 @@ from pydantic import BaseModel, ConfigDict, Field
 TicketProviderName = Literal["linear", "github", "gitea"]
 """The three MVP trackers. A closed literal so it drives branching with the
 type checker's help and rejects typos at the wire boundary."""
+
+TicketReactionKind = Literal["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"]
+"""The reaction vocabulary Gitea and GitHub both accept, verbatim (#193). A
+closed literal so a typo'd reaction name is a type error, not a silent 4xx."""
 
 _FROZEN = ConfigDict(extra="forbid", frozen=True)
 
@@ -70,6 +79,24 @@ class TicketSelector(BaseModel):
     id: str = Field(min_length=1)
 
 
+class TicketComment(BaseModel):
+    """One comment on a ticket thread, provider-neutral (#193).
+
+    ``id`` is the provider's own comment id — opaque to Grove, but the exact
+    handle ``edit_comment``/``react`` round-trip. ``post_comment`` returns this
+    so the issue-ops publisher can persist ``id`` as the sticky-comment marker
+    and update the same comment in place on every subsequent run instead of
+    posting a fresh one each time.
+    """
+
+    model_config = _FROZEN
+
+    id: str = Field(min_length=1)
+    body: str
+    author: str | None = None
+    created_at: datetime | None = None
+
+
 class TicketProviderView(BaseModel):
     """One row of ``GET /tickets/providers`` — what a client may offer the user.
 
@@ -89,8 +116,10 @@ class TicketProviderView(BaseModel):
 
 
 __all__ = [
+    "TicketComment",
     "TicketProviderName",
     "TicketProviderView",
+    "TicketReactionKind",
     "TicketRef",
     "TicketSelector",
 ]

@@ -1,0 +1,53 @@
+name: Grove issue-ops (reusable)
+
+# Reusable workflow wrapping the grove-issue-ops composite action for
+# consumer repos. `uses: ./actions/issue-ops` only resolves within THIS repo's
+# own checkout, so a cross-repo caller needs the repo-qualified form
+# (`bearlike/Grove/actions/issue-ops@<ref>` — pin a released tag, not a
+# branch, once one exists).
+
+on:
+  workflow_call:
+    inputs:
+      trigger:
+        description: "Mention token that must open a comment"
+        type: string
+        required: false
+        default: "@grove"
+      allow-users:
+        description: "SECURITY-SENSITIVE: comma-separated logins trusted without repo write access"
+        type: string
+        required: false
+        default: ""
+      daemon-url:
+        description: "Base URL of the caller's Grove daemon, reachable from their self-hosted runner"
+        type: string
+        required: true
+    secrets:
+      GROVE_DAEMON_TOKEN:
+        description: "Bearer token for the caller's Grove daemon issue-ops route"
+        required: true
+
+jobs:
+  forward:
+    name: Forward triggered comment to Grove
+    # Fast, case-sensitive pre-filter so a non-command comment never spins up
+    # the (self-hosted) runner below; the composite action's own guard
+    # re-checks case-insensitively. A workflow_call job still sees the
+    # caller's triggering event via the `github` context.
+    if: contains(github.event.comment.body, inputs.trigger)
+    # Must reach the caller's daemon over their own network — a GitHub-hosted
+    # runner can't, so this needs a same-host (or same-network) self-hosted
+    # runner, mirroring the Gitea `:host` runner constraint (tickets/CLAUDE.md).
+    runs-on: [self-hosted]
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Run grove-issue-ops
+        uses: bearlike/Grove/actions/issue-ops@v1 # placeholder ref — pin once a tag ships
+        with:
+          daemon-url: ${{ inputs.daemon-url }}
+          daemon-token: ${{ secrets.GROVE_DAEMON_TOKEN }}
+          trigger: ${{ inputs.trigger }}
+          allow-users: ${{ inputs.allow-users }}

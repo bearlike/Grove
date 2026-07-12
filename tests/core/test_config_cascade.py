@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -365,3 +366,105 @@ def test_tickets_provider_layers_merge_per_field() -> None:
     cfg = GroveConfig.model_validate(merged)
     assert cfg.tickets.gitea.enabled is True
     assert cfg.tickets.gitea.owner == "bearlike"  # base field survived the merge
+
+
+# ─── telemetry section (#176) ───────────────────────────────────────────────
+
+
+def test_telemetry_section_defaults_off_and_secret_free() -> None:
+    """Disabled by default; only env-var NAMES are stored, never a literal
+    secret (the repo is published) — the same discipline as `mewbo.api_key_env`."""
+    cfg = GroveConfig()
+    assert cfg.telemetry.enabled is False
+    assert cfg.telemetry.host_env == "LANGFUSE_HOST"
+    assert cfg.telemetry.public_key_env == "LANGFUSE_PUBLIC_KEY"
+    assert cfg.telemetry.secret_key_env == "LANGFUSE_SECRET_KEY"
+    assert cfg.telemetry.passthrough_kinds == ("claude_code", "codex")
+
+
+def test_telemetry_section_forbids_unknown_fields() -> None:
+    """``extra="forbid"`` rejects a literal ``secret_key`` (the secret-leaking shape)."""
+    with pytest.raises(ValidationError):
+        GroveConfig.model_validate({"telemetry": {"secret_key": "literal-secret"}})
+
+
+def test_telemetry_section_round_trips() -> None:
+    cfg = GroveConfig.model_validate(
+        {
+            "telemetry": {
+                "enabled": True,
+                "host_env": "MY_LANGFUSE_HOST",
+                "passthrough_kinds": ["claude_code"],
+            }
+        }
+    )
+    again = GroveConfig.model_validate_json(cfg.model_dump_json(indent=2, by_alias=True))
+    assert again.telemetry == cfg.telemetry
+
+
+def test_derive_env_disabled_yields_nothing() -> None:
+    cfg = GroveConfig()
+    assert cfg.telemetry.derive_env({"LANGFUSE_HOST": "https://cloud.langfuse.com"}) == {}
+
+
+def test_derive_env_native_trio_and_otel_headers() -> None:
+    """The canonical case: all three source vars present derives the native
+    trio AND the OTEL exporter pair, with the header assembled (never stored)
+    from `base64(public_key:secret_key)` per the Langfuse OTEL ingestion docs."""
+    cfg = GroveConfig.model_validate({"telemetry": {"enabled": True}})
+    sample_env = {
+        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+        "LANGFUSE_PUBLIC_KEY": "pk-lf-abc123",
+        "LANGFUSE_SECRET_KEY": "sk-lf-xyz789",
+        "UNRELATED": "ignored",
+    }
+    derived = cfg.telemetry.derive_env(sample_env)
+
+    assert derived["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
+    assert derived["LANGFUSE_PUBLIC_KEY"] == "pk-lf-abc123"
+    assert derived["LANGFUSE_SECRET_KEY"] == "sk-lf-xyz789"
+    assert derived["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://cloud.langfuse.com/api/public/otel"
+
+    expected_token = base64.b64encode(b"pk-lf-abc123:sk-lf-xyz789").decode()
+    assert derived["OTEL_EXPORTER_OTLP_HEADERS"] == (
+        f"Authorization=Basic {expected_token},x-langfuse-ingestion-version=4"
+    )
+
+
+def test_derive_env_partial_credentials_omit_otel_pair() -> None:
+    """Missing the secret key: the native fields present still derive, but the
+    OTEL pair (needs all three) is withheld rather than emitted half-built."""
+    cfg = GroveConfig.model_validate({"telemetry": {"enabled": True}})
+    derived = cfg.telemetry.derive_env(
+        {"LANGFUSE_HOST": "https://cloud.langfuse.com", "LANGFUSE_PUBLIC_KEY": "pk-lf-abc123"}
+    )
+    assert derived == {
+        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+        "LANGFUSE_PUBLIC_KEY": "pk-lf-abc123",
+    }
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in derived
+    assert "OTEL_EXPORTER_OTLP_HEADERS" not in derived
+
+
+def test_derive_env_uses_configured_env_var_names() -> None:
+    """Env-var NAMES are configurable (SSM key names are TBD) — the mechanism
+    reads whatever names the config points at, not hard-coded ones."""
+    cfg = GroveConfig.model_validate(
+        {
+            "telemetry": {
+                "enabled": True,
+                "host_env": "PROD_LANGFUSE_HOST",
+                "public_key_env": "PROD_LANGFUSE_PUBLIC_KEY",
+                "secret_key_env": "PROD_LANGFUSE_SECRET_KEY",
+            }
+        }
+    )
+    derived = cfg.telemetry.derive_env(
+        {
+            "PROD_LANGFUSE_HOST": "https://lf.internal",
+            "PROD_LANGFUSE_PUBLIC_KEY": "pk-prod",
+            "PROD_LANGFUSE_SECRET_KEY": "sk-prod",
+        }
+    )
+    assert derived["LANGFUSE_HOST"] == "https://lf.internal"
+    assert derived["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://lf.internal/api/public/otel"

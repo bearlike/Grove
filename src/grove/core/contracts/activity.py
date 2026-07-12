@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from grove.core.activity import (
         DashboardDelta,
         DashboardSnapshot,
+        LiveCounters,
         ProjectGroup,
         SessionActivity,
         WorkspaceActivity,
@@ -48,6 +49,12 @@ class AgentSessionView(BaseModel):
     adapter_kind: str
     provenance: str
     tmux_window: str | None
+    # The parent/child link (#173): ``None`` for a normal top-level session; for
+    # an itemized sub-agent fleet member, the PRIMARY session's own ``session_id``
+    # — lets a client group a workspace's flat ``sessions`` list back into a tree
+    # without a second lookup. Defaults so a pre-existing client deserializes
+    # unchanged (additive wire evolution, same convention as ``active_subagents``).
+    parent_session_id: str | None = None
 
     @classmethod
     def from_session(cls, s: AgentSession) -> AgentSessionView:
@@ -56,6 +63,35 @@ class AgentSessionView(BaseModel):
             adapter_kind=s.adapter_kind,
             provenance=s.provenance,
             tmux_window=s.tmux_window,
+            parent_session_id=s.parent_session_id,
+        )
+
+
+class LiveCountersView(BaseModel):
+    """Wire mirror of ``grove.core.activity.LiveCounters`` (#181).
+
+    A *block*, not loose fields: either a live tier is actively reporting (all
+    three populated) or the whole block is absent on
+    ``AgentActivityView.live`` — never a partial/inconsistent live read. This
+    is a faster tier than ``AgentActivityView.tokens_in``/``tokens_out`` (the
+    transcript-derived, per-turn-settled cumulative totals): a client renders
+    ``live`` WHILE generating and falls back to the cumulative fields the
+    instant ``live`` goes absent again (a turn flushed, or no fast side-channel
+    is wired yet — #177 is the primary source).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tokens_in: int
+    tokens_out: int
+    generating_since: datetime
+
+    @classmethod
+    def from_live(cls, live: LiveCounters) -> LiveCountersView:
+        return cls(
+            tokens_in=live.tokens_in,
+            tokens_out=live.tokens_out,
+            generating_since=live.generating_since,
         )
 
 
@@ -90,9 +126,19 @@ class AgentActivityView(BaseModel):
     # unchanged (additive wire evolution). It rides the live activity stream so a
     # client renders an answer affordance the instant the questions appear.
     questions: list[AgentQuestionView] = []
+    # Live in-flight token counters (#181) — populated only while a fast
+    # side-channel is actively reporting (proxy #177 primary; partial-message
+    # deltas / OTel metrics as fallbacks). ``None`` means no live tier is wired
+    # yet, or the session isn't currently generating: the client hides the
+    # indicator rather than showing zeros, settling to the cumulative
+    # ``tokens_in``/``tokens_out`` above. Defaults to None so a pre-existing
+    # client deserializes unchanged (additive wire evolution).
+    live: LiveCountersView | None = None
 
     @classmethod
-    def from_activity(cls, a: AgentActivity) -> AgentActivityView:
+    def from_activity(
+        cls, a: AgentActivity, *, live: LiveCountersView | None = None
+    ) -> AgentActivityView:
         return cls(
             state=a.state,
             title=a.title,
@@ -110,6 +156,7 @@ class AgentActivityView(BaseModel):
             error_detail=a.error_detail,
             interpreted_status=a.interpreted_status,
             questions=[AgentQuestionView.from_question(q) for q in a.questions],
+            live=live,
         )
 
 
@@ -125,7 +172,10 @@ class SessionActivityView(BaseModel):
     def from_session_activity(cls, sa: SessionActivity) -> SessionActivityView:
         return cls(
             session=AgentSessionView.from_session(sa.session),
-            activity=AgentActivityView.from_activity(sa.activity),
+            activity=AgentActivityView.from_activity(
+                sa.activity,
+                live=LiveCountersView.from_live(sa.live) if sa.live is not None else None,
+            ),
         )
 
 
