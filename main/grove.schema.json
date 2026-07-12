@@ -50,6 +50,11 @@
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "tools_offline": {
+          "default": false,
+          "title": "Tools Offline",
+          "type": "boolean"
         }
       },
       "required": [
@@ -94,6 +99,90 @@
         }
       },
       "title": "AuthConfig",
+      "type": "object"
+    },
+    "ChannelsConfig": {
+      "additionalProperties": false,
+      "description": "Grove-managed Claude Code *channel* delivery (#182; research preview).\n\nA channel is Claude Code's native seam for pushing a message a **running,\ninteractive** session acts on (and relaying permission decisions), unlike a\nhook (status push, one way) or steering (raw pane keystrokes). When\n``enabled``, Grove launches ``claude_code`` agents with ``--channels\n<grove-channel-settings>`` so the agent connects to the Grove channel MCP\nserver; the daemon then POSTs queued messages to that server's loopback\nreceiver and the agent receives them as ``notifications/claude/channel``.\n\nOff by default on purpose: channels are an auth-gated Claude Code research\npreview, so this stays a deliberately-flipped mechanism knob (not policy).\nDisabling is just flipping ``enabled`` back \u2014 the launch flag disappears and\nthe whole path degrades to a no-op, exactly like the hook ``--settings``.",
+      "properties": {
+        "allowed_senders": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Senders",
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "ChannelsConfig",
+      "type": "object"
+    },
+    "ContainerConfig": {
+      "additionalProperties": false,
+      "description": "Run the agent inside a container instead of directly on the host (#65).\n\nOff by default (mechanism, not policy): a workspace opts in and its\n``DockerExecLaunchBackend`` builds/starts the container, bind-mounts the\nworktree at ``workspace_mount``, and runs the assembled agent command via\n``docker exec`` inside it. Every value cascades like the rest of the config;\na future Podman driver reads the SAME submodel behind the same protocol \u2014\n``docker_bin`` names the CLI, it is not the driver-swap seam.",
+      "properties": {
+        "build_context": {
+          "default": ".",
+          "title": "Build Context",
+          "type": "string"
+        },
+        "docker_bin": {
+          "default": "docker",
+          "title": "Docker Bin",
+          "type": "string"
+        },
+        "dockerfile": {
+          "default": "",
+          "title": "Dockerfile",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "exec_user": {
+          "default": "",
+          "title": "Exec User",
+          "type": "string"
+        },
+        "image": {
+          "default": "",
+          "title": "Image",
+          "type": "string"
+        },
+        "mounts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Mounts",
+          "type": "array"
+        },
+        "network": {
+          "default": "",
+          "title": "Network",
+          "type": "string"
+        },
+        "run_args": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Run Args",
+          "type": "array"
+        },
+        "workspace_mount": {
+          "default": "/workspace",
+          "title": "Workspace Mount",
+          "type": "string"
+        }
+      },
+      "title": "ContainerConfig",
       "type": "object"
     },
     "GitHubTicketConfig": {
@@ -238,10 +327,10 @@
     },
     "HooksConfig": {
       "additionalProperties": false,
-      "description": "Opt-in Grove-managed Claude Code status hooks (#18).\n\nWhen ``enabled``, Grove launches ``claude_code`` agents with\n``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact\nlifecycle status (``WORKING`` / ``WAITING`` / ``BLOCKED`` / ``IDLE``) into a\nper-session sidecar that the Activity Dashboard prefers over polled status \u2014\ngiving precise *blocked-on-a-permission-prompt* that polling can't see. Off\nby default (mechanism, not policy); the user's own ``.claude/settings.json``\nis never touched, so uninstalling is just flipping this back to ``false``.",
+      "description": "Grove-managed Claude Code status hooks (#18; on by default since #171).\n\nWhen ``enabled``, Grove launches ``claude_code`` agents with\n``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact\nlifecycle status (``WORKING`` / ``WAITING`` / ``BLOCKED`` / ``IDLE``) into a\nper-session sidecar that the Activity Dashboard prefers over polled status \u2014\ngiving precise *blocked-on-a-permission-prompt* that polling can't see, plus\nan immediate daemon refresh over the native http hook (#171) instead of\nwaiting out the poll tick. On by default now that the sidecar is the\nprimary live signal rather than a dormant opt-in sidecar (still a\nmechanism knob, not policy); the user's own ``.claude/settings.json`` is\nnever touched, so disabling is just flipping this back to ``false``.",
       "properties": {
         "enabled": {
-          "default": false,
+          "default": true,
           "title": "Enabled",
           "type": "boolean"
         }
@@ -309,6 +398,52 @@
         }
       },
       "title": "InitScriptConfig",
+      "type": "object"
+    },
+    "IssueOpsConfig": {
+      "additionalProperties": false,
+      "description": "Turn issue-comment mentions into workspace actions (#196) + mirror progress back (#197).\n\nOne submodel, two faces. INBOUND (#196): a commenter mentions the ``trigger``\ntoken as the first word of an issue comment; the forwarder (a stateless CI\naction) POSTs the event to the daemon, and the engine parses the grammar,\nenforces the permission policy, and routes to a workspace verb. OUTBOUND\n(#197): when ``enabled``, the daemon runs a status publisher that mirrors each\nworkspace's progress onto its ticket as one live sticky comment. Every knob\nhere is mechanism, not policy \u2014 the trigger word, who may drive it, the boot\nprompt, and the mirror's cadence are all data the deployment owns, never baked\ninto the engine.\n\n``enabled`` gates ONLY the outbound status mirror. The inbound command routing\nhas no on/off flag of its own \u2014 its real opt-in is installing the CI workflow\nAND enabling the matching ticket provider (``tickets.<provider>``) with the\nrepo's ``owner``/``repo`` (with neither, no event ever reaches the engine and\nno repo resolves for one that does). So a deployment can route commands without\nthe status mirror, mirror without routing, or run both.",
+      "properties": {
+        "agent": {
+          "default": "claude",
+          "title": "Agent",
+          "type": "string"
+        },
+        "allowed_actors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Actors",
+          "type": "array"
+        },
+        "deep_link_base_url": {
+          "default": "",
+          "title": "Deep Link Base Url",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "prompt_template": {
+          "default": "You are handling tracker issue #{number}: \"{title}\".\n\nIssue description:\n{body}\n\nThe human triggered you with this comment:\n{command_text}\n\nDrive it to a merged PR autonomously: read the issue and map the affected\ncomponents (read the nearest owning CLAUDE.md before editing), implement the\nchange, run the project's gates, open a PR that closes the issue, and reply on\nthe issue with what changed and a link to the PR. Ask only about genuinely\nambiguous decisions; bias to action.\n\nIssue link: {url}\n",
+          "title": "Prompt Template",
+          "type": "string"
+        },
+        "trigger": {
+          "default": "@grove",
+          "title": "Trigger",
+          "type": "string"
+        },
+        "update_window_seconds": {
+          "default": 5.0,
+          "minimum": 0,
+          "title": "Update Window Seconds",
+          "type": "number"
+        }
+      },
+      "title": "IssueOpsConfig",
       "type": "object"
     },
     "LinearTicketConfig": {
@@ -412,6 +547,139 @@
       "title": "NotificationsConfig",
       "type": "object"
     },
+    "PermissionConfig": {
+      "additionalProperties": false,
+      "description": "Grove-hosted Claude Code ``--permission-prompt-tool`` answering (#172).\n\nA *permission prompt* is the \"allow this tool call?\" gate a headless / paneless\nsession hits with no interactive terminal to answer it. When ``enabled``, Grove\nlaunches ``claude_code`` agents with a Grove-owned MCP server registered\n(``--mcp-config <grove-permission-mcp>``) plus\n``--permission-prompt-tool mcp__grove_permission__permission_prompt`` \u2014 so\nClaude Code calls that Grove tool instead of blocking on a TTY, and the tool\nanswers with allow/deny JSON. It is the native replacement for typing a\npermission answer into the tmux pane (which only works with a human attached).\n\nOff by default on purpose (mechanism, not policy), and **fail-closed**:\n``default = \"deny\"`` means an un-relayed prompt is denied, never silently\nallowed \u2014 flipping ``enabled`` on can't widen what an unattended agent may do\nwithout an explicit ``default: \"allow\"``. Disabling is just flipping\n``enabled`` back \u2014 the launch flags disappear and the whole path is a no-op,\nexactly like the hook ``--settings`` / channel ``--channels`` appends.",
+      "properties": {
+        "default": {
+          "default": "deny",
+          "enum": [
+            "allow",
+            "deny"
+          ],
+          "title": "Default",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "PermissionConfig",
+      "type": "object"
+    },
+    "ProxyConfig": {
+      "additionalProperties": false,
+      "description": "Loopback LLM-gateway passthrough proxy for wire-truth capture (issue #177).\n\nOff by default (mechanism, not policy). When a deployment opts in and the\norchestrator serves the proxy (``grove.core.proxy.ProxyApp``), an agent is\npointed at it through :meth:`proxy_env` at the launch boundary and every\nprovider request/response is forwarded VERBATIM while telemetry (true TTFT,\ntoken usage, latency) is teed off the stream. Nothing here holds a secret \u2014\nupstreams are public API base URLs and the env-var NAMES that carry the\nproxy address to each runtime; auth flows untouched through the proxy, never\ninto config.\n\nTwo per-kind maps do the wiring, keyed by ``AgentKind`` (the map keys are the\nopt-in set, the ``TelemetryConfig.passthrough_kinds`` analogue expressed as\nmembership): ``upstreams`` = where the proxy forwards that kind's traffic;\n``base_url_env`` = the env var whose value :meth:`proxy_env` sets to the proxy\nURL (``claude_code`` reads ``ANTHROPIC_BASE_URL``; ``codex`` reads its\n``model_providers`` base-url env, ``OPENAI_BASE_URL`` by default). Both\ncascade and merge like every other config value.",
+      "properties": {
+        "base_url_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "enum": [
+              "claude_code",
+              "codex",
+              "generic",
+              "mewbo"
+            ]
+          },
+          "title": "Base Url Env",
+          "type": "object"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "host": {
+          "default": "127.0.0.1",
+          "title": "Host",
+          "type": "string"
+        },
+        "log_bodies": {
+          "default": false,
+          "title": "Log Bodies",
+          "type": "boolean"
+        },
+        "max_body_bytes": {
+          "default": 8192,
+          "minimum": 0,
+          "title": "Max Body Bytes",
+          "type": "integer"
+        },
+        "port": {
+          "default": 8788,
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "upstreams": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "enum": [
+              "claude_code",
+              "codex",
+              "generic",
+              "mewbo"
+            ]
+          },
+          "title": "Upstreams",
+          "type": "object"
+        }
+      },
+      "title": "ProxyConfig",
+      "type": "object"
+    },
+    "TelemetryConfig": {
+      "additionalProperties": false,
+      "description": "LangFuse credentials + OpenTelemetry passthrough knobs (issue #176).\n\nSecret-free like every other integration submodel (the ``mewbo.api_key_env``\ndiscipline): the three canonical values are env-var NAMES, never secret\nliterals, so committed config stays publishable \u2014 the actual host/keys live\nonly in the consuming process's environment. Off by default (mechanism, not\npolicy); a deployment opts in by setting ``enabled: true`` and pointing the\nthree ``*_env`` fields at whatever names its host actually exports (exact\nkey names per environment are TBD \u2014 this holds regardless of what a given\nhost calls them).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "host_env": {
+          "default": "LANGFUSE_HOST",
+          "title": "Host Env",
+          "type": "string"
+        },
+        "passthrough_kinds": {
+          "default": [
+            "claude_code",
+            "codex"
+          ],
+          "items": {
+            "enum": [
+              "claude_code",
+              "codex",
+              "generic",
+              "mewbo"
+            ],
+            "type": "string"
+          },
+          "title": "Passthrough Kinds",
+          "type": "array"
+        },
+        "public_key_env": {
+          "default": "LANGFUSE_PUBLIC_KEY",
+          "title": "Public Key Env",
+          "type": "string"
+        },
+        "secret_key_env": {
+          "default": "LANGFUSE_SECRET_KEY",
+          "title": "Secret Key Env",
+          "type": "string"
+        }
+      },
+      "title": "TelemetryConfig",
+      "type": "object"
+    },
     "TicketsConfig": {
       "additionalProperties": false,
       "description": "External ticket-tracker integration, one submodel per MVP provider.\n\nEach provider is independently ``enabled`` and configured. All three stay\noff by default (mechanism, not policy): a repo opts in by enabling the\ntracker its branches reference. Credentials never live here \u2014 only the NAME\nof the env var holding each token.",
@@ -479,6 +747,12 @@
           "default": "shell",
           "title": "Shell Window Name",
           "type": "string"
+        },
+        "steer_settle_ms": {
+          "default": 200,
+          "minimum": 0,
+          "title": "Steer Settle Ms",
+          "type": "integer"
         }
       },
       "title": "TmuxConfig",
@@ -575,11 +849,20 @@
     "auth": {
       "$ref": "#/$defs/AuthConfig"
     },
+    "channels": {
+      "$ref": "#/$defs/ChannelsConfig"
+    },
+    "container": {
+      "$ref": "#/$defs/ContainerConfig"
+    },
     "hooks": {
       "$ref": "#/$defs/HooksConfig"
     },
     "init_script": {
       "$ref": "#/$defs/InitScriptConfig"
+    },
+    "issueops": {
+      "$ref": "#/$defs/IssueOpsConfig"
     },
     "mewbo": {
       "$ref": "#/$defs/MewboConfig"
@@ -587,12 +870,21 @@
     "notifications": {
       "$ref": "#/$defs/NotificationsConfig"
     },
+    "permission": {
+      "$ref": "#/$defs/PermissionConfig"
+    },
     "projects": {
       "items": {
         "type": "string"
       },
       "title": "Projects",
       "type": "array"
+    },
+    "proxy": {
+      "$ref": "#/$defs/ProxyConfig"
+    },
+    "telemetry": {
+      "$ref": "#/$defs/TelemetryConfig"
     },
     "tickets": {
       "$ref": "#/$defs/TicketsConfig"

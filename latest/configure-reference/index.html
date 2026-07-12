@@ -763,6 +763,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../issue-ops/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m10 8l-3 3l3 3m4 0l3-3l-3-3"/></g></svg>
+
+        
+        Issue Ops
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../use-workflow/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1280,6 +1304,12 @@
 <td><code>**required**</code></td>
 <td></td>
 </tr>
+<tr>
+<td><code>tools_offline</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
 </tbody>
 </table></div>
 <h2 id="auth"><code>auth</code></h2>
@@ -1329,15 +1359,135 @@ a test-only escape hatch; production daemons leave it <code>true</code>.</p>
 </tr>
 </tbody>
 </table></div>
+<h2 id="channels"><code>channels</code></h2>
+<p>Grove-managed Claude Code <em>channel</em> delivery (#182; research preview).</p>
+<p>A channel is Claude Code's native seam for pushing a message a <strong>running,
+interactive</strong> session acts on (and relaying permission decisions), unlike a
+hook (status push, one way) or steering (raw pane keystrokes). When
+<code>enabled</code>, Grove launches <code>claude_code</code> agents with <code>--channels
+&lt;grove-channel-settings&gt;</code> so the agent connects to the Grove channel MCP
+server; the daemon then POSTs queued messages to that server's loopback
+receiver and the agent receives them as <code>notifications/claude/channel</code>.</p>
+<p>Off by default on purpose: channels are an auth-gated Claude Code research
+preview, so this stays a deliberately-flipped mechanism knob (not policy).
+Disabling is just flipping <code>enabled</code> back — the launch flag disappears and
+the whole path degrades to a no-op, exactly like the hook <code>--settings</code>.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>allowed_senders</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>(none)</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="container"><code>container</code></h2>
+<p>Run the agent inside a container instead of directly on the host (#65).</p>
+<p>Off by default (mechanism, not policy): a workspace opts in and its
+<code>DockerExecLaunchBackend</code> builds/starts the container, bind-mounts the
+worktree at <code>workspace_mount</code>, and runs the assembled agent command via
+<code>docker exec</code> inside it. Every value cascades like the rest of the config;
+a future Podman driver reads the SAME submodel behind the same protocol —
+<code>docker_bin</code> names the CLI, it is not the driver-swap seam.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build_context</code></td>
+<td><code>string</code></td>
+<td><code>'.'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>docker_bin</code></td>
+<td><code>string</code></td>
+<td><code>'docker'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>dockerfile</code></td>
+<td><code>string</code></td>
+<td><code>''</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>exec_user</code></td>
+<td><code>string</code></td>
+<td><code>''</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>image</code></td>
+<td><code>string</code></td>
+<td><code>''</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>mounts</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>[]</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>network</code></td>
+<td><code>string</code></td>
+<td><code>''</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>run_args</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>[]</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>workspace_mount</code></td>
+<td><code>string</code></td>
+<td><code>'/workspace'</code></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="hooks"><code>hooks</code></h2>
-<p>Opt-in Grove-managed Claude Code status hooks (#18).</p>
+<p>Grove-managed Claude Code status hooks (#18; on by default since #171).</p>
 <p>When <code>enabled</code>, Grove launches <code>claude_code</code> agents with
 <code>--settings &lt;grove-hooks-settings&gt;</code> so a lightweight hook pushes exact
 lifecycle status (<code>WORKING</code> / <code>WAITING</code> / <code>BLOCKED</code> / <code>IDLE</code>) into a
 per-session sidecar that the Activity Dashboard prefers over polled status —
-giving precise <em>blocked-on-a-permission-prompt</em> that polling can't see. Off
-by default (mechanism, not policy); the user's own <code>.claude/settings.json</code>
-is never touched, so uninstalling is just flipping this back to <code>false</code>.</p>
+giving precise <em>blocked-on-a-permission-prompt</em> that polling can't see, plus
+an immediate daemon refresh over the native http hook (#171) instead of
+waiting out the poll tick. On by default now that the sidecar is the
+primary live signal rather than a dormant opt-in sidecar (still a
+mechanism knob, not policy); the user's own <code>.claude/settings.json</code> is
+never touched, so disabling is just flipping this back to <code>false</code>.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1351,7 +1501,7 @@ is never touched, so uninstalling is just flipping this back to <code>false</cod
 <tr>
 <td><code>enabled</code></td>
 <td><code>boolean</code></td>
-<td><code>False</code></td>
+<td><code>True</code></td>
 <td></td>
 </tr>
 </tbody>
@@ -1408,6 +1558,77 @@ is never touched, so uninstalling is just flipping this back to <code>false</cod
 <td><code>timeout_seconds</code></td>
 <td><code>integer</code></td>
 <td><code>300</code></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="issueops"><code>issueops</code></h2>
+<p>Turn issue-comment mentions into workspace actions (#196) + mirror progress back (#197).</p>
+<p>One submodel, two faces. INBOUND (#196): a commenter mentions the <code>trigger</code>
+token as the first word of an issue comment; the forwarder (a stateless CI
+action) POSTs the event to the daemon, and the engine parses the grammar,
+enforces the permission policy, and routes to a workspace verb. OUTBOUND
+(#197): when <code>enabled</code>, the daemon runs a status publisher that mirrors each
+workspace's progress onto its ticket as one live sticky comment. Every knob
+here is mechanism, not policy — the trigger word, who may drive it, the boot
+prompt, and the mirror's cadence are all data the deployment owns, never baked
+into the engine.</p>
+<p><code>enabled</code> gates ONLY the outbound status mirror. The inbound command routing
+has no on/off flag of its own — its real opt-in is installing the CI workflow
+AND enabling the matching ticket provider (<code>tickets.&lt;provider&gt;</code>) with the
+repo's <code>owner</code>/<code>repo</code> (with neither, no event ever reaches the engine and
+no repo resolves for one that does). So a deployment can route commands without
+the status mirror, mirror without routing, or run both.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agent</code></td>
+<td><code>string</code></td>
+<td><code>'claude'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>allowed_actors</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>(none)</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>deep_link_base_url</code></td>
+<td><code>string</code></td>
+<td><code>''</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>prompt_template</code></td>
+<td><code>string</code></td>
+<td><code>'You are handling tracker issue #{number}: "{title}".\n\nIssue description:\n{body}\n\nThe human triggered you with this comment:\n{command_text}\n\nDrive it to a merged PR autonomously: read the issue and map the affected\ncomponents (read the nearest owning CLAUDE.md before editing), implement the\nchange, run the project\'s gates, open a PR that closes the issue, and reply on\nthe issue with what changed and a link to the PR. Ask only about genuinely\nambiguous decisions; bias to action.\n\nIssue link: {url}\n'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>trigger</code></td>
+<td><code>string</code></td>
+<td><code>'@grove'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>update_window_seconds</code></td>
+<td><code>number</code></td>
+<td><code>5.0</code></td>
 <td></td>
 </tr>
 </tbody>
@@ -1502,7 +1723,170 @@ every value cascades like the rest of the config.</p>
 </tr>
 </tbody>
 </table></div>
+<h2 id="permission"><code>permission</code></h2>
+<p>Grove-hosted Claude Code <code>--permission-prompt-tool</code> answering (#172).</p>
+<p>A <em>permission prompt</em> is the "allow this tool call?" gate a headless / paneless
+session hits with no interactive terminal to answer it. When <code>enabled</code>, Grove
+launches <code>claude_code</code> agents with a Grove-owned MCP server registered
+(<code>--mcp-config &lt;grove-permission-mcp&gt;</code>) plus
+<code>--permission-prompt-tool mcp__grove_permission__permission_prompt</code> — so
+Claude Code calls that Grove tool instead of blocking on a TTY, and the tool
+answers with allow/deny JSON. It is the native replacement for typing a
+permission answer into the tmux pane (which only works with a human attached).</p>
+<p>Off by default on purpose (mechanism, not policy), and <strong>fail-closed</strong>:
+<code>default = "deny"</code> means an un-relayed prompt is denied, never silently
+allowed — flipping <code>enabled</code> on can't widen what an unattended agent may do
+without an explicit <code>default: "allow"</code>. Disabling is just flipping
+<code>enabled</code> back — the launch flags disappear and the whole path is a no-op,
+exactly like the hook <code>--settings</code> / channel <code>--channels</code> appends.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>default</code></td>
+<td><code>string</code></td>
+<td><code>'deny'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="projects"><code>projects</code></h2>
+<h2 id="proxy"><code>proxy</code></h2>
+<p>Loopback LLM-gateway passthrough proxy for wire-truth capture (issue #177).</p>
+<p>Off by default (mechanism, not policy). When a deployment opts in and the
+orchestrator serves the proxy (<code>grove.core.proxy.ProxyApp</code>), an agent is
+pointed at it through :meth:<code>proxy_env</code> at the launch boundary and every
+provider request/response is forwarded VERBATIM while telemetry (true TTFT,
+token usage, latency) is teed off the stream. Nothing here holds a secret —
+upstreams are public API base URLs and the env-var NAMES that carry the
+proxy address to each runtime; auth flows untouched through the proxy, never
+into config.</p>
+<p>Two per-kind maps do the wiring, keyed by <code>AgentKind</code> (the map keys are the
+opt-in set, the <code>TelemetryConfig.passthrough_kinds</code> analogue expressed as
+membership): <code>upstreams</code> = where the proxy forwards that kind's traffic;
+<code>base_url_env</code> = the env var whose value :meth:<code>proxy_env</code> sets to the proxy
+URL (<code>claude_code</code> reads <code>ANTHROPIC_BASE_URL</code>; <code>codex</code> reads its
+<code>model_providers</code> base-url env, <code>OPENAI_BASE_URL</code> by default). Both
+cascade and merge like every other config value.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>base_url_env</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>host</code></td>
+<td><code>string</code></td>
+<td><code>'127.0.0.1'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>log_bodies</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>max_body_bytes</code></td>
+<td><code>integer</code></td>
+<td><code>8192</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>port</code></td>
+<td><code>integer</code></td>
+<td><code>8788</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>upstreams</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="telemetry"><code>telemetry</code></h2>
+<p>LangFuse credentials + OpenTelemetry passthrough knobs (issue #176).</p>
+<p>Secret-free like every other integration submodel (the <code>mewbo.api_key_env</code>
+discipline): the three canonical values are env-var NAMES, never secret
+literals, so committed config stays publishable — the actual host/keys live
+only in the consuming process's environment. Off by default (mechanism, not
+policy); a deployment opts in by setting <code>enabled: true</code> and pointing the
+three <code>*_env</code> fields at whatever names its host actually exports (exact
+key names per environment are TBD — this holds regardless of what a given
+host calls them).</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>boolean</code></td>
+<td><code>False</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>host_env</code></td>
+<td><code>string</code></td>
+<td><code>'LANGFUSE_HOST'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>passthrough_kinds</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>['claude_code', 'codex']</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>public_key_env</code></td>
+<td><code>string</code></td>
+<td><code>'LANGFUSE_PUBLIC_KEY'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>secret_key_env</code></td>
+<td><code>string</code></td>
+<td><code>'LANGFUSE_SECRET_KEY'</code></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="tickets"><code>tickets</code></h2>
 <p>External ticket-tracker integration, one submodel per MVP provider.</p>
 <p>Each provider is independently <code>enabled</code> and configured. All three stay
@@ -1603,6 +1987,12 @@ of the env var holding each token.</p>
 <td><code>shell_window_name</code></td>
 <td><code>string</code></td>
 <td><code>'shell'</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>steer_settle_ms</code></td>
+<td><code>integer</code></td>
+<td><code>200</code></td>
 <td></td>
 </tr>
 </tbody>
@@ -2083,6 +2473,30 @@ of the env var holding each token.</p>
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../issue-ops/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m10 8l-3 3l3 3m4 0l3-3l-3-3"/></g></svg>
+
+        
+        Issue Ops
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../use-workflow/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2513,6 +2927,22 @@ of the env var holding each token.</p>
             </a>
             
             
+            <a href="#channels"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#channels');">
+                channels
+            </a>
+            
+            
+            <a href="#container"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#container');">
+                container
+            </a>
+            
+            
             <a href="#hooks"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -2526,6 +2956,14 @@ of the env var holding each token.</p>
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#init_script');">
                 init_script
+            </a>
+            
+            
+            <a href="#issueops"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#issueops');">
+                issueops
             </a>
             
             
@@ -2552,11 +2990,32 @@ of the env var holding each token.</p>
                 notifications
             </a>
             
+            <a href="#permission"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#permission');">
+                permission
+            </a>
+            
             <a href="#projects"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#projects');">
                 projects
+            </a>
+            
+            <a href="#proxy"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#proxy');">
+                proxy
+            </a>
+            
+            <a href="#telemetry"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#telemetry');">
+                telemetry
             </a>
             
             <a href="#tickets"

@@ -1,0 +1,23 @@
+# Example caller for a repo that wants Grove's issue-ops on GitHub.
+# NOT an active workflow — copy this into your own `.github/workflows/`.
+#
+# Prereqs on this repo (Settings > Actions):
+#   - a same-host self-hosted runner that can reach your Grove daemon
+#   - Actions variable  GROVE_DAEMON_URL   (e.g. http://127.0.0.1:43110)
+#   - Actions secret    GROVE_DAEMON_TOKEN
+name: Grove issue-ops
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  grove:
+    # Fast pre-filter so a non-command comment never even dispatches the
+    # reusable workflow below (mirrors the Gitea caller example's own gate).
+    if: contains(github.event.comment.body, '@grove')
+    uses: bearlike/Grove/.github/workflows/grove-issue-ops.yml@v1 # pin a released tag
+    with:
+      daemon-url: ${{ vars.GROVE_DAEMON_URL }}
+    secrets:
+      GROVE_DAEMON_TOKEN: ${{ secrets.GROVE_DAEMON_TOKEN }}
