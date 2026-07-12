@@ -15,7 +15,7 @@ import shlex
 import shutil
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -26,7 +26,7 @@ from libtmux.server import Server
 from loguru import logger
 
 from grove.core import paths
-from grove.core.config import AgentSpec, GroveConfig, InitScriptConfig
+from grove.core.config import GroveConfig, InitScriptConfig
 from grove.core.errors import TmuxError
 
 
@@ -125,24 +125,31 @@ def build_workspace_layout(
     *,
     cfg: GroveConfig,
     worktree: Path,
-    agent: AgentSpec,
-    launch_decoration: list[str] | None = None,
+    command: str,
+    decoration: Sequence[str] = (),
+    env: Mapping[str, str] | None = None,
+    env_unset: Sequence[str] = (),
 ) -> None:
     """Set up windows inside an existing session: shell + agent.
 
     Window 0 is renamed to the configured shell name; a new window is added
-    for the agent, the agent's command is sent into it, and that window is
-    selected so it's frontmost on attach.
+    for the agent, `command` is sent into it, and that window is selected so
+    it's frontmost on attach.
 
-    `launch_decoration` is extra argv the manager threads in from the agent's
-    adapter — Claude Code's `["--session-id", uuid]`, which is what makes
-    transcript correlation deterministic. It is shell-quoted and appended to the
-    command. The decoration is never hard-coded here: tmux.py is the side-effect
-    surface, the adapter owns *what* the tokens are.
+    Takes the launch as structured primitives — not an ``AgentSpec`` — because
+    it sits below the ``LaunchBackend`` seam (#145): the manager composes an
+    ``AgentSpec`` into a ``LaunchSpec`` and the tmux backend unpacks it here, so
+    this side-effect surface stays decoupled from the config model.
+
+    `decoration` is extra argv the manager threads in from the agent's adapter —
+    Claude Code's `["--session-id", uuid]`, which is what makes transcript
+    correlation deterministic. It is shell-quoted and appended to `command`. The
+    decoration is never hard-coded here: tmux.py is the side-effect surface, the
+    adapter owns *what* the tokens are.
 
     The pane's env is made hermetic before the command runs (issue #82): a pane
-    inherits the tmux server env (which inherited the daemon's), so `agent.env_unset`
-    is `unset` first to drop any leaked ambient value, then `agent.env` is exported.
+    inherits the tmux server env (which inherited the daemon's), so `env_unset`
+    is `unset` first to drop any leaked ambient value, then `env` is exported.
     Unset-before-export means a key in both ends up exported — `env` wins.
     """
     server = _server()
@@ -176,14 +183,13 @@ def build_workspace_layout(
     # value: unset the leaked vars first, then export agent-specific env — so we
     # need no agent stdout sniffing or external env-injection. Unset-before-export
     # means a key in both `env_unset` and `env` ends up exported (#82).
-    for key in agent.env_unset:
+    for key in env_unset:
         pane.send_keys(f"unset {key}", enter=True, suppress_history=True)
-    for key, value in agent.env.items():
+    for key, value in (env or {}).items():
         pane.send_keys(f"export {key}={_shell_quote(value)}", enter=True, suppress_history=True)
 
-    command = agent.command
-    if launch_decoration:
-        command = " ".join([command, *(shlex.quote(token) for token in launch_decoration)])
+    if decoration:
+        command = " ".join([command, *(shlex.quote(token) for token in decoration)])
     pane.send_keys(command, enter=True)
 
     try:
@@ -308,7 +314,19 @@ def capture_pane_snapshot(target: str, *, history_lines: int = 500) -> str:
     return "\n".join(out_lines)
 
 
-def send_text(target: str, text: str) -> None:
+# Fallback settle delay when a caller doesn't pass `cfg.tmux.steer_settle_ms`
+# explicitly (same pattern as `create_session`'s `history_limit` default) —
+# mirrors `TmuxConfig.steer_settle_ms`'s own default (#180).
+DEFAULT_STEER_SETTLE_MS = 200
+
+# How much of the sent text's tail the residual-composer check compares
+# against (see `_pane_holds_residual_text`). Bounded because tmux's rendered
+# grid can wrap a long paste across several display rows — matching the very
+# end is the reliable anchor, matching the whole payload is not.
+_RESIDUAL_TAIL_CHARS = 40
+
+
+def send_text(target: str, text: str, *, settle_ms: int = DEFAULT_STEER_SETTLE_MS) -> None:
     """Type `text` into the pane at `target`, then press Enter to submit it.
 
     Two deliberate ``send-keys`` calls, never one:
@@ -321,35 +339,35 @@ def send_text(target: str, text: str) -> None:
     * The submitting Enter is its own, non-``-l`` call: under ``-l`` the
       word "Enter" would just be five typed characters.
 
+    A `settle_ms` delay sits between the two calls (#180): the TUI's
+    bracketed paste buffers everything landing inside its accumulation
+    window as literal text, so an Enter sent immediately after a paste can
+    be coalesced into that same window and read as a literal newline rather
+    than parsed as a lone submitting keypress — only a lone `return`
+    keypress submits. Waiting past the window before sending Enter is what
+    lets it land as a real keypress instead. After the Enter, one
+    verify-and-retry pass (`_retry_enter_if_residual`) re-sends Enter
+    exactly once if the composer still visibly holds the sent text's tail —
+    the observable sign the first Enter was swallowed.
+
     Mechanism only — resolving *which* pane to steer is the manager's
     ``pane_target`` policy. Unlike this module's best-effort read helpers,
     failures raise ``TmuxError``: a steer that silently vanished is worse
-    than one that failed loudly.
+    than one that failed loudly. The residual-retry race itself never
+    raises on its own account — only a genuine subprocess failure on the
+    retry send does, via that same loud contract.
     """
     if shutil.which("tmux") is None:
         raise TmuxError("tmux not found on PATH — on Windows, run Grove inside WSL2")
-    for argv in (
-        ["tmux", "send-keys", "-t", target, "-l", "--", text],
-        ["tmux", "send-keys", "-t", target, "Enter"],
-    ):
-        try:
-            result = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                check=False,
-                shell=False,
-                timeout=5,
-            )
-        except (subprocess.SubprocessError, OSError) as exc:
-            raise TmuxError(f"send-keys to {target} failed: {exc}") from exc
-        if result.returncode != 0:
-            raise TmuxError(
-                f"send-keys to {target} exited {result.returncode}: {result.stderr.strip()}"
-            )
+    _run_send_keys(target, ["-l", "--", text])
+    _settle(settle_ms)
+    _run_send_keys(target, ["Enter"])
+    _retry_enter_if_residual(target, text, settle_ms=settle_ms)
 
 
-def send_keys(target: str, ops: Sequence[SendOp]) -> None:
+def send_keys(
+    target: str, ops: Sequence[SendOp], *, settle_ms: int = DEFAULT_STEER_SETTLE_MS
+) -> None:
     """Drive an interactive TUI at `target` with an ordered op sequence.
 
     The narrow sibling of :func:`send_text` for tools whose UI is a keystroke
@@ -363,35 +381,113 @@ def send_keys(target: str, ops: Sequence[SendOp]) -> None:
       answer). ``--`` ends option parsing so a run starting with ``-`` can't be
       read as a flag.
 
+    A terminal :attr:`SendKey.ENTER` — the last op in the sequence — gets the
+    same two hardening measures `send_text` gives its Enter (#180): a
+    `settle_ms` delay before it (so it lands after any bracketed-paste window
+    a preceding literal run opened, never glued to it) and one
+    verify-and-retry pass afterward against the most recent literal run sent
+    (the tail a swallowed Enter would leave behind). A non-terminal Enter
+    (nothing in today's grammar emits one, but the type permits it) is
+    neither delayed nor verified — it hasn't submitted anything yet.
+
     Mechanism only — this module knows nothing of questions or grammars; the
     Claude adapter builds the op list, the manager resolves which pane. Like
     :func:`send_text`, failures raise ``TmuxError`` (a steer that silently
     vanished is worse than one that failed loudly). Best-effort ordering is NOT
-    attempted: ops are sent as fast as subprocess spawns allow, so a TUI still
-    painting can drop a keystroke — that residual race is the caller's to own.
+    attempted otherwise: ops are sent as fast as subprocess spawns allow, so a
+    TUI still painting can drop a keystroke — that residual race is the
+    caller's to own.
     """
     if shutil.which("tmux") is None:
         raise TmuxError("tmux not found on PATH — on Windows, run Grove inside WSL2")
-    for op in ops:
+    last_literal = ""
+    final_index = len(ops) - 1
+    for index, op in enumerate(ops):
+        is_terminal_enter = index == final_index and op is SendKey.ENTER
+        if is_terminal_enter and index > 0:
+            _settle(settle_ms)
         if isinstance(op, SendKey):
-            argv = ["tmux", "send-keys", "-t", target, op.value]
+            _run_send_keys(target, [op.value])
         else:
-            argv = ["tmux", "send-keys", "-t", target, "-l", "--", op]
-        try:
-            result = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                check=False,
-                shell=False,
-                timeout=5,
-            )
-        except (subprocess.SubprocessError, OSError) as exc:
-            raise TmuxError(f"send-keys to {target} failed: {exc}") from exc
-        if result.returncode != 0:
-            raise TmuxError(
-                f"send-keys to {target} exited {result.returncode}: {result.stderr.strip()}"
-            )
+            _run_send_keys(target, ["-l", "--", op])
+            last_literal = op
+        if is_terminal_enter:
+            _retry_enter_if_residual(target, last_literal, settle_ms=settle_ms)
+
+
+def _run_send_keys(target: str, key_args: list[str]) -> None:
+    """Run one `tmux send-keys -t <target> <key_args...>`; raises `TmuxError`.
+
+    The single subprocess invocation both `send_text` and `send_keys` dispatch
+    per op, so the argv shape and error handling can't drift between them.
+    """
+    argv = ["tmux", "send-keys", "-t", target, *key_args]
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            shell=False,
+            timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise TmuxError(f"send-keys to {target} failed: {exc}") from exc
+    if result.returncode != 0:
+        raise TmuxError(
+            f"send-keys to {target} exited {result.returncode}: {result.stderr.strip()}"
+        )
+
+
+def _settle(settle_ms: int) -> None:
+    """Sleep `settle_ms` milliseconds; a non-positive value skips the wait.
+
+    Isolated to one line so tests can monkeypatch `tmux.time.sleep` instead of
+    actually blocking on every steering test.
+    """
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000)
+
+
+def _retry_enter_if_residual(target: str, text: str, *, settle_ms: int) -> None:
+    """Re-send the submitting Enter ONCE if the composer still holds `text`.
+
+    After a bounded wait, snapshots the pane and checks whether its last
+    non-blank line still ends with the sent text's tail — the visible sign
+    the first Enter landed inside the bracketed-paste accumulation window and
+    was absorbed as a literal newline instead of submitting (#180). Exactly
+    one retry, never a loop: a genuinely stuck pane is a different problem,
+    not something to spin on. Never raises on the race itself — `text` empty
+    or `capture_pane_snapshot` failing (it's best-effort, returns "") both
+    just skip the retry; only a real subprocess failure on the retry send
+    raises, via `_run_send_keys`'s usual loud `TmuxError`.
+    """
+    if not text:
+        return
+    _settle(settle_ms)
+    snapshot = capture_pane_snapshot(target)
+    if _pane_holds_residual_text(snapshot, text):
+        _run_send_keys(target, ["Enter"])
+
+
+def _pane_holds_residual_text(snapshot: str, text: str) -> bool:
+    """True if the pane's last non-blank line still ends with `text`'s tail.
+
+    Compares a bounded tail (`_RESIDUAL_TAIL_CHARS`), not the whole payload:
+    tmux's rendered grid can wrap a long paste across several display rows,
+    so matching the very end is the reliable anchor — a submitted composer
+    resets to an empty prompt line, a swallowed one still shows the pasted
+    text trailing off the last row.
+    """
+    if not snapshot:
+        return False
+    tail = text.strip()[-_RESIDUAL_TAIL_CHARS:]
+    if not tail:
+        return False
+    lines = [line for line in snapshot.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return tail in lines[-1]
 
 
 def pane_activity_seconds_ago(target: str) -> int | None:

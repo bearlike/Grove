@@ -20,6 +20,7 @@ from grove.core.contracts import (
     AutoBranch,
     BranchPlan,
     CreateWorkspaceRequest,
+    TicketProviderName,
     WorkspacePeekView,
     WorkspaceStateView,
 )
@@ -47,14 +48,29 @@ class GroveTools:
 
     # ─── read tools ──────────────────────────────────────────────────────────
 
-    async def list_workspaces(self) -> list[WorkspaceStateView]:
-        """List every Grove workspace the daemon knows, across all repos.
+    async def list_workspaces(
+        self,
+        repo_root: str | None = None,
+        ticket_provider: TicketProviderName | None = None,
+        ticket_id: str | None = None,
+    ) -> list[WorkspaceStateView]:
+        """List Grove workspaces the daemon knows. With no filters, every
+        workspace across all repos. `repo_root` scopes to one repo (like
+        `grove_list_agents`). `ticket_provider`/`ticket_id` (give both
+        together) narrow to the single workspace already tracking that
+        ticket — use this to check "does a workspace exist for this ticket"
+        before creating a new one — scoped to `repo_root` when given, else
+        across every repo.
 
         Each entry carries the stable workspace id, title, repo root,
         branch and base branch, worktree path, tmux session, agent name,
         lifecycle status, and timestamps.
         """
-        return await self._client.list_workspaces()
+        return await self._client.list_workspaces(
+            repo=Path(repo_root) if repo_root is not None else None,
+            ticket_provider=ticket_provider,
+            ticket_id=ticket_id,
+        )
 
     async def get_workspace(self, workspace_id: str) -> WorkspaceStateView:
         """Get the full state of one workspace by its id."""

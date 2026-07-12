@@ -154,3 +154,54 @@ def test_attach_refused_on_orphaned(manager: WorkspaceManager) -> None:
     shutil.rmtree(state.worktree_path)
     with pytest.raises(WorkspaceStateError):
         manager.attach_ticket(state.id, TicketSelector(provider="github", id="1"))
+
+
+# ─── find_by_ticket (#195) ───────────────────────────────────────────────────
+
+
+def test_find_by_ticket_returns_none_when_no_workspace_tracks_it(
+    manager: WorkspaceManager,
+) -> None:
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="plain"))
+    assert manager.find_by_ticket("github", "999") is None
+
+
+def test_find_by_ticket_returns_the_tracking_workspace(manager: WorkspaceManager) -> None:
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="fix"))
+    manager.attach_ticket(state.id, TicketSelector(provider="github", id="42"))
+    found = manager.find_by_ticket("github", "42")
+    assert found is not None
+    assert found.id == state.id
+
+
+def test_find_by_ticket_ignores_a_different_provider_with_the_same_id(
+    manager: WorkspaceManager,
+) -> None:
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="fix"))
+    manager.attach_ticket(state.id, TicketSelector(provider="github", id="42"))
+    assert manager.find_by_ticket("linear", "42") is None
+
+
+def test_find_by_ticket_newest_created_at_wins_on_multiple_matches(
+    manager: WorkspaceManager,
+) -> None:
+    # Two workspaces can end up tracking the same ticket (hand-attached twice,
+    # or a fresh workspace opened for a ticket an older one already tracks) —
+    # the newest by created_at is the one issue-ops should steer.
+    older = manager.create(CreateWorkspaceRequest(agent_name="claude", title="older"))
+    newer = manager.create(CreateWorkspaceRequest(agent_name="claude", title="newer"))
+    manager.attach_ticket(older.id, TicketSelector(provider="github", id="7"))
+    manager.attach_ticket(newer.id, TicketSelector(provider="github", id="7"))
+    found = manager.find_by_ticket("github", "7")
+    assert found is not None
+    assert found.id == newer.id
+
+
+def test_find_by_ticket_excludes_a_killed_workspace(manager: WorkspaceManager) -> None:
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="dead"))
+    manager.attach_ticket(state.id, TicketSelector(provider="github", id="5"))
+    assert manager.find_by_ticket("github", "5") is not None
+    # kill() deletes the persisted record outright (no KILLED status), so the
+    # scan over list() excludes it with no separate filter.
+    manager.kill(state.id, delete_branch=True)
+    assert manager.find_by_ticket("github", "5") is None

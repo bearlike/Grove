@@ -203,6 +203,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/hooks/agent-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Agent Hook
+         * @description Native Claude Code http-hook push (#171) — the live half of the #18 sidecar.
+         *
+         *     Claude Code dispatches the ``command`` and ``http`` handlers registered
+         *     on the SAME event independently (`ClaudeHook.settings`), so by the time
+         *     this request lands the command handler has already written the
+         *     sidecar — this route's only job is collapsing the ~2s poll-tick lag
+         *     into an immediate recompute, never a second sidecar write (this
+         *     payload carries no ``$TMUX_PANE``, so writing here would race the
+         *     command handler's more complete record). ``poll_once`` already diffs
+         *     per-workspace by fingerprint and emits a delta only for what changed,
+         *     so this is a scoped refresh by construction, not a blanket resnapshot.
+         *
+         *     Gated by the same-host hook-ingest token (`make_require_hook_token`),
+         *     not the `SessionStore` pairing bearer every other route uses — see its
+         *     docstring for why.
+         */
+        post: operations["ingest_agent_hook_hooks_agent_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -418,6 +452,86 @@ export interface paths {
          *     structurally-malformed body (422) before the handler runs.
          */
         post: operations["answer_question_workspaces__ws_id__question_answer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/controls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Controls
+         * @description Enumerate the session's available input controls (#178).
+         *
+         *     Slash commands, skills, MCP servers, the model catalog + current model,
+         *     and the permission posture — the read behind the webapp's control panel.
+         *     Fetch-on-demand by design (never SSE, like the session-history reads). The
+         *     scan touches disk and the current-model read parses a transcript, so it
+         *     runs in the executor like ``/sessions``. ``session_controls`` is
+         *     best-effort (the ``peek`` discipline): a fs/parse hiccup yields an empty
+         *     surface rather than a 500 — a bad workspace id is still the 404 from
+         *     ``_manager_for``.
+         */
+        get: operations["workspace_controls_workspaces__ws_id__controls_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/controls/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invoke Workspace Control
+         * @description Invoke a named session control — a slash command or a skill (#178).
+         *
+         *     Composes the tool's ``/name`` invocation and delivers it through the same
+         *     steer path as ``/message`` — 204 on dispatch (delivered, not "ran"; the
+         *     result rides the transcript later). Refusals ride the typed envelope: 501
+         *     ``capability_unavailable`` (a shell/remote kind has no slash-control
+         *     surface), 409 ``pane_not_found`` / ``workspace_state_error``.
+         */
+        post: operations["invoke_workspace_control_workspaces__ws_id__controls_invoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/controls/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch Workspace Model
+         * @description Switch the running session's model (#178).
+         *
+         *     Delivered as the interactive ``/model <id>`` control through the steer
+         *     path — 204 on dispatch. The id is forwarded verbatim (the provider
+         *     boundary). Refusals: 501 ``capability_unavailable`` (a kind with no
+         *     model-switch channel), 409 ``pane_not_found`` / ``workspace_state_error``.
+         */
+        post: operations["switch_workspace_model_workspaces__ws_id__controls_model_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -878,6 +992,7 @@ export interface components {
              * @default []
              */
             questions: components["schemas"]["AgentQuestionView"][];
+            live?: components["schemas"]["LiveCountersView"] | null;
         };
         /**
          * AgentQuestionOptionView
@@ -952,6 +1067,8 @@ export interface components {
             provenance: string;
             /** Tmux Window */
             tmux_window: string | null;
+            /** Parent Session Id */
+            parent_session_id?: string | null;
         };
         /**
          * AgentSummaryView
@@ -1163,18 +1280,21 @@ export interface components {
          * DigestEntryView
          * @description Wire mirror of ``grove.core.agents.DigestEntry`` (text capped).
          *
-         *     ``question`` is set only for ``role=="question"`` — the structured choice
-         *     payload; every other role leaves it ``None`` and reads from ``text``.
+         *     ``question``/``file_edit``/``todo`` are set only for their matching role
+         *     (``"question"``/``"file_edit"``/``"todo"``) — the structured payload; every
+         *     other role leaves all three ``None`` and reads from ``text``.
          */
         DigestEntryView: {
             /**
              * Role
              * @enum {string}
              */
-            role: "user" | "assistant" | "tool" | "summary" | "status" | "notification" | "question";
+            role: "user" | "assistant" | "tool" | "summary" | "status" | "notification" | "question" | "file_edit" | "todo";
             /** Text */
             text: string;
             question?: components["schemas"]["AgentQuestionView"] | null;
+            file_edit?: components["schemas"]["FileEditView"] | null;
+            todo?: components["schemas"]["TodoListView"] | null;
         };
         /**
          * ExistingLocalBranch
@@ -1192,6 +1312,32 @@ export interface components {
             kind: "existing_local";
             /** Name */
             name: string;
+        };
+        /**
+         * FileEditView
+         * @description Wire mirror of ``grove.core.agents.FileEdit`` — one file mutation a tool
+         *     call performed, normalized across providers so the webapp/TUI can draw a
+         *     diff card instead of a bare tool name. ``old_text`` is empty for a
+         *     from-scratch write; never backfilled from disk (see the engine dataclass's
+         *     docstring for why).
+         *
+         *     ``path`` is the full path as the tool recorded it (usually absolute — the
+         *     tooltip target). ``display_path`` is that path made relative to the
+         *     session's cwd (the worktree the agent ran in) for the diff-card header, so
+         *     the reader sees ``src/foo.py`` not ``/home/…/.worktrees/x/src/foo.py``. The
+         *     anchor is host-private and stays engine-side — only the two rendered paths
+         *     cross the wire. ``display_path`` falls back to the full path when the edit
+         *     is outside the anchor or no cwd was recorded.
+         */
+        FileEditView: {
+            /** Path */
+            path: string;
+            /** Display Path */
+            display_path: string;
+            /** Old Text */
+            old_text: string;
+            /** New Text */
+            new_text: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1230,6 +1376,30 @@ export interface components {
          * @enum {string}
          */
         InitStatus: "ok" | "failed" | "skipped";
+        /**
+         * LiveCountersView
+         * @description Wire mirror of ``grove.core.activity.LiveCounters`` (#181).
+         *
+         *     A *block*, not loose fields: either a live tier is actively reporting (all
+         *     three populated) or the whole block is absent on
+         *     ``AgentActivityView.live`` — never a partial/inconsistent live read. This
+         *     is a faster tier than ``AgentActivityView.tokens_in``/``tokens_out`` (the
+         *     transcript-derived, per-turn-settled cumulative totals): a client renders
+         *     ``live`` WHILE generating and falls back to the cumulative fields the
+         *     instant ``live`` goes absent again (a turn flushed, or no fast side-channel
+         *     is wired yet — #177 is the primary source).
+         */
+        LiveCountersView: {
+            /** Tokens In */
+            tokens_in: number;
+            /** Tokens Out */
+            tokens_out: number;
+            /**
+             * Generating Since
+             * Format: date-time
+             */
+            generating_since: string;
+        };
         /**
          * NewNamedBranch
          * @description User-supplied branch name, off ``base_ref``.
@@ -1420,6 +1590,53 @@ export interface components {
             activity: components["schemas"]["AgentActivityView"];
         };
         /**
+         * SessionControlView
+         * @description Wire mirror of ``grove.core.agents.SessionControl`` — one invokable session
+         *     control (a slash command, a skill, or a configured MCP server, #178).
+         *
+         *     ``name`` is exactly what a trigger delivers (``POST .../controls/invoke``);
+         *     ``scope`` is a display-only origin hint; ``detail`` an optional one-line
+         *     description read off disk.
+         */
+        SessionControlView: {
+            /** Name */
+            name: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "project" | "user" | "builtin" | "dynamic";
+            /** Detail */
+            detail?: string | null;
+        };
+        /**
+         * SessionControlsView
+         * @description Wire mirror of ``grove.core.agents.SessionControls`` (#178) — the input
+         *     controls a session exposes, fetch-on-demand (``GET /workspaces/{id}/controls``)
+         *     and never on the SSE stream, exactly like the session-history reads above.
+         *
+         *     Read-only display is the core value: the enumerated commands / skills /
+         *     MCP servers / model catalog / current model / permission posture. The trigger
+         *     verbs (``.../controls/invoke``, ``.../controls/model``) act on the ``name``s
+         *     and model ids here. Every field degrades to empty/``None`` — an agent with no
+         *     control surface (a shell, a remote session) yields an empty view, and the
+         *     webapp renders no chrome for it.
+         */
+        SessionControlsView: {
+            /** Commands */
+            commands: components["schemas"]["SessionControlView"][];
+            /** Skills */
+            skills: components["schemas"]["SessionControlView"][];
+            /** Mcp Servers */
+            mcp_servers: components["schemas"]["SessionControlView"][];
+            /** Models */
+            models: string[];
+            /** Current Model */
+            current_model: string | null;
+            /** Permission Mode */
+            permission_mode: string | null;
+        };
+        /**
          * SessionDetailView
          * @description One session with its conversation — the turns endpoint's response.
          */
@@ -1587,6 +1804,40 @@ export interface components {
             provider: "linear" | "github" | "gitea";
             /** Id */
             id: string;
+        };
+        /**
+         * TodoItemView
+         * @description Wire mirror of ``grove.core.agents.TodoItem`` — one entry in an agent's
+         *     todo/plan list. ``content`` is the imperative task text; ``active_form`` is
+         *     Claude's optional present-tense phrasing (``None`` for Codex ``update_plan``,
+         *     which carries no equivalent).
+         */
+        TodoItemView: {
+            /** Content */
+            content: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "in_progress" | "completed";
+            /** Active Form */
+            active_form?: string | null;
+        };
+        /**
+         * TodoListView
+         * @description Wire mirror of ``grove.core.agents.TodoList`` — the current todo/plan list
+         *     an agent drove through ``TodoWrite`` (Claude) / ``update_plan`` (Codex),
+         *     normalized so the webapp/TUI draw one checklist card instead of a bare tool
+         *     name. The todo sibling of ``FileEditView``/``AgentQuestionView`` — a third
+         *     structured ``DigestEntryView`` payload proving the "new role + optional
+         *     payload" recipe generalizes with zero daemon-route changes (#184).
+         */
+        TodoListView: {
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["TodoItemView"][];
         };
         /**
          * TrackRemoteBranch
@@ -1833,6 +2084,36 @@ export interface components {
          */
         WorkspaceStatus: "running" | "paused" | "error" | "active" | "idle" | "offline" | "orphaned";
         /**
+         * _HookIngestBody
+         * @description Native Claude Code http-hook payload (#171) — permissive by design.
+         *
+         *     The payload shape varies per event (``session_id``/``cwd``/``tool_name``/
+         *     ``tool_use_id``/...); this route only needs enough to confirm a real hook
+         *     fired, never a full parse — that's the sidecar the command handler
+         *     already wrote. ``extra="allow"`` lets every other Claude Code field ride
+         *     through untouched rather than pinning a contract that drifts with each
+         *     event type Anthropic adds. Module-scope for the same forward-ref reason as
+         *     ``_PauseBody`` above.
+         */
+        _HookIngestBody: {
+            /** Session Id */
+            session_id: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * _InvokeControlBody
+         * @description Trigger a named session control — a slash command or a skill (#178).
+         *
+         *     ``name`` is a control name from ``GET .../controls`` (a command/skill is
+         *     invoked as ``/name``); the leading slash is optional (the engine strips it).
+         *     Module-scope for the same forward-ref reason as ``_SendMessageBody``.
+         */
+        _InvokeControlBody: {
+            /** Name */
+            name: string;
+        };
+        /**
          * _KillBody
          * @description Kill request body — ``delete_branch=None`` defers to the workspace's branch_provenance.
          *
@@ -1872,6 +2153,16 @@ export interface components {
         _SendMessageBody: {
             /** Text */
             text: string;
+        };
+        /**
+         * _SwitchModelBody
+         * @description Switch the running session's model (#178) — ``model`` is any id, forwarded
+         *     verbatim (the provider boundary; the engine never validates it against the
+         *     offered catalog). Module-scope for the same forward-ref reason above.
+         */
+        _SwitchModelBody: {
+            /** Model */
+            model: string;
         };
     };
     responses: never;
@@ -2120,6 +2411,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardSnapshotView"];
+                };
+            };
+        };
+    };
+    ingest_agent_hook_hooks_agent_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_HookIngestBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2467,6 +2789,103 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["QuestionAnswerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_controls_workspaces__ws_id__controls_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionControlsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invoke_workspace_control_workspaces__ws_id__controls_invoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_InvokeControlBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    switch_workspace_model_workspaces__ws_id__controls_model_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_SwitchModelBody"];
             };
         };
         responses: {

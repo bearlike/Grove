@@ -202,7 +202,11 @@ class WorkspaceListScreen(Screen[None]):
         # same slow path as the peek. The fast pane tick re-passes the
         # cached tuple so the rail's transcript tab doesn't flicker off
         # between slow ticks (same reason the agent activity is re-passed).
+        # `_turns_wid` scopes the cache to the workspace it was read for, so
+        # a degraded read can fall back to it without ever leaking one
+        # workspace's tail into another selection.
         self._cached_turns: tuple[SessionTurn, ...] = ()
+        self._turns_wid: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -724,6 +728,7 @@ class WorkspaceListScreen(Screen[None]):
         if wid is None:
             self._cached_peek = None
             self._cached_turns = ()
+            self._turns_wid = None
             rail.set_peek(None)
             return
         try:
@@ -733,10 +738,12 @@ class WorkspaceListScreen(Screen[None]):
             # been killed externally between selection and recompute.
             self._cached_peek = None
             self._cached_turns = ()
+            self._turns_wid = None
             rail.set_peek(None)
             return
         self._cached_peek = peek
         self._cached_turns = self._recent_turns(wid)
+        self._turns_wid = wid
         # The agent map is fed by the slow tick; a row it hasn't covered yet
         # (fresh selection, sessionless workspace) simply renders no line.
         rail.set_peek(peek, agent=self._agent_activity.get(wid), turns=self._cached_turns)
@@ -747,8 +754,13 @@ class WorkspaceListScreen(Screen[None]):
         Rides the same slow path as ``peek()`` (selection debounce + slow
         stats tick), so the cost — one directory scan plus one transcript
         parse — is the same class the activity tick already pays per row.
-        Best-effort like peek: any failure renders no transcript tab
-        rather than breaking the rail.
+        Best-effort like peek — but a FAILED read for the selection we
+        already have a tail for keeps the last-good tuple instead of
+        returning empty: a remote session's ``/events`` fetch times out
+        routinely, and flapping the rail to "(no transcript)" and back on
+        every degraded tick was the cloud-session transcript flicker
+        (2026-07-11; the engine's ``_settle`` precedent applied at this
+        seam). A different workspace never inherits the stale cache.
         """
         try:
             listings = self._explorer.for_workspace(wid)
@@ -757,7 +769,7 @@ class WorkspaceListScreen(Screen[None]):
             return self._explorer.turns_for(listings[0], last=_RAIL_TURNS)
         except Exception as exc:  # best-effort, peek contract
             logger.debug("transcript tail for {} failed: {}", wid, exc)
-            return ()
+            return self._cached_turns if wid == self._turns_wid else ()
 
     # ─── filter ───────────────────────────────────────────────────────────
 

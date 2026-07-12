@@ -9,6 +9,7 @@ import {
 } from "@assistant-ui/react";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { GroveMessage } from "@/components/chat/chat-message";
+import { TodoListCard } from "@/components/chat/todo-list-view";
 import { PendingQuestionCard } from "@/components/workspace/question-card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,7 @@ export function ChatPanel({
   snapshot,
   agentState,
   emptyStatePicker,
+  wide,
 }: {
   workspaceId: string;
   /** The page-selected session whose transcript this panel renders. */
@@ -59,6 +61,13 @@ export function ChatPanel({
    * CTA. Absent ⇒ the generic empty state.
    */
   emptyStatePicker?: ReactNode;
+  /**
+   * True when the transcript is the ONLY pane on screen (single-pane view, no
+   * work panel sharing the row) — widens the column measure since there's no
+   * neighboring pane to leave room for. False (or omitted) keeps the Claude
+   * reading measure used inside the split view. See `THREAD_MAX_WIDTH_WIDE`.
+   */
+  wide?: boolean;
 }) {
   // Self-wrapped boundary: a malformed streamed turn degrades to one
   // placeholder tile, never a white-screened detail page.
@@ -70,6 +79,7 @@ export function ChatPanel({
         snapshot={snapshot}
         agentState={agentState}
         emptyStatePicker={emptyStatePicker}
+        wide={wide}
       />
     </ErrorBoundary>
   );
@@ -78,24 +88,32 @@ export function ChatPanel({
 /**
  * Thread layout tokens from assistant-ui's own styled template (#154), set on
  * the panel root so every descendant (the column measure, the composer) reads
- * one source. `--thread-max-width` (44rem / 704px) is the Claude reading
- * measure; the composer trio drives its floating-input look (a muted-tinted
- * plane at the 24px composer radius).
+ * one source. `--thread-max-width` is the Claude reading measure (44rem/704px)
+ * while the transcript shares the row with the work panel (split view); with
+ * no pane to share the row against (single-pane transcript view), it widens to
+ * `THREAD_MAX_WIDTH_WIDE` so the column actually uses the freed-up width
+ * instead of leaving it as empty gutters either side. The composer trio drives
+ * its floating-input look (a muted-tinted plane at the 24px composer radius).
  */
-const THREAD_TOKENS = {
-  "--thread-max-width": "44rem",
-  "--composer-bg": "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
-  "--composer-radius": "1.5rem",
-  "--composer-padding": "8px",
-} as CSSProperties;
+const THREAD_MAX_WIDTH = "44rem";
+const THREAD_MAX_WIDTH_WIDE = "80rem";
+
+function threadTokens(wide: boolean): CSSProperties {
+  return {
+    "--thread-max-width": wide ? THREAD_MAX_WIDTH_WIDE : THREAD_MAX_WIDTH,
+    "--composer-bg": "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
+    "--composer-radius": "1.5rem",
+    "--composer-padding": "8px",
+  } as CSSProperties;
+}
 
 /**
  * The one shared column measure (LibreChat's no-drift rule, #124): transcript
  * content, notice, and composer all mount inside it so they stay column-aligned
  * at every width. `px-3` makes mobile effectively edge-to-edge; the max-width is
- * the `--thread-max-width` token (704px, the assistant-ui/Claude measure).
+ * the `--thread-max-width` token, set per-pane-mode by `threadTokens()`.
  */
-const CHAT_COLUMN = "mx-auto w-full max-w-[var(--thread-max-width)] px-3 sm:px-4";
+const CHAT_COLUMN = "mx-auto w-full max-w-[var(--thread-max-width)] px-3 sm:px-4 lg:px-6";
 
 function ChatPanelInner({
   workspaceId,
@@ -103,25 +121,28 @@ function ChatPanelInner({
   snapshot,
   agentState,
   emptyStatePicker,
+  wide,
 }: {
   workspaceId: string;
   sessionId: string | null;
   snapshot: DashboardSnapshotView | null;
   agentState: AgentActivityState;
   emptyStatePicker?: ReactNode;
+  wide?: boolean;
 }) {
-  const { runtime, isEmpty, pending, notice, canInterrupt, onInterrupt } = useGroveChatRuntime({
-    workspaceId,
-    sessionId,
-    snapshot,
-    agentState,
-  });
+  const { runtime, isEmpty, pending, todo, notice, canInterrupt, onInterrupt } =
+    useGroveChatRuntime({
+      workspaceId,
+      sessionId,
+      snapshot,
+      agentState,
+    });
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
-        style={THREAD_TOKENS}
+        style={threadTokens(Boolean(wide))}
         data-testid="chat-panel"
       >
         {/* The Viewport is itself the scroll container (assistant-ui drives
@@ -188,6 +209,16 @@ function ChatPanelInner({
           >
             {notice}
           </p>
+        )}
+
+        {/* The agent's current todo/plan list (#184) — pinned as a card directly
+            above the composer (a sibling of the transcript, not a message), so
+            the plan stays visible while you scroll. Column-aligned; absent
+            entirely when the session has no todo (degrade to nothing). */}
+        {todo && (
+          <div className={cn(CHAT_COLUMN, "pb-1")}>
+            <TodoListCard todo={todo} />
+          </div>
         )}
 
         {/* Breathing room under the composer: the tone-filled composer floats in

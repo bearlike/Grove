@@ -33,6 +33,12 @@ def manager(tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path) -> WorkspaceMan
         {
             "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
             "tmux": {"session_prefix": "test-"},
+            # This file asserts exact launch decorations for session-id/resume
+            # composition — hooks (#171, on by default) would append an
+            # unrelated ``--settings`` flag to every claude_code decoration.
+            # The two dedicated hook-install tests build their own cfg with
+            # hooks explicitly on instead of using this fixture.
+            "hooks": {"enabled": False},
         }
     )
     store = JsonWorkspaceStore(path=tmp_path / "state.json")
@@ -194,6 +200,96 @@ def test_create_shell_ignores_model(manager: WorkspaceManager, fake_tmux: FakeTm
     state = manager.create(CreateWorkspaceRequest(agent_name="shell", title="plain", model="opus"))
 
     assert _last_decoration(fake_tmux, state.tmux_session) == []
+
+
+# ─── #148 tools_offline rides the launch argv, per adapter ──────────────────
+
+
+@pytest.fixture
+def offline_manager(tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path) -> WorkspaceManager:
+    """A manager whose agents all opt into `tools_offline` (#148), with the
+    hook `--settings` decoration disabled so the asserted argv stays a fixed,
+    non-temp-path shape."""
+    del fake_tmux  # applied via monkeypatch
+    cfg = GroveConfig.model_validate(
+        {
+            "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
+            "tmux": {"session_prefix": "test-"},
+            "hooks": {"enabled": False},
+            "agents": [
+                {
+                    "name": "claude",
+                    "command": "claude",
+                    "kind": "claude_code",
+                    "tools_offline": True,
+                },
+                {"name": "codex", "command": "codex", "kind": "codex", "tools_offline": True},
+                {
+                    "name": "shell",
+                    "command": "$SHELL",
+                    "description": "Plain shell",
+                    "tools_offline": True,
+                },
+            ],
+        }
+    )
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    return WorkspaceManager(repo_root=tmp_repo, cfg=cfg, store=store)
+
+
+def test_create_claude_offline_appends_disallowed_tools(
+    offline_manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    state = offline_manager.create(CreateWorkspaceRequest(agent_name="claude", title="task"))
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+        "--disallowedTools",
+        "WebFetch,WebSearch",
+    ]
+
+
+def test_create_codex_offline_appends_sandbox_flags(
+    offline_manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """Codex mints no session id (empty base decoration), but `tools_offline`
+    still rides the launch — independent of correlation, like `model`."""
+    state = offline_manager.create(CreateWorkspaceRequest(agent_name="codex", title="task"))
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "sandbox_workspace_write.network_access=false",
+    ]
+
+
+def test_create_shell_offline_is_noop(
+    offline_manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """A generic shell has no tool concept — `tools_offline` is a no-op."""
+    state = offline_manager.create(CreateWorkspaceRequest(agent_name="shell", title="plain"))
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == []
+
+
+def test_create_claude_offline_precedes_initial_prompt_positional(
+    offline_manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """The prompt stays the trailing positional after every flag, including the
+    offline-tools decoration."""
+    state = offline_manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="task", initial_prompt="do X")
+    )
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+        "--disallowedTools",
+        "WebFetch,WebSearch",
+        "do X",
+    ]
 
 
 # ─── persistence / legacy ───────────────────────────────────────────────────

@@ -1,21 +1,49 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Maximize2, Minimize2, GitCompare, Info, SquareTerminal, type LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Maximize2,
+  Minimize2,
+  ChevronDown,
+  GitCompare,
+  Info,
+  Plug,
+  SlidersHorizontal,
+  SquareTerminal,
+  type LucideIcon,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TerminalPane } from "@/components/terminal/terminal-pane";
 import { StatTrio } from "@/components/workspace/stat-trio";
 import { CommitList } from "@/components/workspace/commit-list";
 import { PlacementBadge } from "@/components/workspace/placement-badge";
+import { FleetTree } from "@/components/workspace/fleet-tree";
 import { RelativeTime } from "@/components/shared/relative-time";
+import { buildFleetTree, fleetMemberCount } from "@/lib/grove/fleet";
+import { useInvokeControl, useSessionControls, useSwitchModel } from "@/lib/grove/hooks";
 import { cn } from "@/lib/utils";
 import type { AgentLiveStatus } from "@/lib/grove/agent-activity";
-import type { CommitSummaryView, WorkspacePeekView } from "@/lib/grove/types";
+import type {
+  CommitSummaryView,
+  SessionActivityView,
+  SessionControlView,
+  WorkspacePeekView,
+} from "@/lib/grove/types";
 
 const SECTION_LABEL =
   "text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground";
 
-type PanelTab = "terminal" | "diff" | "info";
+type PanelTab = "terminal" | "diff" | "info" | "controls";
 
 /**
  * The session page's work panel (ADE #142) — the tabbed surface that fills
@@ -33,9 +61,11 @@ type PanelTab = "terminal" | "diff" | "info";
  *   (no hunk view — the daemon doesn't expose per-file diffs).
  * - **Info** — the metrics one-liner (turns · tools · tokens, `metrics` testid
  *   — the SAME seam the dashboard card uses, so a drift test can't miss it)
- *   plus subagent count, agent + model identity, placement, and created/paused
- *   timestamps. Deliberately omits `worktree_path` — a host filesystem path is
- *   host-private-ish and was never rendered anywhere in the old UI either.
+ *   plus subagent count (or the itemized fleet tree, #174, when the session's
+ *   sub-agents are itemized on the wire — see below), agent + model identity,
+ *   placement, and created/paused timestamps. Deliberately omits
+ *   `worktree_path` — a host filesystem path is host-private-ish and was
+ *   never rendered anywhere in the old UI either.
  *
  * Tab selection is page-session-local `useState` (design ruling: "smallest
  * seam, don't add a store slice") — it resets on navigation, which is exactly
@@ -43,21 +73,44 @@ type PanelTab = "terminal" | "diff" | "info";
  * (`fixed inset-0`), not a portal/Dialog, so it composes with the resizable
  * split underneath without fighting focus-trap semantics.
  *
- * Test seams: `work-panel` (root), `work-panel-tab-terminal` / `-diff` / `-info`,
- * `work-panel-fullscreen`. The Terminal tab keeps every seam `TerminalPane`
- * already owns (`terminal-pane`, `terminal-capture-badge`, `peek-snapshot`).
+ * `sessions` (`WorkspaceActivityView.sessions`, #173) is optional and
+ * defaults to `[]` so every pre-existing caller/test keeps working unchanged
+ * — it's the same flat parent/child list the header identity popover and the
+ * session rail already read off the activity snapshot, just threaded here
+ * too for the Info tab's `FleetTree` (#174). When it carries no itemized
+ * sub-agent (a plain single-session workspace, or a kind that doesn't itemize
+ * its fleet), the tab falls back to the old bare `active_subagents` count
+ * line — never both, and never empty tree chrome.
+ *
+ * - **Controls** — the session's input-control surface (#178): the enumerated
+ *   slash commands, skills, and configured MCP servers, plus the model catalog
+ *   with a switch action. Read-only display is the core value; commands/skills
+ *   carry a "Run" trigger and the model a switch, all thin best-effort verbs over
+ *   the daemon's `/controls/*` routes. Degrades cleanly — an agent with no
+ *   control surface (a shell/remote kind) renders a quiet empty state, no chrome.
+ *
+ * Test seams: `work-panel` (root), `work-panel-tab-terminal` / `-diff` / `-info`
+ * / `-controls`, `work-panel-fullscreen`. The Terminal tab keeps every seam
+ * `TerminalPane` already owns (`terminal-pane`, `terminal-capture-badge`,
+ * `peek-snapshot`); the Controls tab owns `work-panel-controls-content`,
+ * `controls-model-picker`, `controls-command`, `controls-skill`.
  */
 export function WorkPanel({
+  workspaceId,
   peek,
   live,
   commits,
   commitsLoading,
+  sessions = [],
   className,
 }: {
+  workspaceId: string;
   peek: WorkspacePeekView;
   live: AgentLiveStatus;
   commits: CommitSummaryView[] | undefined;
   commitsLoading?: boolean;
+  /** The workspace's flat session list (primary + itemized fleet), #173/#174. */
+  sessions?: SessionActivityView[];
   className?: string;
 }) {
   const [tab, setTab] = useState<PanelTab>("terminal");
@@ -107,6 +160,13 @@ export function WorkPanel({
             selected={tab === "info"}
             onClick={() => setTab("info")}
           />
+          <PanelTabButton
+            testid="work-panel-tab-controls"
+            icon={SlidersHorizontal}
+            label="Controls"
+            selected={tab === "controls"}
+            onClick={() => setTab("controls")}
+          />
         </div>
         <button
           type="button"
@@ -136,7 +196,10 @@ export function WorkPanel({
           />
         )}
         {tab === "diff" && <DiffTab peek={peek} commits={commits} commitsLoading={commitsLoading} />}
-        {tab === "info" && <InfoTab peek={peek} live={live} />}
+        {tab === "info" && (
+          <InfoTab workspaceId={workspaceId} peek={peek} live={live} sessions={sessions} />
+        )}
+        {tab === "controls" && <ControlsTab workspaceId={workspaceId} />}
       </div>
     </div>
   );
@@ -174,8 +237,23 @@ function DiffTab({
   );
 }
 
-function InfoTab({ peek, live }: { peek: WorkspacePeekView; live: AgentLiveStatus }) {
+function InfoTab({
+  workspaceId,
+  peek,
+  live,
+  sessions,
+}: {
+  workspaceId: string;
+  peek: WorkspacePeekView;
+  live: AgentLiveStatus;
+  sessions: SessionActivityView[];
+}) {
   const s = peek.state;
+  // The itemized fleet (#173) wins over the bare count — a workspace whose
+  // adapter/session doesn't itemize its sub-agents (or has none) falls back
+  // to the old one-liner; never both, never empty tree chrome.
+  const fleetRoots = useMemo(() => buildFleetTree(sessions), [sessions]);
+  const hasFleet = fleetMemberCount(fleetRoots) > 0;
   return (
     <div data-testid="work-panel-info-content" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       <section className="space-y-1.5">
@@ -183,10 +261,14 @@ function InfoTab({ peek, live }: { peek: WorkspacePeekView; live: AgentLiveStatu
         <p data-testid="metrics" className="font-mono text-xs tabular-nums text-muted-foreground">
           {live.metricsLine ?? "—"}
         </p>
-        {live.subagents > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {live.subagents} bg agent{live.subagents > 1 ? "s" : ""}
-          </p>
+        {hasFleet ? (
+          <FleetTree roots={fleetRoots} workspaceId={workspaceId} />
+        ) : (
+          live.subagents > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {live.subagents} bg agent{live.subagents > 1 ? "s" : ""}
+            </p>
+          )
         )}
       </section>
 
@@ -217,6 +299,220 @@ function InfoTab({ peek, live }: { peek: WorkspacePeekView; live: AgentLiveStatu
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * The Controls tab (#178): the session's input-control surface. Read-only
+ * enumeration is the core value — the model catalog (with a switch), the
+ * slash commands, the skills, and the configured MCP servers. Commands and
+ * skills carry a thin "Run" trigger (`/name` over the steer path); MCP servers
+ * are informational. Every section is conditional, so an agent with no control
+ * surface renders the quiet empty state, never empty chrome.
+ */
+function ControlsTab({ workspaceId }: { workspaceId: string }) {
+  const { data, isLoading } = useSessionControls(workspaceId);
+  const invoke = useInvokeControl(workspaceId);
+  const switchModel = useSwitchModel(workspaceId);
+
+  if (isLoading && !data) {
+    return (
+      <div data-testid="work-panel-controls-content" className="flex flex-col gap-3 p-4">
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="h-20 w-full" />
+      </div>
+    );
+  }
+
+  const controls = data;
+  const hasAny =
+    !!controls &&
+    (controls.models.length > 0 ||
+      controls.commands.length > 0 ||
+      controls.skills.length > 0 ||
+      controls.mcp_servers.length > 0 ||
+      controls.permission_mode != null);
+
+  if (!controls || !hasAny) {
+    return (
+      <div
+        data-testid="work-panel-controls-content"
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
+      >
+        <SlidersHorizontal aria-hidden className="size-6 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">No session controls available.</p>
+      </div>
+    );
+  }
+
+  // A refusal (501 capability_unavailable / 409) is expected, not exceptional —
+  // surface the daemon's typed message quietly. The mutations share one line.
+  const failure = invoke.error ?? switchModel.error;
+  const notice = failure instanceof Error ? failure.message : failure ? String(failure) : null;
+
+  return (
+    <div
+      data-testid="work-panel-controls-content"
+      className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+    >
+      {controls.models.length > 0 && (
+        <section className="space-y-1.5">
+          <p className={SECTION_LABEL}>Model</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <ModelSwitch
+              current={controls.current_model}
+              models={controls.models}
+              pending={switchModel.isPending}
+              onSwitch={(m) => switchModel.mutate(m)}
+            />
+            {controls.current_model && (
+              <span className="text-xs text-muted-foreground">current</span>
+            )}
+          </div>
+        </section>
+      )}
+
+      {controls.commands.length > 0 && (
+        <ControlSection
+          label="Commands"
+          items={controls.commands}
+          testid="controls-command"
+          pending={invoke.isPending}
+          onRun={(name) => invoke.mutate(name)}
+        />
+      )}
+
+      {controls.skills.length > 0 && (
+        <ControlSection
+          label="Skills"
+          items={controls.skills}
+          testid="controls-skill"
+          pending={invoke.isPending}
+          onRun={(name) => invoke.mutate(name)}
+        />
+      )}
+
+      {controls.mcp_servers.length > 0 && (
+        <section className="space-y-1.5">
+          <p className={SECTION_LABEL}>MCP servers</p>
+          <div className="flex flex-wrap gap-1.5">
+            {controls.mcp_servers.map((s) => (
+              <Badge key={s.name} variant="outline" className="gap-1 font-mono text-xs">
+                <Plug aria-hidden className="size-3" />
+                {s.name}
+              </Badge>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {controls.permission_mode && (
+        <section className="space-y-1 text-xs text-muted-foreground">
+          <p className={SECTION_LABEL}>Permission</p>
+          <p>
+            Prompt default: <span className="font-mono">{controls.permission_mode}</span>
+          </p>
+        </section>
+      )}
+
+      {notice && (
+        <p role="status" className="text-xs text-[var(--status-error)]">
+          {notice}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** One list of invokable controls (commands or skills) — each row is a name +
+ *  optional description with a thin "Run" trigger delivering `/name`. */
+function ControlSection({
+  label,
+  items,
+  testid,
+  pending,
+  onRun,
+}: {
+  label: string;
+  items: SessionControlView[];
+  testid: string;
+  pending: boolean;
+  onRun: (name: string) => void;
+}) {
+  return (
+    <section className="space-y-1.5">
+      <p className={SECTION_LABEL}>{label}</p>
+      <ul className="flex flex-col gap-0.5">
+        {items.map((c) => (
+          <li
+            key={`${c.scope}:${c.name}`}
+            data-testid={testid}
+            className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-mono text-[13px] text-foreground">/{c.name}</p>
+              {c.detail && (
+                <p className="truncate text-xs text-muted-foreground">{c.detail}</p>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={pending}
+              onClick={() => onRun(c.name)}
+              aria-label={`Run ${c.name}`}
+            >
+              Run
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** The model switcher — a `Model ▾` dropdown over the offered catalog, mirroring
+ *  the composer's `ModelPicker` anatomy (no bespoke chrome). Selecting an id
+ *  delivers the `/model <id>` control; the current model is marked. */
+function ModelSwitch({
+  current,
+  models,
+  pending,
+  onSwitch,
+}: {
+  current: string | null;
+  models: string[];
+  pending: boolean;
+  onSwitch: (model: string) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          data-testid="controls-model-picker"
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          className="gap-1 font-mono"
+          aria-label={`Model: ${current ?? "unknown"}`}
+        >
+          <span className="truncate">{current ?? "Switch model"}</span>
+          <ChevronDown aria-hidden className="size-3.5 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-52">
+        <DropdownMenuLabel>Switch model</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {models.map((id) => (
+          <DropdownMenuItem key={id} className="font-mono" onSelect={() => onSwitch(id)}>
+            {id}
+            {current === id && (
+              <span className="ml-auto text-xs text-muted-foreground">current</span>
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

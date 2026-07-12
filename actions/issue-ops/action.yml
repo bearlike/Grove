@@ -1,0 +1,274 @@
+name: grove-issue-ops
+description: >-
+  Forward a triggered issue/PR comment to a Grove daemon's issue-ops ingest
+  endpoint, then reflect the result back onto the comment as a reaction.
+  Stateless: this action asserts the commenter's forge permission and bot-ness
+  and forwards them; the daemon's engine makes every routing decision (#196).
+
+inputs:
+  daemon-url:
+    description: "Base URL of the Grove daemon reachable from this runner, e.g. http://127.0.0.1:43110"
+    required: true
+  daemon-token:
+    description: "Bearer token for the daemon's issue-ops ingest route"
+    required: true
+  trigger:
+    description: "Mention token that must open a comment (word-boundary matched)"
+    required: false
+    default: "@grove"
+  allow-users:
+    description: >-
+      SECURITY-SENSITIVE widening knob. Comma-separated forge logins trusted
+      to drive issue-ops even without repo write access. Leave empty unless
+      you mean to grant this.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # (a) cheap trigger re-check + (context) derive provider/owner/repo/ids from
+    # ambient env — the daemon's CommandParser re-validates the grammar
+    # authoritatively, this only stops noise (a reaction on every comment).
+    - name: Resolve event context + cheap trigger guard
+      id: context
+      shell: bash
+      env:
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        TRIGGER: ${{ inputs.trigger }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        COMMENT_ID: ${{ github.event.comment.id }}
+        ACTOR: ${{ github.event.comment.user.login }}
+        ACTOR_TYPE: ${{ github.event.comment.user.type }}
+      run: |
+        set -euo pipefail
+        # GITEA_ACTIONS is the one Gitea-only ambient var (GitHub never sets it);
+        # everything else is read off the GITHUB_*-shaped compat env both set.
+        if [ "${GITEA_ACTIONS:-}" = "true" ]; then
+          provider=gitea
+        else
+          provider=github
+        fi
+        owner="${GITHUB_REPOSITORY%%/*}"
+        repo="${GITHUB_REPOSITORY##*/}"
+        # Defensive bot detection: a live "type" field (GitHub) plus the
+        # `[bot]`-suffix login convention and Gitea's own well-known actions
+        # actor, so Gitea parity holds even if `user.type` is absent/differently
+        # cased there — this is a floor, not the only defense (the daemon's
+        # marker + dedupe guards are the suspenders).
+        actor_is_bot=$(jq -n --arg type "${ACTOR_TYPE:-}" --arg login "${ACTOR:-}" '
+          ($type | ascii_downcase) as $t
+          | ($login | ascii_downcase) as $l
+          | ($t == "bot") or ($l | test("\\[bot\\]$")) or ($l == "gitea-actions")
+        ')
+        # Never string-interpolate the comment body into shell: it's read here
+        # only as a jq --arg, never echoed, never written to $GITHUB_OUTPUT.
+        triggered=$(jq -n --arg body "${COMMENT_BODY:-}" --arg trig "$TRIGGER" '
+          ($body | sub("^[ \t\r\n]+"; "")) as $b
+          | ($b | ascii_downcase) as $bl
+          | ($trig | ascii_downcase) as $tl
+          | ($bl | startswith($tl)) as $starts
+          | ($bl[($tl | length):($tl | length) + 1]) as $next
+          | $starts and (($next == "") or ($next | test("^[a-z0-9_]$") | not))
+        ')
+        {
+          echo "provider=$provider"
+          echo "owner=$owner"
+          echo "repo=$repo"
+          echo "api_base=${GITHUB_API_URL}"
+          echo "issue_number=${ISSUE_NUMBER}"
+          echo "comment_id=${COMMENT_ID}"
+          echo "actor=${ACTOR}"
+          echo "actor_is_bot=${actor_is_bot}"
+          echo "proceed=${triggered}"
+        } >> "$GITHUB_OUTPUT"
+        if [ "$triggered" != "true" ]; then
+          echo "::notice::comment does not open with trigger '${TRIGGER}' — skipping"
+        fi
+
+    # (b) commenter permission gate: a CI-side floor in front of the daemon's
+    # own actor_permission/allowed_actors gate (#196) — defense in depth, not
+    # a replacement for it. No fork-PR skip here: this action only runs on
+    # `issue_comment`, which both forges always deliver to the BASE repo with
+    # normal token permissions and secrets (unlike a fork's `pull_request` run,
+    # which is the one context that's actually clamped) — and no fork code is
+    # ever checked out or executed, so there is nothing to gate on.
+    - name: Commenter permission check
+      id: permission
+      if: steps.context.outputs.proceed == 'true'
+      shell: bash
+      env:
+        API_BASE: ${{ steps.context.outputs.api_base }}
+        OWNER: ${{ steps.context.outputs.owner }}
+        REPO: ${{ steps.context.outputs.repo }}
+        ACTOR: ${{ steps.context.outputs.actor }}
+        ALLOW_USERS: ${{ inputs.allow-users }}
+        FORGE_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        http_status=$(curl -s -o /tmp/grove-permission.json -w '%{http_code}' \
+          -H "Authorization: token ${FORGE_TOKEN}" \
+          -H "Accept: application/json" \
+          "${API_BASE}/repos/${OWNER}/${REPO}/collaborators/${ACTOR}/permission") || http_status="000"
+        permission="none"
+        if [ "$http_status" = "200" ]; then
+          permission=$(jq -r '.permission // "none"' /tmp/grove-permission.json)
+        else
+          echo "::warning::permission lookup for @${ACTOR} failed (HTTP ${http_status}) — treating as no access"
+        fi
+        allowed=false
+        case "$permission" in
+          write | admin | maintain | owner) allowed=true ;;
+        esac
+        if [ "$allowed" != "true" ]; then
+          IFS=',' read -ra allow_list <<< "${ALLOW_USERS:-}"
+          for u in "${allow_list[@]}"; do
+            u="${u// /}"
+            if [ -n "$u" ] && [ "${u,,}" = "${ACTOR,,}" ]; then
+              allowed=true
+              break
+            fi
+          done
+        fi
+        echo "permission=${permission}" >> "$GITHUB_OUTPUT"
+        if [ "$allowed" = "true" ]; then
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::notice::@${ACTOR} lacks write access and isn't in allow-users — skipping"
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # (c) receipt reaction — best-effort, never fails the job over cosmetics.
+    - name: React eyes
+      id: react_eyes
+      if: steps.permission.outputs.proceed == 'true'
+      shell: bash
+      continue-on-error: true
+      env:
+        API_BASE: ${{ steps.context.outputs.api_base }}
+        OWNER: ${{ steps.context.outputs.owner }}
+        REPO: ${{ steps.context.outputs.repo }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        FORGE_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        body=$(jq -n '{content: "eyes"}')
+        curl -s -o /dev/null \
+          -H "Authorization: token ${FORGE_TOKEN}" \
+          -H "Content-Type: application/json" \
+          --data-binary "$body" \
+          "${API_BASE}/repos/${OWNER}/${REPO}/issues/comments/${COMMENT_ID}/reactions" || true
+
+    # (d) build the IssueOpsEvent (jq -n with env — never string-interpolate
+    # the comment body into shell) and POST it to the daemon.
+    - name: Build IssueOpsEvent + POST to the Grove daemon
+      id: post_event
+      if: steps.permission.outputs.proceed == 'true'
+      shell: bash
+      env:
+        PROVIDER: ${{ steps.context.outputs.provider }}
+        OWNER: ${{ steps.context.outputs.owner }}
+        REPO: ${{ steps.context.outputs.repo }}
+        ISSUE_NUMBER: ${{ steps.context.outputs.issue_number }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        ACTOR: ${{ steps.context.outputs.actor }}
+        ACTOR_IS_BOT: ${{ steps.context.outputs.actor_is_bot }}
+        ACTOR_PERMISSION: ${{ steps.permission.outputs.permission }}
+        ISSUE_TITLE: ${{ github.event.issue.title }}
+        ISSUE_BODY: ${{ github.event.issue.body }}
+        ISSUE_URL: ${{ github.event.issue.html_url }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        DAEMON_URL: ${{ inputs.daemon-url }}
+        DAEMON_TOKEN: ${{ inputs.daemon-token }}
+      run: |
+        set -euo pipefail
+        payload=$(jq -n \
+          --arg provider "$PROVIDER" \
+          --arg owner "$OWNER" \
+          --arg repo "$REPO" \
+          --argjson issue_number "$ISSUE_NUMBER" \
+          --arg issue_title "${ISSUE_TITLE:-}" \
+          --arg issue_body "${ISSUE_BODY:-}" \
+          --arg issue_url "${ISSUE_URL:-}" \
+          --arg comment_id "$COMMENT_ID" \
+          --arg comment_body "${COMMENT_BODY:-}" \
+          --arg actor "$ACTOR" \
+          --arg actor_permission "$ACTOR_PERMISSION" \
+          --argjson actor_is_bot "$ACTOR_IS_BOT" \
+          '{
+            provider: $provider,
+            owner: $owner,
+            repo: $repo,
+            issue_number: $issue_number,
+            issue_title: $issue_title,
+            issue_body: $issue_body,
+            issue_url: $issue_url,
+            comment_id: $comment_id,
+            comment_body: $comment_body,
+            actor: $actor,
+            actor_permission: $actor_permission,
+            actor_is_bot: $actor_is_bot
+          }')
+        http_status=$(curl -s -o /tmp/grove-outcome.json -w '%{http_code}' -X POST \
+          -H "Authorization: Bearer ${DAEMON_TOKEN}" \
+          -H "Content-Type: application/json" \
+          --data-binary "$payload" \
+          "${DAEMON_URL%/}/issue-ops/events") || http_status="000"
+        {
+          echo "http_status=${http_status}"
+          if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
+            echo "transport_ok=true"
+            echo "outcome_action=$(jq -r '.action // ""' /tmp/grove-outcome.json)"
+          else
+            echo "transport_ok=false"
+            echo "outcome_action="
+          fi
+        } >> "$GITHUB_OUTPUT"
+        if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+          echo "::warning::daemon POST failed (HTTP ${http_status})"
+        fi
+
+    # (e) reflect the result: rocket on an actioned outcome, thumbsdown on a
+    # refusal or a transport failure. The daemon already replies for its own
+    # refusals (#196's _reply) — only a transport failure gets our own reply,
+    # since then the daemon never saw the comment at all.
+    - name: React outcome
+      if: steps.permission.outputs.proceed == 'true'
+      shell: bash
+      continue-on-error: true
+      env:
+        API_BASE: ${{ steps.context.outputs.api_base }}
+        OWNER: ${{ steps.context.outputs.owner }}
+        REPO: ${{ steps.context.outputs.repo }}
+        ISSUE_NUMBER: ${{ steps.context.outputs.issue_number }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        FORGE_TOKEN: ${{ github.token }}
+        TRANSPORT_OK: ${{ steps.post_event.outputs.transport_ok }}
+        HTTP_STATUS: ${{ steps.post_event.outputs.http_status }}
+        OUTCOME_ACTION: ${{ steps.post_event.outputs.outcome_action }}
+      run: |
+        set -euo pipefail
+        react() {
+          body=$(jq -n --arg c "$1" '{content: $c}')
+          curl -s -o /dev/null \
+            -H "Authorization: token ${FORGE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary "$body" \
+            "${API_BASE}/repos/${OWNER}/${REPO}/issues/comments/${COMMENT_ID}/reactions" || true
+        }
+        if [ "$TRANSPORT_OK" != "true" ]; then
+          react "-1"
+          reply=$(jq -n --arg status "$HTTP_STATUS" \
+            '{body: ("Grove daemon request failed (HTTP " + $status + ") — see the workflow run for details.")}')
+          curl -s -o /dev/null \
+            -H "Authorization: token ${FORGE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary "$reply" \
+            "${API_BASE}/repos/${OWNER}/${REPO}/issues/${ISSUE_NUMBER}/comments" || true
+          exit 0
+        fi
+        case "$OUTCOME_ACTION" in
+          refused) react "-1" ;;
+          ignored | "") : ;; # silent drop: duplicate/bot/marker/not_triggered/unknown_repo
+          *) react "rocket" ;;
+        esac

@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 
 from grove.core.activity import SessionActivity
-from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
+from grove.core.agents import (
+    AgentActivity,
+    AgentActivityState,
+    AgentSession,
+    DigestEntry,
+    SessionTurn,
+)
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
@@ -23,6 +29,7 @@ from grove.tui.screens.remap_session import RemapSessionScreen
 from grove.tui.screens.sessions import SessionRow
 from grove.tui.widgets.card import WorkspaceCard
 from grove.tui.widgets.list import WorkspaceList
+from grove.tui.widgets.peek_rail import PeekRail
 from grove.tui.widgets.status import StatusBar
 from tests.conftest import FakeTmux
 
@@ -968,3 +975,65 @@ def test_key_available_remap_shares_edit_gate() -> None:
     ):
         assert _key_available("x", status) is True
     assert _key_available("x", WorkspaceStatus.ORPHANED) is False
+
+
+# ─── degraded turns reads keep the last-good rail transcript (2026-07-11) ────
+
+
+@pytest.mark.asyncio
+async def test_degraded_turns_read_keeps_last_good_transcript(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A transient turns-read failure (a remote /events timeout, a JSONL
+    mid-rotation) must keep the last-good tail for the SAME selection instead
+    of flapping the rail to "(no transcript)" and back every slow tick — the
+    engine's `_settle` keep-through-degraded-reads precedent, applied at the
+    rail's feed."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="flap"))
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        for attr in ("_stats_timer", "_pane_timer", "_pulse_timer"):
+            getattr(screen, attr).stop()
+
+        turns = (
+            SessionTurn(
+                user_text="hello cloud",
+                entries=(DigestEntry(role="assistant", text="world"),),
+            ),
+        )
+
+        class _FlappyExplorer:
+            def __init__(self) -> None:
+                self.fail = False
+
+            def for_workspace(self, wid: str) -> list[object]:
+                if self.fail:
+                    raise RuntimeError("degraded read")
+                return [object()]
+
+            def turns_for(self, listing: object, *, last: int | None = None) -> tuple:
+                if self.fail:
+                    raise RuntimeError("degraded read")
+                return turns
+
+        fake = _FlappyExplorer()
+        screen._explorer = fake
+        screen._refresh_peek()
+        await pilot.pause()
+        rail = screen.query_one(PeekRail)
+        assert "hello cloud" in rail.body_text
+
+        fake.fail = True
+        screen._refresh_peek()
+        await pilot.pause()
+        assert "hello cloud" in rail.body_text  # kept, not flapped to empty
+
+        # A DIFFERENT selection must not inherit the stale cache: the
+        # keep-last-good memory is scoped to the workspace it was read for.
+        assert screen._recent_turns("some-other-wid") == ()
+        await pilot.press("q")
+        await pilot.pause()

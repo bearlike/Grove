@@ -34,6 +34,7 @@ When you own a Gitea issue end-to-end, drive it to a merged PR on this loop. Bia
 | `src/grove/core/contracts/` | wire-level Pydantic shapes that cross clients | [contracts/CLAUDE.md](src/grove/core/contracts/CLAUDE.md) |
 | `src/grove/core/agents/` | tool-agnostic agent introspection (adapters) | [agents/CLAUDE.md](src/grove/core/agents/CLAUDE.md) |
 | `src/grove/core/tickets/` | branch-aware ticket providers (Gitea/GitHub/Linear) | [tickets/CLAUDE.md](src/grove/core/tickets/CLAUDE.md) |
+| `src/grove/core/issueops/` | issue-comment events → workspace actions (command grammar + routing) | [issueops/CLAUDE.md](src/grove/core/issueops/CLAUDE.md) |
 | `src/grove/core/notifications/` | push notifications on agent-state edges (broker + channels) | [notifications/CLAUDE.md](src/grove/core/notifications/CLAUDE.md) |
 | `src/grove/daemon/` | loopback FastAPI daemon (multi-repo, SSE) | [daemon/CLAUDE.md](src/grove/daemon/CLAUDE.md) |
 | `src/grove/client/` | transport-agnostic attach (local PTY / SSH) | [client/CLAUDE.md](src/grove/client/CLAUDE.md) |
@@ -58,6 +59,7 @@ Working memory is **distributed and recursive**: every component owns a nested `
 │  ├─ src/grove/core/contracts/CLAUDE.md   the wire boundary (Pydantic shapes that cross clients)
 │  ├─ src/grove/core/agents/CLAUDE.md       tool-agnostic agent introspection (adapters)
 │  ├─ src/grove/core/tickets/CLAUDE.md      branch-aware ticket providers (Gitea/GitHub/Linear)
+│  ├─ src/grove/core/issueops/CLAUDE.md      issue-comment events → workspace actions (grammar + routing)
 │  └─ src/grove/core/notifications/CLAUDE.md  push on agent-state edges (broker + channels)
 ├─ src/grove/daemon/CLAUDE.md          loopback HTTP daemon (multi-repo, SSE)
 ├─ src/grove/client/CLAUDE.md          transport-agnostic attach (local PTY / SSH)

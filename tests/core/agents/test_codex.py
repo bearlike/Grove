@@ -27,6 +27,8 @@ from grove.core.agents.codex import CodexAdapter, _RolloutParser
 FIXTURES = Path(__file__).parent / "fixtures"
 BASIC = FIXTURES / "codex_basic.jsonl"
 QUESTIONS = FIXTURES / "codex_questions.jsonl"
+FILE_EDIT = FIXTURES / "codex_file_edit.jsonl"
+TODO = FIXTURES / "codex_todo.jsonl"
 
 # The id + cwd the fixture's session_meta records in-line.
 BASIC_SID = "019dd5d5-60fb-7461-bd07-b6e8cf342726"
@@ -34,6 +36,12 @@ BASIC_CWD = Path("/home/dev/work/svc")
 
 # The questions fixture's session_meta id (same cwd as BASIC).
 QUESTIONS_SID = "019dd6aa-11aa-7461-bd07-aaaaaaaaaaaa"
+
+# The file-edit fixture's session_meta id (same cwd as BASIC).
+FILE_EDIT_SID = "019dd777-22bb-7461-bd07-bbbbbbbbbbbb"
+
+# The update_plan fixture's session_meta id (same cwd as BASIC).
+TODO_SID = "019dd888-33cc-7461-bd07-cccccccccccc"
 
 
 @pytest.fixture
@@ -167,6 +175,100 @@ def test_normal_function_call_still_renders_as_tool(
         ("tool", "exec_command"),
     ]
     assert all(e.question is None for e in turn.entries)
+
+
+# ─── file edits (apply_patch is a custom_tool_call, verified on-host) ────────
+
+
+def test_apply_patch_custom_tool_call_becomes_file_edit_entry(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Codex's ``apply_patch`` file editor is recorded as a ``custom_tool_call``
+    (NOT a ``function_call``) whose ``input`` is the raw ``*** Begin Patch`` …
+    ``*** End Patch`` body — a plain string, not a JSON ``arguments`` blob
+    (verified against real on-host rollouts, codex 0.125.0). It becomes a
+    structured ``role="file_edit"`` entry with the old/new bodies reconstructed
+    from the patch and the path recovered from the ``*** Update File:`` marker."""
+    _install(codex_home, FILE_EDIT_SID, FILE_EDIT)
+    (turn,) = adapter.read_turns(BASIC_CWD, FILE_EDIT_SID)
+    edits = [e for e in turn.entries if e.role == "file_edit"]
+    assert len(edits) == 1
+    entry = edits[0]
+    assert entry.text == "apply_patch Engines/audit.py"
+    assert entry.file_edit is not None
+    edit = entry.file_edit
+    assert edit.path == "Engines/audit.py"
+    # Removed lines land in old_text only; the added line in new_text only.
+    assert "if self._is_owner:" in edit.old_text
+    assert "if self._is_owner:" not in edit.new_text
+    assert "_scope_has_action" in edit.new_text
+    assert "_scope_has_action" not in edit.old_text
+    # A context line feeds both sides.
+    assert "def can_read_any(self):" in edit.old_text
+    assert "def can_read_any(self):" in edit.new_text
+
+
+def test_apply_patch_is_counted_as_a_tool_call(adapter: CodexAdapter, codex_home: Path) -> None:
+    """The visibility gap this closes: a ``custom_tool_call`` is now in the
+    ``is_tool_call`` set, so an ``apply_patch`` edit is counted (before it was
+    silently skipped — uncounted, unrendered). The fixture has exactly one
+    ``apply_patch`` plus one other custom tool → two tool calls."""
+    _install(codex_home, FILE_EDIT_SID, FILE_EDIT)
+    act = adapter.parse_activity(BASIC_CWD, FILE_EDIT_SID)
+    assert act.tool_calls == 2
+
+
+def test_non_edit_custom_tool_call_renders_as_generic_tool(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Widening ``is_tool_call`` to include ``custom_tool_call`` must not misfire
+    the file-edit branch for a non-edit custom tool: a name outside
+    ``FILE_EDIT_TOOL_NAMES`` still renders as a plain ``role="tool"`` entry.
+    (On-host only ``apply_patch`` is observed as a custom tool today, so
+    ``run_notebook`` here is a plausible stand-in guarding future custom tools.)"""
+    _install(codex_home, FILE_EDIT_SID, FILE_EDIT)
+    (turn,) = adapter.read_turns(BASIC_CWD, FILE_EDIT_SID)
+    generic = [e for e in turn.entries if e.role == "tool"]
+    assert [e.text for e in generic] == ["run_notebook"]
+    assert all(e.file_edit is None for e in generic)
+
+
+def test_apply_patch_full_turn_entry_shape(adapter: CodexAdapter, codex_home: Path) -> None:
+    """The whole turn reads as assistant reply → file_edit card → generic tool,
+    in transcript order — the file edit never displaces the surrounding entries."""
+    _install(codex_home, FILE_EDIT_SID, FILE_EDIT)
+    (turn,) = adapter.read_turns(BASIC_CWD, FILE_EDIT_SID)
+    assert turn.user_text == "Refactor the audit read-permission check"
+    assert [(e.role, e.text) for e in turn.entries] == [
+        ("assistant", "Patching the permission logic."),
+        ("file_edit", "apply_patch Engines/audit.py"),
+        ("tool", "run_notebook"),
+    ]
+
+
+def test_update_plan_becomes_a_todo_entry(adapter: CodexAdapter, codex_home: Path) -> None:
+    """Codex drives its plan through an ``update_plan`` ``function_call`` whose
+    ``arguments`` is a JSON string carrying ``plan[]`` with ``step``/``status``
+    (verified against a real on-host rollout — no ``content``, no ``activeForm``).
+    It renders ONE ``role="todo"`` entry with ``step`` mapped to ``content`` and
+    ``active_form`` left ``None``; before #184 it was a bare ``role="tool"``
+    "update_plan" and the plan was discarded."""
+    _install(codex_home, TODO_SID, TODO)
+    (turn,) = adapter.read_turns(BASIC_CWD, TODO_SID)
+    todos = [e for e in turn.entries if e.role == "todo"]
+    assert len(todos) == 1
+    assert todos[0].text == "1/3 done · Design a minimal KISS refactor"
+    assert todos[0].todo is not None
+    assert [(i.content, i.status, i.active_form) for i in todos[0].todo.items] == [
+        ("Review current orchestration code", "completed", None),
+        ("Design a minimal KISS refactor", "in_progress", None),
+        ("Implement and add tests", "pending", None),
+    ]
+    # The whole turn: assistant reply → todo card, in order; never a generic tool.
+    assert [(e.role, e.text) for e in turn.entries] == [
+        ("assistant", "Laying out a plan."),
+        ("todo", "1/3 done · Design a minimal KISS refactor"),
+    ]
 
 
 def test_status_working_when_a_turn_is_in_flight(adapter: CodexAdapter, codex_home: Path) -> None:
@@ -406,9 +508,209 @@ def test_codex_model_decoration_is_model_flag() -> None:
     assert get_adapter("codex").model_decoration("gpt-5.5") == ["--model", "gpt-5.5"]
 
 
+def test_codex_offline_decoration_disables_sandbox_network() -> None:
+    """#148: Codex has no standalone tool-disable flag — `tools_offline` pins
+    the sandbox to workspace-write with networking off instead."""
+    assert get_adapter("codex").offline_decoration() == [
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "sandbox_workspace_write.network_access=false",
+    ]
+
+
 def _install_text(codex_home: Path, sid: str, text: str) -> Path:
     target_dir = codex_home / "sessions" / "2026" / "04" / "28"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"rollout-2026-04-28T13-43-44-{sid}.jsonl"
     target.write_text(text, encoding="utf-8")
     return target
+
+
+# ─── the agentic-loop spine (#179) ──────────────────────────────────────────
+
+
+def test_read_messages_maps_roles_and_drops_metadata(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """The spine is the parse ``read_turns`` / ``digest`` project from: the
+    ``session_meta`` / ``turn_context`` metadata and the ``event_msg`` status /
+    token mirrors are dropped, the developer message and AGENTS.md preamble user
+    message are not turns, and each surviving native line becomes one message —
+    the real prompt, opaque reasoning (a ``thinking`` block), the assistant
+    message, the ``function_call`` (a ``tool_use`` block) and its output."""
+    _install(codex_home, BASIC_SID, BASIC)
+    messages = adapter.read_messages(BASIC_CWD, BASIC_SID)
+
+    assert [m.role for m in messages] == ["user", "assistant", "assistant", "assistant", "tool"]
+
+    # Codex reports usage per SESSION, not per message, and has no logical
+    # message id — those stay unset (never fabricated from the cumulative total).
+    assert all(m.usage is None for m in messages)
+    assert all(m.message_id is None for m in messages)
+
+    # Reasoning is opaque (encrypted_content) → a thinking block with no readable
+    # text, never the decrypted payload.
+    reasoning = messages[1].content[0]
+    assert reasoning.type == "thinking"
+    assert reasoning.text is None
+
+    # The function_call is a tool_use block carrying the correlating call_id.
+    tool_use = messages[3].content[0]
+    assert tool_use.type == "tool_use"
+    assert tool_use.tool_name == "exec_command"
+    assert tool_use.tool_use_id == "call_gdMNxpyvIKl8Fo6w2xOE65LH"
+
+    # Its output is a tool_result carrier resolving the same call_id.
+    output = messages[4]
+    assert output.role == "tool"
+    assert output.content[0].type == "tool_result"
+    assert output.content[0].tool_use_id == "call_gdMNxpyvIKl8Fo6w2xOE65LH"
+
+
+def test_read_messages_maps_apply_patch_custom_tool_call(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """``apply_patch`` is a ``custom_tool_call`` whose ``input`` is the raw patch
+    body (not JSON). The spine carries it as a ``tool_use`` block with the body
+    wrapped as ``{"input": <patch>}`` — the shape ``FileEdit.from_tool_call``
+    consumes — so the file-edit projection renders across the same seam."""
+    _install(codex_home, FILE_EDIT_SID, FILE_EDIT)
+    messages = adapter.read_messages(BASIC_CWD, FILE_EDIT_SID)
+
+    patch_blocks = [
+        b
+        for m in messages
+        for b in m.content
+        if b.type == "tool_use" and b.tool_name == "apply_patch"
+    ]
+    assert len(patch_blocks) == 1
+    assert patch_blocks[0].tool_input is not None
+    assert isinstance(patch_blocks[0].tool_input.get("input"), str)
+
+
+def test_read_turns_is_a_projection_of_read_messages(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """The turn projection reads the same spine: every ``user`` message's text
+    is a turn's ``user_text`` (one parse, many projections)."""
+    _install(codex_home, BASIC_SID, BASIC)
+    messages = adapter.read_messages(BASIC_CWD, BASIC_SID)
+    spine_prompts = [m.text() for m in messages if m.role == "user"]
+    turn_prompts = [t.user_text for t in adapter.read_turns(BASIC_CWD, BASIC_SID)]
+    assert turn_prompts == spine_prompts
+
+
+# ─── typed final-result extraction (#149) ───────────────────────────────────
+
+
+def test_final_result_incomplete_when_a_tool_result_trails_the_last_assistant(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """The BASIC fixture's spine tail is the ``tool`` result carrier, one past
+    the last ``assistant``-role message (the ``function_call``) — so
+    ``is_complete`` is ``False`` even though ``task_complete`` fired in the raw
+    rollout: that boundary lives only in ``event_msg`` records, which never
+    reach the spine (#179's dual-record rule), so the shape-only projection is
+    the honest best-effort answer here, not the event-accurate one."""
+    _install(codex_home, BASIC_SID, BASIC)
+    result = adapter.final_result(BASIC_CWD, BASIC_SID)
+    assert result is not None
+    assert result.is_complete is False
+
+
+def test_final_result_complete_on_a_trailing_plain_text_reply(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A tail assistant ``message`` with no following tool call is the
+    terminal shape — complete, carrying that reply's text."""
+    sid = "55555555-5555-7555-8555-555555555555"
+    rollout = (
+        '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+        '"payload":{"id":"' + sid + '","cwd":"/home/dev/work/done","model_provider":"openai"}}\n'
+        '{"timestamp":"2026-04-28T20:00:01.000Z","type":"response_item",'
+        '"payload":{"type":"message","role":"user",'
+        '"content":[{"type":"input_text","text":"add the endpoint"}]}}\n'
+        '{"timestamp":"2026-04-28T20:00:02.000Z","type":"response_item",'
+        '"payload":{"type":"message","role":"assistant",'
+        '"content":[{"type":"output_text","text":"Done, added it."}]}}\n'
+    )
+    _install_text(codex_home, sid, rollout)
+    result = adapter.final_result(Path("/home/dev/work/done"), sid)
+    assert result is not None
+    assert result.is_complete is True
+    assert result.text == "Done, added it."
+
+
+def test_final_result_none_before_any_assistant_reply(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """No assistant has replied yet — degrade to ``None``."""
+    sid = "66666666-6666-7666-8666-666666666666"
+    rollout = (
+        '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+        '"payload":{"id":"' + sid + '","cwd":"/home/dev/work/none","model_provider":"openai"}}\n'
+        '{"timestamp":"2026-04-28T20:00:01.000Z","type":"response_item",'
+        '"payload":{"type":"message","role":"user",'
+        '"content":[{"type":"input_text","text":"go"}]}}\n'
+    )
+    _install_text(codex_home, sid, rollout)
+    assert adapter.final_result(Path("/home/dev/work/none"), sid) is None
+
+
+# ─── latest-todo projection (#194) ──────────────────────────────────────────
+
+
+def test_latest_todo_from_an_update_plan_call(adapter: CodexAdapter, codex_home: Path) -> None:
+    """``update_plan`` (Codex's ``plan[]``/``step``/``status`` shape, no
+    ``content``/``activeForm``) is whole-list-per-call, same as Claude's
+    ``TodoWrite`` — the provider-neutral projection reads it straight
+    through with no Task-system fold involved."""
+    _install(codex_home, TODO_SID, TODO)
+    todo = adapter.latest_todo(BASIC_CWD, TODO_SID)
+    assert todo is not None
+    assert [(i.content, i.status, i.active_form) for i in todo.items] == [
+        ("Review current orchestration code", "completed", None),
+        ("Design a minimal KISS refactor", "in_progress", None),
+        ("Implement and add tests", "pending", None),
+    ]
+
+
+def test_latest_todo_none_before_any_todo_call(adapter: CodexAdapter, codex_home: Path) -> None:
+    """The BASIC fixture never calls ``update_plan`` — degrade to ``None``."""
+    _install(codex_home, BASIC_SID, BASIC)
+    assert adapter.latest_todo(BASIC_CWD, BASIC_SID) is None
+
+
+# ─── session controls (#178): codex analog (prompts + config.toml MCP) ──────
+
+
+def test_session_controls_enumerates_prompts_and_mcp(
+    adapter: CodexAdapter, codex_home: Path, tmp_path: Path
+) -> None:
+    prompts = codex_home / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "plan.md").write_text("plan prompt", encoding="utf-8")
+    (prompts / "ship.md").write_text("ship prompt", encoding="utf-8")
+    (codex_home / "config.toml").write_text(
+        '[mcp_servers.gitea]\ncommand = "x"\n[mcp_servers.fs]\ncommand = "y"\n',
+        encoding="utf-8",
+    )
+
+    controls = adapter.session_controls(tmp_path / "repo", "sid")
+
+    assert {c.name for c in controls.commands} == {"plan", "ship"}
+    assert all(c.scope == "user" for c in controls.commands)
+    assert {c.name for c in controls.mcp_servers} == {"gitea", "fs"}
+    assert controls.skills == ()  # codex has no skills concept
+
+
+def test_session_controls_empty_and_tolerant(
+    adapter: CodexAdapter, codex_home: Path, tmp_path: Path
+) -> None:
+    # No prompts dir + malformed config.toml → honest empty, never raises.
+    (codex_home).mkdir(parents=True, exist_ok=True)
+    (codex_home / "config.toml").write_text("not = [valid toml", encoding="utf-8")
+    controls = adapter.session_controls(tmp_path / "repo", "sid")
+    assert controls.commands == ()
+    assert controls.mcp_servers == ()

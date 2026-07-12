@@ -119,6 +119,39 @@ class Placement(StrEnum):
     rebuild). Recover a vanished session with respawn; stop it with kill."""
 
 
+@dataclass(slots=True, frozen=True)
+class TranscriptContext:
+    """Optional per-workspace override for reading a transcript recorded under
+    a different runtime context than the host (#147) — the container-launch
+    case: the agent's actual cwd and config dir, as its own transcript records
+    them, are never the host's ``agent_cwd`` / ambient ``CLAUDE_CONFIG_DIR``/
+    ``CODEX_HOME``, so a host-side read with no override searches the wrong
+    folder name (``encode_cwd``) under the wrong config-dir cascade entirely.
+
+    Carries only what a *read* needs — the adapters' own parsing and env
+    resolution are unchanged (the provider-boundary rule, #147): a caller
+    scopes the matching env var to ``config_dir`` for one read call, and
+    substitutes ``agent_cwd`` wherever the workspace's own ``agent_cwd``/
+    ``scan_cwds`` would otherwise be passed in. ``agent_cwd`` is matched only
+    as an opaque string against each transcript record's own ``cwd`` field —
+    it never needs to resolve as a real path on this host.
+
+    ``WorkspaceState.transcript_context`` defaults to ``None`` (no override,
+    the historical worktree/host shape) so every legacy record and every
+    non-container workspace reads byte-for-byte as before. Nothing populates
+    a non-``None`` value yet — this lands the read-side mechanism; a future
+    container-transcript-mount feature is what would set one at create time.
+    """
+
+    config_dir: str
+    """Host directory standing in for the runtime's CLAUDE_CONFIG_DIR/
+    CODEX_HOME (e.g. the host side of a bind mount)."""
+
+    agent_cwd: str
+    """The cwd string the transcript itself records (e.g. a
+    container-internal path)."""
+
+
 @dataclass(slots=True)
 class WorkspaceState:
     """Persisted runtime record for one workspace."""
@@ -189,6 +222,12 @@ class WorkspaceState:
     # explicitly by the store. Defaults to an empty list so legacy records load
     # without migration — the branch_provenance/placement precedent.
     ticket_refs: list[TicketRef] = field(default_factory=list)
+    # Optional override for reading this workspace's transcript from a
+    # different runtime context than the host (#147) — see TranscriptContext.
+    # None (the default) means every transcript read falls back to agent_cwd/
+    # scan_cwds and the ambient config-dir env exactly as before; legacy
+    # records load without migration, same precedent as agent_kind/placement.
+    transcript_context: TranscriptContext | None = None
 
     @property
     def agent_cwd(self) -> Path:
@@ -220,6 +259,20 @@ class WorkspaceState:
         base = Path(self.worktree_path)
         agent = self.agent_cwd
         return (agent,) if agent == base else (agent, base)
+
+    @property
+    def transcript_scan_cwds(self) -> tuple[Path, ...]:
+        """The cwd(s) a transcript read should scan for this workspace (#147).
+
+        ``scan_cwds`` unless ``transcript_context`` overrides it — a
+        container-recorded cwd can never equal either host path (agent_cwd or
+        the worktree root), so the override REPLACES the union rather than
+        extending it: there is exactly one true cwd for a session recorded
+        elsewhere. No override (the default) is byte-for-byte ``scan_cwds``.
+        """
+        if self.transcript_context is not None:
+            return (Path(self.transcript_context.agent_cwd),)
+        return self.scan_cwds
 
     def adopts_session(
         self, born_at: datetime | None, *, live_here_at: datetime | None = None

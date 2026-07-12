@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from grove.core import tmux as tmux_mod
+from grove.core.agents.claude_code import ClaudeCodeAdapter
+from grove.core.agents.codex import CodexAdapter
 from grove.core.config import GroveConfig
 from grove.core.errors import TmuxError
 from grove.core.tmux import AttachInstruction
@@ -57,7 +59,46 @@ def _offline_codex_models(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_transcript_caches() -> None:
+    """Each test starts with empty transcript caches.
+
+    The incremental transcript cache + result memo are module-level singletons
+    (they must outlive adapter instances in the daemon), so without a reset
+    they'd accumulate state across the whole suite — and a same-size same-ns
+    rewrite of a fixture path could read stale. Clearing is the adapters' own
+    public ``clear_caches`` seam, not a private patch.
+    """
+    ClaudeCodeAdapter.clear_caches()
+    CodexAdapter.clear_caches()
+
+
 # ─── on-disk paths redirected to a tmpdir ───────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _isolated_agent_hook_paths(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-redirect the hook-settings + sidecar dirs so every test is sandboxed.
+
+    ``HooksConfig.enabled`` defaults ``True`` since #171, so an unconfigured
+    ``GroveConfig()`` now writes real files on every ``claude_code``
+    ``manager.create()``/``resume()``/``respawn()`` — the hook-only settings
+    file AND the ingest-token sibling `ClaudeHook.ensure_ingest_token`
+    persists — unless redirected. Autouse (unlike the opt-in `tmp_state_dir`
+    below) because the blast radius is every test in the suite, not just the
+    ones that already know to ask for isolation; a test that wants its OWN
+    path (e.g. to assert the file's contents) still wins by monkeypatching
+    the same attrs afterward — `monkeypatch.setattr` on an already-patched
+    attribute just overwrites, last call wins.
+    """
+    base = tmp_path_factory.mktemp("agent-hook-state")
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: base / "agent-sidecars")
+    monkeypatch.setattr(
+        "grove.core.paths.agent_hooks_settings_path",
+        lambda: base / "claude-hooks-settings.json",
+    )
 
 
 @pytest.fixture
@@ -112,7 +153,7 @@ class FakeTmux:
 
     def __init__(self) -> None:
         self.sessions: set[str] = set()
-        self.layouts: list[tuple[str, str]] = []  # (session_name, agent_name)
+        self.layouts: list[tuple[str, str]] = []  # (session_name, command)
         # session_name → cwd the session was created in, and → worktree the
         # layout windows were rooted in. Lets nested-cwd tests assert the agent
         # session starts in the project subdir while the worktree/branch anchor
@@ -153,10 +194,12 @@ class FakeTmux:
         # and that refusal paths never reach the injection seam at all.
         self.sent_keys: list[tuple[str, list[Any]]] = []
 
-    def send_text(self, target: str, text: str) -> None:
+    def send_text(self, target: str, text: str, *, settle_ms: int = 200) -> None:
+        del settle_ms  # the fake has no paste-window race to guard against
         self.sent_texts.append((target, text))
 
-    def send_keys(self, target: str, ops: Any) -> None:
+    def send_keys(self, target: str, ops: Any, *, settle_ms: int = 200) -> None:
+        del settle_ms
         self.sent_keys.append((target, list(ops)))
 
     def has_session(self, name: str) -> bool:
@@ -182,13 +225,15 @@ class FakeTmux:
         *,
         cfg: GroveConfig,
         worktree: Path,
-        agent: Any,
-        launch_decoration: list[str] | None = None,
+        command: str,
+        decoration: Sequence[str] = (),
+        env: Mapping[str, str] | None = None,
+        env_unset: Sequence[str] = (),
     ) -> None:
         self.layout_worktrees[session_name] = worktree
-        self.layouts.append((session_name, agent.name))
-        self.launch_decorations.append((session_name, list(launch_decoration or [])))
-        self.launch_envs.append((session_name, dict(agent.env), tuple(agent.env_unset)))
+        self.layouts.append((session_name, command))
+        self.launch_decorations.append((session_name, list(decoration)))
+        self.launch_envs.append((session_name, dict(env or {}), tuple(env_unset)))
         # Mirrors real `build_workspace_layout`: rename window 0 → shell,
         # add an `agent` window. Tests that want a session reorganized
         # externally (no `agent`, weirdly named windows, etc.) overwrite

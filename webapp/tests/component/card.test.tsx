@@ -245,6 +245,36 @@ describe("WorkspaceCard (calm ADE card, repo-grouped)", () => {
     expect(stat("tokens in")).toHaveAttribute("title", "1.5k tokens in");
   });
 
+  it("meta: the live token block (#181) replaces the cumulative stats while generating, hidden until then", () => {
+    // No `live` block on the wire yet (pre-#177 daemon / no fast side-channel):
+    // the cumulative tokens-in/out stats render exactly as before.
+    const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
+    expect(screen.queryByTestId("live-token-flow")).toBeNull();
+    expect(stat("tokens in")).toHaveTextContent("1.5k");
+
+    // Once a live tier reports, the same slot swaps to the in-flight readout
+    // and the cumulative stats step aside — never both at once.
+    rerenderWrapped(
+      rerender,
+      <WorkspaceCard
+        activity={activity(
+          "working",
+          {},
+          { live: { tokens_in: 42, tokens_out: 7, generating_since: "2026-06-08T10:00:30Z" } },
+        )}
+      />,
+    );
+    const live = screen.getByTestId("live-token-flow");
+    expect(live).toHaveTextContent("42");
+    expect(live).toHaveTextContent("7");
+    expect(stat("tokens in")).toBeNull();
+
+    // Settling back to idle (no live tier) restores the cumulative stats.
+    rerenderWrapped(rerender, <WorkspaceCard activity={activity("working")} />);
+    expect(screen.queryByTestId("live-token-flow")).toBeNull();
+    expect(stat("tokens in")).toHaveTextContent("1.5k");
+  });
+
   it("meta: a sessionless card suppresses every activity stat", () => {
     r(<WorkspaceCard activity={activity("idle", { sessions: [] })} />);
     expect(stat("turns")).toBeNull();

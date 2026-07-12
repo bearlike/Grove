@@ -1,0 +1,40 @@
+name: Grove issue-ops (dogfood)
+
+# Grove's own issue-ops caller. `created` only, never `edited` — an edited-comment
+# trigger is a silent re-fire hole (tickets/CLAUDE.md verdict).
+on:
+  issue_comment:
+    types: [created]
+
+# Restricted-mode Gitea (>=1.26.0) 403s an undeclared `issues: write`; declare
+# both up front even though older instances only parse-and-ignore this block.
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  forward:
+    name: Forward triggered comment to Grove
+    # Fast, case-sensitive pre-filter to skip spinning up a runner on obviously
+    # unrelated comments; the action's own guard re-checks case-insensitively.
+    if: contains(github.event.comment.body, '@grove')
+    # A default docker act_runner job can't reach the daemon's host loopback —
+    # this needs the dedicated :host-schema runner (tickets/CLAUDE.md verdict).
+    runs-on: grove-issueops
+    steps:
+      - name: Require GROVE_DAEMON_URL
+        if: vars.GROVE_DAEMON_URL == ''
+        run: |
+          echo "::error::vars.GROVE_DAEMON_URL is not set on this repo — configure it in Settings > Actions > Variables"
+          exit 1
+
+      # Local composite action lives in this same repo, so a relative
+      # `uses: ./actions/issue-ops` needs the checkout first.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run grove-issue-ops
+        uses: ./actions/issue-ops
+        with:
+          daemon-url: ${{ vars.GROVE_DAEMON_URL }}
+          daemon-token: ${{ secrets.GROVE_DAEMON_TOKEN }}

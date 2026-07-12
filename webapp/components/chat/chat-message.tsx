@@ -10,12 +10,14 @@ import {
 } from "@assistant-ui/react";
 import { Response } from "@/components/ai-elements/response";
 import { ToolGroup } from "@/components/ai-elements/tool";
+import { FileEditCard } from "@/components/chat/file-edit-view";
 import { QuestionCard } from "@/components/workspace/question-card";
 import { RoleLabel } from "@/components/shared/role-label";
 import { cn } from "@/lib/utils";
 import {
   CHAT_DATA_NAME,
   type ChatItem,
+  type FileEditPartData,
   type NotePartData,
   type NotificationPartData,
   type QuestionPartData,
@@ -91,7 +93,11 @@ export function GroveMessage() {
           <MessagePrimitive.Parts components={{ Text: AssistantTextPart }} />
         </div>
         {copyText && (
-          <div className="-mb-7.5 min-h-7.5 px-2 pt-1.5">
+          // Reserve the action-bar height then pull MOST of it back, so at rest
+          // the copy button adds only a small gap (not a full empty row) yet the
+          // revealed button on hover stays within the reply's footprint and
+          // never overlaps the next part (paired with the 20px intra-turn gap).
+          <div className="-mb-5 min-h-7.5 px-2 pt-1.5">
             <CopyButton text={copyText} />
           </div>
         )}
@@ -108,12 +114,16 @@ export function GroveMessage() {
 }
 
 /** Top-margin tier for a message at `index`, keyed on the three-tier §4.6
- * rhythm. The first message never gets one (the viewport already pads). */
+ * rhythm. The first message never gets one (the viewport already pads). The
+ * intra-turn tier is 20px (not 12) so substantial parts — a file-edit diff
+ * card especially — get comfortable separation, and so the agent reply's
+ * hover copy button (which reveals ~24px below the prose) clears the next
+ * part instead of overlapping it (paired with the tamed copy reserve below). */
 function turnSpacing(kind: ChatItem["kind"], role: string, index: number): string | undefined {
   if (index === 0) return undefined;
   if (role === "user" || kind === "continuation") return "mt-14"; // 56px turn boundary
   if (kind === "message") return "mt-6"; // 24px inter-message (agent reply)
-  return "mt-3"; // 12px intra-turn part
+  return "mt-5"; // 20px intra-turn part
 }
 
 // ─── text parts ──────────────────────────────────────────────────────────────
@@ -164,6 +174,11 @@ const QuestionPart: DataMessagePartComponent = ({ data }) => (
   </div>
 );
 
+/** A file mutation — an always-visible inline diff, never the tool accordion. */
+const FileEditPart: DataMessagePartComponent = ({ data }) => (
+  <FileEditCard {...(data as FileEditPartData)} />
+);
+
 /** A resumed/compacted session's head — a quiet marker, its turn boundary. */
 const ContinuationPart: DataMessagePartComponent = () => (
   <p className="text-center text-xs text-muted-foreground">continued session</p>
@@ -174,6 +189,7 @@ const DATA_RENDERERS: Record<string, DataMessagePartComponent> = {
   [CHAT_DATA_NAME.note]: NotePart,
   [CHAT_DATA_NAME.notification]: NotificationPart,
   [CHAT_DATA_NAME.question]: QuestionPart,
+  [CHAT_DATA_NAME.fileEdit]: FileEditPart,
   [CHAT_DATA_NAME.continuation]: ContinuationPart,
 };
 

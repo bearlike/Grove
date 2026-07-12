@@ -67,8 +67,19 @@ class FakeGroveClient(GroveClient):
         self.peek_view: WorkspacePeekView = make_peek()
         self.send_message_error: Exception | None = None
 
-    async def list_workspaces(self) -> list[WorkspaceStateView]:
-        self.calls.append(("list_workspaces", {}))
+    async def list_workspaces(
+        self,
+        *,
+        repo: Path | None = None,
+        ticket_provider: str | None = None,
+        ticket_id: str | None = None,
+    ) -> list[WorkspaceStateView]:
+        self.calls.append(
+            (
+                "list_workspaces",
+                {"repo": repo, "ticket_provider": ticket_provider, "ticket_id": ticket_id},
+            )
+        )
         return [make_state("ws-1"), make_state("ws-2")]
 
     async def get_workspace(self, ws_id: str) -> WorkspaceStateView:

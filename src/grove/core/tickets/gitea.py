@@ -7,6 +7,16 @@ user's assigned issues across repos (scoped down to ``owner/repo`` client-side);
 ``number`` (the canonical key), ``title``, ``html_url``, ``state``
 (``open``/``closed``), and ``assignees`` — normalized into the neutral
 :class:`TicketRef` here, never reshaped for semantics.
+
+Comment I/O (#193): ``GET/POST /repos/{owner}/{repo}/issues/{index}/comments``
+lists/creates; ``PATCH /repos/{owner}/{repo}/issues/comments/{id}`` edits by
+comment id alone (Gitea comment ids are unique repo-wide, no issue index
+needed); ``POST .../issues/comments/{id}/reactions`` with ``{"content": ...}``
+reacts. A comment payload carries ``id``, ``body``, ``user``, ``created_at`` —
+the same shape GitHub's comments API returns, but normalized here rather than
+shared with :mod:`github`, matching this file's existing per-provider
+``_to_ref`` precedent (an adapter owns its own JSON shape even when two
+trackers happen to overlap).
 """
 
 from __future__ import annotations
@@ -17,7 +27,12 @@ from typing import Any, ClassVar
 import httpx
 
 from grove.core.config import GiteaTicketConfig
-from grove.core.contracts.tickets import TicketProviderName, TicketRef
+from grove.core.contracts.tickets import (
+    TicketComment,
+    TicketProviderName,
+    TicketReactionKind,
+    TicketRef,
+)
 from grove.core.errors import TicketProviderError
 from grove.core.tickets.provider import NumberTicketProvider
 
@@ -74,17 +89,47 @@ class GiteaProvider(NumberTicketProvider):
         return refs
 
     def get_ticket(self, ticket_id: str) -> TicketRef:
-        if not (self._owner and self._repo):
-            raise TicketProviderError(
-                "gitea provider needs owner+repo configured to fetch a ticket by id"
-            )
-        path = f"/api/v1/repos/{self._owner}/{self._repo}/issues/{ticket_id}"
+        owner, repo = self._scoped("fetch a ticket by id")
+        path = f"/api/v1/repos/{owner}/{repo}/issues/{ticket_id}"
         payload = self._request("GET", path)
         if not isinstance(payload, dict):
             raise TicketProviderError(f"gitea returned an unexpected shape for issue {ticket_id}")
         return self._to_ref(payload)
 
+    # ─── comment I/O (#193) ─────────────────────────────────────────────────
+
+    def list_comments(self, ticket_id: str) -> list[TicketComment]:
+        owner, repo = self._scoped("list comments")
+        path = f"/api/v1/repos/{owner}/{repo}/issues/{ticket_id}/comments"
+        payload = self._request("GET", path)
+        comments = payload if isinstance(payload, list) else []
+        return [self._to_comment(c) for c in comments if isinstance(c, dict)]
+
+    def post_comment(self, ticket_id: str, body: str) -> TicketComment:
+        owner, repo = self._scoped("post a comment")
+        path = f"/api/v1/repos/{owner}/{repo}/issues/{ticket_id}/comments"
+        payload = self._request("POST", path, json_body={"body": body})
+        if not isinstance(payload, dict):
+            raise TicketProviderError("gitea returned an unexpected shape for a posted comment")
+        return self._to_comment(payload)
+
+    def edit_comment(self, comment_id: str, body: str) -> None:
+        owner, repo = self._scoped("edit a comment")
+        path = f"/api/v1/repos/{owner}/{repo}/issues/comments/{comment_id}"
+        self._request("PATCH", path, json_body={"body": body})
+
+    def react(self, comment_id: str, reaction: TicketReactionKind) -> None:
+        owner, repo = self._scoped("react to a comment")
+        path = f"/api/v1/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"
+        self._request("POST", path, json_body={"content": reaction})
+
     # ─── shape normalization ────────────────────────────────────────────────
+
+    def _scoped(self, op: str) -> tuple[str, str]:
+        """(owner, repo) for a per-repo endpoint — raises if either is unset."""
+        if not (self._owner and self._repo):
+            raise TicketProviderError(f"gitea provider needs owner+repo configured to {op}")
+        return self._owner, self._repo
 
     def _to_ref(self, issue: dict[str, Any]) -> TicketRef:
         return TicketRef(
@@ -114,6 +159,16 @@ class GiteaProvider(NumberTicketProvider):
         if isinstance(repo, dict) and isinstance(repo.get("full_name"), str):
             return str(repo["full_name"])
         return None
+
+    @staticmethod
+    def _to_comment(comment: dict[str, Any]) -> TicketComment:
+        user = comment.get("user")
+        return TicketComment(
+            id=str(comment.get("id", "")),
+            body=comment.get("body") or "",
+            author=user.get("login") if isinstance(user, dict) else None,
+            created_at=comment.get("created_at") or None,
+        )
 
 
 __all__ = ["GiteaProvider"]

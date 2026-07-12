@@ -5,25 +5,34 @@ Polling `stop_reason` + tmux activity (the MVP, #14) cannot cleanly separate
 Code **hooks** push exact lifecycle events; the Grove hook turns each into a tiny
 sidecar file the ``ActivityService`` reads to *override* the polled status.
 
-This is opt-in and degrades gracefully: with no hook installed there is no
-sidecar and the polled blend stands unchanged. Robust by design — unlike peer
-tools that string-match the CLI's prompt copy (which breaks when Anthropic
-rewords it), the hook event names are a stable contract.
+This is on by default (#171; opt-in through #18) and degrades gracefully: with
+no hook installed there is no sidecar and the polled blend stands unchanged.
+Robust by design — unlike peer tools that string-match the CLI's prompt copy
+(which breaks when Anthropic rewords it), the hook event names are a stable
+contract.
 
-Three atomic pieces live here:
+Four atomic pieces live here:
 
-- :class:`HookRecord` — one session's pushed status (the on-disk shape).
+- :class:`HookRecord` — one session's pushed status (the on-disk shape; the
+  offline ground truth `ActivityService` always reads first).
 - :class:`ClaudeHook` — the pure event→state mapping + the read/write/install
   mechanism. Stateless; all methods are static/class methods over the record.
 - the rendered settings dict (``ClaudeHook.settings``) Grove passes to
   ``claude --settings`` so the hook installs *without* touching the user's own
   ``.claude/settings.json`` (uninstall = stop passing the flag).
+- the daemon **PUSH path** (#171): every registered event now ALSO carries a
+  native Claude Code ``{"type": "http"}`` handler that POSTs straight to the
+  daemon's ingest route (`grove.daemon.app`), so the dashboard refreshes the
+  instant the hook fires instead of waiting out the ~2s poll tick. It never
+  replaces the sidecar file — that stays the offline truth a restarted daemon
+  (or a client with no live connection) still reads correctly.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -75,6 +84,46 @@ _QUESTION_CLEAR_EVENTS: Final[frozenset[str]] = frozenset(
 # polling cannot see, so expiring it into a polled guess re-creates the
 # "permission prompt shows as working" bug it exists to fix.
 DEFAULT_SIDECAR_MAX_AGE_SECONDS: Final = 300
+
+# Registered ALONGSIDE the state-mapped events (#171) purely so the daemon PUSH
+# path (below) fires on sub-agent lifecycle too — a finishing sub-agent still
+# changes the transcript (worth an immediate refresh) even though it never
+# flips the MAIN thread's state (`state_for` returns `None` for both; the
+# sidecar-write side is unaffected).
+_SUBAGENT_EVENTS: Final[tuple[str, ...]] = ("SubagentStart", "SubagentStop")
+
+# The three sub-kinds Claude Code's ``Notification`` event covers: a tool
+# permission ask, the "still there?" idle nudge, and the general
+# needs-your-input case. `state_for` keys off the bare event name regardless
+# (all three collapse to BLOCKED — the one polling-invisible signal, #18);
+# this tuple only widens the *registration* in `settings()` so each is its own
+# matcher entry rather than one untyped catch-all (#171).
+_NOTIFICATION_MATCHERS: Final[tuple[str, ...]] = (
+    "permission_prompt",
+    "idle_prompt",
+    "agent_needs_input",
+)
+
+# The daemon route this module's http hook entries POST to (#171). A module
+# constant, not a literal repeated in both `settings()` and `grove.daemon.app`
+# — the daemon imports it to register the exact same path so the two can't
+# drift.
+HOOK_INGEST_ROUTE: Final = "/hooks/agent-events"
+
+# The daemon binds loopback-only on this port by default (`grove daemon serve`,
+# `client/backend.py::BackendConfig.daemon_port` — same literal, not a new
+# policy). A custom `--port` breaks this guess; that's fine, the http push is
+# best-effort on top of the sidecar file, never the only path to a correct
+# status.
+DEFAULT_DAEMON_LOOPBACK_URL: Final = "http://127.0.0.1:7421"
+
+# Sibling of the hook-only settings file (same directory, same lifecycle: both
+# are (re)written by `_ensure_hook_settings` on every launch). NOT the
+# `SessionStore` pairing bearer every other daemon route trusts — that needs a
+# human to click approve, and this hook fires dozens of times per session with
+# nobody watching, so `ClaudeHook.ensure_ingest_token` mints and shares a
+# same-host secret file instead.
+_INGEST_TOKEN_FILENAME: Final = "hook-ingest.token"
 
 
 @dataclass(slots=True, frozen=True)
@@ -418,16 +467,82 @@ class ClaudeHook:
         return HookRecord.from_json(data)
 
     @staticmethod
-    def settings(command: str = COMMAND) -> dict[str, Any]:
+    def ensure_ingest_token() -> str:
+        """Get-or-create the same-host secret the http hook and the daemon's
+        ingest route both trust (#171).
+
+        Deliberately NOT the multi-device `SessionStore` pairing bearer every
+        other daemon route uses — pairing needs a human to approve a
+        challenge, and this fires on every hook event with nobody watching.
+        Persisted next to the hook-only settings file (same directory, same
+        best-effort write discipline as `ClaudeHook.settings`/
+        `WorkspaceManager._ensure_hook_settings`) so both the CLI-rendered
+        settings and the daemon process resolve the identical value without
+        threading it through any call site. An unwritable dir still returns a
+        fresh in-memory token — the caller degrades to "this request's token
+        won't match", never a raise.
+        """
+        path = paths.agent_hooks_settings_path().parent / _INGEST_TOKEN_FILENAME
+        try:
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+        except OSError:
+            pass
+        token = secrets.token_urlsafe(32)
+        try:
+            paths.ensure_dir(path.parent)
+            path.write_text(token, encoding="utf-8")
+            path.chmod(0o600)
+        except OSError as exc:
+            logger.debug("could not persist hook ingest token: {}", exc)
+        return token
+
+    @staticmethod
+    def settings(
+        command: str = COMMAND, *, daemon_url: str | None = DEFAULT_DAEMON_LOOPBACK_URL
+    ) -> dict[str, Any]:
         """The Claude Code settings dict that installs the Grove hook on every event.
 
         Hook-only: Grove writes this to its own file and passes it via
         ``claude --settings``, so the user's ``.claude/settings.json`` is never
-        touched. Every tracked event routes to the one ``command`` (it reads the
-        session id from stdin), so a single entry per event covers all sessions.
+        touched.
+
+        Two independent handlers per event (#171): the ``command`` handler is
+        unchanged since #18 (writes the offline-truth sidecar); ``daemon_url``
+        (a mechanism default, not None) adds an ``http`` handler that POSTs the
+        SAME event straight to the daemon's ingest route so the dashboard can
+        refresh immediately instead of waiting out the poll tick. Claude Code
+        dispatches every registered handler independently, so the http POST
+        can never add latency to the command handler or the agent's own turn
+        — the alternative (``grove agent-hook`` making the HTTP call itself,
+        synchronously, before it exits) would. Pass ``daemon_url=None`` to get
+        the pre-#171 command-only shape (the test seam).
+
+        Registers a WIDER event set than the state map: `_SUBAGENT_EVENTS`
+        never move the sidecar's state (`state_for` returns ``None`` for
+        both — a sub-agent lifecycle never flips the main thread) but still
+        deserve a push refresh, since a finishing sub-agent changes the
+        transcript. ``Notification`` is split into its `_NOTIFICATION_MATCHERS`
+        sub-kinds as separate matcher entries rather than one catch-all —
+        `state_for` still keys off the bare event name (all three collapse to
+        BLOCKED); the split is registration-only.
         """
-        hook_entry = [{"hooks": [{"type": "command", "command": command}]}]
-        return {"hooks": dict.fromkeys(_STATE_BY_EVENT, hook_entry)}
+        handlers: list[dict[str, Any]] = [{"type": "command", "command": command}]
+        if daemon_url:
+            handlers.append(
+                {
+                    "type": "http",
+                    "url": f"{daemon_url}{HOOK_INGEST_ROUTE}",
+                    "headers": {"Authorization": f"Bearer {ClaudeHook.ensure_ingest_token()}"},
+                }
+            )
+        catch_all = [{"hooks": handlers}]
+        hooks: dict[str, Any] = dict.fromkeys((*_STATE_BY_EVENT, *_SUBAGENT_EVENTS), catch_all)
+        hooks["Notification"] = [
+            {"matcher": matcher, "hooks": handlers} for matcher in _NOTIFICATION_MATCHERS
+        ]
+        return {"hooks": hooks}
 
 
 def run_hook_from_stdin() -> int:

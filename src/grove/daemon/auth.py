@@ -14,6 +14,7 @@ Error envelope matches the rest of the daemon: ``{"detail": {"error":
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import UUID
@@ -26,6 +27,7 @@ from starlette.status import (
     HTTP_429_TOO_MANY_REQUESTS,
 )
 
+from grove.core.agents.hook import ClaudeHook
 from grove.core.auth import Session, SessionStore
 from grove.core.contracts.auth import (
     PairingChallengeView,
@@ -105,6 +107,31 @@ def make_require_session(
             ) from exc
 
     return require_session
+
+
+def make_require_hook_token(*, enabled: bool) -> Callable[[Request], Awaitable[None]]:
+    """Build the hook-ingest route's auth dependency (#171).
+
+    A same-host shared secret (:meth:`ClaudeHook.ensure_ingest_token`), never
+    the `SessionStore` pairing bearer `require_session` checks — pairing needs
+    a human to approve a challenge, and the native Claude Code http hook fires
+    on every tracked event with nobody watching. ``enabled=False`` mirrors
+    `make_require_session`'s test-only escape hatch (`cfg.auth.enabled`), so
+    the same config flag gates both auth mechanisms together.
+    """
+
+    async def require_hook_token(request: Request) -> None:
+        if not enabled:
+            return
+        header = request.headers.get("authorization", "")
+        token = header[len("Bearer ") :].strip() if header.lower().startswith("bearer ") else ""
+        if not token or not secrets.compare_digest(token, ClaudeHook.ensure_ingest_token()):
+            raise HTTPException(
+                HTTP_401_UNAUTHORIZED,
+                _envelope("auth_invalid", "missing or invalid hook token"),
+            )
+
+    return require_hook_token
 
 
 _SENTINEL_SESSION = Session(
@@ -211,5 +238,6 @@ def build_auth_router(
 
 __all__ = [
     "build_auth_router",
+    "make_require_hook_token",
     "make_require_session",
 ]

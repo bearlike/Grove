@@ -13,9 +13,12 @@ from pathlib import Path
 from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
+    FinalResult,
     OrderedDigest,
+    SessionControls,
     SessionSummary,
     SessionTurn,
+    TodoList,
 )
 
 
@@ -34,6 +37,14 @@ class GenericAdapter:
         # A bare shell has no model concept — ignore the request, run as named.
         del model
         return []
+
+    def offline_decoration(self) -> list[str]:
+        # A bare shell has no tool concept, so no flag to gate — no-op.
+        return []
+
+    def telemetry_env(self) -> dict[str, str]:
+        # A bare shell has no telemetry to enable — no-op.
+        return {}
 
     def available_models(self, command: str) -> tuple[str, ...]:
         # No model concept, so nothing to offer a picker.
@@ -71,3 +82,18 @@ class GenericAdapter:
     def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
         del cwd, session_id
         return OrderedDigest()
+
+    def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
+        # No transcript format to project a terminal outcome from.
+        del cwd, session_id
+        return None
+
+    def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
+        # No transcript format to project a todo/checklist state from.
+        del cwd, session_id
+        return None
+
+    def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
+        # A bare shell has no slash-command / skill / MCP surface to enumerate.
+        del cwd, session_id
+        return SessionControls.empty()

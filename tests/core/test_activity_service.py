@@ -58,7 +58,13 @@ def _init_repo(path: Path) -> Path:
 
 @pytest.fixture
 def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegistry]:
-    cfg = GroveConfig.model_validate({"tmux": {"session_prefix": "test-"}})
+    # hooks explicitly OFF: this fixture predates #171's default-True flip and
+    # several tests below (e.g. test_extras_discovered_without_hooks_enabled)
+    # exist specifically to pin the hooks-DISABLED behavior — pin it here so
+    # the flip in config.py can't silently change what this file exercises.
+    cfg = GroveConfig.model_validate(
+        {"tmux": {"session_prefix": "test-"}, "hooks": {"enabled": False}}
+    )
     store = JsonWorkspaceStore(path=tmp_path / "state.json")
     registry = RepoRegistry(cfg=cfg, store=store)
     return ActivityService(registry=registry), registry
@@ -277,6 +283,72 @@ def test_snapshot_parses_real_transcript(
     assert primary.current_task == "do the thing"
     # has_transcript True + transcript WAITING (end_turn) → WAITING.
     assert primary.state is AgentActivityState.WAITING
+
+
+def test_snapshot_itemizes_fleet_and_excludes_it_from_attention(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The dashboard card's ``sessions`` list itemizes a sub-agent fleet member
+    (#173) alongside the primary — not just a bare ``active_subagents`` int —
+    with the parent/child link set. A finished sub-agent settles to WAITING
+    (an ``ATTENTION_STATE`` for a real human-facing session) but must NOT bubble
+    into the workspace's own ``needs_attention``: it is itemized detail, not a
+    second conversation waiting on the human."""
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="fleet"))
+    worktree = Path(state.worktree_path)
+    sid = state.agent_session_id
+    assert sid is not None
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    # Primary is still mid tool-loop (spawned an Agent, no result yet) → WORKING,
+    # never an attention state — so any attention-flagging here must come from
+    # a fleet entry incorrectly bubbling up if the exclusion regresses.
+    (folder / f"{sid}.jsonl").write_text(
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"fan out"}}\n'
+        '{"type":"assistant","uuid":"a1","requestId":"r1","timestamp":"2026-06-01T10:00:01.000Z",'
+        '"isSidechain":false,"message":{"id":"m1","role":"assistant","stop_reason":"tool_use",'
+        '"content":[{"type":"tool_use","id":"tu1","name":"Agent",'
+        '"input":{"description":"Explore it","subagent_type":"Explore"}}]}}\n',
+        encoding="utf-8",
+    )
+    sub_dir = folder / sid / "subagents"
+    sub_dir.mkdir(parents=True)
+    (sub_dir / "agent-a1.jsonl").write_text(
+        '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"a1",'
+        '"timestamp":"2026-06-01T10:00:02.000Z","message":{"role":"user","content":"go explore"}}\n'
+        '{"type":"assistant","uuid":"sa1","isSidechain":true,"agentId":"a1",'
+        '"timestamp":"2026-06-01T10:00:03.000Z","message":{"id":"sm1","role":"assistant",'
+        '"model":"claude-haiku-4-5-20251001","stop_reason":"end_turn",'
+        '"content":[{"type":"text","text":"Found it."}]}}\n',
+        encoding="utf-8",
+    )
+    (sub_dir / "agent-a1.meta.json").write_text(
+        '{"agentType":"Explore","description":"Explore it","toolUseId":"tu1"}', encoding="utf-8"
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+    assert len(row.sessions) == 2
+    primary, fleet_member = row.sessions
+    assert primary.session.session_id == sid
+    assert primary.session.parent_session_id is None
+    assert primary.activity.active_subagents == 1  # unchanged derived count
+    assert primary.activity.state is AgentActivityState.WORKING
+
+    assert fleet_member.session.session_id == "a1"
+    assert fleet_member.session.parent_session_id == sid
+    assert fleet_member.activity.title == "Explore"
+    assert fleet_member.activity.state is AgentActivityState.WAITING
+
+    assert row.needs_attention is False
 
 
 def test_snapshot_never_calls_peek(

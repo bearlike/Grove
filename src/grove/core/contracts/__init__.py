@@ -40,6 +40,11 @@ from grove.core.contracts.branch_plan import (
     RootBranch,
     TrackRemoteBranch,
 )
+from grove.core.contracts.issueops import (
+    IssueOpsAction,
+    IssueOpsEvent,
+    IssueOpsOutcome,
+)
 from grove.core.contracts.questions import (
     AgentQuestionOptionView,
     AgentQuestionView,
@@ -85,6 +90,9 @@ __all__ = [
     "DashboardSnapshotView",
     "DigestEntryView",
     "ExistingLocalBranch",
+    "IssueOpsAction",
+    "IssueOpsEvent",
+    "IssueOpsOutcome",
     "NewNamedBranch",
     "PairRequest",
     "PairResultView",

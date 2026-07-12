@@ -11,6 +11,7 @@ import {
 import { WorkPanel } from "@/components/workspace/work-panel";
 import type { AgentTab } from "@/components/workspace/view-switcher";
 import type { AgentLiveStatus } from "@/lib/grove/agent-activity";
+import { findWorkspaceActivity } from "@/lib/grove/live-question";
 import type {
   AgentActivityState,
   CommitSummaryView,
@@ -44,7 +45,11 @@ const ChatPanel = dynamic(
  * `peek`/`live`/`commits` are the same page-owned reads `ContextBar` already
  * consumes for the identity strip — threaded here too because the `Diff`/`Info`
  * tabs need the same git/activity data the strip summarizes. One fetch, two
- * homes, never a second request.
+ * homes, never a second request. The work panel's Info-tab fleet tree (#174)
+ * reads the SAME `activitySnapshot` the transcript already receives for live
+ * questions — `findWorkspaceActivity` resolves this workspace's own
+ * `WorkspaceActivityView.sessions` (primary + itemized fleet, #173) from it,
+ * so the tree needs no fetch of its own either.
  *
  * ⌘/Ctrl+J toggles the work panel (design §4.2: "one obvious control — `⟩` /
  * `⌘J` — slides it in"). The page owns the actual tab/view state (so it can
@@ -109,10 +114,22 @@ export function AgentWorkspace({
       snapshot={activitySnapshot}
       agentState={agentState}
       emptyStatePicker={emptyStatePicker}
+      // No work panel sharing the row outside the split → widen the column
+      // measure so the transcript actually uses the freed-up width instead of
+      // leaving it as empty gutters either side.
+      wide={!showSplit}
     />
   );
+  const sessions = findWorkspaceActivity(activitySnapshot, workspaceId)?.sessions ?? [];
   const panel = (
-    <WorkPanel peek={peek} live={live} commits={commits} commitsLoading={commitsLoading} />
+    <WorkPanel
+      workspaceId={workspaceId}
+      peek={peek}
+      live={live}
+      commits={commits}
+      commitsLoading={commitsLoading}
+      sessions={sessions}
+    />
   );
 
   return (

@@ -15,8 +15,15 @@ from loguru import logger
 from grove import __version__
 from grove.core import GroveError, build, load_config, paths
 from grove.core.agents.hook import run_hook_from_stdin
-from grove.core.config import dump_config_json, dump_schema_json, write_schema
+from grove.core.config import add_known_project, dump_config_json, dump_schema_json, write_schema
 from grove.core.git import detect_root
+from grove.tui.cli_onboarding import (
+    AgentChoice,
+    render_outcomes,
+    resolve_agents,
+    run_onboarding,
+)
+from grove.tui.cli_onboarding import register as register_onboarding_commands
 from grove.tui.cli_sessions import sessions_app
 from grove.tui.cli_workspace import register as register_workspace_commands
 
@@ -44,6 +51,9 @@ app.add_typer(sessions_app, name="sessions")
 # Flat workspace verbs (`grove create` / `grove message`) — grafted on like
 # `ls`/`version` rather than nested under a `workspace` subgroup (issue #45).
 register_workspace_commands(app)
+
+# `grove skills install` / `grove mcp install` — onboard Claude/Codex (#190).
+register_onboarding_commands(app)
 
 
 # ─── default command (TUI) ──────────────────────────────────────────────────
@@ -107,10 +117,53 @@ def config_show() -> None:
     typer.echo(dump_config_json(cfg))
 
 
+_PROJECT_PATH_ARGUMENT = typer.Argument(
+    None, help="Repo path (default: the current directory's repo)."
+)
+
+
+@config_app.command("add-project")
+def config_add_project(
+    path: Path | None = _PROJECT_PATH_ARGUMENT,
+) -> None:
+    """Register a git repo in the user config's known-projects list.
+
+    Adds ``path`` (default: cwd) to ``GroveConfig.projects`` so it shows up in
+    every cross-project surface (dashboard, project picker, ``known_roots()``,
+    #95) even with zero workspaces — without needing its own committed
+    ``.grove/config.json``.
+    """
+    repo_root = detect_root(path or Path.cwd())
+    if repo_root is None:
+        typer.secho("not in a git repository", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    target = paths.user_config_path()
+    try:
+        added = add_known_project(repo_root, target=target)
+    except GroveError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    if added:
+        typer.secho(f"added {repo_root} to {target}", fg=typer.colors.GREEN)
+    else:
+        typer.echo(f"{repo_root} is already known ({target})")
+
+
 @config_app.command("init")
 def config_init(
     *,
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing config file."),
+    with_onboarding: bool = typer.Option(
+        False,
+        "--with-onboarding",
+        help=(
+            "Also install the using-grove skill and register Grove as an MCP "
+            "server for this project, non-interactively (see `grove skills "
+            "install` / `grove mcp install` to run either on demand)."
+        ),
+    ),
 ) -> None:
     """Scaffold a project config at <repo>/.grove/config.json."""
     repo_root = detect_root(Path.cwd())
@@ -149,6 +202,16 @@ def config_init(
     target.write_text(json.dumps(stub, indent=2) + "\n", encoding="utf-8", newline="\n")
     typer.echo(f"wrote {target}")
     typer.echo(f"schema:  {schema_path}")
+
+    if with_onboarding:
+        typer.echo("\nonboarding:")
+        outcomes = run_onboarding(
+            actions=["skill", "mcp"],
+            targets=["project"],
+            agents=resolve_agents(AgentChoice.all),
+            repo_root=repo_root,
+        )
+        render_outcomes(outcomes)
 
 
 @config_app.command("schema")

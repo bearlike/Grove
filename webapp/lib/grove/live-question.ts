@@ -6,7 +6,7 @@ import type { AgentQuestionView, DashboardSnapshotView, WorkspaceActivityView } 
  * against a snapshot shape a stubbed-fetch test never meant to model activity
  * (render-hardening: degrade to "not found", never throw).
  */
-function findWorkspaceActivity(
+export function findWorkspaceActivity(
   snapshot: DashboardSnapshotView | null | undefined,
   workspaceId: string,
 ): WorkspaceActivityView | null {
