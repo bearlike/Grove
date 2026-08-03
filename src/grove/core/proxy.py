@@ -1,4 +1,4 @@
-"""Loopback LLM-gateway passthrough proxy — wire-truth capture at the edge (#177).
+"""Loopback LLM-gateway passthrough proxy — wire-truth capture at the edge.
 
 A Grove-owned HTTP proxy an agent points at (``ANTHROPIC_BASE_URL`` for Claude,
 the ``model_providers`` base-url env for Codex — see :meth:`ProxyConfig.proxy_env`).
@@ -20,7 +20,7 @@ Two boundaries, both deliberate:
 
 The capture is emitted to a pluggable :class:`CaptureSink` (a one-method
 Protocol). The default :class:`LoggingCaptureSink` is dependency-free and logs
-metadata only; the OTel/LangFuse exporter (#175) is wired in by the orchestrator
+metadata only; the OTel/LangFuse exporter is wired in by the orchestrator
 at integration behind this same interface — ``proxy.py`` never hard-depends on
 opentelemetry. **A capture or emit failure NEVER breaks or delays the forward
 path**: bytes are relayed downstream before the tee touches them, and every sink
@@ -125,7 +125,7 @@ class CaptureSink(Protocol):
     non-blocking or fire-and-forget (the OTel/LangFuse sink batches); the proxy
     guards every call, so a slow or raising sink degrades capture, never the
     proxied request. Grove ships the dependency-free :class:`LoggingCaptureSink`;
-    #175 supplies the real OTLP sink behind this same interface.
+    the real OTLP sink is wired in behind this same interface.
     """
 
     def emit(self, event: CaptureEvent) -> None: ...
@@ -136,7 +136,7 @@ class LoggingCaptureSink:
 
     Never logs the request body or any header — only the numbers that make the
     capture useful at a glance (status, TTFT, latency, usage). Swap in the OTel
-    sink (#175) for real ingestion; this keeps the proxy self-contained.
+    sink for real ingestion; this keeps the proxy self-contained.
     """
 
     def emit(self, event: CaptureEvent) -> None:

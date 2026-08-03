@@ -140,7 +140,7 @@ def test_update_request_round_trip_via_json() -> None:
     assert reloaded == req
 
 
-# ─── ticket selector on create (#7) ──────────────────────────────────────────
+# ─── ticket selector on create ───────────────────────────────────────────────
 
 
 def test_create_request_accepts_ticket_selector() -> None:

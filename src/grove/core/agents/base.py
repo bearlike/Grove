@@ -10,12 +10,12 @@ real implementation exists).
 Every method is read-only over the filesystem (or a remote API) or pure logic;
 adapters hold no mutable state. The launch decoration is the *only*
 outward-facing method — it feeds argv into ``tmux.build_workspace_layout``
-(#13) — and even that returns a plain token list, leaving the side effect to
+— and even that returns a plain token list, leaving the side effect to
 ``tmux.py``.
 
 The session-reading unit of reference is ``(cwd, session_id)``, never a file
 path: how a session id resolves to backing storage (a transcript glob, an HTTP
-endpoint) is each adapter's internal detail, so a remote adapter (#36) fits the
+endpoint) is each adapter's internal detail, so a remote adapter fits the
 seam without faking filesystem ``Path``s. ``locate_transcripts`` is the one
 deliberately filesystem-shaped method, kept for callers that genuinely want
 the files (dump, transcript-path display).
@@ -32,6 +32,7 @@ from grove.core.agents.model import (
     FinalResult,
     OrderedDigest,
     SessionControls,
+    SessionRef,
     SessionSummary,
     SessionTurn,
     TodoList,
@@ -51,8 +52,8 @@ class AgentAdapter(Protocol):
 
     ``resumable`` declares whether the tool can CONTINUE an existing session by
     id at launch (``launch_decoration(..., resume=True)`` yields a real handle) —
-    the single source of truth the manager derives its resumable-kinds set from
-    (#F10d), so a future resumable adapter can't be missed by a hand-maintained
+    the single source of truth the manager derives its resumable-kinds set from,
+    so a future resumable adapter can't be missed by a hand-maintained
     list. Claude Code / Codex are ``True``; a remote (mewbo) session and a bare
     shell have no launch resume handle, so ``False``.
     """
@@ -69,7 +70,7 @@ class AgentAdapter(Protocol):
         shell adapter returns ``[]`` and Grove tracks nothing for it.
 
         ``resume=True`` asks the tool to CONTINUE an existing session rather than
-        start a fresh one (#120): Claude Code → ``["--resume", id]`` (plain resume
+        start a fresh one: Claude Code → ``["--resume", id]`` (plain resume
         keeps the same session id/file), Codex → ``["resume", id]`` (a subcommand,
         valid after the command since Codex's grammar is
         ``codex [OPTIONS] <COMMAND> [ARGS]``). Kinds with no resume handle ignore
@@ -90,7 +91,7 @@ class AgentAdapter(Protocol):
 
     def offline_decoration(self) -> list[str]:
         """Extra argv tokens that disallow network-facing tools for this launch
-        (#148: Claude Code → ``["--disallowedTools", "WebFetch,WebSearch"]``,
+        (Claude Code → ``["--disallowedTools", "WebFetch,WebSearch"]``,
         Codex → its workspace-write-no-network sandbox flags). Empty for tools
         with no local network-tool gate (mewbo runs server-side, the generic
         shell has no tool concept). Gated by the caller on `AgentSpec.tools_offline`
@@ -100,7 +101,7 @@ class AgentAdapter(Protocol):
         ...
 
     def telemetry_env(self) -> dict[str, str]:
-        """The tool's OWN native-telemetry *enable* env vars (#170 passthrough).
+        """The tool's OWN native-telemetry *enable* env vars.
 
         The provider-boundary sibling of :meth:`offline_decoration`: the manager
         already injects the generic OTLP endpoint/headers (``TelemetryConfig.
@@ -149,7 +150,7 @@ class AgentAdapter(Protocol):
         ...
 
     def discover_sessions(self, cwd: Path, *, exclude_id: str | None = None) -> list[str]:
-        """Session ids the tool ran in ``cwd`` that Grove didn't launch (#18).
+        """Session ids the tool ran in ``cwd`` that Grove didn't launch.
 
         Out-of-band discovery: surfaces sessions a user started by hand in a Grove
         worktree. Read-only, best-effort (returns ``[]`` on error or when the tool
@@ -163,16 +164,38 @@ class AgentAdapter(Protocol):
     ) -> list[tuple[str, datetime | None, float]]:
         """``(session_id, birth, mtime)`` for sessions in ``cwd``, newest-first by mtime.
 
-        The CHEAP pre-filter behind the dashboard's adoption gate (#F5): the same
+        The CHEAP pre-filter behind the dashboard's adoption gate: the same
         scan as :meth:`discover_sessions`, but each id paired with its session
         BIRTH (first-record timestamp, from the bounded head read the scan
         already does — never a full transcript parse) and the transcript mtime
-        (for newest-first ordering when a caller unions several cwds, #F7). The
+        (for newest-first ordering when a caller unions several cwds). The
         service evaluates the birth-or-live-here gate on this cheap metadata
         FIRST and pays a full activity parse only for candidates that pass, so
         per-tick cost is O(new sessions), not O(history). ``birth`` is ``None``
         for a transcript with no timestamped record. Best-effort: ``[]`` on error
         or for tools with no discoverable transcripts (generic, remote).
+        """
+        ...
+
+    def discover_all(self) -> tuple[SessionRef, ...]:
+        """Every session this adapter's store holds, across every cwd — the
+        host-wide catalog's discovery unit (epic: Session Catalog).
+
+        NOT the same scan as ``discover_paths(cwd)``: that method answers
+        "sessions in *this* cwd" on the 2 s activity poll's hot path and must
+        stay cheap (one directory listing for Claude Code; a full store walk
+        for Codex, unavoidable given its date-partitioned, cwd-less paths).
+        This method answers "every session, host-wide" for a catalog request
+        — never called from the poll. Where a per-file head read already
+        yields both a row here and a ``discover_paths`` row, the SAME read
+        is reused (``_head_cwd_and_birth`` / ``_meta_and_birth``); no adapter
+        re-derives a second head-read loop.
+
+        Best-effort per file, newest-first by mtime: a malformed or vanished
+        file is skipped, never raised. A file whose head read can't recover a
+        cwd still yields a ``SessionRef`` with ``cwd=None`` rather than being
+        dropped (~2 % of Claude transcripts on the reference host). ``()`` for
+        adapters with no discoverable store (generic).
         """
         ...
 
@@ -212,16 +235,16 @@ class AgentAdapter(Protocol):
         ...
 
     def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
-        """Compact ordered slice for the future external-LLM interpreter (#20).
+        """Compact ordered slice for the future external-LLM interpreter.
 
-        Minimal in the MVP; the seam exists so #20 never has to reshape the
-        adapter contract. Best-effort: an empty or missing session yields an
-        empty digest.
+        Minimal in the MVP; the seam exists so a future interpreter never
+        has to reshape the adapter contract. Best-effort: an empty or
+        missing session yields an empty digest.
         """
         ...
 
     def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
-        """The session's available input controls — TIER 1 filesystem scan (#178).
+        """The session's available input controls — a TIER 1 filesystem scan.
 
         Enumerates the invokable affordances reachable in ``cwd`` with NO running
         session needed: the provider-specific slash commands, skills, and
@@ -239,7 +262,7 @@ class AgentAdapter(Protocol):
 
     def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
         """The session's terminal outcome — the last assistant turn plus
-        whether it is truly final (#149).
+        whether it is truly final.
 
         A PROJECTION, never a second parser: the filesystem adapters build it
         from their own ``read_messages`` spine via
@@ -251,7 +274,7 @@ class AgentAdapter(Protocol):
         ...
 
     def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
-        """The session's CURRENT todo/checklist state (#194).
+        """The session's CURRENT todo/checklist state.
 
         The ``latest_todo`` sibling of :meth:`final_result` — same shape, same
         reason: a PROJECTION over the already-parsed spine, never a second
@@ -263,5 +286,26 @@ class AgentAdapter(Protocol):
         sits arbitrarily far back, so the fold must run from session start).
         Best-effort like every read here: ``None`` when no todo/Task tool has
         been called yet, or the session/transcript can't be read.
+        """
+        ...
+
+    def latest_task(self, cwd: Path, session_id: str) -> str | None:
+        """The session's current task text, UNCAPPED — the same text
+        ``parse_activity`` puts on ``AgentActivity.current_task``, minus the
+        ``_TASK_TEXT_CAP`` truncation.
+
+        Two consumers, two costs, one selection. ``current_task`` rides the
+        ~1 Hz activity delta for every workspace on the host plus every TUI row
+        and webapp card, so it is capped at parse time and must stay capped —
+        an arbitrarily large pasted prompt on the poll path is exactly what the
+        cap exists to prevent. A per-REQUEST reader that renders the text once
+        (the issueops sticky comment, inside a collapsed ``<details>``) loses
+        nothing but the text, so it reads here instead. Each adapter derives
+        both from ONE selection helper, so the capped and uncapped answers can
+        never disagree about WHICH text they are returning.
+
+        Best-effort like every read here: ``None`` when the session carries no
+        task text at all (a real answer, not an error) or the transcript can't
+        be read.
         """
         ...

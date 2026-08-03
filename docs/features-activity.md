@@ -37,7 +37,7 @@ puts the agents needing you at the very top.
 </figure>
 
 In the browser this wall is the home surface itself. The live grid and
-the old standalone activity page merged into one place (#89), so
+the old standalone activity page merged into one place, so
 `/activity` now just redirects home. A Hero composer is the default view;
 flip the persisted Hero/Overview toggle for the repo-grouped card grid,
 each card carrying a project chip to keep its origin legible. Either view
@@ -140,6 +140,23 @@ you the agent went quiet. The hook can tell you it is blocked on a
 permission prompt. Your own `.claude/settings.json` is never touched,
 and turning it off is one flag.
 
+## The agent's own todo list
+
+Claude Code's `TodoWrite`, Codex's `update_plan`, and Mewbo's task board
+all give an agent a running checklist for the task in front of it. Grove
+has parsed that checklist out of the transcript for a while, to feed the
+[issue-ops](issue-ops.md) sticky comment, but until now nothing else
+surfaced it.
+
+It is now reachable everywhere else too: `grove show` prints it, the TUI
+and web dashboard cards show it as a bounded progress count (`4/7 done`)
+rather than the full list, and `grove_get_workspace_todo` hands the raw
+items to an MCP client. It is read-only, the same as everything else on
+this page. See [task phase](features-status.md#the-third-axis-task-phase)
+for the agent's own self-reported counterpart: the todo list is what
+Grove infers from the transcript, task phase is what the agent states
+directly.
+
 ## Session history
 
 Live state tells you what is happening. Sessions tell you what
@@ -184,6 +201,40 @@ gate-rejected, the pointer goes stale and the transcript reads blank; fix
 it with `grove sessions remap WORKSPACE SESSION`, the TUI's `x` key, or the
 web dashboard's remap picker.
 
+### The Session Catalog: every session on this host
+
+Everything above scopes to one project. Most of your agent history probably
+lives outside it. Every repository you have ever pointed Claude Code or
+Codex at holds its own transcripts on disk, whether or not you ever told
+Grove about it, and Grove already knows how to read any of them. It just
+never looked past the projects in its own configuration.
+
+The Session Catalog removes that limit. `grove sessions list --host` scans
+every session store on the machine instead of just this repository:
+
+```bash
+grove sessions list --host              # every repo on this host
+```
+
+The table gains a `PROJECT` and `BRANCH` column, since neither is implied
+once the scope widens past one repository, plus a live marker on rows with a
+matching agent process still running. Everything else about a row is
+unchanged: agent kind, last-modified time, and whether Grove launched it or
+you started it by hand. The [web dashboard's Sessions
+screen](use-webapp.md#the-session-catalog) and the TUI sessions browser's
+`h` key show the identical catalog.
+
+The scan is a quick peek at each transcript's first few lines, never a full
+read, which is what keeps it fast with hundreds of sessions on disk. A
+session whose transcript never recorded a working directory, or whose
+directory turned out not to be a git repository, still shows up rather than
+being quietly dropped; Grove would rather hand you an incomplete row than
+hide a session because one field came back empty.
+
+The catalog is read-only, same as everything else here. There is no verb
+that adopts a session you find this way into a Grove workspace. Grove shows
+you what is already on the host; it does not reach in and take it over.
+
 ## See also
 
 - [TUI tour](use-tui.md): the dashboard screen, its keys, and where
@@ -192,6 +243,8 @@ web dashboard's remap picker.
   pane, and the per-workspace transcript in the browser.
 - [CLI](use-cli.md#grove-sessions): `grove sessions list`, `show`, and `dump`.
 - [Agents](configure-agents.md): declaring an agent's `kind`.
+- [Task phase](features-status.md#the-third-axis-task-phase): the agent's
+  own self-reported progress, alongside its inferred todo list.
 - [Status semantics](features-status.md): workspace status, the other
   dimension on every tile.
 - [The peek rail](features-peek.md): the per-workspace view, one

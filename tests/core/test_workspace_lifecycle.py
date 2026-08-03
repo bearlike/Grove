@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,7 +20,8 @@ from grove.core import (
 )
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.errors import GroveError, WorkspaceStateError
+from grove.core.errors import GitError, GroveError, WorkspaceStateError
+from grove.core.git import GitRepo
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import BranchProvenance, WorkspaceState, WorkspaceStatus
@@ -156,6 +158,82 @@ def test_kill_cleans_everything(
     assert state.tmux_session not in fake_tmux.sessions
     # Record removed from store
     assert all(s.id != state.id for s in manager.store.load_all())
+
+
+def test_kill_leaves_the_provision_log_on_disk(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provision log is the sole record of what the container path
+    decided silently, and it is not reproducible the way the init log is (a
+    killed container can't be re-run to regenerate it). Kill must not delete
+    it, unlike the init log, which it still drops.
+    """
+    del fake_tmux
+    logs_dir = tmp_path / "provision-logs"
+    monkeypatch.setattr(
+        "grove.core.paths.provision_log_path",
+        lambda workspace_id: logs_dir / f"{workspace_id}-provision.log",
+    )
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="keep-provision-log"))
+    log_path = logs_dir / f"{state.id}-provision.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("provision output\n", encoding="utf-8")
+
+    manager.kill(state.id)
+
+    assert log_path.exists()
+
+
+def test_a_clean_kill_reports_no_residue(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path
+) -> None:
+    del fake_tmux, tmp_repo
+    events: list[WorkspaceEvent] = []
+    manager.subscribe(events.append)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="clean-kill"))
+
+    manager.kill(state.id)
+
+    killed = next(e for e in events if e.kind == "killed")
+    assert killed.detail["branch_deleted"] == "true"
+    assert "residue" not in killed.detail
+
+
+def test_a_kill_whose_branch_delete_failed_says_so(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    tmp_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The teardown stays best-effort, but it may not claim work it did not do.
+
+    ``branch_deleted`` must reflect the actual outcome, not the *request* — a
+    failed ``git branch -D`` must not announce a deleted branch. The record
+    naming the leftovers is deleted on the next line, so the event is the
+    last chance to say anything at all.
+    """
+    del fake_tmux
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="stubborn-branch"))
+    events: list[WorkspaceEvent] = []
+    manager.subscribe(events.append)
+
+    def _refuse(*_args: object, **_kwargs: object) -> None:
+        raise GitError("branch is checked out somewhere else")
+
+    monkeypatch.setattr(GitRepo, "branch_delete", _refuse)
+
+    manager.kill(state.id)
+
+    killed = next(e for e in events if e.kind == "killed")
+    assert killed.detail["branch_deleted"] == "false"
+    assert killed.detail["residue"] == "branch"
+    # Still best-effort: the record is gone and the branch really did survive.
+    assert all(s.id != state.id for s in manager.store.load_all())
+    assert state.branch in _branches(tmp_repo)
 
 
 def test_pause_when_not_running_raises(manager: WorkspaceManager) -> None:
@@ -498,6 +576,84 @@ def test_kill_user_attached_branch_default_keeps(
     assert _wt(state.worktree_path) not in _worktrees(tmp_repo)
 
 
+def _fail_after_worktree_add(manager: WorkspaceManager) -> Callable[..., None]:
+    """Let `worktree_add` do its real work, then fail the create at that step.
+
+    `git worktree add -b` creates the ref before it validates anything else,
+    and `_add_worktree` sets an upstream after the add returns — so a failure
+    at this point routinely leaves a real branch (and sometimes a real
+    worktree) behind. Patching the call to raise *without* running it would
+    test a case where there is nothing to clean up.
+    """
+    real = manager._git.worktree_add
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        real(*args, **kwargs)  # type: ignore[arg-type]
+        raise GroveError("simulated failure after the ref exists")
+
+    manager._git.worktree_add = _boom  # type: ignore[method-assign]
+    return real
+
+
+def test_failed_create_deletes_the_branch_it_leaked(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path
+) -> None:
+    """A create that dies at `worktree_add` must leave nothing behind.
+
+    What this pins is the *retry*, not the tidiness: an abandoned branch
+    makes the next create fail `BranchConflict`, blaming the user for a
+    branch Grove created and forgot.
+    """
+    del fake_tmux
+    real_add = _fail_after_worktree_add(manager)
+    plan = NewNamedBranch(name="feature/retry-me", base_ref="main")
+
+    with pytest.raises(GroveError):
+        manager.create(
+            CreateWorkspaceRequest(agent_name="claude", title="doomed", branch_plan=plan)
+        )
+
+    assert "feature/retry-me" not in _branches(tmp_repo)
+    assert manager.list() == []
+    # The whole point: the same request now succeeds.
+    manager._git.worktree_add = real_add  # type: ignore[method-assign]
+    retried = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="doomed", branch_plan=plan)
+    )
+    assert retried.branch == "feature/retry-me"
+
+
+def test_failed_create_never_deletes_a_user_attached_branch(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path
+) -> None:
+    """Rollback unwinds what create did, and create did not make this branch.
+
+    Placement alone is not a sufficient gate: a WORKTREE workspace attached to
+    the user's own branch must not lose it to a create that fails after the
+    record was written and unwinds through teardown.
+    """
+    del fake_tmux
+    subprocess.run(
+        ["git", "branch", "feature/precious", "main"],
+        cwd=tmp_repo,
+        check=True,
+        capture_output=True,
+    )
+    _fail_after_worktree_add(manager)
+
+    with pytest.raises(GroveError):
+        manager.create(
+            CreateWorkspaceRequest(
+                agent_name="claude",
+                title="attach and fail",
+                branch_plan=ExistingLocalBranch(name="feature/precious"),
+            )
+        )
+
+    assert "feature/precious" in _branches(tmp_repo)
+    assert manager.list() == []
+
+
 def test_kill_explicit_delete_branch_true_overrides_provenance_default(
     manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path
 ) -> None:
@@ -538,8 +694,8 @@ def test_init_script_failure_rolls_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Sandbox the init log: it survives rollback by design (issue #9), so an
-    # unpatched path would leave an orphan file in the real user state dir.
+    # Sandbox the init log: it survives rollback by design, so an unpatched
+    # path would leave an orphan file in the real user state dir.
     monkeypatch.setattr(
         "grove.core.paths.init_log_path",
         lambda workspace_id: tmp_path / "init-logs" / f"{workspace_id}-init.log",
@@ -579,9 +735,9 @@ def test_failed_init_keeps_log_and_error_carries_tail(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #9: rollback used to delete the init log — the one artifact that
-    explains a fail_fast failure — and the error named neither the failing
-    command nor its stderr. Pin both halves of the fix.
+    """Rollback must not delete the init log — the one artifact that explains
+    a fail_fast failure — and the error must name both the failing command
+    and its stderr.
     """
     logs_dir = tmp_path / "init-logs"
     monkeypatch.setattr(
@@ -614,3 +770,68 @@ def test_failed_init_keeps_log_and_error_carries_tail(
     message = str(excinfo.value)
     assert str(logs[0]) in message
     assert "unrecognized subcommand 'sync'" in message
+
+
+# ─── a refused pause is a no-op, not a half-teardown ────────────────────────
+
+
+def _dirty(state: WorkspaceState, *, tracked: bool) -> None:
+    """Make the worktree dirty the way git's own removal check sees it."""
+    worktree = Path(state.worktree_path)
+    if tracked:
+        (worktree / "README.md").write_text("modified\n", encoding="utf-8")
+    else:
+        (worktree / "brand-new.txt").write_text("an agent's first act\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_pausing_a_dirty_workspace_changes_nothing(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path, tracked: bool
+) -> None:
+    """If `pause` kills the session and stops the container before asking git
+    to remove the worktree, a dirty worktree's refusal leaves the first two
+    undone — the user is told the pause failed (reasonably read as "nothing
+    happened") while the workspace actually sits with no session, a stopped
+    container, a worktree still on disk and a record still RUNNING. Pause
+    must gate on the dirty check BEFORE tearing anything down.
+
+    Parametrized over tracked and UNTRACKED changes because a precondition
+    using `--untracked-files=no` reports clean for a worktree holding only
+    new files — an agent's usual first act — while `git worktree remove`
+    itself refuses on "modified **or** untracked"."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="dirty"))
+    _dirty(state, tracked=tracked)
+
+    with pytest.raises(WorkspaceStateError):
+        manager.pause(state.id)
+
+    # Nothing happened, which is what "the pause failed" has to mean.
+    assert state.tmux_session in fake_tmux.sessions
+    assert _wt(state.worktree_path) in _worktrees(tmp_repo)
+    assert manager.store.get(state.id).status == WorkspaceStatus.RUNNING
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_force_still_discards_and_succeeds(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path, tracked: bool
+) -> None:
+    """`force` is the documented escape hatch and must not be gated by the new
+    precondition — the user has already said discard, so it is not asked."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="forced"))
+    _dirty(state, tracked=tracked)
+
+    paused = manager.pause(state.id, force=True)
+
+    assert paused.status == WorkspaceStatus.PAUSED
+    assert _wt(state.worktree_path) not in _worktrees(tmp_repo)
+    assert state.tmux_session not in fake_tmux.sessions
+
+
+def test_a_clean_workspace_still_pauses(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_repo: Path
+) -> None:
+    """The precondition must not make the ordinary path stricter."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="clean"))
+
+    assert manager.pause(state.id).status == WorkspaceStatus.PAUSED
+    assert _wt(state.worktree_path) not in _worktrees(tmp_repo)

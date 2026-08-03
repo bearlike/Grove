@@ -51,22 +51,23 @@ theme:
 
     Capabilities: lucide:sparkles
     "Workspace Lifecycle": lucide:git-branch
+    "Containerized Agents": lucide:container
     "Branch Provenance": lucide:shield-check
     "Agent Activity & Sessions": lucide:activity
+    "Push Notifications": lucide:bell
     "Peek Rail": lucide:eye
     "Status Semantics": lucide:circle-dot
     "Configuration Cascade": lucide:layers
 
-    Develop: lucide:code
     Architecture: lucide:blocks
     "Public API": lucide:book-open-text
     "Engineering Principles": lucide:compass
     Contributing: lucide:git-pull-request
-    "Design System": lucide:palette
 
 hooks:
   - docs/hooks/schema_to_md.py
   - docs/hooks/og_site_name.py
+  - docs/hooks/no_tracker_refs.py
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -104,7 +105,13 @@ plugins:
             - src
           options:
             docstring_style: google
-            show_source: true
+            # The reference publishes the CONTRACT, not the implementation. A
+            # source block renders the whole module verbatim, including every
+            # inline comment — and comments are exactly where this repo keeps
+            # its engineering archaeology (tracker refs, incident notes). No
+            # docstring discipline can cover that, so the only enforceable line
+            # is to not publish source at all; the repo itself is one click away.
+            show_source: false
             show_signature_annotations: true
             show_root_heading: true
             show_root_toc_entry: false
@@ -136,6 +143,7 @@ nav:
           - Daily Workflow: use-workflow.md
       - Capabilities:
           - Workspace Lifecycle: features-workspace-lifecycle.md
+          - Containerized Agents: features-containers.md
           - Branch Provenance: features-branch-provenance.md
           - Ticket Providers: features-ticket-providers.md
           - Agent Activity & Sessions: features-activity.md

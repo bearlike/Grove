@@ -2,15 +2,17 @@
 
 ``Transport`` is a Protocol; concrete impls are ``LocalTransport`` (spawns
 a child ``grove daemon serve --print-port`` and reads the picked port from
-stdout) and ``SshTransport`` (Task 13). Both expose the same surface so
+stdout) and ``SshTransport``. Both expose the same surface so
 ``GroveClient`` is transport-agnostic.
 """
 
 from __future__ import annotations
 
 import asyncio
+import shlex
 import subprocess
 import sys
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
 import asyncssh
@@ -20,7 +22,6 @@ from grove.client.backend import BackendConfig
 from grove.client.errors import TransportError
 
 if TYPE_CHECKING:
-    # Task 14 lands grove.client.attach; until then mypy can't resolve it.
     from grove.client.attach import AttachSession  # type: ignore[import-untyped,import-not-found,unused-ignore] # noqa: I001
 
 
@@ -32,7 +33,7 @@ class Transport(Protocol):
     @property
     def http_url(self) -> str: ...
 
-    async def open_attach(self, tmux_session: str) -> AttachSession: ...
+    async def open_attach(self, argv: Sequence[str]) -> AttachSession: ...
 
     async def close(self) -> None: ...
 
@@ -59,10 +60,10 @@ class UrlTransport:
     async def start(self) -> None:
         return None
 
-    async def open_attach(self, tmux_session: str) -> AttachSession:
+    async def open_attach(self, argv: Sequence[str]) -> AttachSession:
         raise TransportError(
-            f"interactive attach to {tmux_session!r} is not available over a URL backend; "
-            "run `tmux attach` on the daemon's host instead"
+            f"interactive attach via {shlex.join(argv)!r} is not available over a URL "
+            "backend; run it on the daemon's host instead"
         )
 
     async def close(self) -> None:
@@ -126,14 +127,14 @@ class LocalTransport:
             raise TransportError("local daemon exited before printing port")
         return int(line)
 
-    async def open_attach(self, tmux_session: str) -> AttachSession:
+    async def open_attach(self, argv: Sequence[str]) -> AttachSession:
         # Construction-only: callers wire ``on_output`` first, THEN call
         # ``attach.start()``. Calling start() here would race the PTY
         # reader pump against any subsequent on_output registration, so
         # the first chunks would be silently dropped.
         from grove.client.attach import LocalAttach  # noqa: PLC0415
 
-        return LocalAttach(tmux_session)
+        return LocalAttach(argv)
 
     async def close(self) -> None:
         if self._proc is None:
@@ -229,7 +230,7 @@ class SshTransport:
 
         self._port = self._listener.get_port()
 
-    async def open_attach(self, tmux_session: str) -> AttachSession:
+    async def open_attach(self, argv: Sequence[str]) -> AttachSession:
         # Construction-only: same contract as ``LocalTransport.open_attach``.
         # Caller wires ``on_output`` then ``await attach.start()``; the
         # asyncssh reader loop only begins once start() runs.
@@ -237,7 +238,8 @@ class SshTransport:
 
         if self._conn is None:
             raise TransportError("SshTransport not started")
-        return SshAttach(self._conn, tmux_session)
+        # Re-quoted into one line because ssh runs a remote SHELL, not an argv.
+        return SshAttach(self._conn, shlex.join(argv))
 
     async def close(self) -> None:
         if self._listener is not None:

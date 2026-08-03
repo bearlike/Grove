@@ -69,6 +69,8 @@ def _render(schema_path: Path) -> str:
         ),
     ]
 
+    lines.extend(_env_var_section(props, defs))
+
     for name, ref in props.items():
         if name.startswith("$"):  # `$schema` alias is internal; skip
             continue
@@ -99,6 +101,57 @@ def _render(schema_path: Path) -> str:
     return "\n".join(lines)
 
 
+_ENV_VAR_KEY = "x-env-var"
+
+
+def _env_var_section(props: dict[str, Any], defs: dict[str, Any]) -> list[str]:
+    """Table of every field that declares its own environment variable.
+
+    The schema is the census: a field declares the name in `json_schema_extra`,
+    so this walks the model tree rather than repeating a list the code already
+    holds. Nested fields do not appear in the per-section tables below, so
+    without this the declaration would ship invisible to every reader.
+    """
+    rows = sorted(_env_var_rows(props, defs, prefix=""))
+    if not rows:
+        return []
+    lines = [
+        "\n## Environment variable overrides\n",
+        (
+            "These fields read from a fixed environment variable when it is set "
+            "and non-empty, so a deployment can supply the value without editing "
+            "a config file. An unset or empty variable simply does not override. "
+            "`GROVE_<SECTION>__<FIELD>` still wins over the name below, and any "
+            "string value can also reference a variable you choose yourself with "
+            "`${YOUR_VAR}` — see [the cascade](features-cascade.md).\n"
+        ),
+        "\n| Field | Variable |",
+        "|---|---|",
+    ]
+    lines.extend(f"| `{path}` | `{variable}` |" for path, variable in rows)
+    return lines
+
+
+def _env_var_rows(
+    props: dict[str, Any], defs: dict[str, Any], *, prefix: str
+) -> list[tuple[str, str]]:
+    """Recurse the schema, collecting `(dotted path, variable)` declarations."""
+    rows: list[tuple[str, str]] = []
+    for name, node in props.items():
+        if name.startswith("$"):
+            continue
+        info = _resolve(node, defs)
+        path = f"{prefix}{name}"
+        nested = info.get("properties")
+        if isinstance(nested, dict):
+            rows.extend(_env_var_rows(nested, defs, prefix=f"{path}."))
+            continue
+        variable = info.get(_ENV_VAR_KEY)
+        if isinstance(variable, str):
+            rows.append((path, variable))
+    return rows
+
+
 def _resolve(node: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
     """Pydantic v2 emits `$ref: '#/$defs/Name'` for nested models. Follow it."""
     if "$ref" in node:
@@ -120,7 +173,9 @@ def _type_str(info: dict[str, Any], defs: dict[str, Any]) -> str:
         return info["$ref"].split("/")[-1]
     if "anyOf" in info:
         parts = [_type_str(_resolve(x, defs), defs) for x in info["anyOf"]]
-        return " \\| ".join(p for p in parts if p != "null") + (" \\| null" if any(p == "null" for p in parts) else "")
+        return " \\| ".join(p for p in parts if p != "null") + (
+            " \\| null" if any(p == "null" for p in parts) else ""
+        )
     if "enum" in info:
         return " \\| ".join(repr(v) for v in info["enum"])
     return "any"

@@ -1,7 +1,7 @@
-"""Native steering delivery (#172): render_answer + the ChannelSteerClient seam.
+"""Native steering delivery: render_answer + the ChannelSteerClient seam.
 
 The paneless twin of tmux keystroke steering — an answer/message is rendered to
-text and delivered over the #182 channel receiver. Best-effort by contract: no
+text and delivered over the channel receiver. Best-effort by contract: no
 endpoint (channels off / server down) is a logged no-op, never a raise.
 """
 

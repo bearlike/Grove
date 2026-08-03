@@ -47,6 +47,16 @@ describe("tierForActivity (tmux/status fallback, no agent session)", () => {
     expect(tierForActivity(null, "running").tier).toBe("active");
   });
 
+  it("null + PROVISIONING → active tier, never dimmed", () => {
+    // A container being built has no agent session by construction, so it always
+    // takes this fallback. Dimming it is the "looks dead → reach for a
+    // destructive verb" failure the status exists to end.
+    const t = tierForActivity(null, "provisioning");
+    expect(t.tier).toBe("active");
+    expect(t.opacityClass).toBe("opacity-100");
+    expect(t.accentVar).toBe("var(--status-provisioning)");
+  });
+
   it("null + IDLE → dormant, dimmed", () => {
     const t = tierForActivity(null, "idle");
     expect(t.tier).toBe("dormant");

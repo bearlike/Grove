@@ -6,9 +6,9 @@ import { useUiStore } from "@/lib/grove/ui-store";
 import { workspace } from "@/tests/_helpers/activity-fixtures";
 import type { DashboardSnapshotView, WorkspaceActivityView } from "@/lib/grove/types";
 
-// The grid (issue #96 deliverables C/D): repo-grouped sections, attention-first
-// within a section, every view-intent read straight off the Zustand store. The
-// ONLY public prop is the server `snapshot`.
+// The grid: repo-grouped sections, attention-first within a section, every
+// view-intent read straight off the Zustand store. The ONLY public prop is
+// the server `snapshot`.
 
 function inRepo(w: WorkspaceActivityView, repo_root: string): WorkspaceActivityView {
   return { ...w, state: { ...w.state, repo_root } };

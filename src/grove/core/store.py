@@ -11,7 +11,6 @@ version and write a migration step here.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterable
 from dataclasses import asdict
 from datetime import datetime
@@ -21,6 +20,7 @@ from typing import Any
 from loguru import logger
 
 from grove.core import paths
+from grove.core.container_runtime import ContainerRuntimeState
 from grove.core.contracts.tickets import TicketRef
 from grove.core.errors import GroveError, WorkspaceNotFound
 from grove.core.workspace import (
@@ -28,6 +28,8 @@ from grove.core.workspace import (
     BranchProvenance,
     InitStatus,
     Placement,
+    ProvisionStatus,
+    Runtime,
     TranscriptContext,
     WorkspaceState,
     WorkspaceStatus,
@@ -47,9 +49,18 @@ _LEGACY_STATUS_ALIASES: dict[str, WorkspaceStatus] = {
 class JsonWorkspaceStore:
     """Atomic, single-file JSON store for workspaces.
 
-    Single writer assumed (one Grove process per user). No file locking.
-    Atomicity comes from temp-file + `os.replace`, which is atomic on
-    POSIX and Windows since Python 3.3.
+    Writes go through `paths.write_atomic` (private temp name + `os.replace`),
+    so a concurrent writer — the daemon, a `grove` CLI verb and the TUI are
+    three processes over this one file — can never publish a half-written
+    record. Each mutation additionally holds `paths.exclusive_lock` across its
+    whole read-modify-write, so two overlapping saves serialize instead of
+    resolving last-writer-wins: without it, both read the same records, each
+    added its own, and the second rename published a file missing the first
+    one's workspace entirely.
+
+    Reads (`load_all` / `get` / `for_repo`) take no lock and need none: the
+    atomic rename means a reader either sees the whole previous file or the
+    whole next one, never a blend.
     """
 
     def __init__(self, path: Path | None = None) -> None:
@@ -99,16 +110,18 @@ class JsonWorkspaceStore:
                 f"refusing to persist computed status {state.status!r} for {state.id}; "
                 f"only {sorted(s.value for s in PERSISTED_STATUSES)} round-trip"
             )
-        records = {s.id: s for s in self.load_all()}
-        records[state.id] = state
-        self._write(records.values())
+        with paths.exclusive_lock(self._path):
+            records = {s.id: s for s in self.load_all()}
+            records[state.id] = state
+            self._write(records.values())
 
     def delete(self, workspace_id: str) -> None:
-        records = {s.id: s for s in self.load_all()}
-        if workspace_id not in records:
-            raise WorkspaceNotFound(workspace_id)
-        records.pop(workspace_id)
-        self._write(records.values())
+        with paths.exclusive_lock(self._path):
+            records = {s.id: s for s in self.load_all()}
+            if workspace_id not in records:
+                raise WorkspaceNotFound(workspace_id)
+            records.pop(workspace_id)
+            self._write(records.values())
 
     def for_repo(self, repo_root: Path) -> list[WorkspaceState]:
         """All workspaces whose `repo_root` matches the given canonical path."""
@@ -126,16 +139,13 @@ class JsonWorkspaceStore:
     # ─── internal ──────────────────────────────────────────────────────────
 
     def _write(self, states: Iterable[WorkspaceState]) -> None:
-        paths.ensure_dir(self._path.parent)
         serialized = {s.id: self._serialize(s) for s in states}
         payload: dict[str, Any] = {
             "version": _VERSION,
             "workspaces": serialized,
         }
         text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8", newline="\n")
-        os.replace(tmp, self._path)
+        paths.write_atomic(self._path, text)
         logger.debug("state saved: {} workspace(s) → {}", len(serialized), self._path)
 
     @staticmethod
@@ -148,10 +158,17 @@ class JsonWorkspaceStore:
         data["init_status"] = state.init_status.value if state.init_status else None
         data["branch_provenance"] = state.branch_provenance.value
         data["placement"] = state.placement.value
+        data["runtime"] = state.runtime.value
+        data["provision_status"] = state.provision_status.value if state.provision_status else None
         # `asdict` leaves the Pydantic TicketRefs as model instances (it only
         # recurses dataclasses), so serialize them to plain JSON dicts here —
         # the same explicit-field treatment the enums/datetimes get.
         data["ticket_refs"] = [r.model_dump(mode="json") for r in state.ticket_refs]
+        # Same treatment for the container identity (Pydantic, so `asdict` left
+        # it as a model instance). Persisting it is what makes teardown possible
+        # at all: a container whose id is not on disk is a container nothing can
+        # ever find again.
+        data["container"] = state.container.model_dump(mode="json") if state.container else None
         return data
 
     @staticmethod
@@ -162,6 +179,7 @@ class JsonWorkspaceStore:
         # legacy records, matching historical behavior ("Grove always
         # created the branch").
         init_status_raw = data.get("init_status")
+        provision_status_raw = data.get("provision_status")
         return WorkspaceState(
             id=data["id"],
             title=data["title"],
@@ -179,7 +197,6 @@ class JsonWorkspaceStore:
             ),
             error_detail=data.get("error_detail"),
             description=data.get("description"),
-            init_env=dict(data.get("init_env") or {}),
             init_status=InitStatus(init_status_raw) if init_status_raw else None,
             init_duration_ms=data.get("init_duration_ms"),
             init_log_path=data.get("init_log_path"),
@@ -188,7 +205,7 @@ class JsonWorkspaceStore:
             ),
             placement=Placement(data.get("placement", Placement.WORKTREE.value)),
             # `.get()` — absent on records written before nested-project cwd
-            # existed (#101); "" means the agent starts at the worktree root,
+            # existed; "" means the agent starts at the worktree root,
             # the historical shape.
             project_subpath=data.get("project_subpath", ""),
             # `.get()` — absent on records written before agent-session tracking
@@ -203,26 +220,78 @@ class JsonWorkspaceStore:
             # on-disk ref fails loudly here rather than mid-render.
             ticket_refs=[TicketRef.model_validate(r) for r in (data.get("ticket_refs") or [])],
             # `.get()` — absent on every record until a runtime-context override
-            # is set (#147); None is the default, current-behavior path for
+            # is set; None is the default, current-behavior path for
             # every legacy and non-container workspace.
             transcript_context=_decode_transcript_context(data.get("transcript_context")),
+            # `.get(..., "host")` — the identical technique `placement` and
+            # `branch_provenance` use: every workspace written before runtime
+            # selection existed loads as a host workspace, which is exactly
+            # what it is. No migration step, no version bump.
+            runtime=Runtime(data.get("runtime", Runtime.HOST.value)),
+            # `.get(..., False)` — a record written before the first-turn brief
+            # existed was never briefed, which is exactly what `False` says.
+            brief=bool(data.get("brief", False)),
+            runtime_fallback_reason=data.get("runtime_fallback_reason"),
+            provision_status=(
+                ProvisionStatus(provision_status_raw) if provision_status_raw else None
+            ),
+            provision_duration_ms=data.get("provision_duration_ms"),
+            provision_log_path=data.get("provision_log_path"),
+            provision_started_at=data.get("provision_started_at"),
+            # `.get()` — absent on every host-mode and legacy record. Unlike the
+            # other optional decodes this one re-validates LOUDLY; see
+            # `_decode_container`.
+            container=_decode_container(data.get("container")),
+            # `.get(..., False)` — a legacy record predates the packaged
+            # default config entirely, so it can never have used one.
+            runtime_default_config=bool(data.get("runtime_default_config", False)),
         )
 
 
+def _decode_container(raw: Any) -> ContainerRuntimeState | None:
+    """``None`` for a host-mode/legacy record, else the persisted identity.
+
+    The one optional decode here that re-validates LOUDLY rather than degrading
+    to ``None`` (the `ticket_refs` precedent, the opposite of
+    `_decode_transcript_context`): a lost transcript override falls back to
+    still-correct default behavior, but a dropped container record silently
+    orphans a REAL container on the host — Grove forgets an identity it is the
+    only owner of, and no later teardown can name it. A loud failure the
+    operator can fix is the cheaper outcome.
+    """
+    if raw is None:
+        return None
+    return ContainerRuntimeState.model_validate(raw)
+
+
 def _decode_transcript_context(raw: Any) -> TranscriptContext | None:
-    """``None`` for a legacy/no-override record, else the persisted override (#147).
+    """``None`` for a legacy/no-override record, else the persisted override.
 
     Defensive like every other optional-field decode here: a malformed value
     (wrong shape, missing key) degrades to ``None`` rather than raising —
     losing an override falls back to the current, still-correct default
     behavior instead of breaking `load_all` for the whole store.
+
+    A blank ``config_dir`` decodes to ``None`` too, matching what the only other
+    way into this type — ``TranscriptContext.for_launch`` — can ever produce
+    (it normalizes a falsy pin away). The two entry points must agree on what a
+    falsy value means, because an empty string is NOT inert on the read side:
+    it slips past ``transcript_config_dir_scope``'s ``config_dir is None`` guard
+    and *sets* the reader's env var to empty, clearing a legitimate ambient pin
+    for the duration of the read. Whitespace is stripped for the same reason —
+    a ``"   "`` pin would otherwise install an active-but-useless scope. Only
+    reachable from a hand-edited state file today; cheap to close anyway.
     """
     if not isinstance(raw, dict):
         return None
     try:
-        return TranscriptContext(config_dir=raw["config_dir"], agent_cwd=raw["agent_cwd"])
-    except (KeyError, TypeError):
+        config_dir = raw["config_dir"].strip()
+        agent_cwd = raw["agent_cwd"]
+    except (AttributeError, KeyError, TypeError):
         return None
+    if not config_dir or not isinstance(agent_cwd, str):
+        return None
+    return TranscriptContext(config_dir=config_dir, agent_cwd=agent_cwd)
 
 
 def _decode_status(raw: str) -> WorkspaceStatus:

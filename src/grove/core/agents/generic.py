@@ -16,6 +16,7 @@ from grove.core.agents.model import (
     FinalResult,
     OrderedDigest,
     SessionControls,
+    SessionRef,
     SessionSummary,
     SessionTurn,
     TodoList,
@@ -65,6 +66,10 @@ class GenericAdapter:
         del cwd, exclude_id
         return []
 
+    def discover_all(self) -> tuple[SessionRef, ...]:
+        # No known transcript format, so no store to enumerate — no-op.
+        return ()
+
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
         del cwd
         return []
@@ -90,6 +95,11 @@ class GenericAdapter:
 
     def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
         # No transcript format to project a todo/checklist state from.
+        del cwd, session_id
+        return None
+
+    def latest_task(self, cwd: Path, session_id: str) -> str | None:
+        # No transcript format to read a task text from.
         del cwd, session_id
         return None
 

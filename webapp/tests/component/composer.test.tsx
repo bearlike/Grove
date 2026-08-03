@@ -5,8 +5,8 @@ import { Composer } from "@/components/composer/composer";
 import { useUiStore } from "@/lib/grove/ui-store";
 import type { AgentSummaryView, WorkspaceStateView } from "@/lib/grove/types";
 
-// The composer is the hero create surface (#96 deliverable A). It reads/writes
-// the Zustand composer slice and pulls its data hooks itself, so the test mocks
+// The composer is the hero create surface. It reads/writes the Zustand composer
+// slice and pulls its data hooks itself, so the test mocks
 // the hooks module (the data + the create mutation) and `next/navigation` (the
 // post-create route). We assert the PUBLIC contract — what request the prompt +
 // pickers build, the model-pill visibility rule, the custom-id escape hatch, and
@@ -47,6 +47,8 @@ function resetComposer(overrides: Record<string, unknown> = {}) {
       prompt: "",
       agentName: null,
       model: null,
+      runtime: null,
+      brief: null,
       repoRoot: null,
       branchMode: "auto",
       baseRef: "HEAD",

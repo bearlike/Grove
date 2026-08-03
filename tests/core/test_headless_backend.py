@@ -1,4 +1,4 @@
-"""Headless provisioning (#146): a workspace whose agent runs as a detached
+"""Headless provisioning: a workspace whose agent runs as a detached
 process, tracked purely from the transcript/adapter with no tmux pane.
 
 Three surfaces:
@@ -11,7 +11,7 @@ Three surfaces:
   missing session), respawn relaunches without the OFFLINE gate, and the pane
   snapshot degrades to empty rather than reaching for a pane that isn't there.
 * ``send_message`` / ``interrupt`` / ``answer_question`` route over the native
-  channel (#172) instead of raising — the paneless twin of the mewbo remote arm.
+  channel instead of raising — the paneless twin of the mewbo remote arm.
 """
 
 from __future__ import annotations
@@ -30,7 +30,12 @@ from grove.core.config import GroveConfig
 from grove.core.contracts.questions import QuestionAnswerItem, QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.errors import ProcessError, WorkspaceStateError
-from grove.core.launch import HeadlessLaunchBackend, LaunchSpec, TmuxLaunchBackend
+from grove.core.launch import (
+    HeadlessLaunchBackend,
+    HostNamespaceBackend,
+    LaunchSpec,
+    TmuxLaunchBackend,
+)
 from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
@@ -52,13 +57,19 @@ class FakeNativeSteer:
         self.interrupts.append(session_id)
 
 
-class FakeHeadlessBackend:
+class FakeHeadlessBackend(HostNamespaceBackend):
     """A paneless backend that records specs instead of spawning (the DI seam).
 
-    Mirrors ``HeadlessLaunchBackend``'s capability sentinel so the manager takes
-    every no-pane branch, without a real detached process in the test."""
+    Mirrors ``HeadlessLaunchBackend`` so the manager takes every no-pane
+    branch, without a real detached process in the test: `provides_pane` False
+    plus the SAME host-namespace bridge base the real backend inherits —
+    paneless, but still a process on this machine with ``spec.env`` applied
+    directly, so no pane does not mean no shared filesystem. Inheriting rather
+    than restating it is what keeps this fake from quietly ceasing to conform
+    to the Protocol when the Protocol grows a member."""
 
     provides_pane = False
+    host_namespace = True
 
     def __init__(self) -> None:
         self.specs: list[LaunchSpec] = []
@@ -117,7 +128,7 @@ def test_spawn_detached_builds_hermetic_argv(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """command + decoration → shell-free argv; env drops env_unset then overlays env
-    (a key in both ends up from env, #82); detached into its own session, stdio /dev/null."""
+    (a key in both ends up from env); detached into its own session, stdio /dev/null."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/leaked/should/be/dropped")
     calls: list[dict[str, object]] = []
 
@@ -184,6 +195,7 @@ def test_headless_backend_delegates_to_process(
         env_unset=("CLAUDE_CONFIG_DIR",),
         cfg=GroveConfig(),
         worktree=tmp_path / "wt",
+        kind="claude_code",
     )
     HeadlessLaunchBackend().launch(spec)
 
@@ -256,7 +268,7 @@ def test_respawn_headless_refuses_paused_record(
         mgr.respawn(state.id)
 
 
-# ─── pane-bound ops route over the native channel (#172) ────────────────────
+# ─── pane-bound ops route over the native channel ───────────────────────────
 
 
 def test_send_message_headless_routes_native(
@@ -277,8 +289,8 @@ def test_send_message_headless_routes_native(
 def test_interrupt_headless_routes_native(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """Interrupt no longer refuses a paneless runtime — it routes over the native
-    channel (best-effort) instead of the old CapabilityUnavailable raise (#172)."""
+    """Interrupt does not refuse a paneless runtime — it routes over the native
+    channel, best-effort."""
     steer = FakeNativeSteer()
     mgr, _ = _headless_manager(tmp_repo, tmp_path, native=steer)
     state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="headless"))

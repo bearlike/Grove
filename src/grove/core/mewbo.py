@@ -1,11 +1,10 @@
 """All Mewbo REST API I/O Grove ever performs, bound to one configuration.
 
-The dedicated side-effect module for the Mewbo orchestrator (#36) — the HTTP
+The dedicated side-effect module for the Mewbo orchestrator — the HTTP
 sibling of ``git.py`` and ``tmux.py``. :class:`MewboClient` is the canonical
 surface: every method wraps one endpoint, returns plain parsed dicts, and the
 consumers (``MewboAdapter``, the manager's launch fork) stay pure over those
-payloads. No Mewbo internals are ever imported; Grove talks only to the wire
-(epic #34's boundary rule).
+payloads. No Mewbo internals are ever imported; Grove talks only to the wire.
 
 Auth follows the env-ref pattern: config carries the NAME of the environment
 variable (``cfg.api_key_env``), never the key itself, and the value is read
@@ -13,7 +12,7 @@ from the consuming process's environment at construction. Failures surface as
 the typed :class:`MewboError`; httpx exceptions never leak past this module.
 
 Deliberately absent: ``/message`` and ``/interrupt`` wrappers — the follow-up
-/steer operation is issue #37's surface and lands on its branch, not here.
+/steer operation lands on its own branch, not here.
 """
 
 from __future__ import annotations
@@ -31,12 +30,12 @@ from grove.core.errors import MewboError
 class MewboClient:
     """Sync HTTP client for the Mewbo session API, one instance per config.
 
-    Wire facts (verified against the Mewbo console client + API guide,
-    2026-06-11): auth is the ``X-API-KEY`` header; errors come back as an
+    Wire facts (verified against the Mewbo console client + API guide):
+    auth is the ``X-API-KEY`` header; errors come back as an
     ``{"error": {code, reason}}`` envelope; ``POST /api/sessions`` returns
     ``{"session_id": ...}`` (server-minted — the opposite of Claude Code's
     client-minted ``--session-id``); ``cwd`` anchoring on create is additive
-    and gated server-side by ``api.allow_external_cwd`` (Assistant #91).
+    and gated server-side by ``api.allow_external_cwd``.
 
     ``transport`` is the test seam: ``httpx.MockTransport`` fakes the wire
     without monkey-patching, matching the "stub only I/O boundaries" rule.
@@ -64,13 +63,13 @@ class MewboClient:
     ) -> str:
         """Create a remote session; return the SERVER-minted session id.
 
-        ``cwd`` anchors the session to an external worktree (top-level field,
-        Assistant #91) — the API validates the directory exists, so callers
-        create the worktree first. The title is set with a follow-up PATCH
-        (the create endpoint takes none) and is deliberately best-effort: a
-        label must never fail an already-created session.
+        ``cwd`` anchors the session to an external worktree (top-level field)
+        — the API validates the directory exists, so callers create the
+        worktree first. The title is set with a follow-up PATCH (the create
+        endpoint takes none) and is deliberately best-effort: a label must
+        never fail an already-created session.
 
-        ``model`` (per-create model selection, #98) is forwarded on the create
+        ``model`` (per-create model selection) is forwarded on the create
         body when set — the Mewbo equivalent of ``--model`` for the CLI kinds.
         Unlike claude_code/codex it cannot ride a launch flag (mewbo runs the
         model server-side), so the only place to forward it is session-create.
@@ -160,7 +159,7 @@ class MewboClient:
         ``total_input_tokens`` here is PEAK semantics (root peak + per-sub-agent
         peaks — the context-pressure number); the cumulative billed sum is a
         different field on a different endpoint (``/usage``'s
-        ``total_input_tokens_billed``). Never mix the two (epic #34 / Mewbo #45).
+        ``total_input_tokens_billed``). Never mix the two.
         """
         return self._request("GET", f"/api/sessions/{session_id}/agents")
 

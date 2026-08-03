@@ -1,12 +1,12 @@
 """tmux.py — direct unit tests for the read-only helpers.
 
-These pin the *flags* we pass to `tmux capture-pane` / `tmux resize-window`.
+These pin the *flags* we pass to `tmux capture-pane` / `tmux set-option`.
 The flags are load-bearing: dropping `-e` strips colors, dropping `-S -N`
-drops scrollback (only the bottom of the session ever shows), getting
-`resize-window` wrong silently makes the source pane mismatch our
-viewport. The fakes used elsewhere (FakeTmux) skip
-this surface intentionally — they're the manager-level seam, not a
-substitute for verifying the actual subprocess argv we emit.
+drops scrollback (only the bottom of the session ever shows), and sizing the
+window on attach with anything other than `window-size: latest` silently
+mismatches the pane against the client's viewport. The fakes used elsewhere
+(FakeTmux) skip this surface intentionally — they're the manager-level seam,
+not a substitute for verifying the actual subprocess argv we emit.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def fake_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """Capture every subprocess.run argv emitted by grove.core.tmux.
 
     Also neutralizes `time.sleep` (the settle/verify delays in
-    `send_text`/`send_keys`, #180) so these tests don't actually block —
+    `send_text`/`send_keys`) so these tests don't actually block —
     dedicated timing tests monkeypatch `tmux.time.sleep` themselves to
     assert on the delay.
     """
@@ -198,6 +198,99 @@ def test_list_windows_swallows_subprocess_errors(
     assert tmux.list_windows("sess") == []
 
 
+# ─── fit_window_to_client — the attach-time sizing policy ────────────────────
+
+
+def test_fit_window_to_client_sets_window_size_latest_on_every_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin the argv: list the window ids, then `set-option -w ... window-size latest`.
+
+    Every token is load-bearing, and the command we DON'T emit most of all.
+    Attach used to run `resize-window -x <cols> -y <rows>`, which pins the
+    window to `window-size: manual` — tmux then never re-fits it again, on any
+    later attach or terminal resize — and forced us to compute the height
+    ourselves from `#{client_height}`, which counts the status-bar rows the
+    window never gets. With a two-row status bar the window came out two rows
+    too tall and tmux painted the agent's footer underneath it.
+
+    `#{window_id}` and not `#{window_name}`: names can collide across windows,
+    ids cannot, and a per-window option must target something unambiguous.
+    """
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: Any) -> Any:
+        calls.append(argv)
+
+        class _R:
+            returncode = 0
+            stdout = "@1\n@2\n" if argv[1] == "list-windows" else ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    tmux.fit_window_to_client("sess")
+
+    assert calls == [
+        ["tmux", "list-windows", "-t", "sess", "-F", "#{window_id}"],
+        ["tmux", "set-option", "-w", "-t", "@1", "window-size", "latest"],
+        ["tmux", "set-option", "-w", "-t", "@2", "window-size", "latest"],
+    ]
+    # The regression guard: an attach must never pin the window again.
+    assert not any("resize-window" in argv for argv in calls)
+
+
+def test_fit_window_to_client_is_a_noop_when_tmux_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: None)
+
+    tmux.fit_window_to_client("sess")  # best-effort: must not raise
+
+
+def test_fit_window_to_client_sets_nothing_for_a_dead_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session that vanished lists no windows, so nothing is set — quietly.
+
+    Sizing is a courtesy the attach performs on the way past; it must never
+    block or fail the attach that follows it.
+    """
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: Any) -> Any:
+        calls.append(argv)
+
+        class _R:
+            returncode = 1  # can't find session
+            stdout = ""
+            stderr = "can't find session"
+
+        return _R()
+
+    monkeypatch.setattr(tmux.subprocess, "run", _run)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    tmux.fit_window_to_client("ghost")
+
+    assert calls == [["tmux", "list-windows", "-t", "ghost", "-F", "#{window_id}"]]
+
+
+def test_fit_window_to_client_swallows_subprocess_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise OSError("tmux exploded")
+
+    monkeypatch.setattr(tmux.subprocess, "run", _boom)
+    monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    tmux.fit_window_to_client("sess")  # best-effort: must not raise
+
+
 # ─── pane_activity_seconds_ago ───────────────────────────────────────────────
 
 
@@ -355,11 +448,11 @@ def test_send_text_emits_literal_payload_then_separate_enter(
     names (a message containing "Enter" or "C-c" becomes keystrokes),
     dropping `--` makes a leading-dash payload parse as a flag, and
     folding Enter into the literal call would type the word instead of
-    submitting. Verified against real tmux 3.2a on 2026-06-11.
+    submitting. Verified against real tmux 3.2a.
     """
     tmux.send_text("sess:agent", "-please continue, then press Enter")
 
-    # A third call follows: the post-Enter verify-and-retry snapshot (#180).
+    # A third call follows: the post-Enter verify-and-retry snapshot.
     # The fixture's fake pane ("line1\nline2\n") never echoes the sent text,
     # so no residual is detected and no second Enter fires.
     assert fake_run == [
@@ -420,7 +513,7 @@ def test_send_text_settles_before_enter_and_before_verify(
     fake_run: list[list[str]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The settle delay (#180) fires twice: once before the submitting Enter
+    """The settle delay fires twice: once before the submitting Enter
     (so it lands after the paste-accumulation window closes) and once more
     before the post-Enter verify snapshot — both using the configured
     `settle_ms`, converted to seconds."""
@@ -503,7 +596,7 @@ def test_send_text_never_retries_more_than_once(
     assert calls.count(["tmux", "send-keys", "-t", "sess:agent", "Enter"]) == 2
 
 
-# ─── send_keys (#109) ────────────────────────────────────────────────────────
+# ─── send_keys ───────────────────────────────────────────────────────────────
 
 
 def test_send_keys_dispatches_literal_runs_and_named_keys(
@@ -519,8 +612,8 @@ def test_send_keys_dispatches_literal_runs_and_named_keys(
         ["2", "1", "3", tmux.SendKey.TAB, tmux.SendKey.ENTER],
     )
 
-    # The sequence ends in Enter, so a verify-and-retry snapshot follows it
-    # (#180); the fixture pane never echoes "3" (the last literal run sent),
+    # The sequence ends in Enter, so a verify-and-retry snapshot follows it;
+    # the fixture pane never echoes "3" (the last literal run sent),
     # so no residual is detected and no second Enter fires.
     assert fake_run == [
         ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "2"],
@@ -635,7 +728,7 @@ def test_send_keys_raises_on_nonzero_exit_and_stops(
     assert len(calls) == 1  # stopped after the failed first op
 
 
-# ─── build_workspace_layout — the hermetic launch env (#82) ──────────────────
+# ─── build_workspace_layout — the hermetic launch env ────────────────────────
 
 
 class _FakePane:
@@ -690,8 +783,8 @@ def fake_pane(monkeypatch: pytest.MonkeyPatch) -> _FakePane:
 
 def _layout(pane_fixture: _FakePane, agent: AgentSpec) -> list[str]:
     # The layout takes structured primitives, not an AgentSpec (it sits below the
-    # LaunchBackend seam, #145); unpack the fixture's agent the way the manager's
-    # TmuxLaunchBackend does, so these #82 hermetic-env assertions still pin the
+    # LaunchBackend seam); unpack the fixture's agent the way the manager's
+    # TmuxLaunchBackend does, so these hermetic-env assertions still pin the
     # real keystroke sequence.
     tmux.build_workspace_layout(
         "test-sess",

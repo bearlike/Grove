@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// `/` is the composer-first landing (ADE #140): a persisted `Hero | Overview`
+// `/` is the composer-first landing: a persisted `Hero | Overview`
 // toggle. Hero (default) shows the composer + a Recent strip; Overview shows
 // today's repo-grouped card grid VERBATIM (zero-loss). The fleet is never
 // hidden — it lives in the left session rail. Cards come from the fake daemon's
@@ -42,6 +42,23 @@ test("Overview keeps attention-first ordering within a section", async ({ page }
     "data-agent-state",
     "waiting",
   );
+});
+
+test("Overview cards show the phase axis and link an issue with no PR (#330)", async ({ page }) => {
+  await page.goto("/");
+  await toOverview(page);
+  const dash = page.locator('[data-testid="workspace-card"]').filter({ hasText: "feat dashboard" });
+  // Axis 3 on the card header…
+  await expect(dash.getByTestId("phase-badge")).toContainText("3/6");
+  // …and the linkage row, which used to require a PR before mounting at all.
+  await expect(dash.getByTestId("ticket-linkage").getByRole("link", { name: /issue #330/ })).toBeVisible();
+
+  // A workspace WITH a PR keeps the issue → PR read, both independently linked.
+  const tests = page.locator('[data-testid="workspace-card"]').filter({ hasText: "fix tests" });
+  await expect(tests.getByRole("link", { name: /issue #331/ })).toBeVisible();
+  await expect(tests.getByRole("link", { name: /pull request #332/ })).toBeVisible();
+  // …and reports no phase, so it wears no phase chrome at all.
+  await expect(tests.getByTestId("phase-badge")).toHaveCount(0);
 });
 
 test("Overview card title links to its detail page", async ({ page }) => {

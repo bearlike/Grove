@@ -63,6 +63,27 @@ def test_pair_init_rejects_empty_label(daemon: TestClient) -> None:
     assert resp.json()["detail"]["error"] == "invalid_label"
 
 
+def test_a_damaged_auth_file_is_503_and_never_blames_the_label(
+    daemon: TestClient, auth_store: SessionStore
+) -> None:
+    """A storage fault must never be reported as `422 invalid_label`.
+
+    Three server-side faults (interrupted write, unreadable file, newer
+    version) all mapped to the caller's input being wrong — and since
+    `POST /auth/pair` is unauthenticated, the message would hand an
+    unauthenticated caller the absolute path of the config file while
+    doing it.
+    """
+    auth_store.path.write_text('{"version": 1, "challenges": [', encoding="utf-8")
+
+    resp = daemon.post("/auth/pair", json={"label": "a perfectly good label"})
+
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error"] == "auth_store_unavailable"
+    assert str(auth_store.path) not in detail["message"]
+
+
 def test_full_pair_flow_yields_working_token(daemon: TestClient, auth_store: SessionStore) -> None:
     # 1. Browser kicks off pairing.
     init_resp = daemon.post("/auth/pair", json={"label": "phone"})

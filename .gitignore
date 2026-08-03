@@ -266,3 +266,13 @@ __marimo__/
 # macOS filesystem cruft (Finder metadata + AppleDouble resource forks)
 .DS_Store
 ._*
+
+# Written by `devcontainer build` beside whichever config it was handed.
+# Generated, host-specific, and never ours to ship. Grove resolves Features
+# through the devcontainer CLI and never passes --experimental-lockfile, so
+# nothing reads these back — committing one would only churn.
+src/grove/core/data/devcontainer-lock.json
+/.devcontainer/devcontainer-lock.json
+
+# Playwright MCP scratch (browser console/page dumps from agent sessions)
+/.playwright-mcp/

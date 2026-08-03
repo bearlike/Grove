@@ -46,7 +46,7 @@ from grove.core.contracts.branch_plan import (
     TrackRemoteBranch,
 )
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.workspace import slug
+from grove.core.workspace import Runtime, slug
 from grove.tui._status import ref_color
 from grove.tui.screens._modal import GroveModal
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
@@ -58,6 +58,14 @@ _MODE_REMOTE = "remote"
 _MODE_ROOT = "root"
 
 _MODES = (_MODE_AUTO, _MODE_NEW, _MODE_EXISTING, _MODE_REMOTE, _MODE_ROOT)
+
+# The Brief picker is genuinely tri-state (unlike Runtime, which always submits
+# a concrete value) because `CreateWorkspaceRequest.brief` really does carry
+# `None` through to the engine, which re-reads the cascade at create time —
+# see `_submit`. "cascade" sends `None`; "on"/"off" force the field.
+_BRIEF_CASCADE = "cascade"
+_BRIEF_ON = "on"
+_BRIEF_OFF = "off"
 
 
 # ─── variant blocks (atomic widgets, each owns its inputs + read()) ─────────
@@ -293,6 +301,10 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
     CreateWorkspaceScreen #skip-init {
         margin-bottom: 1;
     }
+    CreateWorkspaceScreen #runtime-hint {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
     CreateWorkspaceScreen #root-explain {
         color: $text-muted;
     }
@@ -323,6 +335,12 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         default_base: str = "HEAD",
     ) -> None:
         super().__init__()
+        # A precondition, not a user-facing error path: the screen has no way to
+        # render a picker over nothing, and a caller that got here with an empty
+        # roster has skipped its own guard. `action_new_workspace` flashes the
+        # actionable message (naming `builtin_agents`) and returns before
+        # constructing us — recovery belongs where the user is, this only keeps
+        # the invariant honest for the next caller.
         if not agents:
             raise ValueError("at least one agent must be configured")
         self._agents = list(agents)
@@ -349,6 +367,32 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         self._remote_block = _TrackRemoteBlock(remote_opts)
         self._root_block = _RootBlock(self._current_branch_name())
         self._model_hint = self._build_model_hint()
+        # Presentation hint only (the engine's runtime decision tree owns
+        # the real answer, never re-derived here) — whether `--runtime
+        # container` would use the project's own devcontainer.json or
+        # Grove's packaged default.
+        self._has_devcontainer = (repo_root / ".devcontainer" / "devcontainer.json").exists()
+        # The Runtime picker offers exactly Host/Container — no third "default
+        # (config)" option — and pre-selects whichever one the cascade would
+        # pick for an unopinionated create. `container.enabled` IS that cascade
+        # default (`core/runtime.py`'s `RuntimeResolver.resolve` reads this same
+        # field when `requested is None`); reusing it here rather than a copy
+        # is what keeps this in sync with the engine instead of drifting.
+        self._default_runtime = Runtime.CONTAINER if cfg.container.enabled else Runtime.HOST
+        # Presentation hint only, same reasoning as `_default_runtime` above:
+        # `cfg.brief.enabled` IS the cascade's answer for an unopinionated
+        # create, reused here (never re-derived) to name it on the "cascade"
+        # option instead of leaving it an ambiguous blank.
+        self._default_brief = cfg.brief.enabled
+
+    def _brief_option_label(self, choice: str) -> str:
+        """Option text for the tri-state Brief picker. The cascade option
+        names what it actually resolves to right now, mirroring the Runtime
+        picker's "(default)" marker — the unset state must never read as an
+        ambiguous blank."""
+        if choice == _BRIEF_CASCADE:
+            return f"Cascade default (currently {'on' if self._default_brief else 'off'})"
+        return "On" if choice == _BRIEF_ON else "Off"
 
     def _build_model_hint(self) -> str:
         """Placeholder text for the model input: the union of every configured
@@ -368,6 +412,22 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         if not seen:
             return self._MODEL_HINT_FALLBACK
         return "e.g. " + ", ".join(tuple(seen)[: self._MODEL_HINT_CAP])
+
+    def _runtime_hint(self) -> str:
+        """Informational, never a warning — the default-container notice, shown
+        up front rather than only after the fact."""
+        if self._has_devcontainer:
+            return "project .devcontainer/devcontainer.json found"
+        return "no .devcontainer/ — container runtime uses Grove's default image"
+
+    def _runtime_option_label(self, runtime: Runtime) -> str:
+        """Option text for the two-choice Runtime picker — marks whichever
+        option matches ``self._default_runtime`` so the cascade's answer is
+        readable without opening the dropdown."""
+        label = "Host" if runtime is Runtime.HOST else "Container"
+        if runtime is self._default_runtime:
+            label += " (default)"
+        return label
 
     def _current_branch_name(self) -> str:
         """Branch HEAD points to, read from ``local_branches``.
@@ -417,6 +477,28 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 agent_options,
                 value=agent_options[0][1],
                 id="agent",
+                allow_blank=False,
+            )
+            yield Label("Runtime:", classes="field-label")
+            yield Select(
+                [
+                    (self._runtime_option_label(Runtime.HOST), Runtime.HOST.value),
+                    (self._runtime_option_label(Runtime.CONTAINER), Runtime.CONTAINER.value),
+                ],
+                value=self._default_runtime.value,
+                id="runtime",
+                allow_blank=False,
+            )
+            yield Static(self._runtime_hint(), id="runtime-hint")
+            yield Label("First-turn brief:", classes="field-label")
+            yield Select(
+                [
+                    (self._brief_option_label(_BRIEF_CASCADE), _BRIEF_CASCADE),
+                    (self._brief_option_label(_BRIEF_ON), _BRIEF_ON),
+                    (self._brief_option_label(_BRIEF_OFF), _BRIEF_OFF),
+                ],
+                value=_BRIEF_CASCADE,
+                id="brief",
                 allow_blank=False,
             )
             yield Label("Model (blank = agent default):", classes="field-label")
@@ -626,6 +708,26 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             return
         skip_init = self.query_one("#skip-init", Checkbox).value
         model = self.query_one("#model", Input).value.strip() or None
+        # The picker only ever offers the two concrete runtimes (no "default
+        # (config)" sentinel), so this always resolves to a real `Runtime` —
+        # never `None`. That differs from a non-interactive caller (CLI/MCP,
+        # which still send `runtime=None` to let the cascade decide at create
+        # time) only in *when* the cascade is read: here it was read at
+        # modal-open (`self._default_runtime`, see `__init__`) to pre-select
+        # an option, and the same value is what gets submitted. The window
+        # between open and submit is sub-second and interactive — config
+        # cannot change under the user in that time — so reading it once at
+        # open and sending it concrete is equivalent to reading it again at
+        # submit and sending `None`.
+        runtime_value = self.query_one("#runtime", Select).value
+        runtime = Runtime(str(runtime_value))
+        # Unlike runtime, the brief picker genuinely has three states: the
+        # cascade choice sends `None` so the engine re-reads `brief.enabled`
+        # at create time (the same field this modal read at open time to
+        # label the option, per `_default_brief`), rather than a value frozen
+        # at modal-open.
+        brief_value = str(self.query_one("#brief", Select).value)
+        brief = None if brief_value == _BRIEF_CASCADE else brief_value == _BRIEF_ON
         try:
             request = CreateWorkspaceRequest(
                 agent_name=str(self.query_one("#agent", Select).value),
@@ -633,6 +735,8 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 branch_plan=plan,
                 skip_init=skip_init,
                 model=model,
+                runtime=runtime,
+                brief=brief,
             )
         except Exception:
             self.app.bell()

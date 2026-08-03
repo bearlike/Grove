@@ -3,10 +3,10 @@ import { render, screen } from "@testing-library/react";
 import { Response } from "@/components/ai-elements/response";
 
 // The transcript (and the composer's fullscreen preview) render agent prose
-// through this ONE `Response` = streamdown mount. #160 flattens streamdown's
-// stock fenced-code card-within-a-card into the assistant-ui single well (no
+// through this ONE `Response` = streamdown mount. Fenced code flattens
+// streamdown's stock card-within-a-card into the assistant-ui single well (no
 // download affordance, no line-number gutters, no floating pill — just a slim
-// header + one bordered body); #162 flattens markdown TABLES the same way (no
+// header + one bordered body); markdown TABLES flatten the same way (no
 // nested bordered shell, no copy/download/fullscreen controls row — one framed
 // table with a muted header cap). streamdown's own `controls`/`lineNumbers`
 // props carry the semantic removals; these tests pin that contract at the DOM

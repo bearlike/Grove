@@ -127,14 +127,15 @@ webapp-test:  ## Run webapp unit + component tests
 
 # ─── systemd (Linux user-scope) ─────────────────────────────────────────────
 #
-# Installs ~/.config/systemd/user/grove-daemon.service (always) and
-# grove-webapp.service (only when WITH_WEBAPP=1). Templates live in
-# packaging/systemd/*.service.in; @PLACEHOLDER@ tokens are substituted
-# by sed at install time.
+# Installs ~/.config/systemd/user/grove-daemon.service (always),
+# grove-webapp.service (only when WITH_WEBAPP=1), and grove-mcp.service
+# (only when WITH_MCP=1). Templates live in packaging/systemd/*.service.in;
+# @PLACEHOLDER@ tokens are substituted by sed at install time.
 #
 # Quick reference:
 #   make systemd                    # daemon only
 #   WITH_WEBAPP=1 make systemd      # daemon + webapp
+#   WITH_MCP=1 make systemd         # daemon + MCP over Streamable HTTP
 #   make systemd-enable             # daemon-reload + enable --now (matches WITH_WEBAPP)
 #   make systemd-disable            # stop + disable
 #   make systemd-uninstall          # remove unit files
@@ -146,7 +147,10 @@ SYSTEMD_USER_DIR ?= $(HOME)/.config/systemd/user
 SYSTEMD_TEMPLATE_DIR := $(CURDIR)/packaging/systemd
 
 # Auto-detect grove + npm binaries; user can override for nvm/asdf setups.
+# `grove-mcp` is a separate console script from `grove`, so it gets its own
+# lookup — an install with the lean `[daemon]` extra ships one and not the other.
 GROVE_BIN ?= $(shell command -v grove 2>/dev/null)
+MCP_BIN   ?= $(shell command -v grove-mcp 2>/dev/null)
 NPM_BIN   ?= $(shell command -v npm 2>/dev/null)
 NODE_BIN_DIR := $(if $(NPM_BIN),$(dir $(NPM_BIN)),)
 
@@ -160,22 +164,31 @@ DAEMON_HOST ?= 127.0.0.1
 DAEMON_PORT ?= 7421
 WEBAPP_HOST ?= 0.0.0.0
 WEBAPP_PORT ?= 3000
+# Loopback by default, deliberately unlike WEBAPP_HOST: the MCP surface grants
+# workspace lifecycle control (create/kill/message), so exposing it off-host is
+# an explicit operator decision, taken behind a tunnel/VPN/TLS proxy.
+MCP_HOST    ?= 127.0.0.1
+MCP_PORT    ?= 7431
 DAEMON_URL  := http://$(DAEMON_HOST):$(DAEMON_PORT)
 
 # WITH_WEBAPP=1 to also install/enable/disable the webapp unit.
 WITH_WEBAPP ?=
+# WITH_MCP=1 to also install/enable/disable the MCP (Streamable HTTP) unit.
+WITH_MCP ?=
 
-# Internal: list the webapp unit basename only when WITH_WEBAPP=1.
+# Internal: list a companion unit basename only when its gate is set.
 _WEBAPP_UNIT_NAME := $(if $(WITH_WEBAPP),grove-webapp.service,)
-_UNITS := grove-daemon.service $(_WEBAPP_UNIT_NAME)
+_MCP_UNIT_NAME := $(if $(WITH_MCP),grove-mcp.service,)
+_UNITS := grove-daemon.service $(_WEBAPP_UNIT_NAME) $(_MCP_UNIT_NAME)
 
-# When WITH_WEBAPP is set, `systemd` depends on the webapp install recipe too.
-# This is a Make-level (not shell) conditional so the per-unit recipes stay
+# When a gate is set, `systemd` depends on that unit's install recipe too.
+# These are Make-level (not shell) conditionals so the per-unit recipes stay
 # single-purpose and don't hide control flow inside shell heredocs.
 _WEBAPP_INSTALL_DEP := $(if $(WITH_WEBAPP),_systemd-install-webapp,)
+_MCP_INSTALL_DEP := $(if $(WITH_MCP),_systemd-install-mcp,)
 
 .PHONY: systemd systemd-enable systemd-disable systemd-uninstall systemd-status systemd-print \
-        _systemd-precheck _systemd-install-daemon _systemd-install-webapp
+        _systemd-precheck _systemd-install-daemon _systemd-install-webapp _systemd-install-mcp
 
 # Precondition: required binaries discoverable. Run before any install/enable.
 _systemd-precheck:
@@ -197,6 +210,15 @@ _systemd-precheck:
 	  echo "✓ npm: $(NPM_BIN)"; \
 	  echo "✓ webapp dir: $(WEBAPP_DIR)"; \
 	fi
+	@if [ -n "$(WITH_MCP)" ]; then \
+	  if [ -z "$(MCP_BIN)" ]; then \
+	    echo "✗ grove-mcp not on PATH (required for WITH_MCP=1). Reinstall with the mcp extra: 'uv tool install --reinstall --force --editable .[all]'" >&2; exit 1; \
+	  fi; \
+	  if [ ! -f "$(HOME)/.config/grove/mcp.env" ]; then \
+	    echo "⚠  $(HOME)/.config/grove/mcp.env not found — create it (mode 0600) with GROVE_MCP_TOKEN=<secret>; the service exits 2 without it."; \
+	  fi; \
+	  echo "✓ grove-mcp: $(MCP_BIN)"; \
+	fi
 
 # Common sed substitution applied to a template. Uses ',' as the delimiter
 # so file paths don't need escaping.
@@ -210,6 +232,9 @@ _SED_SUBST := sed \
 	-e 's,@NODE_BIN_DIR@,$(NODE_BIN_DIR:/=),g' \
 	-e 's,@WEBAPP_HOST@,$(WEBAPP_HOST),g' \
 	-e 's,@WEBAPP_PORT@,$(WEBAPP_PORT),g' \
+	-e 's,@MCP_BIN@,$(MCP_BIN),g' \
+	-e 's,@MCP_HOST@,$(MCP_HOST),g' \
+	-e 's,@MCP_PORT@,$(MCP_PORT),g' \
 	-e 's,@DAEMON_URL@,$(DAEMON_URL),g'
 
 _systemd-install-daemon: _systemd-precheck
@@ -224,10 +249,16 @@ _systemd-install-webapp: _systemd-precheck
 	@mv -f "$(SYSTEMD_USER_DIR)/grove-webapp.service.tmp" "$(SYSTEMD_USER_DIR)/grove-webapp.service"
 	@echo "✓ wrote $(SYSTEMD_USER_DIR)/grove-webapp.service"
 
-systemd: _systemd-install-daemon $(_WEBAPP_INSTALL_DEP)  ## Install user systemd units (WITH_WEBAPP=1 to also install webapp)
+_systemd-install-mcp: _systemd-precheck
+	@mkdir -p "$(SYSTEMD_USER_DIR)"
+	@$(_SED_SUBST) "$(SYSTEMD_TEMPLATE_DIR)/grove-mcp.service.in" > "$(SYSTEMD_USER_DIR)/grove-mcp.service.tmp"
+	@mv -f "$(SYSTEMD_USER_DIR)/grove-mcp.service.tmp" "$(SYSTEMD_USER_DIR)/grove-mcp.service"
+	@echo "✓ wrote $(SYSTEMD_USER_DIR)/grove-mcp.service"
+
+systemd: _systemd-install-daemon $(_WEBAPP_INSTALL_DEP) $(_MCP_INSTALL_DEP)  ## Install user systemd units (WITH_WEBAPP=1 / WITH_MCP=1 to also install those)
 	systemctl --user daemon-reload
 	@echo
-	@echo "next: 'make systemd-enable'$(if $(WITH_WEBAPP), (will enable both),)"
+	@echo "next: 'make systemd-enable'$(if $(_WEBAPP_UNIT_NAME)$(_MCP_UNIT_NAME), (will enable all installed units),)"
 
 systemd-print: _systemd-precheck  ## Print the rendered unit file(s) without writing
 	@echo "─── grove-daemon.service ───"
@@ -235,6 +266,10 @@ systemd-print: _systemd-precheck  ## Print the rendered unit file(s) without wri
 	@if [ -n "$(WITH_WEBAPP)" ]; then \
 	  echo; echo "─── grove-webapp.service ───"; \
 	  $(_SED_SUBST) "$(SYSTEMD_TEMPLATE_DIR)/grove-webapp.service.in"; \
+	fi
+	@if [ -n "$(WITH_MCP)" ]; then \
+	  echo; echo "─── grove-mcp.service ───"; \
+	  $(_SED_SUBST) "$(SYSTEMD_TEMPLATE_DIR)/grove-mcp.service.in"; \
 	fi
 
 systemd-enable: systemd  ## Enable + start now (matches WITH_WEBAPP scope)
@@ -248,6 +283,7 @@ systemd-disable:  ## Stop + disable user units (matches WITH_WEBAPP scope)
 systemd-uninstall: systemd-disable  ## Stop, disable, and remove unit files
 	rm -f $(SYSTEMD_USER_DIR)/grove-daemon.service
 	@if [ -n "$(WITH_WEBAPP)" ]; then rm -f $(SYSTEMD_USER_DIR)/grove-webapp.service; fi
+	@if [ -n "$(WITH_MCP)" ]; then rm -f $(SYSTEMD_USER_DIR)/grove-mcp.service; fi
 	systemctl --user daemon-reload
 	@echo "✓ removed unit files"
 

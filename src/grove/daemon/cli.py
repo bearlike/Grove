@@ -8,12 +8,75 @@ own machinery, not Typer's.
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 
 import typer
 import uvicorn
 from loguru import logger
 
 app = typer.Typer(help="Grove API daemon")
+
+
+def _arm_parent_death_signal() -> None:
+    """Exit if the process that spawned us is already gone, else die when it dies.
+
+    Gated on ``--print-port`` in ``serve()`` below, not a dedicated flag:
+    that flag's own help text already says "used by LocalTransport", so its
+    presence already means "I am an ephemeral daemon owned by one caller's
+    process lifetime, not the supervised systemd unit" — reusing it is one
+    fewer knob for a property that has exactly one true today. This is a
+    real coupling, not a coincidence: if `--print-port` ever grows a second
+    caller that does NOT want death-linkage, split it into its own flag
+    then — don't preempt that here.
+
+    Without this, a SIGKILLed/OOM-killed/terminal-closed parent leaves this
+    process running forever, reparented to init, still polling every 2s
+    (measured on the reference host: two such orphans at 1.4% CPU each
+    after 35 hours).
+
+    Linux-only — ``prctl`` has no equivalent on macOS/Windows; degrades to a
+    no-op there, same shape as ``paths.exclusive_lock``'s ``fcntl`` guard.
+
+    Deliberately done HERE, in the exec'd child's own startup, rather than
+    via ``Popen(preexec_fn=...)`` in the launcher. ``preexec_fn`` runs
+    Python/library code between fork() and exec() *in the launcher's
+    process*, and fork() only clones the calling thread — any lock another
+    thread held at that instant (e.g. Textual's TUI driver thread, which
+    genuinely runs alongside this codepath) can wedge the child forever.
+    That hazard is specific to running code pre-exec; fork()+exec() itself
+    is safe regardless of how many threads the launcher has. Arming after
+    our own exec() sidesteps it entirely, at the cost of a longer window
+    between fork and the signal being armed — which is exactly why the
+    getppid() re-check below exists: closing that widened race is cheap
+    and this is the one caller who actually needs it.
+    """
+    if sys.platform != "linux":
+        return
+    import ctypes  # noqa: PLC0415 - Linux-only; no reason to import elsewhere
+    import signal  # noqa: PLC0415 - ditto
+
+    parent_pid = os.getppid()
+    PR_SET_PDEATHSIG = 1
+    libc = ctypes.CDLL(None, use_errno=True)
+    rc = libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+    if rc != 0:
+        # Silently unarmed is exactly the failure this function exists to
+        # prevent — log loudly rather than let a permission/seccomp denial
+        # (the realistic causes) pass for "armed". Best-effort: this daemon
+        # still has a job to do, so a failed self-safety-net doesn't block
+        # startup, it just means the orphan risk below is back.
+        logger.warning(
+            "prctl(PR_SET_PDEATHSIG) failed (errno={}); this daemon will NOT die with its parent",
+            ctypes.get_errno(),
+        )
+        return
+    if os.getppid() != parent_pid:
+        # The parent died in the (fork -> exec -> import -> here) window,
+        # before the signal was armed — we've already been reparented, so
+        # no SIGTERM is coming. Exit now rather than becoming the exact
+        # orphan this function exists to prevent.
+        os._exit(1)
 
 
 @app.command("serve")
@@ -27,6 +90,8 @@ def serve(
     ),
 ) -> None:
     """Run the Grove daemon (FastAPI + uvicorn)."""
+    if print_port:
+        _arm_parent_death_signal()
     config = uvicorn.Config(
         "grove.daemon._asgi:app",
         host=host,

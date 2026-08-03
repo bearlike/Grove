@@ -16,8 +16,8 @@ nameable in a sentence and testable on its own:
 Grounding (verified against real on-host transcripts, Claude Code 2.1.x):
 - Transcript path is ``<config>/projects/<encoded-cwd>/<session-uuid>.jsonl``;
   the encoding (every non-alphanumeric char → ``-``, per the Agent SDK sessions
-  guide) is **lossy and non-reversible** (anthropics/claude-code#7009), so we
-  glob by the known UUID and never decode the folder name back to a cwd.
+  guide) is **lossy and non-reversible**, so we glob by the known UUID and
+  never decode the folder name back to a cwd.
 - A ``type:"user"`` line is usually **not** a human turn: ``tool_result`` blocks
   carry ``role:"user"`` too (one real session: 4683 user lines, 80 real turns).
   The real-turn filter is the whole game — see :meth:`_Record.is_human_turn`.
@@ -57,6 +57,7 @@ from grove.core.agents.model import (
     OrderedDigest,
     SessionControl,
     SessionControls,
+    SessionRef,
     SessionSummary,
     SessionTurn,
     TaskBoard,
@@ -78,6 +79,14 @@ from grove.core.tmux import SendKey, SendOp
 # raw ``<task-notification>…`` "user prompts" in every client.
 _NOTIFICATION_MARKER = "<task-notification>"
 
+# A relayed message from a peer teammate session (verified CC 2.1.209
+# in_process_teammate flavor) — the completion signal for an Agent-
+# tool spawn with a ``name`` (a "teammate"), which returns nothing shaped
+# like ``_NOTIFICATION_MARKER`` at all. Landed as a plain ``type:"user"``
+# STRING-content line wrapping ``<teammate-message teammate_id="...">``
+# around an embedded JSON payload (e.g. ``{"type":"idle_notification",...}``).
+_TEAMMATE_MESSAGE_MARKER = "<teammate-message"
+
 _NON_HUMAN_MARKERS: tuple[str, ...] = (
     "<command-name>",
     "<command-message>",
@@ -89,11 +98,24 @@ _NON_HUMAN_MARKERS: tuple[str, ...] = (
     "Caveat:",
     "This session is being continued from a previous",
     _NOTIFICATION_MARKER,
+    _TEAMMATE_MESSAGE_MARKER,
 )
 
 # The harness tools that spawn a sub-agent. ``Task`` is the pre-2.1 name of the
-# same tool; both appear in transcripts depending on the Claude Code version.
-_SUBAGENT_TOOLS = frozenset({"Agent", "Task"})
+# ``Agent`` tool; both appear in transcripts depending on the Claude Code
+# version. ``Workflow`` ("ultracode") is a third, distinct spawn shape —
+# its launch ack is ``async_launched``-flavored (see ``_ASYNC_ACK_STATUSES``)
+# and its workers persist recursively under ``subagents/workflows/wf_<id>/``.
+_SUBAGENT_TOOLS = frozenset({"Agent", "Task", "Workflow"})
+
+# toolUseResult.status values marking a tool_result as a LAUNCH ACK, not a
+# real return (verified CC 2.1.209): "teammate_spawned" (in-process
+# Agent-tool teammate, mailbox-delivered — no run_in_background flag exists
+# for this flavor, backgrounding is implicit) and "async_launched" (a
+# Workflow ("ultracode") run, whose own async job id rides `toolUseResult
+# .taskId` — a DIFFERENT id space than the Task-board taskId TaskCreate/
+# TaskUpdate use, but the one `TaskOutput` polls with).
+_ASYNC_ACK_STATUSES = frozenset({"teammate_spawned", "async_launched"})
 
 # Sentinel model id Claude Code writes for interrupts / synthetic lines; never a
 # real model and never counted toward token usage or the displayed model.
@@ -150,7 +172,7 @@ class _ClaudeHome:
         Order: ``CLAUDE_CONFIG_DIR`` (comma-separated, like ccusage) → the XDG
         ``~/.config/claude`` → the legacy ``~/.claude``. This is the one place the
         cascade is defined; ``projects_dirs`` (transcripts) and the controls scan
-        (#178, commands/skills live directly under a config dir) both project off
+        (commands/skills live directly under a config dir) both project off
         it, so a relocated profile is honoured by both without drift.
         """
         candidates: list[Path] = []
@@ -208,9 +230,9 @@ class _ClaudeHome:
 
         Globs by the unique UUID across every config dir (never by the lossy
         folder name). When the same UUID resolves under multiple project folders
-        — collisions are possible per #7009 — the one whose first record's
-        ``cwd`` matches ``cwd`` wins; otherwise all are returned and the parser's
-        content-level de-dup sorts it out.
+        — a real collision, since the cwd encoding is lossy — the one whose
+        first record's ``cwd`` matches ``cwd`` wins; otherwise all are returned
+        and the parser's content-level de-dup sorts it out.
         """
         encoded = cls.encode_cwd(cwd)
         mains: list[Path] = []
@@ -224,7 +246,12 @@ class _ClaudeHome:
                 if match.is_file() and match not in mains:
                     mains.append(match)
             # Sub-agent transcripts (Claude Code 2.1.2+): <uuid>/subagents/agent-*.jsonl
-            for match in projects.glob(f"*/{session_id}/subagents/agent-*.jsonl"):
+            # — globbed RECURSIVELY: a Workflow ("ultracode") worker
+            # nests one level deeper, at
+            # <uuid>/subagents/workflows/wf_<runId>/agent-*.jsonl. ``**``
+            # matches zero-or-more intermediate dirs, so this still covers the
+            # flat, non-Workflow case too.
+            for match in projects.glob(f"*/{session_id}/subagents/**/agent-*.jsonl"):
                 if match.is_file():
                     subagents.append(match)
 
@@ -239,11 +266,11 @@ class _ClaudeHome:
         """Best-effort read of one sub-agent transcript's sibling ``.meta.json``
         (``{agentType, description, toolUseId}``, verified on-host — Claude Code
         writes it fire-and-forget beside ``agent-{agentId}.jsonl``) — the fleet
-        reader's (#173) identity + spawn-correlation source. ``toolUseId`` is
+        reader's identity + spawn-correlation source. ``toolUseId`` is
         the exact spawning tool_use id on the MAIN thread; this is deliberately
         NOT the same thing as ``sourceToolAssistantUUID`` (surfaced on the spine
         as ``AgentMessage.parent_tool_use_id``) — verified against 1300+ real
-        on-host sub-agent transcripts (2026-07-08), that field mirrors the
+        on-host sub-agent transcripts, that field mirrors the
         record's own ``parentUuid`` in every sample (same-thread chaining), never
         the main transcript's spawning call, so it cannot correlate a thread back
         to its spawn. Missing or malformed sidecar → ``{}``, never raised —
@@ -275,7 +302,7 @@ class _ClaudeHome:
         """``(session_id, transcript_path, mtime, birth)`` for every session
         recorded in ``cwd``, newest-first by mtime — the one scan behind
         ``discover`` (ids for the dashboard), ``discover_births`` (the cheap
-        adoption pre-filter, #F5), and ``list_sessions`` (summaries for the
+        adoption pre-filter), and ``list_sessions`` (summaries for the
         explorer).
 
         Scans the forward-encoded candidate folder under each config dir — a
@@ -298,7 +325,7 @@ class _ClaudeHome:
                 session_id = path.stem
                 if session_id == exclude_id or not path.is_file():
                     continue
-                recorded_cwd, birth = cls._head_cwd_and_birth(path)
+                recorded_cwd, birth, _branch = cls._head_cwd_and_birth(path)
                 if recorded_cwd != target:
                     continue
                 try:
@@ -328,22 +355,29 @@ class _ClaudeHome:
     @staticmethod
     def _head_cwd_and_birth(
         path: Path, *, max_lines: int = 200
-    ) -> tuple[str | None, datetime | None]:
-        """The ``(cwd, birth)`` this session recorded, from ONE bounded head read.
+    ) -> tuple[str | None, datetime | None, str | None]:
+        """The ``(cwd, birth, git_branch)`` this session recorded, from ONE
+        bounded head read.
 
         Modern transcripts open with cwd-less preamble lines (``mode``,
         ``file-history-snapshot``, ``summary``); the ``cwd`` first appears a few
         lines in (the first ``attachment``/``user`` record) and the earliest
         timestamped record (records are time-sorted) is the session BIRTH.
-        Returning line 0's cwd — as this used to — yields ``None`` for every real
-        transcript, which silently breaks all cwd-based discovery and locate
-        tie-breaking. Both facts ride out of one head read (bounded by
-        ``max_lines`` so a pathological file costs no more than a head-read; both
-        are near the top in practice), so the cheap adoption pre-filter (#F5)
-        never pays a full parse.
+        Line 0 never carries a cwd, so reading only that line yields ``None``
+        for every real transcript, which silently breaks all cwd-based
+        discovery and locate tie-breaking. All three facts ride out of one
+        head read (bounded by ``max_lines`` so a pathological file costs no
+        more than a head-read; all are near the top in practice), so the
+        cheap adoption pre-filter never pays a full parse. ``git_branch``
+        rides the SAME record as
+        ``cwd`` (verified on-host: 374/374 real transcripts carry both on one
+        line), so this costs no extra I/O over the ``(cwd, birth)`` shape the
+        hot-path callers below already relied on — they simply ignore the third
+        element.
         """
         first_cwd: str | None = None
         first_birth: datetime | None = None
+        first_branch: str | None = None
         try:
             with path.open(encoding="utf-8") as fh:
                 for index, line in enumerate(fh):
@@ -362,19 +396,75 @@ class _ClaudeHome:
                         cwd = rec.get("cwd")
                         if isinstance(cwd, str) and cwd:
                             first_cwd = cwd
+                    if first_branch is None:
+                        branch = rec.get("gitBranch")
+                        if isinstance(branch, str) and branch:
+                            first_branch = branch
                     if first_birth is None:
                         first_birth = _parse_timestamp(rec.get("timestamp"))
-                    if first_cwd is not None and first_birth is not None:
+                    if (
+                        first_cwd is not None
+                        and first_birth is not None
+                        and first_branch is not None
+                    ):
                         break
         except OSError:
-            return (None, None)
-        return (first_cwd, first_birth)
+            return (None, None, None)
+        return (first_cwd, first_birth, first_branch)
+
+    @classmethod
+    def discover_all(cls) -> tuple[SessionRef, ...]:
+        """Every session across EVERY folder in the projects cascade — the
+        deliberately broader host-wide walk, distinct from :meth:`discover_paths`.
+
+        ``discover_paths(cwd)`` jumps straight to the one forward-encoded
+        folder for ``cwd`` (a single directory listing) because Claude's cwd
+        encoding is a deterministic one-way function — that is what keeps it
+        cheap enough for the 2 s activity poll, and this method must NOT be
+        used to re-implement it (a host-wide walk on every poll tick would
+        peg the daemon's CPU). This method exists only for
+        catalog requests: it walks every ``<encoded-cwd>/`` folder under every
+        ``projects_dirs()`` root and head-reads every top-level ``*.jsonl`` in
+        each — the SAME bounded head read :meth:`discover_paths` already uses
+        per file (``_head_cwd_and_birth``), just applied over every folder
+        instead of one. Sub-agent files (``subagents/``) are skipped, exactly
+        like ``discover_paths``. Best-effort: a malformed or vanished file is
+        skipped, never raised; a file whose head read can't recover a cwd
+        still yields a ref with ``cwd=None`` rather than being dropped.
+        """
+        found: dict[str, SessionRef] = {}
+        for projects in cls.projects_dirs():
+            for folder in projects.iterdir():
+                if not folder.is_dir():
+                    continue
+                for path in folder.glob("*.jsonl"):
+                    if not path.is_file():
+                        continue
+                    session_id = path.stem
+                    cwd, birth, branch = cls._head_cwd_and_birth(path)
+                    try:
+                        mtime = path.stat().st_mtime
+                    except OSError:
+                        mtime = 0.0
+                    prior = found.get(session_id)
+                    if prior is not None and prior.mtime >= mtime:
+                        continue
+                    found[session_id] = SessionRef(
+                        session_id=session_id,
+                        adapter_kind="claude_code",
+                        cwd=cwd,
+                        transcript_path=path,
+                        birth=birth,
+                        mtime=mtime,
+                        git_branch=branch,
+                    )
+        return tuple(sorted(found.values(), key=lambda ref: (-ref.mtime, ref.session_id)))
 
 
 class _ClaudeControls:
     """Resolves *which input controls* a Claude Code session in a cwd exposes.
 
-    Pure filesystem enumeration (TIER 1, #178): reads the worktree's ``.claude/``
+    Pure filesystem enumeration: reads the worktree's ``.claude/``
     plus the user-level config-dir cascade, no running session needed. Every scan
     is best-effort — a missing dir, an unreadable file, or malformed JSON drops
     that source and never raises, exactly like :class:`_ClaudeHome`. Reads the
@@ -385,6 +475,11 @@ class _ClaudeControls:
     # Bound the scan so a pathological tree (a symlink loop, a vendored node_modules
     # under .claude) can't turn a control panel read into an unbounded walk.
     _MAX_ENTRIES = 500
+
+    #: The project-scoped MCP registry, committed at the repo root — so a Grove
+    #: worktree inherits it, and a container reaches it through the workspace
+    #: mount. Named once here because two callers resolve it now.
+    PROJECT_MCP_FILENAME = ".mcp.json"
 
     @classmethod
     def scan(cls, cwd: Path) -> SessionControls:
@@ -420,7 +515,7 @@ class _ClaudeControls:
         # documented shared shape) then the user-global ``~/.claude.json`` — both
         # carry a top-level ``mcpServers`` object keyed by server name.
         mcp_files: list[tuple[Path, ControlScope]] = [
-            (cwd / ".mcp.json", "project"),
+            (cwd / cls.PROJECT_MCP_FILENAME, "project"),
             (Path.home() / ".claude.json", "user"),
         ]
         for path, scope in mcp_files:
@@ -481,19 +576,28 @@ class _ClaudeControls:
         return out
 
     @classmethod
-    def _scan_mcp(cls, path: Path, scope: ControlScope) -> list[SessionControl]:
-        """The ``mcpServers`` object keys from an ``.mcp.json`` → server names."""
+    def mcp_server_names(cls, path: Path) -> tuple[str, ...]:
+        """The ``mcpServers`` object keys of an ``.mcp.json``-shaped file.
+
+        The primitive under :meth:`_scan_mcp`, public because a second caller
+        needs the bare names rather than controls: the container trust stamp
+        pre-approves exactly the project-scoped servers this returns, and a
+        second parser for one JSON object is how the two lists come to disagree.
+        Best-effort like every scan here — an absent or malformed file is ``()``.
+        """
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return []
+            return ()
         servers = raw.get("mcpServers") if isinstance(raw, dict) else None
         if not isinstance(servers, dict):
-            return []
-        return [
-            SessionControl(name=str(name), scope=scope)
-            for name in list(servers)[: cls._MAX_ENTRIES]
-        ]
+            return ()
+        return tuple(str(name) for name in list(servers)[: cls._MAX_ENTRIES])
+
+    @classmethod
+    def _scan_mcp(cls, path: Path, scope: ControlScope) -> list[SessionControl]:
+        """Those server names as scoped controls."""
+        return [SessionControl(name=name, scope=scope) for name in cls.mcp_server_names(path)]
 
     @staticmethod
     def _front_matter(path: Path) -> str | None:
@@ -643,6 +747,111 @@ class _Record:
         return match.group(1).strip() if match else None
 
     @property
+    def is_teammate_message(self) -> bool:
+        """A relayed message from a peer teammate session — the
+        completion signal for a named (in-process-teammate) Agent
+        spawn, a plain ``type:"user"`` STRING-content carrier (same shape
+        :attr:`is_task_notification` guards against) wrapping
+        ``<teammate-message teammate_id="...">…</teammate-message>``. A
+        notice the agent *received*, so it advances the tail exactly like a
+        task-notification, but is never a human turn."""
+        return (
+            self.type == "user"
+            and not self.is_sidechain
+            and not self._has_block("tool_result")
+            and _TEAMMATE_MESSAGE_MARKER in self.text()
+        )
+
+    @property
+    def is_agent_notice(self) -> bool:
+        """Either received-notice shape that advances the tail without being
+        a human turn: a ``<task-notification>`` or a peer
+        ``<teammate-message>``. One combined predicate so the tail-loop
+        dispatch (:meth:`_TranscriptParser.activity`) stays a single branch —
+        ``_SubagentFleet.on_notice`` does the actual routing."""
+        return self.is_task_notification or self.is_teammate_message
+
+    def teammate_message_text(self) -> str:
+        """The relayed notice, human-readable — never the raw
+        ``<teammate-message>`` wrapper or CC's fixed disclaimer boilerplate
+        around every relay.
+
+        The wrapped body is either structured JSON (e.g.
+        ``{"type":"idle_notification","from":...,"idleReason":...}``) or a
+        peer's own plain-text message; both are handled, falling back
+        gracefully rather than ever leaking markup.
+        """
+        sender = self.teammate_message_sender() or "a teammate"
+        inner = self._teammate_message_inner()
+        if inner is None:
+            return f"message from {sender}"
+        try:
+            payload = json.loads(inner)
+        except json.JSONDecodeError:
+            return inner or f"message from {sender}"
+        if not isinstance(payload, dict):
+            return inner or f"message from {sender}"
+        kind = payload.get("type")
+        if kind == "idle_notification":
+            reason = payload.get("idleReason") or "idle"
+            return f"{sender} is now idle ({reason})"
+        if isinstance(kind, str) and kind:
+            return f"{sender}: {kind}"
+        return inner or f"message from {sender}"
+
+    def teammate_message_sender(self) -> str | None:
+        """The sending teammate's name — the embedded JSON's ``from``, else
+        the opening tag's ``teammate_id`` attribute."""
+        payload = self._teammate_message_payload()
+        if payload is not None:
+            sender = payload.get("from")
+            if isinstance(sender, str) and sender:
+                return sender
+        match = re.search(r'teammate_id="([^"]*)"', self.text())
+        return match.group(1) if match else None
+
+    @property
+    def is_teammate_idle_notification(self) -> bool:
+        """True only for the structured ``{"type":"idle_notification",...}``
+        relay — the one teammate-message shape that means "this agent is done
+        with its current work". Teammates also relay INTERIM messages while
+        still running (progress reports, receipt acks, questions back to the
+        lead); closing a spawn on those would undercount the live fleet, so
+        the fleet close keys on this predicate, never on
+        :attr:`is_teammate_message` alone."""
+        payload = self._teammate_message_payload()
+        return payload is not None and payload.get("type") == "idle_notification"
+
+    def _teammate_message_payload(self) -> dict[str, Any] | None:
+        """The embedded JSON payload of a ``<teammate-message>`` relay, or
+        ``None`` when the body is plain prose / unparseable."""
+        inner = self._teammate_message_inner()
+        if inner is None:
+            return None
+        try:
+            payload = json.loads(inner)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _teammate_message_inner(self) -> str | None:
+        """The raw text between the ``<teammate-message>`` tags, stripped —
+        JSON for a structured relay, plain prose for a peer's own message."""
+        match = re.search(
+            r"<teammate-message[^>]*>(.*?)</teammate-message>", self.text(), re.DOTALL
+        )
+        return match.group(1).strip() if match else None
+
+    @property
+    def tool_use_result(self) -> dict[str, Any]:
+        """The top-level ``toolUseResult`` object CC writes on a tool_result
+        line — metadata ABOUT the call (e.g. ``status``), distinct from
+        ``message.content``'s ``tool_result`` block itself. ``{}`` when
+        absent or not a dict (defensive — heterogeneous shape)."""
+        value = self.raw.get("toolUseResult")
+        return value if isinstance(value, dict) else {}
+
+    @property
     def stop_reason(self) -> str | None:
         value = self._message.get("stop_reason")
         return value if isinstance(value, str) else None
@@ -663,17 +872,19 @@ class _Record:
     def tool_use_count(self) -> int:
         return sum(1 for b in self._content_blocks() if b.get("type") == "tool_use")
 
-    # ── spine mapping (#179) ─────────────────────────────────────────────────
+    # ── spine mapping ─────────────────────────────────────────────────────────
     def to_message(self) -> AgentMessage | None:
         """Map this record onto one agentic-loop spine message, or ``None`` for a
         record that is not a loop message (stream metadata, machinery, preamble).
 
         The role IS the classification (reusing the same predicates the status
         path trusts): a real human turn → ``user`` (its text as one block); a
-        delivered ``<task-notification>`` → ``notification`` (the cooked summary
-        as text, the spawning tool id on ``tool_use_id``); a main-thread
-        assistant reply → ``assistant``; a ``tool_result`` carrier → ``tool``.
-        Sub-agent (sidechain) records ride with ``is_sidechain`` + their lineage
+        delivered ``<task-notification>`` OR a peer ``<teammate-message>``
+        → ``notification`` (the cooked summary as text; the former's
+        spawning tool id rides ``tool_use_id``, the latter carries none — it
+        closes its spawn by name, not by tool-use id); a main-thread assistant
+        reply → ``assistant``; a ``tool_result`` carrier → ``tool``. Sub-agent
+        (sidechain) records ride with ``is_sidechain`` + their lineage
         (``parent_tool_use_id`` = ``sourceToolAssistantUUID``, ``thread_id`` =
         ``agentId``), classified by their underlying shape."""
         role = self._spine_role()
@@ -684,7 +895,12 @@ class _Record:
             text = self.text()
             content = (ContentBlock(type="text", text=text),) if text.strip() else ()
         elif role == "notification":
-            content = (ContentBlock(type="text", text=self.notification_text()),)
+            note = (
+                self.teammate_message_text()
+                if self.is_teammate_message
+                else self.notification_text()
+            )
+            content = (ContentBlock(type="text", text=note),)
         else:
             content = self._map_blocks()
         return AgentMessage(
@@ -706,7 +922,7 @@ class _Record:
         # ``is_sidechain`` flag, so lineage survives but projections can filter it.
         if self.is_human_turn:
             return "user"
-        if self.is_task_notification:
+        if self.is_agent_notice:
             return "notification"
         if self.is_assistant:
             return "assistant"
@@ -812,20 +1028,51 @@ class _Record:
             if b.get("type") == "tool_use" and b.get("name")
         ]
 
-    def subagent_spawns(self) -> list[tuple[str, bool]]:
-        """``(tool_use id, runs_in_background)`` per sub-agent this record spawns.
+    def subagent_spawns(self) -> list[tuple[str, bool, str | None]]:
+        """``(tool_use id, runs_in_background, teammate name)`` per sub-agent
+        this record spawns.
 
         The background flag decides what closes the id: a foreground spawn ends
         with its ``tool_result``, but a backgrounded one gets an *immediate*
         launch-ack ``tool_result`` while the agent keeps running — only its
         later ``task-notification`` is the real return (verified on-host;
-        closing on the ack read every background fleet as size 0).
+        closing on the ack read every background fleet as size 0). ``name`` is
+        ``input.name`` when present (the in-process-teammate flavor,
+        verified CC 2.1.209 — this flavor carries NO ``run_in_background`` at
+        all, backgrounding is implicit) — the identity a later
+        ``<teammate-message>`` completion line correlates against, since that
+        line carries no tool-use id to match by.
         """
-        return [
-            (str(b.get("id")), _as_bool((b.get("input") or {}).get("run_in_background")))
-            for b in self._content_blocks()
-            if b.get("type") == "tool_use" and b.get("name") in _SUBAGENT_TOOLS and b.get("id")
-        ]
+        out: list[tuple[str, bool, str | None]] = []
+        for b in self._content_blocks():
+            is_spawn = b.get("type") == "tool_use" and b.get("name") in _SUBAGENT_TOOLS
+            if not is_spawn or not b.get("id"):
+                continue
+            raw_input = b.get("input") or {}
+            name = raw_input.get("name")
+            out.append(
+                (
+                    str(b.get("id")),
+                    _as_bool(raw_input.get("run_in_background")),
+                    name if isinstance(name, str) and name else None,
+                )
+            )
+        return out
+
+    def task_output_calls(self) -> list[tuple[str, str]]:
+        """``(tool_use id, requested taskId)`` per ``TaskOutput`` poll call
+        this record makes — the async-job id a Workflow spawn is closed by.
+        A Workflow's own async id (``toolUseResult.taskId`` on its
+        ``async_launched`` launch ack) is a DIFFERENT id space than the
+        Task-board ``taskId`` TaskCreate/TaskUpdate use, but it IS the value
+        ``TaskOutput`` polls with."""
+        out: list[tuple[str, str]] = []
+        for b in self._content_blocks():
+            if b.get("type") == "tool_use" and b.get("name") == "TaskOutput" and b.get("id"):
+                requested = (b.get("input") or {}).get("taskId")
+                if isinstance(requested, str) and requested:
+                    out.append((str(b.get("id")), requested))
+        return out
 
     def tool_result_ids(self) -> list[str]:
         """``tool_use_id``s this record resolves (the call's return arriving)."""
@@ -932,26 +1179,110 @@ class _SubagentFleet:
 
     The closing rule differs by spawn mode (see ``_Record.subagent_spawns``):
     a foreground id closes on its ``tool_result``; a backgrounded id survives
-    its immediate launch-ack result and closes only on its task-notification.
+    its immediate launch-ack result and closes only on a later signal —
+    ``<task-notification>`` (the ``run_in_background`` flag), a
+    ``<teammate-message>`` matched by name (in-process teammate), or a
+    ``TaskOutput`` poll matched by async job id (Workflow run).
     """
 
-    __slots__ = ("_background", "_in_flight")
+    __slots__ = (
+        "_background",
+        "_in_flight",
+        "_pending_task_output",
+        "_teammate_names",
+        "_workflow_task_ids",
+    )
 
     def __init__(self) -> None:
         self._in_flight: set[str] = set()
         self._background: set[str] = set()
+        # spawn id → the identity/correlation a later close signal matches on.
+        self._teammate_names: dict[str, str] = {}
+        self._workflow_task_ids: dict[str, str] = {}
+        # TaskOutput's own call id → the Workflow taskId it asked about.
+        self._pending_task_output: dict[str, str] = {}
 
     def spawn(self, rec: _Record) -> None:
-        for spawn_id, in_background in rec.subagent_spawns():
+        for spawn_id, in_background, name in rec.subagent_spawns():
             self._in_flight.add(spawn_id)
             if in_background:
                 self._background.add(spawn_id)
+            if name:
+                self._teammate_names[spawn_id] = name
+        for call_id, task_id in rec.task_output_calls():
+            self._pending_task_output[call_id] = task_id
 
     def on_tool_result(self, rec: _Record) -> None:
-        self._in_flight.difference_update(set(rec.tool_result_ids()) - self._background)
+        result_ids = set(rec.tool_result_ids())
+        ack = rec.tool_use_result
+        status = ack.get("status")
+        if status in _ASYNC_ACK_STATUSES:
+            # A launch ack (in-process-teammate mailbox, or a Workflow run),
+            # never the real return — needs a later external close signal,
+            # exactly like the legacy run_in_background flag.
+            pending = result_ids & self._in_flight
+            self._background.update(pending)
+            name = ack.get("name")
+            if isinstance(name, str) and name:
+                for spawn_id in pending:
+                    self._teammate_names.setdefault(spawn_id, name)
+            if status == "async_launched":
+                task_id = ack.get("taskId")
+                if isinstance(task_id, str) and task_id:
+                    for spawn_id in pending:
+                        self._workflow_task_ids[spawn_id] = task_id
+        else:
+            self._in_flight.difference_update(result_ids - self._background)
+        # A TaskOutput poll's own result closes the Workflow spawn it asked
+        # about, keyed by the async taskId from that spawn's launch ack —
+        # "leave open" (no invented poll) is the honest default otherwise.
+        for call_id in result_ids:
+            requested = self._pending_task_output.pop(call_id, None)
+            if requested is None:
+                continue
+            for spawn_id, task_id in list(self._workflow_task_ids.items()):
+                if task_id == requested:
+                    self._in_flight.discard(spawn_id)
+                    self._background.discard(spawn_id)
+                    del self._workflow_task_ids[spawn_id]
+
+    def on_notice(self, rec: _Record) -> None:
+        """Routes a received notice (:attr:`_Record.is_agent_notice`) to its
+        matching close rule — the single call site :meth:`activity` uses so
+        the tail-loop dispatch stays one branch."""
+        if rec.is_task_notification:
+            self.on_notification(rec)
+        else:
+            self.on_teammate_message(rec)
 
     def on_notification(self, rec: _Record) -> None:
         self._in_flight.discard(rec.notification_tool_use_id() or "")
+
+    def on_teammate_message(self, rec: _Record) -> None:
+        """Closes the matching in-process-teammate spawn on its IDLE
+        notification — the name-matched counterpart of
+        :meth:`on_notification`'s tool-use-id match, since a
+        ``<teammate-message>`` carries no machine-readable tool-use id.
+        Only the structured idle_notification closes: an interim
+        relay (progress report, receipt ack) means the teammate is still
+        running, and an idle notification always follows the real finish."""
+        if not rec.is_teammate_idle_notification:
+            return
+        sender = rec.teammate_message_sender()
+        if not sender:
+            return
+        for spawn_id, name in list(self._teammate_names.items()):
+            if spawn_id in self._in_flight and self._names_match(name, sender):
+                self._in_flight.discard(spawn_id)
+                self._background.discard(spawn_id)
+
+    @staticmethod
+    def _names_match(remembered: str, sender: str) -> bool:
+        """Bare-name equality, ignoring an optional ``@<team>`` suffix either
+        side may or may not carry — the spawn's ``input.name`` is bare; a
+        launch ack's ``name``/``agent_id`` and a completion line's ``from``
+        have both been observed bare and ``name@team``-qualified."""
+        return remembered.split("@", 1)[0] == sender.split("@", 1)[0]
 
     @property
     def active(self) -> int:
@@ -979,7 +1310,6 @@ class _TranscriptParser:
         tokens_out = 0
         model: str | None = None
         title: str | None = None
-        current_task: str | None = None
         last_event_at: datetime | None = None
         # The last record that is a human turn or an assistant reply — the tail
         # the status rule reads. Side records (titles, attachments) don't move it.
@@ -995,12 +1325,10 @@ class _TranscriptParser:
                 title = rec.ai_title
                 continue
             if rec.last_prompt:
-                current_task = rec.last_prompt
                 continue
 
             if rec.is_human_turn:
                 buckets.append(0)
-                current_task = current_task or _truncate(rec.text(), _TASK_TEXT_CAP)
                 tail = rec
             elif rec.is_assistant:
                 if buckets:
@@ -1012,9 +1340,11 @@ class _TranscriptParser:
                 tokens_out += t_out
                 model = rec.model or model
                 tail = rec
-            elif rec.is_task_notification:
-                # The agent was just told a background task finished → its move.
-                fleet.on_notification(rec)
+            elif rec.is_agent_notice:
+                # The agent was just told a background task finished, or a
+                # peer teammate relayed a message (often idle/completion)
+                # → its move either way; `on_notice` routes the close.
+                fleet.on_notice(rec)
                 tail = rec
             elif rec.is_tool_result:
                 # A tool just returned → it's the agent's move. Without this the
@@ -1024,13 +1354,33 @@ class _TranscriptParser:
                 fleet.on_tool_result(rec)
                 tail = rec
 
-        # ``last-prompt`` is the authoritative current task when present; fall
-        # back to the first real human turn's text captured above.
-        if current_task is None:
-            current_task = self._first_human_text()
+        # The task text comes from ONE selection helper shared with
+        # `current_task_text()`, so the capped field on this ~1 Hz-delivered
+        # activity and the uncapped per-request read can never name different
+        # text. The cap applies to BOTH branches of that selection: a
+        # `last-prompt` record carries a whole pasted prompt verbatim, and
+        # putting that on the poll path is precisely what the cap prevents.
+        raw_task = self.current_task_text()
+        current_task = _truncate(raw_task, _TASK_TEXT_CAP) if raw_task is not None else None
+
+        state = self._tail_state(tail)
+        if state is AgentActivityState.WAITING and fleet.active > 0:
+            # A backgrounded Agent/Task spawn can close the orchestrator's OWN
+            # turn (tail stop_reason == end_turn) while its sidechain fleet
+            # keeps working — a session whose fleet is running IS working, so
+            # a bare tail-derived WAITING is the wrong read here. BLOCKED (and
+            # ERROR, were it ever tail-derived) are never promoted: an
+            # unanswered question needs the human regardless of the fleet.
+            # No separate "is the fleet actually alive" check is needed — the
+            # loop above already folds sidechain timestamps into
+            # `last_event_at` (it scans every record in `self._records`, main
+            # + sub-agent), so a fleet that dies mid-run goes stale and
+            # `ActivityService._blend`'s existing freshness/settle rules are
+            # the safety net that demotes a dead fleet back down.
+            state = AgentActivityState.WORKING
 
         return AgentActivity(
-            state=self._tail_state(tail),
+            state=state,
             title=title,
             current_task=current_task,
             human_turns=len(buckets),
@@ -1047,7 +1397,7 @@ class _TranscriptParser:
 
     def messages(self) -> tuple[AgentMessage, ...]:
         """The de-duplicated, time-sorted records mapped onto the agentic-loop
-        spine (#179) — the ONE representation :meth:`turns` and :meth:`digest`
+        spine — the ONE representation :meth:`turns` and :meth:`digest`
         below both project (DRY: one parse, many projections). Non-message
         records map to nothing; sub-agent (sidechain) messages ride with their
         lineage fields set."""
@@ -1084,9 +1434,26 @@ class _TranscriptParser:
         session whose head was filtered out) collect under a leading turn with
         an empty ``user_text`` rather than being dropped — `sessions show`
         renders it as a continuation block. Sub-agent (sidechain) messages are
-        lineage, not main-thread turns, so they are skipped here.
+        lineage, not main-thread turns, so they are skipped here (the shared
+        builder this delegates to is also how :meth:`ClaudeCodeAdapter.subagent_turns`
+        renders ONE sidechain thread's own turns).
         """
-        messages = self.messages()
+        return self._turns_from_messages(self.messages(), last=last)
+
+    @classmethod
+    def _turns_from_messages(
+        cls,
+        messages: Sequence[AgentMessage],
+        *,
+        last: int | None = None,
+        include_sidechain: bool = False,
+    ) -> tuple[SessionTurn, ...]:
+        """The one turn-builder behind :meth:`turns` (main thread,
+        ``include_sidechain=False``) and :meth:`ClaudeCodeAdapter.subagent_turns`
+        (one already-thread-filtered sidechain, ``include_sidechain=True``) —
+        so a sub-agent's rendered turns (question/file-edit/todo structuring,
+        leading-continuation handling) can never drift from the main thread's.
+        """
         turns: list[SessionTurn] = []
         entries: list[DigestEntry] = []
         # Pre-scan every tool_result block so a question entry renders resolved
@@ -1113,7 +1480,7 @@ class _TranscriptParser:
 
         current: tuple[str, datetime | None] | None = None
         for message in messages:
-            if message.is_sidechain:
+            if message.is_sidechain and not include_sidechain:
                 continue
             if message.role == "user":
                 if current is not None or entries:
@@ -1127,7 +1494,7 @@ class _TranscriptParser:
                 if current is None and not entries and message.timestamp is not None:
                     # Leading continuation block inherits the first reply's time.
                     current = ("", message.timestamp)
-                entries.extend(self._assistant_entries(message, answered, board))
+                entries.extend(cls._assistant_entries(message, answered, board))
             # role == "tool": a result carrier — feeds `answered`, no entry.
         if current is not None or entries:
             _flush(*(current or ("", None)))
@@ -1221,6 +1588,19 @@ class _TranscriptParser:
                 return rec.last_prompt
         return None
 
+    def current_task_text(self) -> str | None:
+        """The session's task text, UNCAPPED — the ONE selection
+        :meth:`activity` caps onto ``AgentActivity.current_task``.
+
+        The rule (unchanged, only factored out): the newest ``last-prompt``
+        record carrying text wins, else the FIRST real human turn's text. Both
+        readers share this method precisely so a future change to the rule
+        cannot move one and leave the other behind. Whitespace-only text is
+        ``None`` — the honest "this session carries no task text".
+        """
+        text = self.last_prompt_text() or self._first_human_raw()
+        return text if text and text.strip() else None
+
     def created_at(self) -> datetime | None:
         """Timestamp of the earliest timestamped record (records are time-sorted)."""
         for rec in self._records:
@@ -1244,9 +1624,13 @@ class _TranscriptParser:
         return None
 
     def _first_human_text(self) -> str | None:
+        raw = self._first_human_raw()
+        return _truncate(raw, _TASK_TEXT_CAP) if raw is not None else None
+
+    def _first_human_raw(self) -> str | None:
         for rec in self._records:
             if rec.is_human_turn:
-                return _truncate(rec.text(), _TASK_TEXT_CAP)
+                return rec.text()
         return None
 
     @staticmethod
@@ -1262,7 +1646,7 @@ class _TranscriptParser:
         """
         if tail is None:
             return AgentActivityState.UNKNOWN
-        if tail.is_human_turn or tail.is_task_notification:
+        if tail.is_human_turn or tail.is_agent_notice:
             return AgentActivityState.WORKING
         if tail.stop_reason in ("end_turn", "stop_sequence"):
             return AgentActivityState.WAITING
@@ -1308,8 +1692,8 @@ class ClaudeCodeAdapter:
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """``--session-id <uuid>`` for a fresh session — what makes correlation
-        deterministic (#13) — or ``--resume <uuid>`` to CONTINUE an existing one
-        (#120). Plain ``--resume`` keeps the same session id/file (it does NOT
+        deterministic — or ``--resume <uuid>`` to CONTINUE an existing one.
+        Plain ``--resume`` keeps the same session id/file (it does NOT
         rotate the id — that needs ``--fork-session``), so pinning
         ``agent_session_id`` to the resumed id stays correct by construction."""
         if resume:
@@ -1317,16 +1701,16 @@ class ClaudeCodeAdapter:
         return ["--session-id", session_id]
 
     def model_decoration(self, model: str) -> list[str]:
-        """``--model <id>`` — Claude Code's per-launch model selector (#96)."""
+        """``--model <id>`` — Claude Code's per-launch model selector."""
         return ["--model", model]
 
     def offline_decoration(self) -> list[str]:
         """``--disallowedTools WebFetch,WebSearch`` — Claude Code's flag for
-        dropping the two network-facing built-in tools (#148)."""
+        dropping the two network-facing built-in tools."""
         return ["--disallowedTools", "WebFetch,WebSearch"]
 
     def telemetry_env(self) -> dict[str, str]:
-        """Claude Code's native-telemetry switch (#170 passthrough): the master
+        """Claude Code's native-telemetry switch: the master
         enable plus the OTLP exporter selection for its metrics + logs. The
         OTLP *endpoint/headers* ride in from ``TelemetryConfig.derive_env``, so
         with all three present Claude Code streams its own token-usage/cost/tool
@@ -1370,7 +1754,7 @@ class ClaudeCodeAdapter:
 
     def discover_sessions(self, cwd: Path, *, exclude_id: str | None = None) -> list[str]:
         """Session ids of transcripts whose recorded cwd is ``cwd`` but that Grove
-        didn't launch (out-of-band discovery, #18).
+        didn't launch (out-of-band discovery).
 
         Scans only the forward-encoded candidate folder per config dir (one
         directory listing — bounded), and confirms each by the in-line ``cwd``
@@ -1388,7 +1772,7 @@ class ClaudeCodeAdapter:
         self, cwd: Path, *, exclude_id: str | None = None
     ) -> list[tuple[str, datetime | None, float]]:
         """``(session_id, birth, mtime)`` for discovered sessions — the cheap
-        adoption pre-filter (#F5). Birth rides out of the same bounded head read
+        adoption pre-filter. Birth rides out of the same bounded head read
         ``discover_sessions`` already does; no full transcript parse. Best-effort:
         ``[]`` on any error."""
         try:
@@ -1401,6 +1785,17 @@ class ClaudeCodeAdapter:
         except OSError as exc:
             logger.debug("discover_births({}) failed: {}", cwd, exc)
             return []
+
+    def discover_all(self) -> tuple[SessionRef, ...]:
+        """Every session across every folder in the projects cascade — the
+        host-wide catalog scan (never the 2 s poll; see
+        ``_ClaudeHome.discover_all`` for why this must stay separate from
+        ``discover_paths``). Best-effort: ``()`` on any error."""
+        try:
+            return _ClaudeHome.discover_all()
+        except OSError as exc:
+            logger.debug("discover_all() failed: {}", exc)
+            return ()
 
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
         """Normalized summaries for every session recorded in ``cwd``, newest-first.
@@ -1429,7 +1824,7 @@ class ClaudeCodeAdapter:
         )
 
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
-        """The session's agentic-loop spine (#179) — the lineage-preserving
+        """The session's agentic-loop spine — the lineage-preserving
         message list ``read_turns`` / ``transcript_digest`` project from, and the
         seam downstream fleet / trace / final-result consumers read. Reads the
         main + sub-agent transcripts, so sub-agent messages ride with their
@@ -1442,17 +1837,49 @@ class ClaudeCodeAdapter:
         )
 
     def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
-        """The session's terminal outcome (#149) — a projection of
+        """The session's terminal outcome — a projection of
         :meth:`read_messages`, never a second parser."""
         return final_result_from_messages(self.read_messages(cwd, session_id))
 
     def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
-        """The session's current todo/checklist state (#194) — a projection of
+        """The session's current todo/checklist state — a projection of
         :meth:`read_messages`, never a second parser."""
         return latest_todo_from_messages(self.read_messages(cwd, session_id))
 
+    def latest_task(self, cwd: Path, session_id: str) -> str | None:
+        """The session's task text, uncapped — the same
+        :meth:`_TranscriptParser.current_task_text` selection
+        :meth:`parse_activity` caps onto ``AgentActivity.current_task``.
+
+        Rides the same incremental record read + stat-signature memo every
+        other projection here does, so it costs a ``stat`` on an unchanged
+        transcript and only the appended bytes on a live one.
+        """
+        paths = self.locate_transcripts(cwd, session_id)
+        return _MEMO.get_or_compute(
+            ("task", str(cwd), session_id),
+            paths,
+            lambda: _TranscriptParser(self._read(paths)).current_task_text(),
+        )
+
+    @staticmethod
+    def project_mcp_servers(cwd: Path) -> tuple[str, ...]:
+        """Server names the worktree's committed ``.mcp.json`` registers.
+
+        A read-only projection of the same scan :meth:`session_controls` uses,
+        surfaced publicly (rather than left inside ``_ClaudeControls``) because
+        the container trust stamp pre-approves this exact list before the
+        container starts — a per-folder approval nobody is there to give
+        interactively. The USER-scoped registry is deliberately not included:
+        it names host commands a container cannot run, which is why the seed
+        drops it wholesale. Deliberately NOT on ``AgentAdapter`` — that seam is
+        the normalized session-read surface, and this is a launch-time fact
+        about one tool's project config.
+        """
+        return _ClaudeControls.mcp_server_names(cwd / _ClaudeControls.PROJECT_MCP_FILENAME)
+
     def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
-        """Enumerate the session's input controls — TIER 1 filesystem scan (#178).
+        """Enumerate the session's input controls — a filesystem scan.
 
         Delegates the whole scan to :class:`_ClaudeControls` (all the ``.claude``
         path logic has one home, like ``_ClaudeHome`` for transcripts). Fills only
@@ -1468,7 +1895,7 @@ class ClaudeCodeAdapter:
             logger.debug("session_controls({}) failed: {}", cwd, exc)
             return SessionControls.empty()
 
-    # ── fleet reader (#173) ─────────────────────────────────────────────────
+    # ── fleet reader ──────────────────────────────────────────────────────────
     def fleet_activity(
         self, cwd: Path, session_id: str
     ) -> list[tuple[AgentSession, AgentActivity]]:
@@ -1478,7 +1905,7 @@ class ClaudeCodeAdapter:
         ``_SubagentFleet`` inside :meth:`parse_activity`, whose foreground-vs-
         background closing rule this does not touch).
 
-        Builds on the already-normalized spine (:meth:`read_messages`, #179) —
+        Builds on the already-normalized spine (:meth:`read_messages`) —
         never a second transcript re-read. A sidechain ``AgentMessage`` already
         carries ``thread_id`` (Claude's ``agentId``); grouping by it recovers
         one worker's own ordered turns. Each thread's own tail then gives its
@@ -1486,20 +1913,21 @@ class ClaudeCodeAdapter:
         read off content-block SHAPE (an assistant reply ending in a
         ``tool_use`` block is exactly when Claude's own ``stop_reason`` would
         read ``"tool_use"``) since the spine deliberately omits the raw
-        ``stop_reason`` (#179). Identity (``agentType``/``description``) comes
-        from the sidecar ``.meta.json`` (:meth:`_ClaudeHome.read_subagent_meta`)
-        — degrading to a truncated first-task-prompt fallback when the sidecar
-        is missing, never fabricated. Only the in-session sidechain fleet is
-        covered here; a CLI ``--bg`` background session is a separate top-level
+        ``stop_reason``. Identity comes from the sidecar ``.meta.json``
+        (:meth:`_ClaudeHome.read_subagent_meta`), preferring ``name`` then
+        ``agentType`` then a truncated first-task-prompt fallback (a Workflow
+        worker's sparse meta carries neither name nor description),
+        never fabricated. Only the in-session sidechain fleet is covered
+        here; a CLI ``--bg`` background session is a separate top-level
         session Grove would track like any other, not a sub-agent thread.
 
         Returns ``()`` when the session spawned no sub-agents (no
-        ``subagents/`` dir) — the common case, cheap: no message read is paid.
+        ``subagents/`` dir anywhere under it — the glob is recursive,
+        so a Workflow worker nested under ``subagents/workflows/wf_<id>/``
+        is covered too) — the common case, cheap: no message read is paid.
         """
         subagent_paths = {
-            p.stem: p
-            for p in self.locate_transcripts(cwd, session_id)
-            if p.parent.name == "subagents"
+            p.stem: p for p in self.locate_transcripts(cwd, session_id) if "subagents" in p.parts
         }
         if not subagent_paths:
             return []
@@ -1514,7 +1942,14 @@ class ClaudeCodeAdapter:
                 continue
             path = subagent_paths.get(f"agent-{thread_id}")
             meta = _ClaudeHome.read_subagent_meta(path) if path is not None else {}
+            # Identity prefers the teammate's own chosen `name` over
+            # `agentType` — a Workflow worker's sparse meta carries neither,
+            # degrading further to `_fallback_description` below.
+            name = meta.get("name")
             agent_type = meta.get("agentType")
+            title = name if isinstance(name, str) and name else None
+            if title is None and isinstance(agent_type, str) and agent_type:
+                title = agent_type
             description = meta.get("description")
             out.append(
                 (
@@ -1528,7 +1963,7 @@ class ClaudeCodeAdapter:
                     ),
                     self._fleet_thread_activity(
                         thread_messages,
-                        title=agent_type if isinstance(agent_type, str) and agent_type else None,
+                        title=title,
                         current_task=(
                             description
                             if isinstance(description, str) and description
@@ -1608,6 +2043,41 @@ class ClaudeCodeAdapter:
                 return _truncate(text, _TASK_TEXT_CAP) if text.strip() else None
         return None
 
+    def subagent_turns(
+        self, cwd: Path, session_id: str, thread_id: str, *, last: int | None = None
+    ) -> tuple[SessionTurn, ...]:
+        """One sub-agent thread's own conversation, oldest first — the turns
+        sibling of :meth:`fleet_activity`.
+
+        A fleet row's ``session_id`` (used e.g. as the webapp's fleet-child
+        transcript route param) IS the Claude sub-agent thread id
+        (``agentId``) — never a top-level session id, since ``discover_paths``
+        deliberately skips ``subagents/``. So no listing anywhere ever carries
+        it, and the normal ``read_turns(cwd, thread_id)`` lookup always misses.
+        This reads the ALREADY-normalized spine (:meth:`read_messages`, no
+        second parser), filters to the one thread, and projects it through the
+        SAME turn-builder the main thread uses
+        (:meth:`_TranscriptParser._turns_from_messages`) so a fleet child's
+        turns render with identical rules (question/file-edit/todo
+        structuring). Mirrors :meth:`fleet_activity`'s cheap no-``subagents/``
+        early exit; an unknown ``thread_id`` degrades to ``()``, never raises.
+        """
+        subagent_paths = {
+            p.stem: p for p in self.locate_transcripts(cwd, session_id) if "subagents" in p.parts
+        }
+        if not subagent_paths:
+            return ()
+        thread_messages = [
+            msg
+            for msg in self.read_messages(cwd, session_id)
+            if msg.is_sidechain and msg.thread_id == thread_id
+        ]
+        if not thread_messages:
+            return ()
+        return _TranscriptParser._turns_from_messages(
+            thread_messages, last=last, include_sidechain=True
+        )
+
     def parse_activity(self, cwd: Path, session_id: str) -> AgentActivity:
         paths = self.locate_transcripts(cwd, session_id)
         return _MEMO.get_or_compute(
@@ -1633,7 +2103,7 @@ class ClaudeCodeAdapter:
         _TRANSCRIPTS.clear()
         _MEMO.clear()
 
-    # ── answer driver (#109) ────────────────────────────────────────────────
+    # ── answer driver ─────────────────────────────────────────────────────────
     @staticmethod
     def build_answer_keys(
         questions: Sequence[AgentQuestion],

@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.asyncio
 async def test_local_attach_echoes_input() -> None:
     # Use 'cat' instead of tmux for a deterministic byte-echo test.
-    attach = LocalAttach.with_command(["cat"])
+    attach = LocalAttach(["cat"])
     received: list[bytes] = []
     attach.on_output(received.append)
 
@@ -40,7 +40,7 @@ async def test_local_attach_echoes_input() -> None:
 
 @pytest.mark.asyncio
 async def test_local_attach_resize_does_not_error() -> None:
-    attach = LocalAttach.with_command(["cat"])
+    attach = LocalAttach(["cat"])
     attach.on_output(lambda _: None)
     await attach.start()
     try:

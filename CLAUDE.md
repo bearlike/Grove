@@ -2,28 +2,24 @@
 
 Grove lets you tend multiple git worktrees like branches in a forest: spin up, switch between, and tear down isolated coding sessions without losing your place. See `README.md` for the product brief.
 
-Maintain context across sessions. When you hit a non-trivial lesson, write it in the **nearest owning `CLAUDE.md`** — the deepest file whose scope it belongs to (see the tree below). This builds distributed working memory, so future sessions run faster and load only what they need.
-
 ## Handling a handed-off issue (the autonomous workspace loop)
 
-When you own a Gitea issue end-to-end, drive it to a merged PR on this loop. Bias to action — never over-plan, over-spec, ask trivial questions, or invent fallbacks nobody requested; each wastes time and tokens.
+When you own a tracker issue end-to-end, drive it to a merged PR on this loop. Bias to action — never over-plan, over-spec, ask trivial questions, or invent fallbacks nobody requested.
 
-1. **Read the issue, map the relevant components, implement, follow the instructions faithfully.** Read the nearest owning `CLAUDE.md`(s) on the path you'll touch *before* editing — the engineering principles below are golden and govern every change.
-2. **Open the PR against the target branch and link the issue so it auto-closes on merge** — `Fixes #<n>` in the PR body. Leave the issue open; the merge closes it (don't hand-close an unmerged ticket).
-3. **After opening, check the PR for conflicts with the remote target and resolve them** — rebase onto the freshly-fetched target, re-apply your change onto the *current* structure (don't clobber what landed meanwhile), re-run the gates, force-push.
-4. **Reply on the issue with what changed and link the PR.** Post a comment summarizing the changes made (the design decision, the components touched, the gate results) and that PR #`<n>` resolves it — then say you're leaving the issue open since the merge auto-closes it. This is the durable trail for the next session and the human; keep it factual and concise, not a restatement of the diff.
-5. **Uphold DRY + KISS and the class-object paradigm; refresh the memory tree without bloating it.** Minimize footprint and optimize readability — define logic once, reuse the established pattern, atomic classes own their state + the methods over it (instance / `@classmethod` / `@staticmethod`, inheritance + DI), not a junk drawer of root-level/private functions. After implementing, fold the **durable insights** (the *why*, the invariant, the trade-off, the reference you'd otherwise re-derive) into the nearest owning `CLAUDE.md` — insights worth a future memoryless session, never copyable snippets or restatements of code, and never at the cost of bloat.
+1. **Read the issue, map the components, implement.** Read the nearest owning `CLAUDE.md`(s) on the path you'll touch *before* editing.
+2. **Keep the issue number OUT of the PR title and body.** PR text and squash titles mirror to the public GitHub remote, where a bare `#<n>` resolves against a *different* tracker — so `Fixes #<n>` would both leak the private issue graph and auto-close nothing.
+3. **Check the open PR for conflicts with the remote target and resolve them** — rebase onto the freshly-fetched target, re-apply onto the *current* structure (don't clobber what landed meanwhile), re-run the gates, force-push.
+4. **Reply on the issue naming the PR — that comment IS the linkage, since the PR carries none.** Summarize the design decision, the components touched, and the gate results. Say plainly anything that did not work, anything left out, and any acceptance criterion that turned out to be unsatisfiable — a ticket whose own premise was wrong is the most valuable thing you can leave behind, and the next session cannot recover it from the diff. Close the issue by hand once the PR merges: an open ticket with a linked PR is honest, a closed one with unmerged work is not.
+5. **After implementing, fold the durable insights into the nearest owning `CLAUDE.md`** — the invariant, the trade-off, the reference you'd otherwise re-derive; never copyable snippets or restatements of code.
 
-**Parallelize to save wall-clock and context.** Spawn a fleet of sub-agents to fan out disjoint work — implement, review, test, and research in parallel — per the parallel-agent pattern below; the superpowers skills explain the delegation mechanics.
+**Parallelize** — fan a fleet of sub-agents out over disjoint work per the parallel-agent pattern below.
 
 ## Core operating rules
 
-- Build a mental map before proposing fixes. Separate facts from assumptions; keep updating both while investigating.
-- Prefer direct evidence (run the code, read the real output) over inference from a description.
-- Use absolute dates and timestamps in findings (example: `2026-06-08`).
-- Ask the user about ambiguous assumptions instead of guessing silently.
+- Separate facts from assumptions and keep updating both; prefer direct evidence (run the code, read the real output) over inference from a description. Ask the user about ambiguous assumptions instead of guessing silently.
+- Use absolute `YYYY-MM-DD` dates in findings you report to a human, never relative ones ("last week").
 - Do not push to a remote unless explicitly asked.
-- Never commit `docs/superpowers/specs/...` — that is session-local working memory; track designs and plans as Gitea issues instead.
+- **Plans live in the issue tracker; design knowledge lives in this memory tree.** Session-local working memory — scratch plans, specs, agent reports — is never committed. Don't dump design detail into issues, or plans into the tree. An unlabelled issue is invisible to the board, so label every issue you file.
 - **Never leak host-private details into tracked files.** No absolute home paths, real private repo names, personal profile names, or host/infra specifics in committed docs or code — this repo mirrors to a public remote. Keep examples generic and fictional. Real host and profile configuration lives in your own config (`~/.config/grove/`, the gitignored `.grove/config.local.json`) and user-global `~/.claude/`, never in the committed tree.
 
 ## Project structure
@@ -35,93 +31,88 @@ When you own a Gitea issue end-to-end, drive it to a merged PR on this loop. Bia
 | `src/grove/core/agents/` | tool-agnostic agent introspection (adapters) | [agents/CLAUDE.md](src/grove/core/agents/CLAUDE.md) |
 | `src/grove/core/tickets/` | branch-aware ticket providers (Gitea/GitHub/Linear) | [tickets/CLAUDE.md](src/grove/core/tickets/CLAUDE.md) |
 | `src/grove/core/issueops/` | issue-comment events → workspace actions (command grammar + routing) | [issueops/CLAUDE.md](src/grove/core/issueops/CLAUDE.md) |
-| `src/grove/core/notifications/` | push notifications on agent-state edges (broker + channels) | [notifications/CLAUDE.md](src/grove/core/notifications/CLAUDE.md) |
+| `src/grove/core/notifications/` | push notifications on workspace edges (broker + channels) | [notifications/CLAUDE.md](src/grove/core/notifications/CLAUDE.md) |
 | `src/grove/daemon/` | loopback FastAPI daemon (multi-repo, SSE) | [daemon/CLAUDE.md](src/grove/daemon/CLAUDE.md) |
 | `src/grove/client/` | transport-agnostic attach (local PTY / SSH) | [client/CLAUDE.md](src/grove/client/CLAUDE.md) |
 | `src/grove/mcp/` | MCP server (stdio tools over the client SDK) | [mcp/CLAUDE.md](src/grove/mcp/CLAUDE.md) |
 | `src/grove/tui/` | Textual terminal UI | [tui/CLAUDE.md](src/grove/tui/CLAUDE.md) + [design-system.md](docs/design-system.md) |
-| `webapp/` | read-only Next.js dashboard | [webapp/CLAUDE.md](webapp/CLAUDE.md) |
+| `webapp/` | Next.js dashboard (drives lifecycle + steering; the `/sessions` browser is structurally read-only) | [webapp/CLAUDE.md](webapp/CLAUDE.md) |
 | `docs/` | published mkdocs site | [docs/CLAUDE.md](docs/CLAUDE.md) |
 | `packaging/` | systemd-user service units + clean-install smoke | [packaging/CLAUDE.md](packaging/CLAUDE.md) |
 | `tests/` | pytest suite + CI/lint gotchas | [tests/CLAUDE.md](tests/CLAUDE.md) |
 
-Side-effect surfaces live in dedicated modules only (`core/git.py`, `core/tmux.py`, `core/mewbo.py` for the Mewbo REST API); everything else is pure. The package root (`__init__.py` re-exports) is the contract; modules below it are internal even without an underscore.
-
 ## The distributed CLAUDE.md tree
 
-Working memory is **distributed and recursive**: every component owns a nested `CLAUDE.md` holding its engineering decisions AND its session lessons. Read the deepest file that applies before editing there. An agent working one component loads only the files on its path, never the whole tree. This faceting is deliberate — it lets a **fleet of agents take disjoint roles and work asynchronously**, each loading only its own slice instead of one monolithic doc that fills the context window.
-
-**Recursive management — every file links both ways, so nothing is lost.** Every nested file opens with a `> ↑ parent · root` backlink; every parent lists its children (the map below). Maintain both links whenever you add, move, or rename a file. This root carries only cross-cutting principles, structure, and process lessons — never restate a nested file's content here. Write each lesson in the nearest owning file; promote a lesson up a level only when it becomes genuinely cross-cutting.
+**Read the deepest file that applies before editing there, and write each lesson in the file that owns it** — promote one up a level only when it becomes genuinely cross-cutting. This root carries only cross-cutting principles, structure, and process lessons; it never restates a nested file's content. Every nested file opens with a `> ↑ parent · root` backlink and every parent lists its children — maintain both links whenever you add, move, or rename a file.
 
 ```
 /CLAUDE.md  (this file — principles · structure · process lessons)
-├─ src/grove/core/CLAUDE.md            engine: lifecycle · config · side effects · status · registry · activity
-│  ├─ src/grove/core/contracts/CLAUDE.md   the wire boundary (Pydantic shapes that cross clients)
-│  ├─ src/grove/core/agents/CLAUDE.md       tool-agnostic agent introspection (adapters)
-│  ├─ src/grove/core/tickets/CLAUDE.md      branch-aware ticket providers (Gitea/GitHub/Linear)
-│  ├─ src/grove/core/issueops/CLAUDE.md      issue-comment events → workspace actions (grammar + routing)
-│  └─ src/grove/core/notifications/CLAUDE.md  push on agent-state edges (broker + channels)
-├─ src/grove/daemon/CLAUDE.md          loopback HTTP daemon (multi-repo, SSE)
-├─ src/grove/client/CLAUDE.md          transport-agnostic attach (local PTY / SSH)
-├─ src/grove/mcp/CLAUDE.md             MCP server (stdio tools over GroveClient)
-├─ src/grove/tui/CLAUDE.md             Textual TUI   (+ docs/design-system.md = visual contract)
-├─ webapp/CLAUDE.md                    read-only Next.js dashboard
-├─ docs/CLAUDE.md                      published mkdocs site
-├─ packaging/CLAUDE.md                 systemd-user service units + clean-install smoke
-└─ tests/CLAUDE.md                     test conventions · CI/lint gotchas
+├─ src/grove/core/CLAUDE.md
+│  ├─ src/grove/core/contracts/CLAUDE.md
+│  ├─ src/grove/core/agents/CLAUDE.md
+│  ├─ src/grove/core/tickets/CLAUDE.md
+│  ├─ src/grove/core/issueops/CLAUDE.md
+│  └─ src/grove/core/notifications/CLAUDE.md
+├─ src/grove/daemon/CLAUDE.md
+├─ src/grove/client/CLAUDE.md
+├─ src/grove/mcp/CLAUDE.md
+├─ src/grove/tui/CLAUDE.md      (+ docs/design-system.md = the visual contract)
+├─ webapp/CLAUDE.md
+├─ docs/CLAUDE.md
+├─ packaging/CLAUDE.md
+└─ tests/CLAUDE.md
 ```
-
-Planning lives in Gitea issues (epics plus per-agent stories) — keep design knowledge in this tree, plans in issues. Don't dump design detail into issues, or plans into the tree.
 
 ## Engineering principles
 
-These apply across every module. Some areas already follow them tightly; others are evolving. The bar isn't perfection — every change should leave the surrounding code more maintainable than it found it. Small decreases in code health compound into rewrites; small improvements compound into a codebase a new engineer can join in a week.
-
-- **Modules align with concerns, not technical layers — Single Responsibility Principle at module scale.** Each module should answer one question, nameable in a single sentence. If you can't name it, it's drifting toward a junk drawer — split the concerns out, or fold the module into its real owner. Boundaries follow what changes together, not generic "models / views / controllers" buckets.
-- **Public surface is small and explicit.** A package's entry point is its contract; leading underscores on internal modules signal "don't import from here". Explicit re-export lists pin what consumers may depend on. The smaller the public surface, the cheaper internal refactors become.
-- **Deterministic public entry points; subpackages organize by concern, not by technical layer.** Each package exposes one canonical surface (its `__init__.py` re-export list); every module under it is internal. Split by concern (`contracts/` for wire shapes, `git.py` / `tmux.py` for side effects, `manager.py` for orchestration), never by technical layer — no generic `helpers/` / `utils/` / `models/` / `services/` junk drawers. When one file accumulates two answers to two questions, split it. The directory tree should read as a map you can navigate without grep.
-- **Dependencies flow inward.** Orchestration imports from utilities; the reverse is a smell. When a low-level helper has to know about a high-level caller, the boundary is wrong — most circular-import pain traces back to this.
-- **Boring code beats clever code.** Reuse the pattern already established. Local cleverness has a price every reader pays; if you must deviate, name the reason inline.
-- **Add structure only when there's a real concern to separate (YAGNI).** Build only what the current requirement demands; don't abstract on speculation. Three similar lines is fine. A new helper, class, or subpackage costs review surface for years — pay only when one engineer can plausibly own the new boundary.
-- **Fix at the smallest generic seam; never overfit, never hard-code policy. Keep the footprint low and steady (KISS).** Before adding a typed field, a new parameter threaded through layers, or a special case, *first* check whether an existing mechanism already covers it — the config cascade, an `env`-style map, an existing scan/union, a field already on the model. Reuse and generalize that seam instead of bolting on machinery for the one case in front of you. **A fix that balloons across many files or duplicates an existing capability is the signal to stop and find the seam** — a one-variable, one-agent problem must not grow a one-variable, one-agent field threaded everywhere. **No policy in code:** a specific variable name, profile, path, or provider quirk belongs in config (where it cascades), never baked into a default constant or branch — code supplies the *mechanism* that acts on whatever config names. Measure a change by how little surface it adds: deleting code or reusing a seam beats adding one, and the diff should stay small and consistent in shape with what's already there. (Worked example: issue #82's leak fix collapsed from a typed `config_dir` field threaded through every adapter + `WorkspaceState` + read path (~950 LOC) to one generic `env_unset` map consumed at the launch boundary with the var name living only in config (~260 LOC) — same correctness, a fraction of the footprint, zero hard-coded names.)
-- **Strong types where they catch bugs.** Narrow literal types for string sets that drive branching, structured types for conditional payloads, explicit return types everywhere. Escape-hatch types only for genuinely heterogeneous external data, narrowed at the boundary. Introduce protocols only when more than one real implementation exists.
-- **Pydantic at public-contract boundaries; plain dataclass for in-process state.** Pydantic for anything that crosses a client/server boundary now or could later (config, requests, responses, discriminated unions of intent). Plain `@dataclass(slots=True)` for internal mutable state and engine-only IR. The test: would a non-Python client ever construct or receive this? Yes → Pydantic; no → dataclass. Wire shapes live in [`core/contracts/`](src/grove/core/contracts/CLAUDE.md).
-- **Class-encapsulated atomic state — code as poem, not a junk drawer of free helpers.** State and the methods over it live together as one class. Prefer instance / `@classmethod` / `@staticmethod` on the owning type over root-level free functions, especially private ones. A free helper in module scope is usually a missing class. When you touch a module, leave its class structure a little tighter than you found it.
+- **Modules align with concerns, not technical layers.** Each module answers one question, nameable in a sentence; if you can't name it, split it or fold it into its real owner. Split by concern (`contracts/` for wire shapes, `git.py` / `tmux.py` for side effects, `manager.py` for orchestration) — never generic `helpers/` / `utils/` / `models/` / `services/` buckets. When one file accumulates two answers to two questions, split it.
+- **Public surface is small and explicit.** A package's `__init__.py` re-export list is its contract; every module under it is internal, and a leading underscore says so. The smaller the public surface, the cheaper internal refactors become.
+- **Dependencies flow inward.** Orchestration imports utilities; the reverse is a smell, and most circular-import pain traces back to it.
+- **Boring code beats clever code.** Reuse the established pattern; if you must deviate, name the reason inline.
+- **Build only what the current requirement demands (YAGNI, KISS, DRY).** Three similar lines is fine; a new helper, class, or subpackage costs review surface for years. Bias toward less code, and search for an existing library or an existing utility before writing anything custom. A rule reused by more than one caller lives in exactly one place.
+- **Fix at the smallest generic seam; never overfit, never hard-code policy.** Before adding a typed field, a new parameter threaded through layers, or a special case, check whether an existing mechanism already covers it — the config cascade, an `env`-style map, an existing scan/union, a field already on the model. **A fix that balloons across many files or duplicates an existing capability is the signal to stop and find the seam.** A specific variable name, profile, path, or provider quirk belongs in config, never in a default constant or a branch — code supplies the *mechanism* that acts on whatever config names.
+- **Mechanism, not policy — configuration cascades at the consumption surface.** Any value a developer might reasonably change is reachable from outside the code; defaults are sensible but held lightly. Config layers by specificity: built-in → project → team → machine → user → invocation. This is only sustainable because the code underneath stays strict on DRY and KISS — one boring implementation, the override cascade resolving on top.
+- **Strong types where they catch bugs.** Narrow literal types for string sets that drive branching, structured types for conditional payloads, explicit return types everywhere. Escape-hatch types only for genuinely heterogeneous external data, narrowed at the boundary. Introduce a protocol only when more than one real implementation exists.
+- **Pydantic at public-contract boundaries; plain `@dataclass(slots=True)` for in-process state.** The test: would a non-Python client ever construct or receive this? Yes → Pydantic; no → dataclass. Wire shapes live in [`core/contracts/`](src/grove/core/contracts/CLAUDE.md).
+- **Class-encapsulated atomic state.** State and the methods over it live together as one class (instance / `@classmethod` / `@staticmethod`, inheritance + DI). A free helper in module scope is usually a missing class.
 - **Side effects at the edges, pure logic in the middle.** I/O, network, and time-of-day belong at the boundary (handlers, fetchers, drivers); the decision logic between them stays testable without them. Best-effort side effects isolate their failures: bounded timeout, structured log per outcome, never re-raise into the caller's retry path.
-- **Tests pin contracts, not implementation.** When a test patches a private symbol, that path becomes an implicit contract — moving it silently no-ops the patch while the test still passes. Surface the seam publicly or update the test in the same commit.
-- **Comments and docstrings explain WHY, not WHAT.** Names and types document the what; prose carries the constraint, the trade-off, the past incident, the surprising invariant. Write the docstring's first line for the engineer deciding whether to call this.
-- **KISS and DRY are the core philosophy.** Bias toward less code. Before writing anything custom, search for an existing library or an existing utility in the codebase. Proven library for infrastructure; custom code only for business logic.
-- **Mechanism, not policy — configuration cascades at the consumption surface.** For the user-facing surface (framework, prompt, model, workflow), provide mechanism and leave policy to the user. Defaults are sensible but held lightly; any value a developer might reasonably change is reachable from outside the code. Config layers by specificity: built-in → project → team → machine → user → invocation. This is only sustainable because the internal codebase stays strict on DRY and KISS — one boring implementation inside, the override cascade resolving on top.
+- **Tests pin contracts, not implementation.** When a test patches a private symbol, that path becomes an implicit contract — moving it silently no-ops the patch while the test still passes. Surface the seam publicly or update the test in the same commit. Tests prefer real code paths and stub only I/O boundaries; cover full orchestration loops with in-memory fakes.
+- **Comments and docstrings explain WHY, not WHAT.** Names and types document the what; prose carries the constraint, the trade-off, the surprising invariant. Write the docstring's first line for the engineer deciding whether to call this.
+- **Code validates itself at the point of definition** — schema validators, strict configs that forbid unknown fields.
+- **Keep published contracts stable:** interface names, method signatures, and field names don't move under consumers without coordination.
+- Gitmoji plus Conventional Commits (e.g. `✨ feat(scope): ...`).
+
+### Concurrency
+
+Grove is one event loop (daemon), one UI thread (TUI), and a lot of slow blocking I/O — git, tmux, `docker exec`, `devcontainer up`. These rules are ordered: satisfy the earlier ones first.
+
+- **Nothing blocking runs on the loop or the UI thread.** A `devcontainer up` is minutes, and on the loop those minutes freeze every SSE stream, every other repo's dashboard and the activity poll; on Textual's single thread they freeze every timer, keypress and repaint. Off-thread is `asyncio.to_thread` — hand-rolling `get_running_loop()` + `run_in_executor(None, …)` is the same call with more lines and no contextvars.
+- **Work whose duration is unbounded gets its own bounded pool.** The default executor is the render path; sharing it with lifecycle verbs trades a loop stall for pool starvation, which looks identical to the user. Bound the pool so a fleet can never become N simultaneous image builds, name its threads, and never let shutdown wait on side-effecting work already in flight.
+- **Introducing concurrency deletes an invariant. Restore it explicitly.** A single-threaded loop is an implicit mutex over everything it runs; the moment work moves to a pool that mutex is gone and nobody notices, because the code that relied on it never mentioned it. Re-establish exclusion at the **narrowest key that preserves the point of the change** — per workspace, not global, or the pool bought nothing. Atomic *storage* is not the same guarantee: `JsonWorkspaceStore` locks its read-modify-write, but a verb is `read → mutate git/tmux/container → save`, and the exposure is that middle span.
+- **Results cross a thread boundary as messages, never as direct writes**, and a verb dispatched per keypress needs de-duplication or one impatient double-press is two kills.
+- **Prefer not having a loop at all.** In order: (1) subscribe to an edge that already exists; (2) if you must poll, gate it on a live consumer — publishing into an empty room is pure waste; (3) suspend the tick when its surface isn't visible, but **measure which branch actually leaks before gating**, and never gate on window focus (an unfocused Grove is a legitimate live surface); (4) only then, a timer, with its body gated so an idle fleet costs nothing.
 
 ### The provider boundary (LLMs and agents)
 
-- **Patch the provider boundary, never model behavior.** Treat LLMs and agents as non-deterministic black-box APIs; avoid anthropomorphic language. Write code only for provider and model *parameter and protocol* differences — how an invocation is launched, how tool calls are passed, how responses (and their varied content-block types) are received, normalized, and presented, accurately across every type exchanged. Never add code to correct, second-guess, or work around what a model *does*: that output is black-box. An adapter normalizes *shape*, not *semantics*. The concrete adapter layer is [`core/agents/`](src/grove/core/agents/CLAUDE.md).
-
-### Other rules
-
-- Code validates itself at the point of definition (schema validators, strict configs that forbid unknown fields).
-- Define logic once; call everywhere. A rule reused by more than one caller lives in one place.
-- Smallest diff that solves the problem. No speculative abstractions.
-- Keep published contracts stable: interface names, method signatures, and field names don't move under consumers without coordination.
-- Tests prefer real code paths; stub only I/O boundaries. Cover full orchestration loops with in-memory fakes for external services and model output.
-- Gitmoji plus Conventional Commits (e.g. `✨ feat(scope): ...`).
-- Keep this file lean as the project evolves; push detail down into the owning nested file.
+- **Patch the provider boundary, never model behavior.** Treat LLMs and agents as non-deterministic black-box APIs; avoid anthropomorphic language. Write code only for provider and model *parameter and protocol* differences — how an invocation is launched, how tool calls are passed, how responses (and their varied content-block types) are received, normalized and presented. Never add code to correct, second-guess, or work around what a model *does*: an adapter normalizes *shape*, not *semantics*. The concrete adapter layer is [`core/agents/`](src/grove/core/agents/CLAUDE.md).
 
 ## Running, testing, linting
 
-- Install (editable, all surfaces): `uv tool install --reinstall --force --editable '.[all]'` from the repo root, then `systemctl --user restart grove-daemon`. `[all]` = daemon+client+mcp, so `grove-mcp` actually works; `'.[daemon]'` is the lean daemon-only variant that intentionally omits the MCP SDK and leaves `grove-mcp` non-functional (`ModuleNotFoundError: No module named 'mcp'`).
-- Tests: `uv run pytest`. Lint: `make lint` is the full gate — it runs `ruff check`, `ruff format --check`, `mypy src/grove`, and `lint-imports` (import-linter) in sequence. Always run the full target before pushing, never just `ruff check`. Standalone equivalents if you need one in isolation: `uv run mypy src`, `uv run lint-imports`.
-- CI is Linux-only; cross-platform defenses are unverified by CI. See [tests/CLAUDE.md](tests/CLAUDE.md) for the test seams and the Windows/macOS gotchas to reason about by hand.
+- Install (editable, all surfaces): `uv tool install --reinstall --force --editable '.[all]'` from the repo root, then `systemctl --user restart grove-daemon`. `[all]` = daemon+client+mcp; `'.[daemon]'` is the lean daemon-only variant that intentionally omits the MCP SDK and leaves `grove-mcp` non-functional (`ModuleNotFoundError: No module named 'mcp'`).
+- Tests: `uv run pytest`. Lint: `make lint` is the full gate — `ruff check`, `ruff format --check`, `mypy src/grove`, `lint-imports` in sequence. Always run the full target before pushing, never just `ruff check`.
+- CI is Linux-only; cross-platform defenses are unverified by CI. See [tests/CLAUDE.md](tests/CLAUDE.md) for the Windows/macOS gotchas to reason about by hand.
 
 ## Cross-cutting process lessons (no single component owner)
 
 > Workflow and tooling lessons with no component home. Component-specific learnings live in the nested files mapped above — don't re-log them here.
 
-- **Running Grove from a checkout means an editable install; an update refreshes three long-lived surfaces.** `~/.local/bin/grove` resolves to whatever was last `uv tool install`ed; a vanilla install pulls the published PyPI wheel (the release), not your checkout. Symptom: a new endpoint or method is green in `pytest` but the running daemon serves 404 / `No such command`. Fix: `uv tool install --reinstall --force --editable '.[all]'`, then restart the daemon (the `[daemon]` extra is load-bearing for the server; `[all]` adds the `mcp` extra so the always-installed `grove-mcp` script can import). Updating Grove means refreshing the CLI/TUI (relaunch), the daemon (restart), and the webapp (rebuild `.next` + restart) — each is a separate surface. (The opt-in `grove-mcp` MCP server needs no refresh step: the MCP client respawns it per connection, so an editable pull is live on its next launch — only a changed `mcp` extra needs a reinstall. See the `reinstalling-grove` skill.)
-- **A Grove workspace is a git worktree, so it sees only committed files.** Uncommitted working-tree edits never propagate into a worktree. Commit shared config (e.g. `.mcp.json`, whose tokens are env refs, not literals) for worktrees to inherit it. Config layers: user `~/.config/grove/config.json`, committed project `.grove/config.json`, gitignored `.grove/config.local.json`.
-- **Parallel-agent build pattern.** Build the shared foundation solo and verify it, then fan out one agent per *disjoint* directory. Agents only consume the foundation, never edit it → zero conflicts. Give each the exact contract plus the source to match; integrate and verify last. You own the shared contention points solo. (This very doc tree was built that way.) **The stable-public-surface variant:** when a redesign forces many agents to touch *shared* atoms (a Button, a Badge, a card), freeze the public contract first — props, testids, first-child structure — so each agent restyles internals freely and the integrations compose without breakage (the webapp #86 redesign restyled `StatusBadge`/`StatTrio`/etc. visual-only across agents this way). The contract, not the directory, is the conflict boundary.
-- **The working tree can advance under you mid-session (concurrent dev).** If the Edit "modified since read" guard fires, re-read the file fresh and re-derive the edit against current content — never force it. `git log` / `git diff --stat` to map the real blast radius before integrating.
-
-## IMPORTANT
-
-Continuously capture non-trivial lessons in the **nearest owning `CLAUDE.md`** (the tree above), so future sessions accelerate and load only what they need. Keep every file in its lane; keep parent and child links current.
+- **A checkout means an editable install, and an update refreshes three independent long-lived surfaces.** `~/.local/bin/grove` resolves to whatever was last `uv tool install`ed, and a vanilla install pulls the published wheel, not your checkout — symptom: a new endpoint or method is green in `pytest` but the running daemon serves 404 / `No such command`. Refresh the CLI/TUI (relaunch), the daemon (restart) and the webapp (rebuild `.next` + restart) separately. The opt-in `grove-mcp` server needs no refresh: its client respawns it per connection, so an editable pull is live on the next launch; only a changed `mcp` extra needs a reinstall. See the `reinstalling-grove` skill.
+- **Never run a Grove entrypoint as root — it poisons the editable install, and uv's error never says so.** The `uv tool` venv and (editable install ⇒) the checkout's `src/grove/**/__pycache__` are user-owned; one root-run entrypoint — classically a root shell where `claude` spawns `grove-mcp` from `.mcp.json` — makes CPython write uid-0 bytecode into both. `uv tool install --reinstall` must empty `site-packages`, cannot unlink a root-owned `__pycache__`, and dies with a bare `Permission denied` naming whatever dependency it hit first; nothing points at root. **Diagnose by ownership, not by the message:** `find "$(uv tool dir)/grove" ! -user "$(id -un)"` — and the *set* of root-owned `.pyc` names the guilty entrypoint (only `grove-mcp` pulls in `mcp/**`). **Recover without sudo** by renaming the venv aside (`mv "$(uv tool dir)/grove" …` — rename needs write on the *parent*, not on the root-owned contents) and reinstalling; the stale tree still needs one `sudo rm -rf`. `reinstall.sh` preflights this and prints the `chown` remedy.
+- **A Grove workspace is a git worktree, so it sees only committed files.** Uncommitted working-tree edits never propagate into a worktree — commit shared config (e.g. `.mcp.json`, whose tokens are env refs, not literals) for worktrees to inherit it. Config layers: user `~/.config/grove/config.json`, committed project `.grove/config.json`, gitignored `.grove/config.local.json`.
+- **Parallel-agent build pattern: build the shared foundation solo and verify it, then fan out one agent per *disjoint* directory.** Agents only consume the foundation, never edit it → zero conflicts. This scales to a whole epic when each story owns its own new module and is restricted to small, delimited insertions in the shared files it must report exactly; merge the engine/integration stories last. **When a redesign instead forces many agents into *shared* atoms, freeze the public contract first** — props, testids, first-child structure — so each agent restyles internals freely and the integrations compose. The contract, not the directory, is the conflict boundary.
+- **A delegated agent optimizes exactly what you made MEASURABLE, so a format rule plus an impression of size produces format compliance and nothing else.** Four agents told "strict bullets, at most one lead paragraph per section" and "roughly half the length" delivered the paragraph rule perfectly and cut prose by 9%: the bullets were the same sentences with dashes in front. Re-nudging did not help, because the second instruction was no more measurable than the first. **Give a per-unit budget with the invariant beside it** — "this section is 496 words, bring it under 250, here is the fact list that must survive" — and verify with a diff of the tokens that had to survive rather than by reading. The integrator's own hand-pass then closed the gap in one turn, which is the tell that the work was never the hard part.
+- **Give each concurrent agent its own worktree AND a file-ownership list.** One checkout cannot hold six branches — a fleet told to `git checkout -b` in a shared tree produces interleaved commits on whichever branch happened to be current. Isolation alone is not enough: name the files each agent owns, forbid the rest, and require it to REPORT any unavoidable touch outside its list with exact lines. When a shared file does conflict, the resolution is usually the UNION of both intents, not either side whole — taking one side silently reverts the other's fix.
+- **A delegated agent can FINISH the work and stall on reporting — read its artifacts before you nudge it.** Nudging costs a full context replay and changes nothing; `git -C <worktree> log/status/diff` answers in one call. Under a saturated fleet a slow suite is the HOST, not a hang — and a run killed by memory pressure exits 144, which is not a test failure and must not be reported as one. Corollary for the integrator: **gate the branch yourself rather than waiting to be told it is green.**
+- **The working tree can advance under you mid-session.** If the Edit "modified since read" guard fires, re-read the file and re-derive the edit against current content — never force it.
+- **`src/grove/skills/` is published twice, and the copy users install is the one in the separate plugin-marketplace repo.** `grove skills install` writes from this tree, but everyone who installs the plugin gets the marketplace copy — so a skill edited only here is live for us and stale for them, silently and indefinitely. **Edit both in one change and `diff` them before committing**; the plugin side also needs its `plugin.json` + root `marketplace.json` version bumped in lockstep and its hand-maintained README updated. A skill's frontmatter `name` must equal its `skills/<name>/` directory name.
+- **A skill or guide that documents a tool surface goes stale the moment the surface grows, and nothing fails when it does.** No test, gate or type checker reads prose, so the only detector is a periodic audit against the real definitions — the Typer commands and MCP registration tuples themselves, never a README. **Never write a count you would have to maintain**; point at the enumeration that is the census instead.

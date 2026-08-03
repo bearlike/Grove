@@ -1,4 +1,4 @@
-"""Mewbo session introspection — the first remote-backed :class:`AgentAdapter` (#36).
+"""Mewbo session introspection — the first remote-backed :class:`AgentAdapter`.
 
 Mewbo sessions live behind a REST API, not in local transcript files — the
 reason the adapter seam is keyed by ``(cwd, session_id)`` instead of paths.
@@ -13,8 +13,7 @@ adapter:
 - :class:`MewboAdapter` — the thin seam wiring client → parser, best-effort
   by contract (a failed or malformed fetch degrades fields, never raises).
 
-Mapping facts (verified against the Mewbo API guide + console wire types,
-2026-06-11):
+Mapping facts (verified against the Mewbo API guide + console wire types):
 
 - ``GET /events`` carries the AUTHORITATIVE ``status`` / ``done_reason`` /
   ``title`` top-level — read them, never reconstruct from the timeline tail.
@@ -44,6 +43,7 @@ from grove.core.agents.model import (
     FinalResult,
     OrderedDigest,
     SessionControls,
+    SessionRef,
     SessionSummary,
     SessionTurn,
     TodoList,
@@ -302,8 +302,6 @@ class _EventLog:
         ``total_steps`` over counting call-side tool events.
         """
         buckets: list[int] = []
-        current_task: str | None = None
-        first_user_text: str | None = None
         last_event_at: datetime | None = None
         model: str | None = None
         error_detail: str | None = None
@@ -318,19 +316,13 @@ class _EventLog:
 
             if event.is_user:
                 buckets.append(0)
-                if first_user_text is None:
-                    first_user_text = _truncate(event.text(), _TASK_TEXT_CAP)
             elif event.is_assistant_reply:
                 if buckets:
                     buckets[-1] += 1
                 error_detail = event.error_text or error_detail
 
-            titles = event.plan_step_titles()
-            if titles:
-                current_task = _truncate(titles[-1], _TASK_TEXT_CAP)
-            elif event.is_tool_call:
+            if not event.plan_step_titles() and event.is_tool_call:
                 tool_events += 1
-                current_task = _truncate(event.tool_label(), _TASK_TEXT_CAP)
 
             usage_in, usage_out = event.llm_usage()
             peak_in = max(peak_in, usage_in)
@@ -346,10 +338,15 @@ class _EventLog:
         if state is AgentActivityState.ERROR and error_detail is None:
             error_detail = done_reason if isinstance(done_reason, str) else None
 
+        # One selection helper, shared with `current_task_text()`, so this
+        # capped field and the uncapped per-request read can never name
+        # different text.
+        raw_task = self.current_task_text()
+
         return AgentActivity(
             state=state,
             title=self.title(),
-            current_task=current_task or first_user_text,
+            current_task=_truncate(raw_task, _TASK_TEXT_CAP) if raw_task is not None else None,
             human_turns=len(buckets),
             assistant_replies=sum(buckets),
             replies_per_turn=tuple(buckets),
@@ -399,7 +396,7 @@ class _EventLog:
 
     def digest(self) -> OrderedDigest:
         """Ordered ``user / assistant / tool`` skeleton, truncated for the
-        future external-LLM interpreter (#20)."""
+        future external-LLM interpreter."""
         entries: list[DigestEntry] = []
         for event in self._events:
             if event.is_user:
@@ -414,11 +411,12 @@ class _EventLog:
         return OrderedDigest(tuple(entries[-_DIGEST_MAX_ENTRIES:]))
 
     def final_result(self) -> FinalResult | None:
-        """The session's terminal outcome (#149), ``None`` before any reply.
+        """The session's terminal outcome, ``None`` before any reply.
 
-        Mewbo has no message spine to project (#179 never touched the remote
-        adapter) — but ``GET /events`` is already AUTHORITATIVE on completion
-        (the module's own status-mapping rule), so ``is_complete`` reuses
+        Mewbo has no message spine to project (the agentic-loop spine never
+        touched the remote adapter) — but ``GET /events`` is already
+        AUTHORITATIVE on completion (the module's own status-mapping rule),
+        so ``is_complete`` reuses
         :meth:`state` directly rather than re-deriving it from the raw event
         tail: WAITING is Mewbo's "turn over, human's move" (this class's own
         ``_STATUS_STATE`` convention), the exact analogue of Claude's
@@ -437,8 +435,31 @@ class _EventLog:
             timestamp=last_reply.ts,
         )
 
+    def current_task_text(self) -> str | None:
+        """The session's task text, UNCAPPED — the ONE selection
+        :meth:`activity` caps onto ``AgentActivity.current_task``.
+
+        The rule (unchanged, only factored out of the metrics loop): the
+        newest plan-step title else the newest tool label, whichever the event
+        log saw last, falling back to the FIRST user event's text. Both readers
+        share this method so the capped and uncapped answers cannot drift
+        apart. Whitespace-only text is ``None``.
+        """
+        task: str | None = None
+        first_user: str | None = None
+        for event in self._events:
+            if event.is_user and first_user is None:
+                first_user = event.text()
+            titles = event.plan_step_titles()
+            if titles:
+                task = titles[-1]
+            elif event.is_tool_call:
+                task = event.tool_label()
+        text = task or first_user
+        return text if text and text.strip() else None
+
     def latest_todo(self) -> TodoList | None:
-        """The session's current todo/checklist state (#194), ``None`` before
+        """The session's current todo/checklist state, ``None`` before
         any todo-shaped tool call.
 
         Mewbo has no message spine either (same caveat as :meth:`final_result`),
@@ -546,7 +567,7 @@ class MewboAdapter:
         # AgentSpec names (typically a shell); the session itself lives
         # server-side and its id is SERVER-minted at create (manager fork). A
         # remote session has no launch-time resume handle either — resume-by-id
-        # is rejected for mewbo at the manager gate (#120), so this stays empty.
+        # is rejected for mewbo at the manager gate, so this stays empty.
         del session_id, resume
         return []
 
@@ -591,9 +612,53 @@ class MewboAdapter:
         self, cwd: Path, *, exclude_id: str | None = None
     ) -> list[tuple[str, datetime | None, float]]:
         # No out-of-band discovery for a remote backend (see discover_sessions),
-        # so the cheap adoption pre-filter (#F5) has nothing to offer either.
+        # so the cheap adoption pre-filter has nothing to offer either.
         del cwd, exclude_id
         return []
+
+    def discover_all(self) -> tuple[SessionRef, ...]:
+        """Every remote session, unfiltered — the catalog scan.
+
+        The host-wide sibling of :meth:`list_sessions`: the SAME
+        ``GET /api/sessions`` listing, with the ``context.cwd`` equality
+        filter removed. Rows that expose no context cwd stay excluded
+        (honest filtering — a session claiming no location can't be placed on
+        a catalog grouped by project, and this mirrors ``list_sessions``'
+        own skip). Best-effort: ``()`` on any error, or when no client is
+        configured. No local file, so ``transcript_path`` is ``None`` and
+        ``mtime`` is ``0.0`` (Mewbo rows carry no recency timestamp today).
+        """
+        client = self._client_or_none()
+        if client is None:
+            return ()
+        try:
+            rows = client.list_sessions()
+        except MewboError as exc:
+            logger.debug("mewbo discover_all() failed: {}", exc)
+            return ()
+        refs: list[SessionRef] = []
+        for row in rows:
+            context = row.get("context")
+            context = context if isinstance(context, dict) else {}
+            cwd = context.get("cwd")
+            if not isinstance(cwd, str) or not cwd:
+                continue
+            session_id = row.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            branch = context.get("branch") if isinstance(context.get("branch"), str) else None
+            refs.append(
+                SessionRef(
+                    session_id=session_id,
+                    adapter_kind=self.kind,
+                    cwd=cwd,
+                    transcript_path=None,
+                    birth=_parse_timestamp(row.get("created_at")),
+                    mtime=0.0,
+                    git_branch=branch,
+                )
+            )
+        return tuple(refs)
 
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
         """Remote sessions whose persisted context ``cwd`` matches this worktree.
@@ -673,6 +738,14 @@ class MewboAdapter:
     def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
         log = self._fetch_log(cwd, session_id)
         return log.latest_todo() if log is not None else None
+
+    def latest_task(self, cwd: Path, session_id: str) -> str | None:
+        """The session's task text, uncapped — the same
+        :meth:`_EventLog.current_task_text` selection :meth:`parse_activity`
+        caps onto ``AgentActivity.current_task``. One ``/events`` fetch, like
+        every other read here; ``None`` when the fetch degrades."""
+        log = self._fetch_log(cwd, session_id)
+        return log.current_task_text() if log is not None else None
 
     def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
         # A remote orchestrator's controls (commands / skills / MCP servers) live

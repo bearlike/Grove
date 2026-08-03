@@ -1,4 +1,4 @@
-"""ProjectPickerScreen — switch between registered repos without leaving the TUI (#59).
+"""ProjectPickerScreen — switch between registered repos without leaving the TUI.
 
 ``WorkspaceListScreen`` is repo-scoped: it binds one ``WorkspaceManager`` to
 the launch CWD. The cross-project ``DashboardScreen`` (``d``) is read-only. This
@@ -72,7 +72,7 @@ class RepoChoice:
         ``known`` is the registry's ``known_roots()`` union (store-derived plus
         config-declared). Every entry is seeded at count 0 so a config-declared
         *empty* project lists alongside the current-repo special case — without
-        it, only repos with persisted workspaces would appear (#95). Sorted
+        it, only repos with persisted workspaces would appear. Sorted
         current-first, then by name, so the chooser reads predictably.
         """
         current_resolved = current.resolve()

@@ -1,7 +1,7 @@
 """Cross-project activity aggregation — the hub both clients consume.
 
-The ``ActivityService`` is the tool-agnostic top of the Activity Dashboard
-(epic #11 §3). It enumerates every workspace across every repo (via the
+The ``ActivityService`` is the tool-agnostic top of the Activity Dashboard.
+It enumerates every workspace across every repo (via the
 ``RepoRegistry``), resolves each workspace's agent session(s), parses their
 activity through the agent adapters, **blends** the transcript-derived status
 with Grove's existing tmux-driven workspace reconciliation into one
@@ -36,13 +36,16 @@ from grove.core.agents import (
     AgentQuestion,
     AgentSession,
     SessionProvenance,
+    TodoList,
     get_adapter,
 )
 from grove.core.agents.base import AgentAdapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook, HookRecord
 from grove.core.git import GitRepo
+from grove.core.launch import AgentExit
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
+from grove.core.phase import PhaseReport
 from grove.core.registry import RepoRegistry
 from grove.core.workspace import CommitSummary, WorkspaceState, WorkspaceStatus
 
@@ -54,12 +57,12 @@ DeltaKind = Literal["workspace_changed", "session_activity"]
 
 @dataclass(slots=True, frozen=True)
 class LiveCounters:
-    """In-flight token counters for a session mid-generation (#181).
+    """In-flight token counters for a session mid-generation.
 
     Distinct from ``AgentActivity.tokens_in``/``tokens_out`` (the
     transcript-derived totals, settled once a turn flushes): this is a
     *faster* tier a client renders WHILE generating, sourced from whatever
-    live side-channel is active — the #177 wire-truth proxy is the primary
+    live side-channel is active — the wire-truth proxy is the primary
     source, with partial-message deltas or OTel metrics as fallbacks. The
     whole block is ``None`` on ``SessionActivity.live`` when no such tier is
     reporting (hidden, never zeroed) — see ``ActivityService._live_counters``.
@@ -74,8 +77,8 @@ class LiveCounters:
 class SessionActivity:
     """One agent session paired with its computed activity.
 
-    ``live`` is the optional #181 live-counters block — ``None`` until a live
-    tier is wired (#177); the wire mirror hides the whole block rather than
+    ``live`` is the optional live-counters block — ``None`` until a live
+    tier is wired; the wire mirror hides the whole block rather than
     showing zeros.
     """
 
@@ -85,13 +88,60 @@ class SessionActivity:
 
 
 @dataclass(slots=True, frozen=True)
+class TodoProgress:
+    """How far through its checklist an agent is — COUNTS ONLY, never the items.
+
+    The bounded projection of ``TodoList`` that a dashboard card renders
+    as "4/10 done". The full item list stays fetch-on-demand behind
+    ``GET /workspaces/{id}/todo``: this rides the ~1 Hz ``session_activity``
+    delta for every workspace on the host, and the contracts boundary forbids
+    embedding an unbounded payload in that stream (the same rule that keeps
+    session turns off it). A checklist is legitimately long and legitimately
+    verbose; four integers are neither.
+
+    A counts-only shape is also the only one that stays honest under the cap it
+    would otherwise need — a truncated list of items reads as *the* list, where
+    a count of 10 with 4 done cannot be misread.
+    """
+
+    total: int
+    completed: int
+    in_progress: int
+    pending: int
+
+    @classmethod
+    def from_todo(cls, todo: TodoList | None) -> TodoProgress | None:
+        """Count ``todo``'s items by status, or ``None`` if there is no list.
+
+        ``None`` (no todo tool called yet) is deliberately NOT an empty
+        progress: "this agent keeps no checklist" and "this agent's checklist is
+        empty" are different facts, and a client must be able to hide the
+        indicator for the first rather than render 0/0 — the same
+        absence-is-not-a-value rule ``PhaseView`` and ``LiveCounters`` follow.
+
+        ``total`` is sent rather than left to the client to sum, for the reason
+        ``PhaseView.total`` exists: two renderers deriving the same number two
+        ways is two chances to disagree.
+        """
+        if todo is None:
+            return None
+        statuses = [item.status for item in todo.items]
+        return cls(
+            total=len(statuses),
+            completed=statuses.count("completed"),
+            in_progress=statuses.count("in_progress"),
+            pending=statuses.count("pending"),
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class WorkspaceActivity:
     """A workspace's dashboard row: reconciled state + its sessions + cheap stats.
 
     ``pane_target`` is the tmux target a client promotes to a live pane on
     hover/focus; ``None`` when the session isn't live. ``base_ahead`` / ``diff_*``
     are the cheap ``--shortstat`` totals for the card — the full diff stays on the
-    peek focus path (claude-squad #280: never load full diffs for a list).
+    peek focus path (never load full diffs for a list).
 
     ``dirty_files`` counts uncommitted paths in the worktree — the live "the
     agent is editing" signal that precedes any commit.
@@ -103,6 +153,13 @@ class WorkspaceActivity:
     transcript-derived task text is ephemeral. ``observed_at`` is when this row
     was produced (the per-card "updated Xs ago"); the dashboard-wide refresh time
     is ``DashboardSnapshot.generated_at``.
+
+    ``phase`` and ``todo`` are the two "how is the TASK going" fields, both
+    ``None`` when the agent has said nothing. They are DERIVED per tick from
+    durable artifacts (a worktree file, the transcript) exactly like the session
+    activity above — neither is persisted onto ``WorkspaceState``, so nothing
+    here can go stale relative to what the agent last wrote. Both default so the
+    row can still be constructed from the fields that predate them.
     """
 
     state: WorkspaceState
@@ -115,6 +172,8 @@ class WorkspaceActivity:
     pane_target: str | None
     recent_commits: tuple[CommitSummary, ...]
     observed_at: datetime
+    phase: PhaseReport | None = None
+    todo: TodoProgress | None = None
 
     @property
     def primary(self) -> AgentActivity | None:
@@ -123,7 +182,7 @@ class WorkspaceActivity:
 
     @property
     def needs_attention(self) -> bool:
-        # Sub-agent fleet entries (#173, ``AgentSession.parent_session_id`` set)
+        # Sub-agent fleet entries (``AgentSession.parent_session_id`` set)
         # are itemized DETAIL, not separate top-level conversations: a worker
         # that finished normally settles to WAITING, which is exactly an
         # ATTENTION_STATE for a real human-facing session but means nothing of
@@ -143,6 +202,15 @@ class WorkspaceActivity:
         make every card emit a delta on every poll. The last commit sha is
         included so a fresh commit streams promptly even when it doesn't move the
         ahead/behind counts (an amend on the tip).
+
+        ``phase`` and ``todo`` go in WHOLE rather than field-by-field: both are
+        frozen value objects that compare by value, so including the object
+        cannot forget a field a later change adds — where the per-session tuple
+        below must stay explicit precisely because ``AgentActivity`` carries
+        fields that churn every tick. Note this makes ``PhaseReport.updated_at``
+        part of the key on purpose: unlike ``observed_at`` it moves only when the
+        agent actually rewrites the file, so a re-report of the same phase is a
+        real "still here" signal worth streaming, not per-tick noise.
         """
         return (
             self.state.status,
@@ -152,6 +220,8 @@ class WorkspaceActivity:
             self.base_ahead,
             self.base_behind,
             self.recent_commits[0].sha if self.recent_commits else None,
+            self.phase,
+            self.todo,
             # Every session, not just the primary: a hand-started secondary's
             # state change must stream too, and a sessions set going empty (a
             # discovery miss) is itself a change worth emitting.
@@ -165,7 +235,7 @@ class WorkspaceActivity:
                     # once — it can arrive without a state change (the capturing
                     # PreToolUse is WORKING, like the tool call it gates).
                     tuple(q.id for q in s.activity.questions),
-                    # Live counters (#181): included so a client sees the token
+                    # Live counters: included so a client sees the token
                     # count tick up ~1Hz while generating, and sees the block
                     # disappear the moment a live tier stops reporting (e.g. the
                     # turn flushed and the transcript's own totals took over).
@@ -183,7 +253,7 @@ class ProjectGroup:
 
     ``repo_root`` is the git repo that anchors the worktrees; ``cwd`` is the
     project's working directory. For a top-level repo ``cwd == repo_root``; for a
-    nested project (#101) ``cwd`` is a subdirectory, so several groups can share
+    nested project ``cwd`` is a subdirectory, so several groups can share
     one ``repo_root`` and are distinguished by ``cwd``. ``repo_name`` stays the
     repo's basename; clients show ``cwd`` (or its tail) to disambiguate siblings.
     """
@@ -192,6 +262,16 @@ class ProjectGroup:
     repo_name: str
     cwd: str
     workspaces: tuple[WorkspaceActivity, ...]
+    error: str | None = None
+    """Why this project could not be read, or ``None`` when it was read fine.
+
+    A project whose ``.grove/config.json`` will not parse is exactly the one an
+    operator most needs the dashboard to name, so it is surfaced as a DEGRADED
+    group rather than dropped. Silently omitting it would let the fleet look
+    healthy while one repo had quietly vanished. ``workspaces`` is empty when
+    set — nothing could be listed — so a client renders the reason in place of
+    rows.
+    """
 
 
 @dataclass(slots=True, frozen=True)
@@ -276,12 +356,13 @@ class ActivityService:
         peek rail already follows.
         """
         self._ensure_bridged()
-        # One group per known *project* (#101). Several nested projects can share
+        # One group per known *project*. Several nested projects can share
         # one repo root — and thus one Manager — so workspaces are listed once per
         # repo and split into groups by their persisted ``project_subpath``. A
         # workspace whose subpath matches no declared project still gets its own
         # implied group (no row is ever dropped); every declared project appears
-        # even when empty (the #95 visibility contract, carried per-project).
+        # even when empty, carried per-project regardless of whether it has
+        # workspaces.
         seeded: dict[Path, dict[str, Path]] = {}  # repo_root → {subpath: project_cwd}
         for project in self._registry.known_projects():
             root = project.repo_root.resolve()
@@ -289,7 +370,16 @@ class ActivityService:
             seeded.setdefault(root, {})[sub] = project.cwd
         groups: list[ProjectGroup] = []
         for root, declared in seeded.items():
-            mgr = self._registry.get(root)
+            try:
+                mgr = self._registry.get(root)
+            except Exception as exc:  # best-effort: never break the snapshot
+                # The same isolation the per-workspace git reads below already
+                # have. This one gates the whole ITERATION rather than one row,
+                # so without it a stray comma in one repo's config blanks the
+                # dashboard for every repo, plus every open SSE stream.
+                logger.warning("activity: project {} unreadable: {}", root, exc)
+                groups.extend(self._degraded_groups(root, declared, exc))
+                continue
             cwds = dict(declared)  # subpath → project cwd (seeds empty groups)
             rows_by_sub: dict[str, list[WorkspaceActivity]] = {sub: [] for sub in cwds}
             for state in mgr.list():
@@ -335,6 +425,28 @@ class ActivityService:
 
         return _unsub
 
+    @staticmethod
+    def _degraded_groups(
+        root: Path, declared: dict[str, Path], exc: Exception
+    ) -> list[ProjectGroup]:
+        """One rowless group per declared project of a repo that could not be read.
+
+        Per DECLARED project rather than one per repo, so a repo hosting several
+        nested projects degrades the same shape it renders when healthy —
+        a client's grouping does not change under failure, only its contents.
+        """
+        reason = f"{type(exc).__name__}: {exc}"
+        return [
+            ProjectGroup(
+                repo_root=str(root),
+                repo_name=root.name,
+                cwd=str(cwd),
+                workspaces=(),
+                error=reason,
+            )
+            for cwd in declared.values()
+        ]
+
     def poll_once(self) -> None:
         """Recompute activity, emit a ``session_activity`` delta per changed workspace.
 
@@ -346,7 +458,11 @@ class ActivityService:
         self._ensure_bridged()
         fresh: dict[str, tuple[object, ...]] = {}
         for root in self._registry.known_roots():
-            mgr = self._registry.get(root)
+            try:
+                mgr = self._registry.get(root)
+            except Exception as exc:  # best-effort: never break the poll
+                logger.warning("activity: project {} unreadable, not polled: {}", root, exc)
+                continue
             for state in mgr.list():
                 row = self._workspace_activity(mgr, state)
                 fingerprint = row.fingerprint
@@ -397,7 +513,7 @@ class ActivityService:
             logger.debug("activity dirty_file_count({}) failed: {}", state.id, exc)
             dirty = 0
         try:
-            pane_target = mgr.pane_target(state.id)
+            pane_target = mgr.pane_target_for(state)
         except Exception as exc:
             logger.debug("activity pane_target({}) failed: {}", state.id, exc)
             pane_target = None
@@ -408,6 +524,45 @@ class ActivityService:
         except Exception as exc:  # best-effort: never break the snapshot
             logger.debug("activity recent_commits({}) failed: {}", state.id, exc)
             commits = ()
+        try:
+            # One `stat` + a small JSON read off the worktree. Asked of the
+            # MANAGER rather than reading the file here so "where does a
+            # workspace's phase live" has exactly one answer — the CLI, the MCP
+            # tool and this card cannot drift apart about it.
+            phase = mgr.phase_for(state)
+        except Exception as exc:  # best-effort: never break the snapshot
+            logger.debug("activity phase({}) failed: {}", state.id, exc)
+            phase = None
+        try:
+            # The session is handed OVER, not re-derived. `sessions_for`
+            # above already resolved this workspace's primary through the full
+            # adoption path — which is the only answer that covers a codex
+            # workspace (mints no id, so `agent_session_id` is empty for life)
+            # and a dead minted pointer (rotated by `/clear`, promoted here to
+            # the live adopted session). Left to `agent_session_id` the axis
+            # reads blank for both, though the adapter parses their todo fine.
+            # The manager's own id seam reaches the same answer by scanning;
+            # this path must not, at ~1 Hz per workspace.
+            #
+            # `latest_todo_for`, NOT `latest_todo(id)`: the id form re-fetches
+            # from the store and re-runs `_reconcile_status` on a state this
+            # loop already reconciled. Cost is bounded by the incremental
+            # transcript cache — `read_messages` is memoized on the backing
+            # files' stat signature, so an unchanged transcript pays one stat
+            # and the tick stays O(appended bytes). Measured against the largest
+            # real transcript on the reference host (33 MB, 9458 messages):
+            # warm `latest_todo` 14.5 ms against the 76 ms `parse_activity`
+            # this same tick already pays per session — a fifth of an existing
+            # cost, not a new order of magnitude.
+            todo = TodoProgress.from_todo(
+                mgr.latest_todo_for(
+                    state,
+                    session_id=sessions[0].session.session_id if sessions else None,
+                )
+            )
+        except Exception as exc:  # best-effort: never break the snapshot
+            logger.debug("activity latest_todo({}) failed: {}", state.id, exc)
+            todo = None
         return WorkspaceActivity(
             state=state,
             sessions=tuple(sessions),
@@ -419,6 +574,8 @@ class ActivityService:
             pane_target=pane_target,
             recent_commits=commits,
             observed_at=_utcnow(),
+            phase=phase,
+            todo=todo,
         )
 
     def sessions_for(self, mgr: WorkspaceManager, state: WorkspaceState) -> list[SessionActivity]:
@@ -428,16 +585,26 @@ class ActivityService:
         ``_workspace_activity``) and the TUI list screen's slow tick — so the
         blend + hook-sidecar policy stays in this single site.
 
-        Discovery is a read-only fs glob over ``state.scan_cwds`` — the union of
-        ``agent_cwd`` (``worktree/subpath``, where the agent runs) and the
-        worktree root (a session hand-started at the repo root of a nested
-        project records *its* cwd, #F7). It **always runs**, adapter-gated only
-        (generic/shell discover nothing): ``cfg.hooks.enabled`` gates the sidecar
-        push, never read-only discovery (#119).
+        Discovery is a read-only fs glob over ``state.transcript_scan_cwds`` —
+        ``agent_cwd`` (``worktree/subpath``, where the agent runs) unioned with
+        the worktree root (a session hand-started at the repo root of a nested
+        project records *its* cwd), led by the transcript context's own
+        recorded cwd when the workspace has one. It **always runs**,
+        adapter-gated only (generic/shell discover nothing):
+        ``cfg.hooks.enabled`` gates the sidecar push, never read-only
+        discovery.
+
+        Every adapter read below is wrapped in ``mgr.transcript_scope(state)`` —
+        an agent launched under a pinned ``CLAUDE_CONFIG_DIR``/``CODEX_HOME``
+        wrote its transcript where this process's ambient env does not point,
+        and an unscoped read finds nothing and pins the card at STARTING. That
+        is the manager's shared seam, not a local copy: this file once kept its
+        own two-line version, which is exactly how the same invariant came to be
+        forgotten at four other read sites.
 
         Two paths, by whether Grove minted a deterministic id at create:
 
-        - **Minted id present** (the #13 happy path): that ``grove_launched``
+        - **Minted id present** (the happy path): that ``grove_launched``
           session is the primary; only the discovered sessions this workspace
           *adopts* ride along as ``fs_discovered`` extras. Candidates are
           pre-filtered on CHEAP head metadata (birth) + the sidecar BEFORE any
@@ -461,9 +628,25 @@ class ActivityService:
         a shared cwd (ROOT placement) from adopting another live workspace's
         session (#F1).
         """
-        kind = self._effective_kind(mgr, state)
+        kind = mgr.effective_kind(state)
         adapter = get_adapter(kind)
         now = _utcnow()
+        # The single cwd a one-shot read keys off: the transcript context's
+        # recorded cwd when the workspace has one, else `agent_cwd` — which is
+        # exactly what `transcript_scan_cwds` puts first, by documented order.
+        minted_cwd = state.transcript_scan_cwds[0]
+        # Read ONCE per workspace per tick, not once per session: the agent
+        # command is the workspace's, so its exit is a workspace-level fact
+        # that every session in this pane inherits. `None` — the overwhelmingly
+        # common case — means the command has not exited.
+        #
+        # Asked of the MANAGER rather than the file: where the fact lives is a
+        # property of the runtime, and only the manager knows which one this
+        # workspace has. A host agent's exit is in the recorder's
+        # file (one failed stat); a containerized agent under an in-container
+        # tmux IS the pane's process, so tmux holds its exit status and the file
+        # would never have been written.
+        agent_exit = mgr.agent_exit(state)
 
         if state.agent_session_id:
             # Read the minted sidecar ONCE (#F9): it drives the minted blend,
@@ -481,23 +664,36 @@ class ActivityService:
                 "grove_launched",
                 now,
                 sidecar=minted_sidecar,
-                cwd=state.agent_cwd,
+                cwd=minted_cwd,
+                agent_exit=agent_exit,
             )
-            minted_fleet = self._fleet_entries(kind, state.agent_session_id, state.agent_cwd)
+            minted_fleet = self._fleet_entries(mgr, kind, state, state.agent_session_id, minted_cwd)
             # Only the adopted concurrent sessions ride along; the cheap pre-filter
             # already dropped history, so a full parse is paid per NEW session, not
             # per historical transcript in the cwd (#F5).
             extras: list[SessionActivity] = []
             extras_fleet: list[SessionActivity] = []
             for sid, cwd, sidecar in self._adopted_candidates(
-                adapter, state, reference_pane=reference_pane, exclude_id=state.agent_session_id
+                mgr,
+                adapter,
+                state,
+                reference_pane=reference_pane,
+                exclude_id=state.agent_session_id,
             ):
                 extras.append(
                     self._session_activity(
-                        mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
+                        mgr,
+                        state,
+                        kind,
+                        sid,
+                        "fs_discovered",
+                        now,
+                        sidecar=sidecar,
+                        cwd=cwd,
+                        agent_exit=agent_exit,
                     )
                 )
-                extras_fleet.extend(self._fleet_entries(kind, sid, cwd))
+                extras_fleet.extend(self._fleet_entries(mgr, kind, state, sid, cwd))
             if self._minted_unmaterialized(adapter, minted, minted_sidecar, now) and extras:
                 # The minted --session-id is a dead pointer (rotated by `/clear`,
                 # hand-restarted, or ended). Extras are already adoption-filtered
@@ -512,17 +708,31 @@ class ActivityService:
         # pre-filter walks scan_cwds newest-first and returns adopted candidates
         # only, so we full-parse just the most-recent one (the rest is noise).
         for sid, cwd, sidecar in self._adopted_candidates(
-            adapter, state, reference_pane=None, exclude_id=None
+            mgr, adapter, state, reference_pane=None, exclude_id=None
         ):
             primary = self._session_activity(
-                mgr, state, kind, sid, "fs_discovered", now, sidecar=sidecar, cwd=cwd
+                mgr,
+                state,
+                kind,
+                sid,
+                "fs_discovered",
+                now,
+                sidecar=sidecar,
+                cwd=cwd,
+                agent_exit=agent_exit,
             )
-            return [primary, *self._fleet_entries(kind, sid, cwd)]
+            return [primary, *self._fleet_entries(mgr, kind, state, sid, cwd)]
         return []
 
-    @staticmethod
-    def _fleet_entries(kind: str, session_id: str, cwd: Path) -> list[SessionActivity]:
-        """Itemized in-session sub-agent fleet members for one session (#173) —
+    def _fleet_entries(
+        self,
+        mgr: WorkspaceManager,
+        kind: str,
+        state: WorkspaceState,
+        session_id: str,
+        cwd: Path,
+    ) -> list[SessionActivity]:
+        """Itemized in-session sub-agent fleet members for one session —
         additional ``WorkspaceActivityView.sessions`` rows alongside the
         primary/adopted-extra entries, each an ordinary ``SessionActivity`` (its
         ``AgentSession.parent_session_id`` points back at ``session_id``) so no
@@ -538,27 +748,15 @@ class ActivityService:
         """
         if kind != "claude_code":
             return []
-        return [
-            SessionActivity(session=session, activity=fleet_activity)
-            for session, fleet_activity in ClaudeCodeAdapter().fleet_activity(cwd, session_id)
-        ]
-
-    @staticmethod
-    def _effective_kind(mgr: WorkspaceManager, state: WorkspaceState) -> str:
-        """The adapter kind for ``state`` — persisted at create, else config.
-
-        Prefer the kind persisted at create: it resolves even when the agent is
-        scoped to a repo's project config the daemon never loads (a "Work"
-        profile defined only in private-repos). Fall back to a config lookup for
-        legacy records written before ``agent_kind`` existed.
-        """
-        if state.agent_kind is not None:
-            return state.agent_kind
-        agent = mgr.config.find_agent(state.agent_name)
-        return agent.kind if agent is not None else "generic"
+        with mgr.transcript_scope(state):
+            return [
+                SessionActivity(session=session, activity=fleet_activity)
+                for session, fleet_activity in ClaudeCodeAdapter().fleet_activity(cwd, session_id)
+            ]
 
     def _adopted_candidates(
         self,
+        mgr: WorkspaceManager,
         adapter: AgentAdapter,
         state: WorkspaceState,
         *,
@@ -567,21 +765,27 @@ class ActivityService:
     ) -> list[tuple[str, Path, HookRecord | None]]:
         """Discovered sessions this workspace adopts — cheaply pre-filtered (#F5).
 
-        Unions ``discover_births`` across ``state.scan_cwds`` (#F7), sorts the
-        result newest-first by mtime, then applies the adoption gate on the CHEAP
-        head metadata (birth) plus the sidecar — reading each candidate's sidecar
-        exactly once (#F9) — BEFORE the caller pays any full transcript parse.
-        Returns ``(session_id, cwd, sidecar)`` for the passers, newest-first: the
-        cwd the session was discovered under (so its parse and pane check key on
-        the right directory across a nested project's union) and the already-read
-        sidecar (so the caller reuses it for the blend). A candidate that predates
-        the workspace and left no pane-live sidecar is dropped here and never
-        full-parsed.
+        Unions ``discover_births`` across ``state.transcript_scan_cwds`` (#F7;
+        the context's recorded cwd rides at the head of that union), sorts the
+        result newest-first by mtime, then applies the adoption gate on
+        the CHEAP head metadata (birth) plus the sidecar — reading each
+        candidate's sidecar exactly once (#F9) — BEFORE the caller pays any full
+        transcript parse. Returns ``(session_id, cwd, sidecar)`` for the passers,
+        newest-first: the cwd the session was discovered under (so its parse and
+        pane check key on the right directory across a nested project's union)
+        and the already-read sidecar (so the caller reuses it for the blend). A
+        candidate that predates the workspace and left no pane-live sidecar is
+        dropped here and never full-parsed.
+
+        Only the discovery union is env-scoped: the sidecar reads and the
+        adoption gate below are env-independent, so the process-global config-dir
+        override is held across the globs alone and released before them.
         """
         merged: list[tuple[str, datetime | None, float, Path]] = []
-        for cwd in state.scan_cwds:
-            for sid, born_at, mtime in adapter.discover_births(cwd, exclude_id=exclude_id):
-                merged.append((sid, born_at, mtime, cwd))
+        with mgr.transcript_scope(state):
+            for cwd in state.transcript_scan_cwds:
+                for sid, born_at, mtime in adapter.discover_births(cwd, exclude_id=exclude_id):
+                    merged.append((sid, born_at, mtime, cwd))
         merged.sort(key=lambda t: -t[2])  # newest-first by mtime across the union
         out: list[tuple[str, Path, HookRecord | None]] = []
         seen: set[str] = set()
@@ -618,10 +822,10 @@ class ActivityService:
           this id and no sidecar settled it, so it's honestly empty.
         - **No transcript, latest sidecar event ``SessionEnd``** — the session is
           over even though ``SessionEnd`` settles the blend to IDLE (not
-          STARTING/UNKNOWN); without this the dead pointer read as a live-but-quiet
-          session and recovery never ran (the 2026-07-05 incident). Gated on the
-          sidecar still superseding the poll, so a transcript that somehow outran
-          the ``SessionEnd`` keeps the id materialized.
+          STARTING/UNKNOWN); without this the dead pointer reads as a live-but-quiet
+          session and recovery never runs. Gated on the sidecar still superseding
+          the poll, so a transcript that somehow outran the ``SessionEnd`` keeps
+          the id materialized.
 
         The threaded ``sidecar`` is the minted session's, read once by the caller
         (#F9). Remote adapters never recover this way (no local session to rotate).
@@ -650,6 +854,7 @@ class ActivityService:
         *,
         sidecar: HookRecord | None,
         cwd: Path,
+        agent_exit: AgentExit | None = None,
     ) -> SessionActivity:
         adapter = get_adapter(kind)
         # ``cwd`` is the directory this session was discovered under — agent_cwd
@@ -662,13 +867,18 @@ class ActivityService:
         # for both the push-status override and the pending-question surface.
         # locate stays alongside the (cwd, session_id)-keyed parse: the paths
         # feed the displayed transcript_path and the STARTING detection below.
-        paths = adapter.locate_transcripts(cwd, session_id)
-        transcript = adapter.parse_activity(cwd, session_id)
+        #
+        # Both reads resolve the adapter's config dir from THIS process's env, so
+        # a workspace whose agent was launched under a pinned one is read inside
+        # its scope — held around this pair only, never the blend below.
+        with mgr.transcript_scope(state):
+            paths = adapter.locate_transcripts(cwd, session_id)
+            transcript = adapter.parse_activity(cwd, session_id)
         # Remote adapters surface state with no local file, so "materialized"
         # can't mean "a file exists" — UNKNOWN-and-fileless is the only true
         # STARTING window.
         has_transcript = bool(paths) or transcript.state is not AgentActivityState.UNKNOWN
-        # A headless workspace (#146) has no tmux pane, exactly like a remote
+        # A headless workspace has no tmux pane, exactly like a remote
         # adapter: the local pane says nothing about the agent's work, so the
         # transcript/adapter is the sole live-state authority. Fold it into the
         # blend's `remote` (pane-not-authoritative) arm — but ONLY the blend;
@@ -683,7 +893,7 @@ class ActivityService:
             remote=pane_not_authoritative,
             now=now,
         )
-        # Push-status override (#18): a sidecar from the managed hook is the
+        # Push-status override: a sidecar from the managed hook is the
         # authoritative signal — it sees BLOCKED (permission prompt) and the clean
         # waiting/done split that polling can't. It outranks the poll until the
         # transcript outruns it (the record's own staleness call); absent or
@@ -692,12 +902,26 @@ class ActivityService:
             now=now, transcript_at=transcript.last_event_at
         ):
             blended = sidecar.state
+        # A recorded non-zero exit outranks everything above. It is the
+        # one signal that is a FACT rather than an inference: the agent command
+        # ran and returned, so no transcript tail, pane heartbeat or sidecar
+        # push can still be describing a live agent. It sits after the sidecar
+        # override deliberately — an agent that pushed SessionStart and then
+        # died would otherwise read as working forever off that stale push.
+        #
+        # Placed BEFORE `_settle` so a dead agent settles like any other
+        # definitive state. Nothing here can flap: `agent_exit` is None until
+        # the command actually exits, so a slow-starting agent takes this branch
+        # never, not merely rarely.
+        if agent_exit is not None and agent_exit.failed:
+            blended = AgentActivityState.ERROR
+            transcript = replace(transcript, current_task=agent_exit.reason)
         blended = self._settle(session_id, blended, now)
-        # Live questions (#109): the same sidecar may carry a batch captured at
+        # Live questions: the same sidecar may carry a batch captured at
         # ask-time (before the transcript flushes them). Surfaced independently of
         # the state override above and cross-checked against the transcript so a
         # resolved batch never lingers on the stream.
-        questions = self._pending_questions(adapter, cwd, session_id, sidecar, transcript)
+        questions = self._pending_questions(mgr, kind, state, cwd, session_id, sidecar, transcript)
         live = self._live_counters(state=blended, transcript=transcript)
         session = AgentSession(
             session_id=session_id,
@@ -716,9 +940,9 @@ class ActivityService:
     def _live_counters(
         *, state: AgentActivityState, transcript: AgentActivity
     ) -> LiveCounters | None:
-        """The in-flight token block for a session mid-generation (#181 seam).
+        """The in-flight token block for a session mid-generation.
 
-        No fast side-channel is wired yet — the #177 wire-truth proxy is the
+        No fast side-channel is wired yet — the wire-truth proxy is the
         primary source, with partial-message deltas or OTel metrics as
         fallbacks — so this degrades to ``None`` (hidden, never zeroed) until
         one lands. This call site is where it plugs in: called once per
@@ -734,18 +958,20 @@ class ActivityService:
         a client that keeps seeing it after settling would show a stale count
         fighting the cumulative total instead of yielding to it.
         """
-        del state, transcript  # reserved for the #177 wiring
+        del state, transcript  # reserved for the live wire-truth proxy
         return None
 
     def _pending_questions(
         self,
-        adapter: AgentAdapter,
+        mgr: WorkspaceManager,
+        kind: str,
+        state: WorkspaceState,
         worktree: Path,
         session_id: str,
         sidecar: HookRecord | None,
         transcript: AgentActivity,
     ) -> tuple[AgentQuestion, ...]:
-        """The batch the agent is asking right now, or ``()`` (#109).
+        """The batch the agent is asking right now, or ``()``.
 
         Normalizes the sidecar's captured payload through the shared
         ``from_tool_call`` seam (no question shape re-derived), then confirms it's
@@ -758,6 +984,11 @@ class ActivityService:
         turns to see whether the resolving ``tool_result`` (an answer OR an
         Esc-cancel ``is_error``) has landed for this ``tool_use_id`` (the batch
         shares one, resolving together).
+
+        Takes ``kind`` + ``state`` rather than a resolved adapter because the
+        cross-check is itself an env-dependent transcript read: unscoped, a
+        pinned workspace could never see the resolving result and an
+        already-answered batch would linger on the stream forever.
         """
         if sidecar is None or sidecar.question is None:
             return ()
@@ -770,9 +1001,13 @@ class ActivityService:
         advanced = (
             transcript.last_event_at is not None and transcript.last_event_at > pending.asked_at
         )
-        if advanced and self._question_resolved(adapter, worktree, session_id, pending.tool_use_id):
-            return ()
-        return questions
+        if not advanced:
+            return questions
+        with mgr.transcript_scope(state):
+            resolved = self._question_resolved(
+                get_adapter(kind), worktree, session_id, pending.tool_use_id
+            )
+        return () if resolved else questions
 
     @staticmethod
     def _question_resolved(
@@ -836,7 +1071,7 @@ class ActivityService:
               · otherwise (both signals stale, or session not live) → IDLE — a
                 tool_use tail with nothing advancing is alive-but-stalled (or a
                 killed agent whose transcript froze mid-tool); precise BLOCKED
-                needs a hook (#18).
+                needs a hook.
         """
         # No transcript materialized: only a Grove-launched session is legitimately
         # mid-STARTING (nothing written yet on its first turn). An fs_discovered
@@ -914,7 +1149,17 @@ class ActivityService:
             key = root.resolve()
             if key in self._bridged:
                 continue
-            mgr = self._registry.get(key)
+            try:
+                mgr = self._registry.get(key)
+            except Exception as exc:  # best-effort: never break the caller
+                # Deliberately NOT added to `_bridged`: an unreadable repo is
+                # retried on the next call, so fixing the config recovers the
+                # stream without restarting the daemon. This runs FIRST in both
+                # `snapshot` and `poll_once`, so an unguarded raise here takes
+                # down the whole dashboard — the guards further in are never
+                # even reached.
+                logger.warning("activity: project {} not bridged: {}", key, exc)
+                continue
             self._bridge_unsubs.append(mgr.subscribe(self._bridge_callback(str(key))))
             self._bridged.add(key)
 

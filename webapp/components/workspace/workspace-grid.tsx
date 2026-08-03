@@ -7,8 +7,8 @@ import { selectSections } from "@/lib/grove/dashboard-filter";
 import type { DashboardSnapshotView } from "@/lib/grove/types";
 
 /**
- * The repo-grouped workspace grid (issue #96 deliverables C/D). The ONLY public
- * prop is the server `snapshot`; every piece of VIEW intent is read straight off
+ * The repo-grouped workspace grid. The ONLY public prop is the server
+ * `snapshot`; every piece of VIEW intent is read straight off
  * the Zustand `ui-store` (scope · hidden states · attention-only · query · the
  * single live focus), so the page owns no grid policy and a sidebar filter flows
  * here without prop threading.

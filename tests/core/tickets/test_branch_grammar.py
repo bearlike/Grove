@@ -32,7 +32,7 @@ def test_linear_parses_team_key_anywhere() -> None:
     p = _linear(team_key="ENG")
     assert p.parse_branch_refs("grove/ENG-123-fix-auth") == ["ENG-123"]
     assert p.parse_branch_refs("feature/eng-7-low") == ["ENG-7"]  # case-insensitive → canonical
-    assert p.parse_branch_refs("krishna/ENG-42") == ["ENG-42"]
+    assert p.parse_branch_refs("alice/ENG-42") == ["ENG-42"]
 
 
 def test_linear_team_scoped_ignores_other_keys() -> None:

@@ -20,7 +20,7 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceStatus
-from grove.tui._status import status_color
+from grove.tui._status import STATUS_GLYPH, status_color
 from grove.tui.app import GroveApp
 from grove.tui.widgets.status import StatusBar
 from tests.conftest import FakeTmux
@@ -103,7 +103,7 @@ async def test_orphaned_workspace_sets_attention_class(
         await pilot.pause()
 
 
-# ─── newer-release indicator (#80) ──────────────────────────────────────────
+# ─── newer-release indicator ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -483,5 +483,32 @@ async def test_breakdown_updates_when_workspace_paused(
         await pilot.pause()
         # Manager event triggers _refresh which rebuilds breakdown.
         assert bar.breakdown.get(WorkspaceStatus.PAUSED, 0) == 1, bar.breakdown
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_provisioning_gets_its_own_count_chip_at_the_head_of_the_row(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A status missing from `_COUNT_ORDER` is not a crash — it is a workspace
+    that exists and is counted nowhere, which is how a fleet coming up looks
+    empty. The chip leads the row: the chips descend from most to least alive
+    and a workspace being built is on its way INTO that ladder.
+    """
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        bar = app.screen.query_one(StatusBar)
+        bar.breakdown = {WorkspaceStatus.PROVISIONING: 2, WorkspaceStatus.IDLE: 1}
+        await pilot.pause()
+        plain = _plain(bar)
+        assert f"{STATUS_GLYPH[WorkspaceStatus.PROVISIONING]} 2" in plain, plain
+        assert plain.index(STATUS_GLYPH[WorkspaceStatus.PROVISIONING]) < plain.index("◐"), plain
+        # Building is not an alarm — the bar must not flip to its amber
+        # attention tier for a workspace that is simply not up yet.
+        assert not bar.has_class("-attention")
         await pilot.press("q")
         await pilot.pause()

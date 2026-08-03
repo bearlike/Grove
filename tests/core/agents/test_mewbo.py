@@ -1,9 +1,8 @@
-"""MewboAdapter + MewboClient over a mock HTTP transport (#36).
+"""MewboAdapter + MewboClient over a mock HTTP transport.
 
 Fakes sit at the HTTP boundary only (``httpx.MockTransport``) — the client,
 the event parsing, and the activity mapping all run for real. Payload shapes
-mirror the wire contract verified against the Mewbo console client and API
-guide on 2026-06-11: ``GET /events`` → ``{events: [{ts, type, payload}],
+mirror the wire contract: ``GET /events`` → ``{events: [{ts, type, payload}],
 status, done_reason, title, running}``; ``GET /agents`` → token rollup with
 PEAK-input semantics.
 """
@@ -203,7 +202,7 @@ def test_failed_status_surfaces_error_detail_from_done_reason() -> None:
     assert activity.error_detail == "tool_crash"
 
 
-# ─── typed final-result extraction (#149) ───────────────────────────────────
+# ─── typed final-result extraction ───────────────────────────────────────────
 
 
 def test_final_result_reflects_authoritative_status_not_the_raw_event_type() -> None:
@@ -239,13 +238,13 @@ def test_final_result_none_when_no_assistant_reply_yet() -> None:
     assert adapter.final_result(CWD, "sess-1") is None
 
 
-# ─── latest-todo projection (#194) ──────────────────────────────────────────
+# ─── latest-todo projection ──────────────────────────────────────────────────
 
 
 def test_latest_todo_reads_the_last_recognized_todo_event() -> None:
-    """Mewbo has no message spine (#179 never touched the remote adapter), so
-    the projection is over the SAME ``_turn_entries`` fold ``read_turns``
-    already builds — a second ``TodoWrite`` overwrites the first."""
+    """Mewbo has no message spine, so the projection is over the SAME
+    ``_turn_entries`` fold ``read_turns`` already builds — a second
+    ``TodoWrite`` overwrites the first."""
     events = {
         "status": "running",
         "events": [
@@ -291,6 +290,38 @@ def test_latest_todo_none_when_no_todo_event() -> None:
 def test_latest_todo_none_when_events_fetch_fails() -> None:
     adapter = _adapter(_transport())  # /events 404s
     assert adapter.latest_todo(CWD, "sess-1") is None
+
+
+def test_latest_task_is_uncapped_where_current_task_is_capped() -> None:
+    """The remote adapter owes the same two-reader answer the filesystem ones
+    do: ``current_task`` truncated for the ~1 Hz delta, the whole text behind
+    the per-request seam, both naming the SAME text."""
+    long_text = ("Investigate the flaky fixture and write it up. " * 20).strip()
+    assert len(long_text) > 500
+    events = {
+        "status": "running",
+        "done_reason": None,
+        "title": "Long brief",
+        "running": True,
+        "events": [
+            {"ts": "2026-07-08T10:00:00+00:00", "type": "user", "payload": {"text": long_text}}
+        ],
+    }
+    adapter = _adapter(_transport(events=events))
+
+    full = adapter.latest_task(CWD, "sess-1")
+    capped = adapter.parse_activity(CWD, "sess-1").current_task
+
+    assert full == long_text
+    assert capped is not None
+    assert len(capped) <= 500
+    assert capped.endswith("…")
+    assert long_text.startswith(capped[:-1].rstrip())
+
+
+def test_latest_task_none_when_events_fetch_fails() -> None:
+    adapter = _adapter(_transport())  # /events 404s
+    assert adapter.latest_task(CWD, "sess-1") is None
 
 
 def test_final_result_none_when_events_fetch_fails() -> None:
@@ -690,7 +721,7 @@ def test_create_session_sends_cwd_api_key_and_best_effort_title(
 
 
 def test_create_session_forwards_model_in_body_when_set() -> None:
-    # #98: a per-create model rides the create body (mewbo's only forward point).
+    # A per-create model rides the create body (mewbo's only forward point).
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -752,3 +783,55 @@ def test_list_sessions_filters_to_matching_context_cwd() -> None:
     assert summary.cwd == str(CWD)
     assert summary.git_branch == "grove/fix-flaky"
     assert summary.activity.state is AgentActivityState.WORKING
+
+
+# ─── discover_all (the host-wide catalog scan, epic: Session Catalog) ──────
+
+
+def test_discover_all_is_the_same_listing_unfiltered_by_cwd() -> None:
+    """``discover_all`` is ``list_sessions``'s host-wide sibling: the SAME
+    ``GET /api/sessions`` rows, with the cwd-equality filter removed — so a
+    session recorded under a DIFFERENT cwd than any one caller's still
+    surfaces. A row with no context cwd stays excluded either way (honest
+    filtering, not a gap)."""
+    sessions = {
+        "sessions": [
+            {
+                "session_id": "match-1",
+                "title": "In this worktree",
+                "status": "running",
+                "created_at": "2026-06-11T08:00:00+00:00",
+                "context": {"cwd": str(CWD), "branch": "grove/fix-flaky"},
+            },
+            {
+                "session_id": "other-cwd",
+                "title": "Different worktree",
+                "status": "completed",
+                "created_at": "2026-06-10T08:00:00+00:00",
+                "context": {"cwd": "/somewhere/else", "branch": "main"},
+            },
+            {
+                # No cwd in context: cannot honestly be placed on any project.
+                "session_id": "no-cwd",
+                "title": "Console session",
+                "status": "completed",
+                "context": {"project": "demo"},
+            },
+        ]
+    }
+    adapter = _adapter(_transport(sessions=sessions))
+    refs = adapter.discover_all()
+
+    assert {ref.session_id for ref in refs} == {"match-1", "other-cwd"}
+    by_id = {ref.session_id: ref for ref in refs}
+    assert by_id["match-1"].cwd == str(CWD)
+    assert by_id["match-1"].git_branch == "grove/fix-flaky"
+    assert by_id["match-1"].adapter_kind == "mewbo"
+    assert by_id["match-1"].transcript_path is None
+    assert by_id["other-cwd"].cwd == "/somewhere/else"
+    assert by_id["other-cwd"].git_branch == "main"
+
+
+def test_discover_all_empty_when_no_client_configured() -> None:
+    adapter = MewboAdapter()
+    assert adapter.discover_all() == ()

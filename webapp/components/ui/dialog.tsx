@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 // Canonical shadcn Dialog over @radix-ui/react-dialog (the same primitive Sheet
 // composes — no new dependency). Used for the create-workspace form and the
-// destructive-action confirmations (#56). Sheet stays the bottom/side panel;
+// destructive-action confirmations. Sheet stays the bottom/side panel;
 // Dialog is the centered modal.
 
 export const Dialog = DialogPrimitive.Root;

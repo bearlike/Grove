@@ -56,7 +56,7 @@ async def test_ssh_attach_round_trip(echo_server: int) -> None:
     try:
         # The echo handler ignores command + just pipes stdin→stdout, so
         # _command_override is fine here; tmux_session is irrelevant.
-        attach = SshAttach(conn, "irrelevant", _command_override="echo")
+        attach = SshAttach(conn, "echo")
         received: list[bytes] = []
         attach.on_output(received.append)
         await attach.start()

@@ -2,10 +2,10 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { AgentActivityState, BranchPlan } from "./types";
+import type { AgentActivityState, BranchPlan, Runtime } from "./types";
 
 /**
- * The ONE client-state store (issue #96). Zustand owns every piece of
+ * The ONE client-state store. Zustand owns every piece of
  * cross-component *UI* state — the composer draft, the sidebar collapse, the
  * view scope/filter, and the single live-pane focus. SERVER state stays in
  * TanStack Query (`hooks.ts`); the two layers never mix (a TanStack cache is a
@@ -24,7 +24,7 @@ import type { AgentActivityState, BranchPlan } from "./types";
  * in providers) flips to the stored values. `hydrated` lets a component hold the
  * default shape until then, the same mount-guard the old `useSidebarState` used.
  * The rail filters are safe to persist because the rail's compact filter
- * (`SidebarFilter`) is the always-reachable clear-path (#158); only `query` and
+ * (`SidebarFilter`) is the always-reachable clear-path; only `query` and
  * `scopeRepo` stay transient — a stale search/scope would silently empty the
  * rail with no obvious way to clear it, so those reset to "show all" each load.
  */
@@ -42,6 +42,15 @@ export interface ComposerDraft {
   agentName: string | null;
   /** null = the adapter's default model; else an explicit (incl. custom) model id. */
   model: string | null;
+  /** null = cascade to `container.enabled`'s config default; else an explicit,
+   *  create-time-only choice — mirrors `model`'s null-is-default wire
+   *  convention. Never editable after create on any surface. */
+  runtime: Runtime | null;
+  /** null = cascade to `brief.enabled`'s config default; else an explicit,
+   *  create-time-only choice — the same null-is-default wire convention as
+   *  `runtime`/`model`. Controls whether the agent gets Grove's one-time
+   *  first-turn brief pointing it at the `working-in-grove` skill. */
+  brief: boolean | null;
   /** Create-target repo root; null until the project list resolves and defaults it. */
   repoRoot: string | null;
   branchMode: BranchMode;
@@ -51,8 +60,8 @@ export interface ComposerDraft {
   remoteRef: string;
   remoteLocal: string;
   skipInit: boolean;
-  /** Adopt an existing agent session instead of minting a fresh one (#120/#121)
-   *  — rides as `CreateWorkspaceRequest.resume_session_id`. Empty = mint fresh
+  /** Adopt an existing agent session instead of minting a fresh one — rides
+   *  as `CreateWorkspaceRequest.resume_session_id`. Empty = mint fresh
    *  (the default); a full session id resumes it (claude_code/codex only, the
    *  engine 422s otherwise). Create-only, like `skipInit`. */
   resumeSessionId: string;
@@ -64,6 +73,8 @@ const INITIAL_DRAFT: ComposerDraft = {
   prompt: "",
   agentName: null,
   model: null,
+  runtime: null,
+  brief: null,
   repoRoot: null,
   branchMode: "auto",
   baseRef: "HEAD",
@@ -80,24 +91,24 @@ export interface UiStore {
   /** True once the persisted slices have been read back on the client. */
   hydrated: boolean;
 
-  // ─── Composer draft (deliverable A) ────────────────────────────────────────
+  // ─── Composer draft ─────────────────────────────────────────────────────────
   composer: ComposerDraft;
   patchComposer: (patch: Partial<ComposerDraft>) => void;
   /** After a successful create: clear the prompt + advanced fields, keep the
    *  agent/model/repo picks so the next create starts where this one left off. */
   resetComposerAfterCreate: () => void;
 
-  // ─── Sidebar (deliverable B; replaces use-sidebar-state.ts) ─────────────────
+  // ─── Sidebar ─────────────────────────────────────────────────────────────
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
   setSidebarCollapsed: (v: boolean) => void;
 
-  // ─── Landing view (ADE #140; persisted per-user, design §4.1) ───────────────
+  // ─── Landing view (persisted per-user, design §4.1) ─────────────────────────
   /** `hero` = composer-hero (default, clean first-run); `overview` = card grid. */
   landingView: LandingView;
   setLandingView: (v: LandingView) => void;
 
-  // ─── View scope + filter (deliverable B; replaces filter-persistence.ts) ────
+  // ─── View scope + filter ─────────────────────────────────────────────────────
   /** Free-text search over title/branch — transient, never persisted. */
   query: string;
   setQuery: (q: string) => void;
@@ -142,6 +153,8 @@ export const useUiStore = create<UiStore>()(
             ...INITIAL_DRAFT,
             agentName: s.composer.agentName,
             model: s.composer.model,
+            runtime: s.composer.runtime,
+            brief: s.composer.brief,
             repoRoot: s.composer.repoRoot,
           },
         })),
@@ -194,10 +207,9 @@ export const useUiStore = create<UiStore>()(
       storage: createJSONStorage(() => localStorage),
       // Durable CHROME + rail-filter preferences persist; the composer draft and
       // transient search stay session-local. `hiddenStates`/`attentionOnly` are
-      // safe to persist again now the rail's compact filter (SidebarFilter) is
-      // the always-reachable clear-path — the §4.9 drop had unpersisted them only
-      // because nothing could clear a stale filter (`scopeRepo`/`query` stay
-      // transient: a stale scope/search would silently empty the rail).
+      // safe to persist because the rail's compact filter (SidebarFilter) is
+      // the always-reachable clear-path (`scopeRepo`/`query` stay transient: a
+      // stale scope/search would silently empty the rail with no way to clear it).
       partialize: (s) => ({
         sidebarCollapsed: s.sidebarCollapsed,
         landingView: s.landingView,

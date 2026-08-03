@@ -18,10 +18,10 @@ import { useSessionTurns } from "@/lib/grove/hooks";
 import { cn } from "@/lib/utils";
 
 /**
- * The work panel's fleet browser (epic #170 north star, #174): itemizes a
- * session's in-session sub-agent fleet (#173's `parent_session_id` link)
- * as an expandable tree, one root per top-level session that spawned
- * sub-agents. A root with no children renders nothing (the flat
+ * The work panel's fleet browser: itemizes a session's in-session sub-agent
+ * fleet (via `parent_session_id` linkage) as an expandable tree, one root
+ * per top-level session that spawned sub-agents. A root with no children
+ * renders nothing (the flat
  * `active_subagents` count line stays the fallback for that case, see
  * `WorkPanel`'s `InfoTab`) — this component's own "no empty tree chrome"
  * gate is `fleetMemberCount(roots) === 0` returning `null` outright.
@@ -170,7 +170,19 @@ function FleetChildTranscript({
       </div>
     );
   }
-  if (isError || !data) {
+  if (isError) {
+    // Distinct from the `!data` branch below: this fired a request that the
+    // daemon refused (e.g. 404 `agent_session_not_found` — the id isn't
+    // recorded for this workspace), not a transcript that's merely empty so
+    // far. Conflating the two under one "not recorded yet" copy is what let
+    // a masked-404 regression read as a quiet empty state instead of a bug.
+    return (
+      <p data-testid="fleet-child-transcript" className="text-xs text-muted-foreground">
+        Couldn&apos;t load this sub-agent&apos;s transcript.
+      </p>
+    );
+  }
+  if (!data) {
     return (
       <p data-testid="fleet-child-transcript" className="text-xs text-muted-foreground">
         No transcript recorded for this sub-agent yet.

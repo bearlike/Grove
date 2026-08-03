@@ -156,7 +156,7 @@ def test_attach_refused_on_orphaned(manager: WorkspaceManager) -> None:
         manager.attach_ticket(state.id, TicketSelector(provider="github", id="1"))
 
 
-# ─── find_by_ticket (#195) ───────────────────────────────────────────────────
+# ─── find_by_ticket ──────────────────────────────────────────────────────────
 
 
 def test_find_by_ticket_returns_none_when_no_workspace_tracks_it(
@@ -205,3 +205,41 @@ def test_find_by_ticket_excludes_a_killed_workspace(manager: WorkspaceManager) -
     # scan over list() excludes it with no separate filter.
     manager.kill(state.id, delete_branch=True)
     assert manager.find_by_ticket("github", "5") is None
+
+
+# ─── credentials resolve per repo, and after the manager was built ──────────
+
+
+def test_repo_relative_tickets_env_file_resolves_against_the_repo(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Per-project credentials, end to end through the manager: the registry it
+    caches for its whole life resolves a repo-relative path against THIS repo, and
+    a token written afterwards is picked up with nothing rebuilt — which is the
+    daemon's situation, where one manager per repo outlives every request.
+    """
+    del fake_tmux
+    cfg = GroveConfig.model_validate(
+        {
+            "tickets": {
+                "env_file": ".grove/tickets.env",
+                "gitea": {
+                    "enabled": True,
+                    "owner": "o",
+                    "repo": "r",
+                    "token_env": "REPO_GITEA_TOKEN",
+                },
+            }
+        }
+    )
+    mgr = WorkspaceManager(
+        repo_root=tmp_repo, cfg=cfg, store=JsonWorkspaceStore(path=tmp_path / "state.json")
+    )
+    (tmp_repo / ".grove").mkdir(exist_ok=True)
+    (tmp_repo / ".grove" / "tickets.env").write_text("# not yet\n", encoding="utf-8")
+    assert mgr.ticket_providers.get("gitea").configured is False
+
+    (tmp_repo / ".grove" / "tickets.env").write_text(
+        "REPO_GITEA_TOKEN=late-token\n", encoding="utf-8"
+    )
+    assert mgr.ticket_providers.get("gitea").configured is True

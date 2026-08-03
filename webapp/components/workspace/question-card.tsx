@@ -11,7 +11,7 @@ import {
 } from "@/lib/grove/question-plan";
 
 /**
- * One structured agent question rendered as a read-only choice card (epic #74).
+ * One structured agent question rendered as a read-only choice card.
  * The agent paused to ask the human something; the transcript draws the prompt,
  * its options, and whether it has been answered. Options are a STATIC list, not
  * interactive controls — answer-back is a future write-path (the wire's
@@ -112,10 +112,10 @@ function QuestionHeader({ question }: { question: AgentQuestionView }) {
 }
 
 /**
- * The interactive twin of `QuestionCard` for a LIVE pending question (Gitea
- * #111, epic #109). `AskUserQuestion` blocks the agent until answered and
- * never reaches the transcript until it resolves (research-findings.md), so
- * this renders straight off the SSE-sourced payload (`useActivityStream` +
+ * The interactive twin of `QuestionCard` for a LIVE pending question.
+ * `AskUserQuestion` blocks the agent until answered and never reaches the
+ * transcript until it resolves (research-findings.md), so this renders
+ * straight off the SSE-sourced payload (`useActivityStream` +
  * `livePendingQuestion`), never `/turns`.
  *
  * `questions` is the pending GROUP sharing one `tool_use_id` — the wire's

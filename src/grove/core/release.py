@@ -1,4 +1,4 @@
-"""Best-effort "is a newer GitHub release out?" check (issue #80).
+"""Best-effort "is a newer GitHub release out?" check.
 
 Why this lives in the engine and not in each client: the version-skew check
 is one concern with one network side effect, consumed by both the daemon

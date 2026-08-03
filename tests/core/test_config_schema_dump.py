@@ -9,8 +9,14 @@ two callers from drifting.
 from __future__ import annotations
 
 import json
+import re
 
 from grove.core.config import GroveConfig, dump_schema_json, write_schema
+
+#: A bare `#<n>` — an issue reference with no owner/repo qualification. The
+#: lookbehind spares `#!`-style prefixes and anything already qualified as a
+#: URL path (`.../issues/241`), which are unambiguous wherever they are read.
+_BARE_ISSUE_REF = re.compile(r"(?<![\w/])#\d+")
 
 
 def test_dump_schema_json_parses_as_json() -> None:
@@ -43,3 +49,52 @@ def test_dump_schema_json_matches_what_write_schema_writes(tmp_path) -> None:
     target = tmp_path / "config.schema.json"
     write_schema(target)
     assert target.read_text(encoding="utf-8") == dump_schema_json()
+
+
+def test_no_schema_prose_carries_a_bare_issue_reference() -> None:
+    """Nothing the published config reference prints may name a bare `#<n>`.
+
+    `docs/hooks/schema_to_md.py` renders `configure-reference.md` from this
+    schema and prints its `description` strings VERBATIM, so every model
+    docstring here is public copy. The docs deploy from the GitHub mirror,
+    where a bare `#<n>` resolves against a different tracker than the one the
+    number came from: the link lands on an unrelated issue and the numbering of
+    a private issue graph is published alongside it. Same hazard the repo
+    already avoids in PR titles and bodies, through a third door.
+
+    Asserted over the whole schema rather than over the four docstrings that
+    were wrong, and over the SCHEMA rather than the rendered markdown, because
+    the schema is the boundary: it catches a field description as readily as a
+    class docstring, and it does not need a docs build to run.
+
+    The fix for a failure is always in the docstring, never in the generator or
+    here — describe the behaviour and leave the archaeology to `CLAUDE.md`,
+    which is written for maintainers and is not published.
+    """
+    offenders = {
+        path: _BARE_ISSUE_REF.findall(text)
+        for path, text in _walk_strings(json.loads(dump_schema_json()), "")
+        if _BARE_ISSUE_REF.search(text)
+    }
+    assert offenders == {}
+
+
+def _walk_strings(node: object, path: str) -> list[tuple[str, str]]:
+    """Every string in the schema, paired with the JSON path it sits at."""
+    if isinstance(node, dict):
+        return [
+            found
+            for key, value in node.items()
+            for found in (
+                [(f"{path}.{key}", value)]
+                if isinstance(value, str)
+                else _walk_strings(value, f"{path}.{key}")
+            )
+        ]
+    if isinstance(node, list):
+        return [
+            found
+            for index, value in enumerate(node)
+            for found in _walk_strings(value, f"{path}[{index}]")
+        ]
+    return []

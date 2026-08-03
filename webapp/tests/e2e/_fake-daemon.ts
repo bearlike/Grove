@@ -1,9 +1,9 @@
 import express from "express";
 import type { Server } from "node:http";
 import { randomUUID } from "node:crypto";
-import { FIXTURE_WORKSPACES, FIXTURE_PEEK_W_GROVE_1 } from "./_fixtures";
+import { FIXTURE_WORKSPACES, FIXTURE_PEEK_W_GROVE_1, FIXTURE_PHASES } from "./_fixtures";
 
-/** Deterministic bearer minted on every pair consume (#32). */
+/** Deterministic bearer minted on every pair consume. */
 export const FAKE_DAEMON_TOKEN = "grove-fake-daemon-token";
 
 export function startFakeDaemon(port: number): Promise<Server> {
@@ -11,7 +11,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
     const app = express();
     app.use(express.json());
 
-    // ─── Live question state (Gitea #111) ────────────────────────────────
+    // ─── Live question state ──────────────────────────────────────────────
     // The one pending GROUP tracked at a time (a `tool_use_id` shared by every
     // question in the batch) — enough for the spec's happy path (a single
     // workspace/session ever has a live question in these tests);
@@ -21,7 +21,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
     let eventSeq = 1;
     const eventClients = new Set<express.Response>();
 
-    // ─── Auth (#32): pairing bootstrap + bearer gate ─────────────────────
+    // ─── Auth: pairing bootstrap + bearer gate ───────────────────────────
     // Mirrors the daemon contract (src/grove/daemon/auth.py): POST /auth/pair
     // and GET /auth/pair/{id} are the only unauthenticated entry points; the
     // fake auto-approves, so the FIRST poll consumes and returns the token.
@@ -32,7 +32,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       path === "/healthz" ||
       path === "/openapi.json" ||
       path.startsWith("/auth/pair") ||
-      // Test-harness control plane only (Gitea #111's live-question spec) —
+      // Test-harness control plane only (the live-question spec) —
       // not a real daemon route, so it never needs the bearer.
       path.startsWith("/_test/");
     app.use((req, res, next) => {
@@ -123,7 +123,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.json(ws);
     });
 
-    // ─── Create (workspace parity, #56) ──────────────────────────────────
+    // ─── Create (workspace lifecycle parity) ─────────────────────────────
     // Mirrors the daemon contract: 422 when repo_root is missing, else echo a
     // freshly-minted WorkspaceStateView built from the request's branch plan.
     // Non-destructive to the read fixtures (one shared daemon serves every
@@ -162,7 +162,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       });
     });
 
-    // ─── Create-form pickers (workspace parity, #56) ─────────────────────
+    // ─── Create-form pickers (workspace lifecycle parity) ────────────────
     app.get("/agents", (req, res) => {
       if (!req.query.repo) {
         res.status(422).json({ detail: [{ msg: "repo required" }] });
@@ -254,6 +254,13 @@ export function startFakeDaemon(port: number): Promise<Server> {
     // project's worktrees — grove-launched rows workspace-attributed, plus
     // one hand-staged (fs_discovered, null workspace trio) session.
     app.get("/sessions", (req, res) => {
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+      // Scope is a VALUE of `repo`, never a second route: omitted widens
+      // to the host-wide Session Catalog, metadata-only.
+      if (req.query.repo === undefined) {
+        res.json(buildCatalog().slice(0, limit));
+        return;
+      }
       const repo = String(req.query.repo ?? "");
       const members = FIXTURE_WORKSPACES.filter((w) => w.repo_root === repo);
       if (members.length === 0) {
@@ -262,8 +269,27 @@ export function startFakeDaemon(port: number): Promise<Server> {
           .json({ detail: { error: "unknown_repo_root", message: `no project at ${repo}` } });
         return;
       }
-      const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
       res.json(buildProjectSessions(repo, members).slice(0, limit));
+    });
+
+    // ─── Catalog drill-in: the workspace-LESS turns route ────────────────
+    // Resolves by the `(kind, cwd, session_id)` triple a catalog row carries,
+    // because most sessions on a host were never launched by Grove. Any
+    // coordinate mismatch is ONE typed 404 — never another session's turns.
+    app.get("/sessions/:sessionId/turns", (req, res) => {
+      const row = buildCatalog().find(
+        (r) =>
+          r.session_id === req.params.sessionId &&
+          r.adapter_kind === String(req.query.kind ?? "") &&
+          r.cwd === String(req.query.cwd ?? ""),
+      );
+      if (!row) {
+        res.status(404).json({
+          detail: { error: "agent_session_not_found", message: "no such session recorded" },
+        });
+        return;
+      }
+      res.json({ session: row, turns: buildCatalogTurns(row) });
     });
 
     app.get("/workspaces/:id/sessions/:sessionId/turns", (req, res) => {
@@ -276,7 +302,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.json({ session, turns: buildTurns(ws) });
     });
 
-    // ─── Workspace steering (#38) ────────────────────────────────────────
+    // ─── Workspace steering ───────────────────────────────────────────────
     // Mirrors the daemon contract: 204 on success, 422 on an empty text, and
     // the typed 409 refusal envelope when the agent isn't steerable (here:
     // any non-active fixture workspace, matching the "working" gating the
@@ -316,11 +342,11 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.status(204).end();
     });
 
-    // ─── Session remap (#121) ───────────────────────────────────────────
+    // ─── Session remap ───────────────────────────────────────────────────
     // Mirrors the daemon contract: 404 workspace_not_found, 404
     // agent_session_not_found (the ref matches zero or more-than-one
     // session), else 200 with the WorkspaceStateView. `agent_session_id`
-    // isn't on that wire view (#121 gap — see webapp/CLAUDE.md), so there's
+    // isn't on that wire view (see webapp/CLAUDE.md), so there's
     // nothing to mutate in the fixture; this only exercises the
     // request/response shape + refusal envelope, read-only against
     // FIXTURE_WORKSPACES.
@@ -349,7 +375,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.json(ws);
     });
 
-    // ─── Live question answer-back (Gitea #111) ─────────────────────────
+    // ─── Live question answer-back ───────────────────────────────────────
     // Mirrors the daemon contract: 204 dispatched (resolution rides back over
     // /events separately, driven by the test's /_test/push-event calls, never
     // by this response), 404 unknown workspace, 409 a tool_use_id that isn't
@@ -374,7 +400,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.status(204).end();
     });
 
-    // ─── Test-harness control plane (Gitea #111 question.spec.ts ONLY) ──
+    // ─── Test-harness control plane (question.spec.ts ONLY) ─────────────
     // Not a daemon route: lets a Playwright spec push a live `session_activity`
     // delta (a pending question GROUP appearing/resolving) over the SAME
     // /events connection the page already holds, instead of teaching the
@@ -410,12 +436,30 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.status(204).end();
     });
 
-    // ─── Activity Dashboard (#17) ───────────────────────────────────────
+    // ─── Activity Dashboard ───────────────────────────────────────────────
     app.get("/activity", (_req, res) => {
       res.json(buildActivitySnapshot());
     });
 
-    // Focused live pane (#19) — one-shot ANSI snapshot.
+    // In-flight provisioning progress. Fetched only while a workspace reads
+    // `provisioning`, so no fixture workspace hits it by default — the
+    // provisioning spec rewrites a peek to reach this. Returns the engine's
+    // three facts verbatim: elapsed, the last line written, the recent tail.
+    app.get("/workspaces/:id/provision", (req, res) => {
+      const ws = FIXTURE_WORKSPACES.find((w) => w.id === req.params.id);
+      if (!ws) {
+        res.status(404).json({ detail: { error: "workspace_not_found", message: "missing" } });
+        return;
+      }
+      const lines = [
+        "#5 [internal] load build context",
+        "#8 [4/9] RUN apt-get install -y build-essential",
+        "#8 sha256:deadbeef extracting layers",
+      ];
+      res.json({ elapsed_ms: 131_000, headline: lines[lines.length - 1], lines });
+    });
+
+    // Focused live pane — one-shot ANSI snapshot.
     app.get("/workspaces/:id/pane", (req, res) => {
       const ws = FIXTURE_WORKSPACES.find((w) => w.id === req.params.id);
       if (!ws) {
@@ -429,7 +473,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       });
     });
 
-    // Focused live pane (#19) — SSE stream of `pane_snapshot` frames. Mirrors
+    // Focused live pane — SSE stream of `pane_snapshot` frames. Mirrors
     // the daemon: ONE frame with the same per-workspace ANSI the one-shot
     // `/pane` route returns, then keepalive comments (the real daemon is
     // diff-guarded, so a steady pane emits only keepalives after the first).
@@ -551,8 +595,8 @@ function buildSessions(ws: (typeof FIXTURE_WORKSPACES)[number]) {
 /**
  * Project-wide sessions for `GET /sessions?repo=` — every workspace's
  * grove-launched session (workspace-attributed) plus one hand-staged
- * session with the null workspace trio, newest-first (the grove fixtures
- * are dated 2026-05-09, the hand-staged one a day earlier).
+ * session with the null workspace trio, newest-first (the hand-staged
+ * session's timestamp is deliberately earlier than the grove fixtures').
  */
 function buildProjectSessions(repo: string, members: typeof FIXTURE_WORKSPACES) {
   const grove = members.flatMap((ws) =>
@@ -589,6 +633,103 @@ function buildProjectSessions(repo: string, members: typeof FIXTURE_WORKSPACES) 
     },
   };
   return [...grove, handStaged];
+}
+
+/**
+ * The host-wide Session Catalog — the shape `GET /sessions` returns with
+ * `repo` OMITTED, newest-first. Metadata-only by contract: `activity`,
+ * `size_bytes`, `title`, and both prompts are NULL because the host scan pays
+ * one bounded head read per session and never parses a transcript. A fixture
+ * that filled them would let a bug that reads null-as-zero pass here.
+ *
+ * Deliberately covers the four cases the screen must handle honestly:
+ *   · a Grove-managed row (`workspace_id` set, project `is_grove_managed`)
+ *   · a repo Grove has NEVER managed — the whole point of the catalog, and a row
+ *     the rail's per-known-project fan-out structurally cannot produce
+ *   · a session with no enclosing git repo (`project: null`)
+ *   · a session whose head read recovered no cwd (`cwd: null`) — undrillable,
+ *     listed anyway
+ */
+function buildCatalog() {
+  const project = (repoRoot: string, repoName: string, groveManaged: boolean) => ({
+    repo_root: repoRoot,
+    repo_name: repoName,
+    is_worktree: groveManaged,
+    is_grove_managed: groveManaged,
+  });
+  const base = {
+    workspace_id: null,
+    workspace_title: null,
+    workspace_branch: null,
+    size_bytes: null,
+    title: null,
+    first_prompt: null,
+    last_prompt: null,
+    activity: null,
+    live: false,
+    primary: false,
+  };
+  return [
+    {
+      ...base,
+      session_id: "cat-foreign-1",
+      adapter_kind: "codex",
+      provenance: "fs_discovered",
+      git_branch: "main",
+      created_at: "2026-07-20T08:00:00Z",
+      modified_at: "2026-07-20T12:00:00Z",
+      cwd: "/repos/untracked-lab",
+      project: project("/repos/untracked-lab", "untracked-lab", false),
+      live: true,
+    },
+    {
+      ...base,
+      session_id: "cat-grove-1",
+      adapter_kind: "claude_code",
+      provenance: "grove_launched",
+      primary: true,
+      workspace_id: "w-grove-1",
+      workspace_title: "feat dashboard",
+      git_branch: "dev/feat-dashboard",
+      created_at: "2026-07-19T08:00:00Z",
+      modified_at: "2026-07-19T10:00:00Z",
+      cwd: "/repos/Grove/.worktrees/dash",
+      project: project("/repos/Grove/.worktrees/dash", "Grove", true),
+    },
+    {
+      ...base,
+      session_id: "cat-norepo-1",
+      adapter_kind: "claude_code",
+      provenance: "fs_discovered",
+      git_branch: null,
+      created_at: "2026-07-18T08:00:00Z",
+      modified_at: "2026-07-18T09:00:00Z",
+      cwd: "/tmp/scratchpad",
+      project: null,
+    },
+    {
+      ...base,
+      session_id: "cat-nocwd-1",
+      adapter_kind: "claude_code",
+      provenance: "fs_discovered",
+      git_branch: null,
+      created_at: "2026-07-17T08:00:00Z",
+      modified_at: "2026-07-17T09:00:00Z",
+      cwd: null,
+      project: null,
+    },
+  ];
+}
+
+/** A short recorded conversation for a catalog row's read-only drill-in. */
+function buildCatalogTurns(row: ReturnType<typeof buildCatalog>[number]) {
+  return [
+    {
+      user_text: `what happened in ${row.cwd}?`,
+      started_at: row.created_at,
+      entries: [{ role: "assistant", text: "This is an archived conversation." }],
+    },
+  ];
 }
 
 /** Oldest-first turns; the head turn has an empty user_text (resumed session). */
@@ -631,7 +772,7 @@ function buildTurns(ws: (typeof FIXTURE_WORKSPACES)[number]) {
         { role: "assistant", text: `Survey landed. ${"unbroken-token-".repeat(25)}end` },
       ],
     },
-    // A structured agent question (epic #74): the agent paused to ask, and the
+    // A structured agent question: the agent paused to ask, and the
     // transcript renders it as a read-only choice card. `text` is the digest
     // fallback; the structured payload rides `question`.
     {
@@ -659,7 +800,7 @@ function buildTurns(ws: (typeof FIXTURE_WORKSPACES)[number]) {
         },
       ],
     },
-    // A long user paste (#127): renders past the 6-line clamp in every
+    // A long user paste: renders past the 6-line clamp in every
     // viewport so the SmartCollapse fade + Show more toggle appear. NO tool
     // entries here — chat.spec pins the tool-group count at 3.
     {
@@ -706,11 +847,10 @@ function buildActivitySnapshot() {
 }
 
 /**
- * `questions` is Gitea #111's additive live-pending-question payload
- * (`AgentQuestionView[]`, ordered as asked — a real AskUserQuestion batch can
- * carry more than one, answered atomically) — passed only by
- * `/_test/push-event` (question.spec.ts); every other caller keeps it `[]`,
- * exactly today's behavior.
+ * `questions` is the live-pending-question payload (`AgentQuestionView[]`,
+ * ordered as asked — a real AskUserQuestion batch can carry more than one,
+ * answered atomically) — passed only by `/_test/push-event`
+ * (question.spec.ts); every other caller keeps it `[]`.
  */
 function workspaceActivity(
   ws: (typeof FIXTURE_WORKSPACES)[number],
@@ -756,6 +896,9 @@ function workspaceActivity(
         },
       },
     ],
+    // The third status axis — reported by only one fixture workspace, so
+    // the "no phase ⇒ no chrome" half of the contract is covered by the rest.
+    phase: FIXTURE_PHASES[ws.id] ?? null,
     base_ahead: 1,
     base_behind: 0,
     diff_added: 30,

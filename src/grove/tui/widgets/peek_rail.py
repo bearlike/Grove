@@ -45,17 +45,19 @@ from textual.widgets import Static, TabbedContent, TabPane
 from grove.core import CommitSummary, InitStatus, WorkspacePeek, WorkspaceState, WorkspaceStatus
 from grove.core.agents import AgentActivity, SessionTurn
 from grove.core.contracts.tickets import TicketRef
-from grove.core.workspace import LIVE_STATUSES
+from grove.core.workspace import LIVE_STATUSES, ProvisionProgress
 from grove.tui._status import (
+    PR_GLYPH,
     agent_state_color,
     agent_state_label,
     chrome_color,
     init_status_color,
+    pr_status_color,
     ref_color,
     status_color,
 )
 from grove.tui._turns import render_transcript_digest
-from grove.tui.widgets.card import ticket_pill
+from grove.tui.widgets.card import format_wait, ticket_pill
 from grove.tui.widgets.dashboard_grid import _human_tokens
 
 _SUBJECT_TRIM = 56
@@ -169,6 +171,7 @@ class PeekRail(Vertical):
         *,
         agent: AgentActivity | None = None,
         turns: tuple[SessionTurn, ...] = (),
+        provision: ProvisionProgress | None = None,
     ) -> None:
         """Render the rail for `peek`, or show the empty placeholder if None.
 
@@ -184,6 +187,13 @@ class PeekRail(Vertical):
         by the list screen's slow path; both are keyword-only with empty
         defaults so callers without those axes — and the pre-existing
         tests — stay untouched.
+
+        ``provision`` is the in-flight container build's progress, read by the
+        list screen only when the selection is PROVISIONING. It takes over the
+        terminal tab: a provisioning workspace has no tmux pane to mirror yet,
+        and the provisioner's output is the only thing there is to watch — so
+        the tab that normally shows "what the agent's terminal is doing" shows
+        "what the build is doing", with no second log widget invented for it.
         """
         ws_card = self.query_one("#card-workspace", Static)
 
@@ -195,15 +205,27 @@ class PeekRail(Vertical):
 
         self.remove_class("-empty")
         self._set_workspace(
-            ws_card, _render_workspace(peek, dark=self.app.current_theme.dark, agent=agent)
+            ws_card,
+            _render_workspace(
+                peek, dark=self.app.current_theme.dark, agent=agent, provision=provision
+            ),
         )
         live = peek.state.status in LIVE_STATUSES
+        # Progress only counts while the status still says PROVISIONING: the
+        # stamps and the log outlive the build, so a settled workspace would
+        # otherwise keep showing the log of a container that came up long ago.
+        building = provision if peek.state.status == WorkspaceStatus.PROVISIONING else None
         self._update_transcript(turns)
         if live:
             self._update_pane(_render_pane_body(peek))
+        elif building is not None:
+            self._update_pane(_render_provision_body(building))
         else:
             self._clear_pane()
-        self._update_tabs(peek.state.id, live=live, has_turns=bool(turns))
+        # A build in flight counts as live for the container: it gets the brand
+        # border and stays visible, the one case where the tab has content but
+        # no tmux session behind it.
+        self._update_tabs(peek.state.id, live=live or building is not None, has_turns=bool(turns))
 
     @property
     def body_text(self) -> str:
@@ -257,10 +279,9 @@ class PeekRail(Vertical):
             return
         # Stick to the tail ONLY when the viewer is already there. A busy
         # session's digest changes on every slow tick, and unconditionally
-        # scrolling yanked a user who had scrolled up to read older turns
-        # back to the bottom on each update (the cloud-session scroll-reset
-        # bug, 2026-07-11). Read the position BEFORE the update — the
-        # content swap moves max_scroll_y. After-refresh because the
+        # scrolling would yank a user who had scrolled up to read older turns
+        # back to the bottom on each update. Read the position BEFORE the
+        # update — the content swap moves max_scroll_y. After-refresh because the
         # Static's new height isn't laid out yet at update() time (same
         # lesson as the sessions screen).
         scroll = self.query_one("#transcript-scroll", VerticalScroll)
@@ -335,7 +356,11 @@ def _render_peek(
 
 
 def _render_workspace(
-    peek: WorkspacePeek, *, dark: bool = True, agent: AgentActivity | None = None
+    peek: WorkspacePeek,
+    *,
+    dark: bool = True,
+    agent: AgentActivity | None = None,
+    provision: ProvisionProgress | None = None,
 ) -> Text:
     """Workspace card body: stats / agent metrics / description / affordances / commits.
 
@@ -375,7 +400,7 @@ def _render_workspace(
         text.append_text(_agent_line(agent, dark=dark))
     text.append_text(_ticket_block(s.ticket_refs, dark=dark))
     text.append_text(_description_block(s))
-    text.append_text(_affordance_block(s, dark=dark))
+    text.append_text(_affordance_block(s, dark=dark, provision=provision))
     text.append_text(_commits_block(peek.recent_commits, dark=dark))
     return text
 
@@ -502,12 +527,18 @@ def _ticket_block(refs: list[TicketRef], *, dark: bool) -> Text:
     """Associated tickets — one line each, or nothing when there are none.
 
     Each line leads with the same compact pill the row card shows
-    (``ticket_pill``, agent-info cyan so the reference reads as auxiliary
-    metadata), then the title (default fg, bold — the human-readable
-    identity), then ``status`` / ``assignee`` as muted-label · bold-value
-    pairs, and finally the url muted. Absent fields are skipped, never
-    blank-filled — same convention as the agent line. Empty ``refs`` yields
-    an empty ``Text`` so the rail ships no placeholder.
+    (``ticket_pill``). An issue ref (``kind == "issue"``, the default)
+    keeps the pre-PR treatment verbatim: agent-info cyan, so the reference
+    reads as auxiliary metadata. A pull-request ref (``kind ==
+    "pull_request"``) instead leads with `PR_GLYPH` and takes
+    `pr_status_color` on both the pill AND the ``status`` value — the same
+    "PR state is the single most informative token" rule the row card's
+    `_append_ticket_segments` applies, carried onto the rail's read-deeply
+    surface so the two never disagree about what a PR's color means. Title
+    (default fg, bold — the human-readable identity), ``assignee``, and
+    ``url`` render identically for both kinds. Absent fields are skipped,
+    never blank-filled — same convention as the agent line. Empty ``refs``
+    yields an empty ``Text`` so the rail ships no placeholder.
     """
     text = Text()
     if not refs:
@@ -516,7 +547,11 @@ def _ticket_block(refs: list[TicketRef], *, dark: bool) -> Text:
     muted_hex = chrome_color("muted", dark=dark)
     for ref in refs:
         text.append("\n")
-        text.append(ticket_pill(ref), style=f"bold {info_hex}")
+        is_pr = ref.kind == "pull_request"
+        pill_hex = pr_status_color(ref.status, dark=dark) if is_pr else info_hex
+        if is_pr:
+            text.append(f"{PR_GLYPH} ", style=f"bold {pill_hex}")
+        text.append(ticket_pill(ref), style=f"bold {pill_hex}")
         if ref.title:
             text.append("  ")
             text.append(ref.title, style="bold")
@@ -524,7 +559,7 @@ def _ticket_block(refs: list[TicketRef], *, dark: bool) -> Text:
             text.append("  ")
             text.append("· ", style=muted_hex)
             text.append("status ", style=muted_hex)
-            text.append(ref.status, style="bold")
+            text.append(ref.status, style=f"bold {pill_hex}" if is_pr else "bold")
         if ref.assignee:
             text.append("  ")
             text.append("· ", style=muted_hex)
@@ -561,15 +596,52 @@ def _description_block(s: WorkspaceState) -> Text:
     return text
 
 
-def _affordance_block(s: WorkspaceState, *, dark: bool) -> Text:
+def _affordance_block(
+    s: WorkspaceState, *, dark: bool, provision: ProvisionProgress | None = None
+) -> Text:
     """Init-failure badge + the lifecycle affordance lines, at most a few.
 
     Conditional, state-driven blocks: init failure surfaces a log path the
     user can follow; PAUSED / OFFLINE / ORPHANED each name the one key
-    that recovers them; ERROR surfaces the persisted detail.
+    that recovers them; ERROR surfaces the persisted detail; PROVISIONING
+    names the only "affordance" that is not a key — waiting — and hands over
+    the two facts that make waiting bearable (how long, and what it just did).
     """
     muted_hex = chrome_color("muted", dark=dark)
     text = Text()
+
+    # Runtime fallback: a PERSISTENT warning naming the reason + the
+    # `grove respawn` remedy — never a create-time-only stderr line nobody
+    # scrolls back to. ORPHANED's amber, same reasoning as the card badge.
+    if s.runtime_fallback_reason:
+        warn_hex = status_color(WorkspaceStatus.ORPHANED, dark=dark)
+        text.append("\n")
+        _markup(
+            text,
+            f"[bold {warn_hex}]⚠ container fallback:[/] {escape(s.runtime_fallback_reason)}  "
+            f"[{muted_hex}]— fix the runtime, then respawn to promote[/]",
+        )
+    elif s.runtime_default_config:
+        # Notice, not a warning — still containerized, just on the default image.
+        _markup(
+            text,
+            f"\n[{muted_hex}]ⓘ default container — "
+            "`grove init devcontainer` to graduate to a committed config[/]",
+        )
+
+    # No in-container tmux: independent of the two above — a container
+    # can come up fine (on either config) and still ship no tmux to hold the
+    # agent past a client detach. A PERSISTENT warning for the same reason as
+    # the fallback mark.
+    if s.runtime_no_tmux:
+        warn_hex = status_color(WorkspaceStatus.ORPHANED, dark=dark)
+        text.append("\n")
+        _markup(
+            text,
+            f"[bold {warn_hex}]⚠ no in-container tmux:[/] agent dies with your "
+            f"terminal  [{muted_hex}]— install tmux in the image, or Grove has "
+            "no bundle for this architecture[/]",
+        )
 
     # Init failure surfaces a path the user can follow.
     if s.init_status == InitStatus.FAILED:
@@ -578,6 +650,30 @@ def _affordance_block(s: WorkspaceState, *, dark: bool) -> Text:
         _markup(text, f"[bold {fail_hex}]✗ init failed[/]")
         if s.init_log_path:
             _markup(text, f"[{muted_hex}]log:[/] {escape(s.init_log_path)}")
+
+    # Provisioning affordance — the one whose answer is "do nothing". It takes
+    # the status's own info hue rather than the amber the warnings above use:
+    # this is not something going wrong, and painting a normal build amber is
+    # how a user learns to treat the colour as noise. The elapsed time answers
+    # "should I worry", the headline answers "is it moving" (a timer alone
+    # cannot), and the log path is for the user who wants the whole build.
+    if s.status == WorkspaceStatus.PROVISIONING:
+        prov_hex = status_color(WorkspaceStatus.PROVISIONING, dark=dark)
+        waited = (
+            ""
+            if provision is None or provision.elapsed_ms is None
+            else f" [bold {prov_hex}]{format_wait(provision.elapsed_ms // 1000)}[/]"
+        )
+        text.append("\n")
+        _markup(
+            text,
+            f"[bold {prov_hex}]◍ building the container[/]{waited}  "
+            f"[{muted_hex}]— it comes up on its own; nothing to press[/]",
+        )
+        if provision is not None and provision.headline:
+            _markup(text, f"[{muted_hex}]last:[/] {escape(provision.headline)}")
+        if s.provision_log_path:
+            _markup(text, f"[{muted_hex}]log:[/] {escape(s.provision_log_path)}")
 
     # Paused affordance — the worktree is gone; tell the user how to bring it back.
     # Coloured with the (neutral gray) paused token, not amber: pause is
@@ -671,6 +767,26 @@ def _render_pane_body(peek: WorkspacePeek) -> Text:
         text = _strip_pane_bgcolors(Text.from_ansi("\n".join(snap_lines)))
     else:
         text = Text.from_markup("[dim](no output)[/]")
+    text.no_wrap = True
+    return text
+
+
+def _render_provision_body(progress: ProvisionProgress) -> Text:
+    """Terminal-tab body while the container is being built.
+
+    Same shape as `_render_pane_body` and deliberately so — one `Static`, a
+    tail of lines, `no_wrap` cropping — because it is the same job with a
+    different producer: before the agent's tmux pane exists, the provisioner's
+    stdout is what "the terminal" means for this workspace. The lines are the
+    devcontainer CLI's and BuildKit's own output, appended verbatim (never
+    markup — a build log is full of brackets) and never parsed into steps or a
+    percentage: that format is somebody else's and has no contract.
+
+    The rail tail-slices to its own viewport height rather than trusting the
+    producer's cap, exactly as the pane body does.
+    """
+    lines = progress.lines[-_PANE_TAIL_LINES:]
+    text = Text("\n".join(lines)) if lines else Text.from_markup("[dim](build starting…)[/]")
     text.no_wrap = True
     return text
 

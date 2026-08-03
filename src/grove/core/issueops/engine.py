@@ -1,6 +1,6 @@
-"""IssueOpsEngine — turn a forwarded issue-comment event into a workspace action (#196).
+"""IssueOpsEngine — turn a forwarded issue-comment event into a workspace action.
 
-The keystone of the issue-ops epic (#192): one policy object that takes a
+The keystone of the issue-ops layer: one policy object that takes a
 normalized :class:`IssueOpsEvent`, decides what it means, and drives the existing
 lifecycle seams — reusing ``find_by_ticket`` / ``send_message`` / ``create`` /
 ``pause`` / ``resume`` / ``kill`` verbatim. Zero new lifecycle logic lives here;
@@ -26,7 +26,7 @@ The pipeline, in order (each drop is terminal):
    workspace or create one; usage/refusals → a reply comment (never silence).
 
 Every ack/reply write is best-effort: a failed reply or status render is logged
-and swallowed, never re-raised into the routing path (#193's review).
+and swallowed, never re-raised into the routing path.
 """
 
 from __future__ import annotations
@@ -43,10 +43,12 @@ from grove.core.contracts.tickets import TicketSelector
 from grove.core.errors import GroveError
 from grove.core.issueops.marker import SIGNATURE_MARKER
 from grove.core.issueops.parser import CommandParser, ParsedCommand
+from grove.core.issueops.prompt import IssuePrompt
 from grove.core.workspace import LIVE_STATUSES
 
 if TYPE_CHECKING:
     from grove.core.config import IssueOpsConfig
+    from grove.core.contracts.tickets import TicketComment
     from grove.core.manager import WorkspaceManager
     from grove.core.registry import RepoRegistry
 
@@ -60,18 +62,6 @@ _WRITE_PERMISSIONS: frozenset[str] = frozenset({"write", "admin", "maintain", "o
 # Generous — one comment is one key, so this bounds memory while covering any
 # realistic burst of CI retries.
 _DEDUPE_CAPACITY = 1024
-
-
-class _SafeFormatMap(dict[str, object]):
-    """``str.format_map`` backing that renders an unknown ``{placeholder}`` literally.
-
-    A user-overridden ``prompt_template`` that references a name the engine
-    doesn't supply must not crash the router — the missing key comes back as its
-    own ``{name}`` text instead of raising ``KeyError``.
-    """
-
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
 
 
 class _RecentKeys:
@@ -101,7 +91,7 @@ class _RecentKeys:
 
 @runtime_checkable
 class StatusPublisher(Protocol):
-    """The seam the sticky-status publisher (#197) hooks to re-render on a ``status`` verb.
+    """The seam the sticky-status publisher hooks to re-render on a ``status`` verb.
 
     A no-op default ships here so the engine is complete without the publisher;
     the sibling task injects a real one. Called best-effort — a raise is logged
@@ -291,7 +281,7 @@ class IssueOpsEngine:
             agent_name=ic.agent,
             title=event.issue_title.strip()[:120] or f"issue-{event.issue_number}",
             ticket=TicketSelector(provider=event.provider, id=str(event.issue_number)),
-            initial_prompt=self._render_prompt(ic.prompt_template, event, text),
+            initial_prompt=self._render_prompt(mgr, ic, event, text),
         )
         try:
             state = mgr.create(request)
@@ -300,23 +290,39 @@ class IssueOpsEngine:
             return IssueOpsOutcome(action="refused", code="create_failed")
         return IssueOpsOutcome(action="created", workspace_id=state.id)
 
-    @staticmethod
-    def _render_prompt(template: str, event: IssueOpsEvent, command_text: str) -> str:
-        """Fill the boot-prompt template, tolerating an unknown placeholder or a
-        malformed template (a bad user override degrades to the raw text, never a
-        crash)."""
-        values = _SafeFormatMap(
+    def _render_prompt(
+        self, mgr: WorkspaceManager, ic: IssueOpsConfig, event: IssueOpsEvent, command_text: str
+    ) -> str:
+        """Fill the boot-prompt template from the event PLUS the live thread.
+
+        The thread read is best-effort and create-only: it costs one GET on a
+        path about to spend minutes provisioning a workspace, and it is what
+        makes ``{comments}`` mean the same thing here as on the assignee-pickup
+        path — one template with one meaning, rather than a second mechanism.
+        """
+        return IssuePrompt.render(
+            ic.prompt_template,
+            number=event.issue_number,
             title=event.issue_title,
             body=event.issue_body,
-            number=event.issue_number,
             url=event.issue_url,
             command_text=command_text,
+            comments=IssuePrompt.render_thread(self._thread_comments(mgr, event)),
         )
+
+    @staticmethod
+    def _thread_comments(mgr: WorkspaceManager, event: IssueOpsEvent) -> list[TicketComment]:
+        """The ticket's comments, or an empty list — never a failed create.
+
+        Swallowed like every other provider read on this path: a tracker that
+        will not answer costs the agent context, which is a worse prompt, not a
+        broken workspace.
+        """
         try:
-            return template.format_map(values)
-        except (ValueError, IndexError) as exc:  # stray/positional braces in an override
-            logger.warning("issue-ops prompt template is malformed, using raw command: {}", exc)
-            return command_text
+            return mgr.ticket_providers.get(event.provider).list_comments(str(event.issue_number))
+        except GroveError as exc:
+            logger.warning("issue-ops could not read the thread for the boot prompt: {}", exc)
+            return []
 
     # ─── best-effort side effects (never re-raise into routing) ─────────────
 
@@ -341,7 +347,7 @@ class IssueOpsEngine:
             )
 
     def _render_status(self, mgr: WorkspaceManager, event: IssueOpsEvent) -> None:
-        """Trigger the status re-render seam — best-effort (the publisher lands in #197)."""
+        """Trigger the status re-render seam — best-effort."""
         try:
             self._status.publish(event, mgr)
         except Exception as exc:  # best-effort seam: isolate any publisher failure

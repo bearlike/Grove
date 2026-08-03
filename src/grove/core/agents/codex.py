@@ -15,7 +15,7 @@ own:
 
 ``CodexAdapter`` is the thin public seam that wires filesystem → parser.
 
-Grounding (verified against real on-host rollouts, codex 0.125.0, 2026-04-28):
+Grounding (verified against real on-host rollouts, codex 0.125.0):
 
 - Path is ``$CODEX_HOME``-or-``~/.codex`` / ``sessions/YYYY/MM/DD/`` /
   ``rollout-<ISO-ts>-<uuid>.jsonl``; the session id is the ``uuid`` (also the
@@ -79,6 +79,7 @@ from grove.core.agents.model import (
     OrderedDigest,
     SessionControl,
     SessionControls,
+    SessionRef,
     SessionSummary,
     SessionTurn,
     TodoList,
@@ -181,39 +182,77 @@ class _CodexHome:
     ) -> list[tuple[str, Path, float, datetime | None]]:
         """``(session_id, path, mtime, birth)`` for every rollout recorded in
         ``cwd``, newest-first by mtime — the one scan behind ``discover`` (ids for
-        the dashboard), ``discover_births`` (the cheap adoption pre-filter, #F5),
+        the dashboard), ``discover_births`` (the cheap adoption pre-filter),
         and ``list_sessions`` (summaries for the explorer).
 
-        Reads each rollout's head ``session_meta`` line for its id + cwd (the cwd
-        is not on every line, unlike Claude), keeping only those whose cwd
-        matches and confirming the id from the meta, not the filename. ``birth``
-        (the first head record's timestamp) rides out of the same bounded head
-        read — no full parse — so the adoption gate can reject history cheaply.
+        Expressed over :meth:`discover_all` (unlike Claude's own
+        ``discover_paths``, which is left untouched — see that method's
+        docstring): Codex's path is date-partitioned and carries no cwd, so
+        its "narrow" per-cwd scan was ALREADY a full store walk + a cwd
+        filter — there is no cheaper form to preserve, so folding it onto the
+        shared broader walk is a genuine DRY win rather than a hot-path
+        regression. ``discover_all`` reads each rollout's head exactly once
+        (the same read this method used to perform inline); this just filters
+        and re-shapes the tuple.
         """
         target = str(cwd)
         found: dict[str, tuple[Path, float, datetime | None]] = {}
-        for path in cls._iter_rollouts():
-            meta, birth = cls._meta_and_birth(path)
-            session_id = meta.get("id")
-            if not isinstance(session_id, str) or not session_id:
+        for ref in cls.discover_all():
+            if ref.session_id == exclude_id or ref.cwd != target:
                 continue
-            if session_id == exclude_id:
+            if ref.transcript_path is None:
                 continue
-            if meta.get("cwd") != target:
-                continue
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:  # best-effort: a vanished file just sorts oldest
-                mtime = 0.0
-            prior = found.get(session_id)
-            if prior is None or mtime > prior[1]:
-                found[session_id] = (path, mtime, birth)
+            prior = found.get(ref.session_id)
+            if prior is None or ref.mtime > prior[1]:
+                found[ref.session_id] = (ref.transcript_path, ref.mtime, ref.birth)
         return [
             (sid, path, mtime, birth)
             for sid, (path, mtime, birth) in sorted(
                 found.items(), key=lambda kv: (-kv[1][1], kv[0])
             )
         ]
+
+    @classmethod
+    def discover_all(cls) -> tuple[SessionRef, ...]:
+        """Every rollout in the store, host-wide — the catalog's discovery unit.
+
+        For Codex this is the SAME walk :meth:`discover_paths` already had to
+        perform (date-partitioned paths carry no cwd, so there is no
+        cheaper-than-full-store scan) — one bounded head read per rollout via
+        :meth:`_meta_and_birth`, never a full parse. ``git_branch`` comes free
+        from the same ``session_meta.payload`` the cwd/id/birth already read
+        (``payload.git.branch``, 151/168 rollouts on the reference host).
+        Best-effort: a malformed or vanished file is skipped, never raised; a
+        rollout with no ``id`` in its meta is skipped (unidentifiable), but one
+        with no ``cwd`` still yields a ref with ``cwd=None``.
+        """
+        refs: list[SessionRef] = []
+        for path in cls._iter_rollouts():
+            meta, birth = cls._meta_and_birth(path)
+            session_id = meta.get("id")
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            cwd = meta.get("cwd")
+            cwd = cwd if isinstance(cwd, str) and cwd else None
+            git = meta.get("git")
+            branch = git.get("branch") if isinstance(git, dict) else None
+            branch = branch if isinstance(branch, str) and branch else None
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:  # best-effort: a vanished file just sorts oldest
+                mtime = 0.0
+            refs.append(
+                SessionRef(
+                    session_id=session_id,
+                    adapter_kind="codex",
+                    cwd=cwd,
+                    transcript_path=path,
+                    birth=birth,
+                    mtime=mtime,
+                    git_branch=branch,
+                )
+            )
+        return tuple(sorted(refs, key=lambda ref: (-ref.mtime, ref.session_id)))
 
     @classmethod
     def _iter_rollouts(cls) -> Iterable[Path]:
@@ -238,7 +277,7 @@ class _CodexHome:
         Bounded to a short head read — ``session_meta`` is the first record by
         construction — so a pathological file costs no more than a few lines.
         ``birth`` is the first head record's timestamp (records are time-sorted),
-        so the cheap adoption pre-filter (#F5) reads a session's birth without a
+        so the cheap adoption pre-filter reads a session's birth without a
         full parse.
         """
         payload: dict[str, Any] = {}
@@ -281,7 +320,7 @@ class _CodexHome:
 
 class _CodexControls:
     """Resolves *which input controls* a Codex session exposes — the codex analog
-    of :class:`_ClaudeControls` (#178).
+    of :class:`_ClaudeControls`.
 
     Codex's controls are user-global (its config root, not the worktree): custom
     prompts under ``$CODEX_HOME/prompts/*.md`` (invoked as ``/name`` in the codex
@@ -553,7 +592,7 @@ class _RolloutLine:
             "custom_tool_call_output",
         )
 
-    # ── spine mapping (#179) ─────────────────────────────────────────────────
+    # ── spine mapping ─────────────────────────────────────────────────────────
     def to_message(self) -> AgentMessage | None:
         """Map this rollout line onto one agentic-loop spine message, or ``None``
         for a line that is not a loop message (``event_msg`` status/tokens,
@@ -741,7 +780,6 @@ class _RolloutParser:
 
         buckets: list[int] = []
         tool_calls = 0
-        current_task: str | None = None
         last_event_at: datetime | None = None
         events = _EventState()
         # The last response_item that is a human turn, assistant reply, or tool
@@ -757,7 +795,6 @@ class _RolloutParser:
 
             if line.is_human_turn:
                 buckets.append(0)
-                current_task = current_task or _truncate(line.message_text(), _TASK_TEXT_CAP)
                 tail = line
             elif line.is_assistant:
                 if buckets:
@@ -767,8 +804,11 @@ class _RolloutParser:
                 tool_calls += 1
                 tail = line
 
-        if current_task is None:
-            current_task = self._first_human_text()
+        # One selection helper, shared with `current_task_text()`, so the
+        # capped field on this ~1 Hz-delivered activity and the uncapped
+        # per-request read can never name different text.
+        raw_task = self.current_task_text()
+        current_task = _truncate(raw_task, _TASK_TEXT_CAP) if raw_task is not None else None
 
         return AgentActivity(
             state=events.state(tail),
@@ -786,7 +826,7 @@ class _RolloutParser:
 
     def messages(self) -> tuple[AgentMessage, ...]:
         """The time-sorted rollout lines mapped onto the agentic-loop spine
-        (#179) — the ONE representation :meth:`turns` and :meth:`digest` below
+        — the ONE representation :meth:`turns` and :meth:`digest` below
         both project (DRY: one parse, many projections). ``event_msg`` status /
         token lines and the ``session_meta`` / ``turn_context`` metadata map to
         nothing."""
@@ -910,6 +950,18 @@ class _RolloutParser:
     def first_human_text(self) -> str | None:
         return self._first_human_text()
 
+    def current_task_text(self) -> str | None:
+        """The session's task text, UNCAPPED — the ONE selection
+        :meth:`activity` caps onto ``AgentActivity.current_task``.
+
+        Codex records no ``last-prompt`` analogue, so the rule is just the
+        first real human turn's text (the injected preamble is already excluded
+        by ``is_human_turn``). Both readers share this method so the capped and
+        uncapped answers cannot drift apart. Whitespace-only text is ``None``.
+        """
+        raw = self._first_human_raw()
+        return raw if raw and raw.strip() else None
+
     def last_human_text(self) -> str | None:
         for line in reversed(self._lines):
             if line.is_human_turn:
@@ -975,9 +1027,13 @@ class _RolloutParser:
         return None
 
     def _first_human_text(self) -> str | None:
+        raw = self._first_human_raw()
+        return _truncate(raw, _TASK_TEXT_CAP) if raw is not None else None
+
+    def _first_human_raw(self) -> str | None:
         for line in self._lines:
             if line.is_human_turn:
-                return _truncate(line.message_text(), _TASK_TEXT_CAP)
+                return line.message_text()
         return None
 
 
@@ -1068,7 +1124,7 @@ class CodexAdapter:
         set it, so ``_mint_agent_session_id`` returns ``None`` and Grove tracks it
         purely through fs discovery.
 
-        ``resume=True`` returns the ``resume <uuid>`` SUBCOMMAND (#120). Codex's
+        ``resume=True`` returns the ``resume <uuid>`` SUBCOMMAND. Codex's
         grammar is ``codex [OPTIONS] <COMMAND> [ARGS]`` (top-level flags precede
         the subcommand), so this rides *after* the configured command verbatim —
         ``codex`` → ``codex resume <uuid>``, ``codex --full-auto`` → ``codex
@@ -1082,7 +1138,7 @@ class CodexAdapter:
         return []
 
     def model_decoration(self, model: str) -> list[str]:
-        """``--model <id>`` — Codex CLI's per-launch model selector (#96).
+        """``--model <id>`` — Codex CLI's per-launch model selector.
 
         Independent of correlation: Codex mints no session id, but it still
         honors ``--model`` at launch, so this rides the command even though
@@ -1091,7 +1147,7 @@ class CodexAdapter:
         return ["--model", model]
 
     def offline_decoration(self) -> list[str]:
-        """Pin the sandbox to ``workspace-write`` with networking off (#148):
+        """Pin the sandbox to ``workspace-write`` with networking off:
         ``--sandbox workspace-write -c sandbox_workspace_write.network_access=false``.
         Codex has no standalone "disable web tool" flag — network access is a
         sandbox-policy knob, not a tool toggle, so this is the CLI's own
@@ -1141,7 +1197,7 @@ class CodexAdapter:
         self, cwd: Path, *, exclude_id: str | None = None
     ) -> list[tuple[str, datetime | None, float]]:
         """``(session_id, birth, mtime)`` for discovered rollouts — the cheap
-        adoption pre-filter (#F5). Birth rides out of the same bounded
+        adoption pre-filter. Birth rides out of the same bounded
         ``session_meta`` head read discovery already does; no full parse.
         Best-effort: ``[]`` on any error."""
         try:
@@ -1154,6 +1210,14 @@ class CodexAdapter:
         except OSError as exc:
             logger.debug("discover_births({}) failed: {}", cwd, exc)
             return []
+
+    def discover_all(self) -> tuple[SessionRef, ...]:
+        """Every rollout in the store, host-wide. Best-effort: ``()`` on any error."""
+        try:
+            return _CodexHome.discover_all()
+        except OSError as exc:
+            logger.debug("discover_all() failed: {}", exc)
+            return ()
 
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
         try:
@@ -1174,7 +1238,7 @@ class CodexAdapter:
         )
 
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
-        """The session's agentic-loop spine (#179) — the message list
+        """The session's agentic-loop spine — the message list
         ``read_turns`` / ``transcript_digest`` project from, and the seam
         downstream fleet / trace / final-result consumers read. Codex has no
         sub-agent transcripts, so every message is main-thread."""
@@ -1186,20 +1250,35 @@ class CodexAdapter:
         )
 
     def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
-        """The session's terminal outcome (#149) — a projection of
+        """The session's terminal outcome — a projection of
         :meth:`read_messages`, never a second parser."""
         return final_result_from_messages(self.read_messages(cwd, session_id))
 
     def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
-        """The session's current todo/checklist state (#194) — a projection of
+        """The session's current todo/checklist state — a projection of
         :meth:`read_messages`, never a second parser. Codex has no Task-system
         analog (``TASK_TOOL_NAMES`` never matches an ``update_plan`` call), so
         this is always the plain whole-list-per-call read."""
         return latest_todo_from_messages(self.read_messages(cwd, session_id))
 
+    def latest_task(self, cwd: Path, session_id: str) -> str | None:
+        """The session's task text, uncapped — the same
+        :meth:`_RolloutParser.current_task_text` selection
+        :meth:`parse_activity` caps onto ``AgentActivity.current_task``.
+
+        Rides the same incremental line read + stat-signature memo every other
+        projection here does.
+        """
+        paths = self.locate_transcripts(cwd, session_id)
+        return _MEMO.get_or_compute(
+            ("task", str(cwd), session_id),
+            paths,
+            lambda: _RolloutParser(self._read(paths)).current_task_text(),
+        )
+
     def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
         """Enumerate the session's input controls — the codex analog of Claude's
-        TIER 1 scan (#178): user-global custom prompts + ``config.toml`` MCP
+        TIER 1 scan: user-global custom prompts + ``config.toml`` MCP
         servers (see :class:`_CodexControls`). ``cwd``/``session_id`` are unused —
         codex's control surface is config-root-global, not per-worktree — but stay
         in the signature per the seam contract. Best-effort: empty on any error."""
@@ -1275,7 +1354,7 @@ class CodexAdapter:
         so — unlike Claude's split-block dedup — there is no logical-record
         merge to do; each line is its own record (:class:`_LineFolder` is a
         plain appender). Reading is incremental via :class:`TranscriptCache`
-        (the daemon-CPU fix, 2026-07-11): a poll tick pays ``json.loads`` only
+        (the daemon-CPU fix): a poll tick pays ``json.loads`` only
         for bytes appended since the previous read. The sort stays per call —
         appends keep the list nearly sorted, so timsort is cheap.
         """

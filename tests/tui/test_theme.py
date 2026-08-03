@@ -15,12 +15,18 @@ import pytest
 
 from grove.core import InitStatus, WorkspaceStatus
 from grove.core.config import GroveConfig
+from grove.core.contracts.phase_palette import DARK_PHASE_HEX
+from grove.core.contracts.runtime_palette import DARK_RUNTIME_HEX
 from grove.core.errors import ConfigError
 from grove.core.manager import WorkspaceManager
+from grove.core.phase import PHASE_ORDER
 from grove.core.store import JsonWorkspaceStore
+from grove.core.workspace import Runtime
 from grove.tui._status import (
     init_status_color,
+    phase_color,
     ref_color,
+    runtime_color,
     status_color,
     status_glyph,
 )
@@ -29,6 +35,8 @@ from grove.tui.theme import (
     ACTIVE_PULSE_TINT_HEX,
     GROVE_DARK,
     GROVE_LIGHT,
+    PHASE_HEX,
+    RUNTIME_HEX,
     STATUS_HEX,
     load_theme_overrides,
     resolve_theme_name,
@@ -137,6 +145,37 @@ def test_ref_kinds_resolve_to_unique_hex_per_mode() -> None:
     for dark in (True, False):
         kinds = {ref_color(k, dark=dark) for k in ("branch", "diff_add", "diff_remove", "info")}
         assert len(kinds) == 4
+
+
+# ─── task-phase palette (third axis: contracts.phase_palette cross-client) ───
+
+
+def test_tui_dark_phase_hex_matches_the_cross_client_contract() -> None:
+    """`theme.PHASE_HEX[True]` must be sourced verbatim from
+    `contracts.phase_palette.DARK_PHASE_HEX` — the same "TUI↔web can't drift
+    by construction" guarantee the agent-state palette already has. This
+    pins the import, not a coincidence of matching literals."""
+    assert PHASE_HEX[True] == dict(DARK_PHASE_HEX)
+    for phase in PHASE_ORDER:
+        assert phase_color(phase, dark=True) == DARK_PHASE_HEX[phase]
+
+
+def test_phase_ramp_is_distinct_per_phase_in_both_modes() -> None:
+    """All six phases must be visually distinguishable — the whole point of
+    a sequential ramp is that each step reads as a different point on it."""
+    for dark in (True, False):
+        hexes = {phase_color(p, dark=dark) for p in PHASE_ORDER}
+        assert len(hexes) == len(PHASE_ORDER), f"phase ramp has a hex collision (dark={dark})"
+
+
+def test_phase_done_leaves_the_ramp_for_muted_gray() -> None:
+    """`done` is deliberately NOT a deeper lime — it recedes to the same
+    muted-gray atom IDLE/OFFLINE use, because a converged task is settled
+    rather than intense (contracts.phase_palette's own rationale)."""
+    for dark in (True, False):
+        done_hex = phase_color("done", dark=dark)
+        offline_hex = status_color(WorkspaceStatus.OFFLINE, dark=dark)
+        assert done_hex == offline_hex, f"done should reuse the muted-gray atom (dark={dark})"
 
 
 # ─── theme name resolution ───────────────────────────────────────────────────
@@ -357,3 +396,47 @@ async def test_app_registers_user_overrides(
         assert app.current_theme.background == GROVE_DARK.background
         await pilot.press("q")
         await pilot.pause()
+
+
+def test_tui_dark_runtime_hex_matches_the_cross_client_contract() -> None:
+    """`theme.RUNTIME_HEX[True]` must be sourced verbatim from
+    `contracts.runtime_palette.DARK_RUNTIME_HEX` — the isolation axis gets the
+    same "TUI↔web can't drift by construction" guarantee as the other three."""
+    assert RUNTIME_HEX[True] == dict(DARK_RUNTIME_HEX)
+    for runtime in Runtime:
+        assert runtime_color(runtime, dark=True) == DARK_RUNTIME_HEX[runtime]
+
+
+def test_runtime_marks_are_distinct_in_both_modes() -> None:
+    """Host and container must be tellable apart by color as well as glyph, in
+    both polarities — a two-member axis whose members share a hue would leave
+    the glyph carrying the whole signal on a monochrome-ish terminal."""
+    for dark in (True, False):
+        assert runtime_color(Runtime.HOST, dark=dark) != runtime_color(Runtime.CONTAINER, dark=dark)
+
+
+def test_provisioning_is_painted_in_both_modes_and_never_the_dead_gray() -> None:
+    """The defect this status was added for is a user reading gray as dead and
+    reaching for a destructive verb, so the one thing its hue must never be is
+    the muted gray OFFLINE and PAUSED share. It borrows IDLE's info hue in both
+    polarities — alive, not yet ready — rather than taking a colour of its own.
+
+    Both polarities are asserted because a status added to the dark wire
+    contract renders BLANK-ish on the TUI's light side until `STATUS_HEX[False]`
+    learns it, and nothing else in the suite would notice.
+    """
+    for dark in (True, False):
+        provisioning = status_color(WorkspaceStatus.PROVISIONING, dark=dark)
+        assert provisioning == status_color(WorkspaceStatus.IDLE, dark=dark)
+        assert provisioning != status_color(WorkspaceStatus.OFFLINE, dark=dark)
+        assert provisioning != status_color(WorkspaceStatus.PAUSED, dark=dark)
+
+
+def test_every_workspace_status_resolves_a_hex_in_both_modes() -> None:
+    """`status_color` falls back to plain white/black for an unmapped member,
+    which is not a crash — it is a status silently rendering as undifferentiated
+    text. Enumerate the enum so the next status added to the wire contract
+    cannot reach the TUI half-painted."""
+    for dark in (True, False):
+        for status in WorkspaceStatus:
+            assert status in STATUS_HEX[dark], f"{status} unmapped (dark={dark})"

@@ -29,27 +29,25 @@ const ChatPanel = dynamic(
 
 /**
  * The dominant surface of the detail page: the agent transcript and the work
- * panel — panes ONLY since the chrome teardown (#130). The page owns every bit
- * of view state (which tab, single vs. split) and the view switcher rides the
- * header identity cluster, so this component just renders the side-by-side
- * split (`showSplit`) or the single active pane (`tab`). No strip row, no
- * `TabsList`, no status line.
+ * panel — panes ONLY. The page owns every bit of view state (which tab,
+ * single vs. split) and the view switcher rides the header identity cluster,
+ * so this component just renders the side-by-side split (`showSplit`) or the
+ * single active pane (`tab`). No strip row, no `TabsList`, no status line.
  *
- * The Resizable split is the canonical primitive (never a hand-rolled resizer),
- * its ratio persisted via `autoSaveId` — this contract is FROZEN across the
- * ADE work-panel change (#142): only the right pane's CONTENT changed, from a
- * bare `TerminalPane` to the tabbed `WorkPanel` (Terminal/Diff/Info). The
+ * The Resizable split is the canonical primitive (never a hand-rolled
+ * resizer), its ratio persisted via `autoSaveId`. Only the right pane's
+ * CONTENT varies (the tabbed `WorkPanel`: Terminal/Diff/Info). The
  * `min-h-0`/`min-w-0` chains thread through verbatim so a long transcript or a
  * wide terminal scrolls inside its own pane and never widens the document.
  *
  * `peek`/`live`/`commits` are the same page-owned reads `ContextBar` already
  * consumes for the identity strip — threaded here too because the `Diff`/`Info`
  * tabs need the same git/activity data the strip summarizes. One fetch, two
- * homes, never a second request. The work panel's Info-tab fleet tree (#174)
- * reads the SAME `activitySnapshot` the transcript already receives for live
+ * homes, never a second request. The work panel's Info-tab fleet tree reads
+ * the SAME `activitySnapshot` the transcript already receives for live
  * questions — `findWorkspaceActivity` resolves this workspace's own
- * `WorkspaceActivityView.sessions` (primary + itemized fleet, #173) from it,
- * so the tree needs no fetch of its own either.
+ * `WorkspaceActivityView.sessions` (primary + itemized fleet) from it, so the
+ * tree needs no fetch of its own either.
  *
  * ⌘/Ctrl+J toggles the work panel (design §4.2: "one obvious control — `⟩` /
  * `⌘J` — slides it in"). The page owns the actual tab/view state (so it can
@@ -89,7 +87,7 @@ export function AgentWorkspace({
   /** The live dashboard snapshot (page-owned) the chat panel reads for pending questions. */
   activitySnapshot: DashboardSnapshotView | null;
   agentState: AgentActivityState;
-  /** The page-wired track picker (#132) shown in the transcript's empty state when no session is tracked but candidates exist. */
+  /** The page-wired track picker shown in the transcript's empty state when no session is tracked but candidates exist. */
   emptyStatePicker?: ReactNode;
   /** ⌘/Ctrl+J — the page decides what "toggle" means for the current breakpoint/view. */
   onTogglePanel?: () => void;
@@ -120,7 +118,9 @@ export function AgentWorkspace({
       wide={!showSplit}
     />
   );
-  const sessions = findWorkspaceActivity(activitySnapshot, workspaceId)?.sessions ?? [];
+  // One lookup feeds both work-panel props that live on the activity view
+  // rather than the peek: the itemized fleet and the task phase.
+  const wsActivity = findWorkspaceActivity(activitySnapshot, workspaceId);
   const panel = (
     <WorkPanel
       workspaceId={workspaceId}
@@ -128,7 +128,8 @@ export function AgentWorkspace({
       live={live}
       commits={commits}
       commitsLoading={commitsLoading}
-      sessions={sessions}
+      sessions={wsActivity?.sessions ?? []}
+      phase={wsActivity?.phase ?? null}
     />
   );
 

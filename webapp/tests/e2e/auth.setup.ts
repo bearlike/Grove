@@ -1,5 +1,5 @@
 /**
- * Auth setup project (#32): performs the cookie → BFF → bearer pairing flow
+ * Auth setup project: performs the cookie → BFF → bearer pairing flow
  * once and saves the resulting HttpOnly `grove_session` cookie as Playwright
  * storageState, so every spec starts authenticated and never lands on /login.
  *

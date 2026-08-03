@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,9 +28,9 @@ NOISE = FIXTURES / "noise.jsonl"
 
 # The session ids and cwds the fixtures record in-line.
 BASIC_SID = "11111111-1111-4111-8111-111111111111"
-BASIC_CWD = Path("/home/kk/work/svc")
+BASIC_CWD = Path("/home/dev/work/svc")
 NOISE_SID = "22222222-2222-4222-8222-222222222222"
-NOISE_CWD = Path("/home/kk/work/noise")
+NOISE_CWD = Path("/home/dev/work/noise")
 
 
 @pytest.fixture
@@ -118,7 +119,7 @@ def test_split_block_lines_merge_into_one_logical_reply(
     digests, and tool counts — the "transcripts show no follow-ups" bug.
     """
     sid = "44444444-4444-4444-8444-444444444444"
-    cwd = Path("/home/kk/work/split")
+    cwd = Path("/home/dev/work/split")
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
     usage = '"usage":{"input_tokens":100,"output_tokens":50}'
@@ -166,7 +167,7 @@ def test_trailing_tool_result_reads_working(adapter: ClaudeCodeAdapter, claude_h
     Without the tail advancing on tool_result lines, the status lags a whole
     turn behind reality (a busy session reads WAITING)."""
     sid = "55555555-5555-4555-8555-555555555555"
-    cwd = Path("/home/kk/work/midtool")
+    cwd = Path("/home/dev/work/midtool")
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
     (folder / f"{sid}.jsonl").write_text(
@@ -205,7 +206,7 @@ def test_string_boolean_sidechain_is_coerced(adapter: ClaudeCodeAdapter, claude_
     """Defensive: a sidechain flag serialized as the string ``"true"`` must still
     exclude the line (a naive ``bool("true")`` would too, but ``bool("false")``
     would wrongly include — this pins the coercion)."""
-    cwd = Path("/home/kk/work/strbool")
+    cwd = Path("/home/dev/work/strbool")
     sid = "66666666-6666-4666-8666-666666666666"
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
@@ -236,7 +237,7 @@ def test_task_notification_is_a_notification_not_a_human_turn(
     advance the tail to WORKING (the agent's move), and close the spawning
     tool_use id so the in-flight sub-agent count drops."""
     sid = "88888888-8888-4888-8888-888888888888"
-    cwd = Path("/home/kk/work/notify")
+    cwd = Path("/home/dev/work/notify")
     notice = (
         "<task-notification>\\n<task-id>b8v1e838y</task-id>\\n"
         "<tool-use-id>tu_agent_1</tool-use-id>\\n<status>completed</status>\\n"
@@ -282,7 +283,7 @@ def test_unresolved_subagent_spawns_count_in_flight(
     tool_result must NOT close it (the agent keeps running; only its later
     task-notification is the real return)."""
     sid = "99999999-9999-4999-8999-999999999999"
-    cwd = Path("/home/kk/work/fleet")
+    cwd = Path("/home/dev/work/fleet")
     _write_lines(
         claude_home,
         cwd,
@@ -325,6 +326,431 @@ def test_unresolved_subagent_spawns_count_in_flight(
     assert adapter.parse_activity(cwd, sid).active_subagents == 1  # only tu2 remains
 
 
+def test_teammate_spawn_ack_does_not_close_the_spawn(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The CURRENT (verified CC 2.1.209) in-process-teammate flavor of an
+    ``Agent`` spawn carries no ``run_in_background`` at all — backgrounding is
+    implicit, signaled only by the launch ack's ``toolUseResult.status ==
+    "teammate_spawned"``. That ack ("Spawned successfully. ... The agent is
+    now running...") must NOT close the spawn — only a later
+    ``<teammate-message>`` idle/completion line does (#209)."""
+    sid = "50505050-5050-4505-8505-505050505050"
+    cwd = Path("/home/dev/work/teammate-spawn")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-07-14T23:25:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"map the seams"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-07-14T23:25:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+            '"content":[{"type":"tool_use","id":"toolu_01","name":"Agent",'
+            '"input":{"description":"Map the seams","subagent_type":"Explore","model":"sonnet",'
+            '"name":"seam-mapper","prompt":"go"}}]}}',
+            '{"type":"user","uuid":"t1","isSidechain":false,'
+            '"timestamp":"2026-07-14T23:25:24.000Z","message":{"role":"user","content":'
+            '[{"type":"tool_result","tool_use_id":"toolu_01","content":'
+            '"Spawned successfully. The agent is now running and will receive '
+            'instructions via mailbox."}]},'
+            '"toolUseResult":{"status":"teammate_spawned",'
+            '"teammate_id":"seam-mapper@session-2db82672",'
+            '"agent_id":"seam-mapper@session-2db82672","agent_type":"Explore",'
+            '"model":"sonnet","name":"seam-mapper","color":"blue",'
+            '"team_name":"session-2db82672"}}',
+        ],
+    )
+    act = adapter.parse_activity(cwd, sid)
+    assert act.active_subagents == 1  # the launch ack never closes it
+
+
+def test_idle_notification_closes_the_teammate_spawn_and_is_not_a_human_turn(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The completion signal for a named teammate spawn is NOT a
+    ``<task-notification>`` — it's a plain ``type:"user"`` STRING-content line
+    wrapping ``<teammate-message teammate_id="...">`` around an embedded JSON
+    payload (verified CC 2.1.209, #209). It must (a) close the matching spawn
+    by NAME (no tool-use id exists to match by), (b) never count as a second
+    human turn, and (c) render as a cooked ``notification`` entry — never raw
+    XML markup."""
+    sid = "51515151-5151-4515-8515-515151515151"
+    cwd = Path("/home/dev/work/teammate-idle")
+    spawn_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-07-14T23:25:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"toolu_01","name":"Agent",'
+        '"input":{"description":"Map the seams","subagent_type":"Explore","model":"sonnet",'
+        '"name":"seam-mapper","prompt":"go"}}]}}'
+    )
+    ack_line = (
+        '{"type":"user","uuid":"t1","isSidechain":false,'
+        '"timestamp":"2026-07-14T23:25:24.000Z","message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"toolu_01","content":"Spawned successfully."}]},'
+        '"toolUseResult":{"status":"teammate_spawned","name":"seam-mapper"}}'
+    )
+    teammate_msg = (
+        "Another Claude session sent a message:\\n"
+        '<teammate-message teammate_id=\\"seam-mapper\\" color=\\"blue\\">\\n'
+        '{\\"type\\":\\"idle_notification\\",\\"from\\":\\"seam-mapper\\",'
+        '\\"timestamp\\":\\"2026-07-14T23:26:36.020Z\\",\\"idleReason\\":\\"available\\"}\\n'
+        "</teammate-message>\\n\\nThis came from another Claude session."
+    )
+    idle_line = (
+        f'{{"type":"user","uuid":"tm1","timestamp":"2026-07-14T23:26:36.030Z",'
+        f'"isSidechain":false,"message":{{"role":"user","content":"{teammate_msg}"}}}}'
+    )
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-07-14T23:25:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"map the seams"}}',
+            spawn_line,
+            ack_line,
+            idle_line,
+        ],
+    )
+    act = adapter.parse_activity(cwd, sid)
+    assert act.active_subagents == 0  # the idle line closed it
+    assert act.human_turns == 1  # never a second human turn
+    assert act.state is AgentActivityState.WORKING  # the notice is the agent's move
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    notes = [e for e in turn.entries if e.role == "notification"]
+    assert len(notes) == 1
+    assert "seam-mapper is now idle (available)" in notes[0].text
+    assert "<teammate-message" not in notes[0].text  # never raw markup
+    assert "Another Claude session sent a message" not in notes[0].text
+
+
+def test_interim_teammate_message_keeps_the_spawn_open(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Teammates relay INTERIM messages while still running (progress
+    reports, receipt acks — observed live 2026-07-14: an implementer sent
+    "received the delta, starting now" mid-task). Only the structured
+    idle_notification means "done": an interim relay must NOT close the
+    spawn, or the live fleet undercounts and the WAITING→WORKING promotion
+    drops out exactly while a teammate is busiest. The relay still renders
+    as a cooked notification, never a human turn."""
+    sid = "52525252-5252-4525-8525-525252525252"
+    cwd = Path("/home/dev/work/teammate-interim")
+    spawn_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-07-14T23:25:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"toolu_01","name":"Agent",'
+        '"input":{"description":"Implement the fix","subagent_type":"general-purpose",'
+        '"model":"sonnet","name":"impl-core","prompt":"go"}}]}}'
+    )
+    ack_line = (
+        '{"type":"user","uuid":"t1","isSidechain":false,'
+        '"timestamp":"2026-07-14T23:25:24.000Z","message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"toolu_01","content":"Spawned successfully."}]},'
+        '"toolUseResult":{"status":"teammate_spawned","name":"impl-core"}}'
+    )
+    interim_msg = (
+        "Another Claude session sent a message:\\n"
+        '<teammate-message teammate_id=\\"impl-core\\" color=\\"purple\\">\\n'
+        "Received the scope delta - starting on the third commit now.\\n"
+        "</teammate-message>\\n\\nThis came from another Claude session."
+    )
+    interim_line = (
+        f'{{"type":"user","uuid":"tm1","timestamp":"2026-07-14T23:26:00.000Z",'
+        f'"isSidechain":false,"message":{{"role":"user","content":"{interim_msg}"}}}}'
+    )
+    closing_reply = (
+        '{"type":"assistant","uuid":"a2","requestId":"r2","isSidechain":false,'
+        '"timestamp":"2026-07-14T23:26:02.000Z","message":{"id":"m2","role":"assistant",'
+        '"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"text","text":"Noted - waiting for it to finish."}]}}'
+    )
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-07-14T23:25:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"implement the fix"}}',
+            spawn_line,
+            ack_line,
+            interim_line,
+            closing_reply,
+        ],
+    )
+    act = adapter.parse_activity(cwd, sid)
+    assert act.active_subagents == 1  # interim relay did NOT close the spawn
+    assert act.human_turns == 1  # never a second human turn
+    # end_turn tail + still-active fleet → the promotion holds WORKING.
+    assert act.state is AgentActivityState.WORKING
+
+    (turn,) = adapter.read_turns(cwd, sid)
+    notes = [e for e in turn.entries if e.role == "notification"]
+    assert len(notes) == 1
+    assert "<teammate-message" not in notes[0].text  # never raw markup
+
+
+def test_workflow_async_launched_ack_stays_open_until_task_output_polls_it(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A Workflow ("ultracode") run's launch ack
+    (``toolUseResult.status == "async_launched"``, carrying its OWN async
+    ``taskId`` — a DIFFERENT id space than the Task-board taskId
+    TaskCreate/TaskUpdate use) must not close the spawn either — it closes
+    only once a later ``TaskOutput`` poll for that SAME taskId returns its own
+    result (#209). With no such poll, it honestly stays open — the blend's
+    staleness demotion is the fallback, never an invented poll."""
+    sid = "52525252-5252-4525-8525-525252525252"
+    cwd = Path("/home/dev/work/workflow-async")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-07-14T21:50:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"run the workflow"}}'
+    )
+    spawn_line = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-07-14T21:50:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_wf",'
+        '"name":"Workflow","input":{"workflowName":"seam-mapper","script":"..."}}]}}'
+    )
+    ack_line = (
+        '{"type":"user","uuid":"t1","isSidechain":false,'
+        '"timestamp":"2026-07-14T21:50:03.000Z","message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"toolu_wf","content":"Workflow launched"}]},'
+        '"toolUseResult":{"status":"async_launched","taskId":"wvew06yhw",'
+        '"taskType":"local_workflow","workflowName":"seam-mapper","runId":"wf_48396aa1-537"}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, spawn_line, ack_line])
+    act = adapter.parse_activity(cwd, sid)
+    assert act.active_subagents == 1  # the async_launched ack never closes it
+
+    poll_call = (
+        '{"type":"assistant","uuid":"a2","requestId":"r2","isSidechain":false,'
+        '"timestamp":"2026-07-14T21:58:00.000Z","message":{"id":"m2","role":"assistant",'
+        '"stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_poll",'
+        '"name":"TaskOutput","input":{"taskId":"wvew06yhw"}}]}}'
+    )
+    poll_result = (
+        '{"type":"user","uuid":"t2","isSidechain":false,'
+        '"timestamp":"2026-07-14T21:58:05.000Z","message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"toolu_poll","content":"16 agents, 0 errors"}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, spawn_line, ack_line, poll_call, poll_result])
+    assert adapter.parse_activity(cwd, sid).active_subagents == 0  # closed by the matching poll
+
+
+def _write_workflow_worker(
+    claude_home: Path, cwd: Path, sid: str, run_id: str, agent_hash: str, lines: list[str]
+) -> Path:
+    """A Workflow worker transcript at the real recursive on-host layout
+    (#209, verified CC 2.1.209): ``<sid>/subagents/workflows/wf_<runId>/
+    agent-<hash>.jsonl`` + a SPARSE sibling ``.meta.json`` (no name/color/
+    teammate/model fields — just ``agentType``/``spawnDepth``)."""
+    sub_dir = (
+        claude_home
+        / "projects"
+        / _ClaudeHome.encode_cwd(cwd)
+        / sid
+        / "subagents"
+        / "workflows"
+        / f"wf_{run_id}"
+    )
+    sub_dir.mkdir(parents=True, exist_ok=True)
+    path = sub_dir / f"agent-{agent_hash}.jsonl"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (sub_dir / f"agent-{agent_hash}.meta.json").write_text(
+        '{"agentType":"workflow-subagent","spawnDepth":1}', encoding="utf-8"
+    )
+    return path
+
+
+def test_fleet_activity_finds_workflow_workers_via_the_recursive_glob(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A Workflow worker nests one level deeper than a plain sub-agent
+    (``subagents/workflows/wf_<runId>/agent-<hash>.jsonl``) — the glob behind
+    :meth:`locate_transcripts`/:meth:`fleet_activity` must find it recursively
+    (#209), and its sparse meta (``{"agentType":"workflow-subagent",
+    "spawnDepth":1}`` — no ``name``) degrades identity honestly: no ``name``
+    to prefer, so ``title`` falls back to ``agentType``."""
+    sid = "53535353-5353-4535-8535-535353535353"
+    cwd = Path("/home/dev/work/workflow-worker")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-07-14T21:50:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"run the workflow"}}',
+        ],
+    )
+    _write_workflow_worker(
+        claude_home,
+        cwd,
+        sid,
+        "48396aa1-537",
+        "a1863ee8cb38de03b",
+        [
+            '{"type":"user","uuid":"wu1","isSidechain":true,'
+            '"agentId":"a1863ee8cb38de03b","timestamp":"2026-07-14T21:50:10.000Z",'
+            '"message":{"role":"user","content":"replace the seam"}}',
+            '{"type":"assistant","uuid":"wa1","isSidechain":true,'
+            '"agentId":"a1863ee8cb38de03b","timestamp":"2026-07-14T21:50:12.000Z",'
+            '"message":{"id":"wm1","role":"assistant","stop_reason":"end_turn",'
+            '"content":[{"type":"text","text":"Replaced."}]}}',
+        ],
+    )
+
+    transcripts = adapter.locate_transcripts(cwd, sid)
+    assert any(
+        "workflows" in p.parts and p.name == "agent-a1863ee8cb38de03b.jsonl" for p in transcripts
+    )
+
+    fleet = adapter.fleet_activity(cwd, sid)
+    assert len(fleet) == 1
+    session, act = fleet[0]
+    assert session.session_id == "a1863ee8cb38de03b"
+    assert session.parent_session_id == sid
+    assert act.title == "workflow-subagent"  # no `name` in the sparse meta → agentType fallback
+    assert act.current_task == "replace the seam"  # description absent too → first-prompt fallback
+
+
+def test_activity_promotes_waiting_to_working_while_background_fleet_runs(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The orchestrator bug: a BACKGROUNDED Agent spawn can close the
+    orchestrator's OWN turn (tail ``stop_reason == end_turn`` — the raw
+    tail-state rule's WAITING) while the fleet it kicked off keeps running. A
+    session whose fleet is active IS working, so the tail-derived WAITING must
+    be promoted to WORKING. Once the fleet actually closes (its
+    task-notification delivered, and the orchestrator produces its own
+    end-of-turn wrap-up), the tail-derived WAITING stands untouched — the
+    promotion never fires once the fleet has genuinely gone idle."""
+    sid = "40404040-4040-4404-8404-404040404040"
+    cwd = Path("/home/dev/work/fleet-promote")
+    user_line = (
+        '{"type":"user","uuid":"u1","timestamp":"2026-07-14T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"find the flaky test"}}'
+    )
+    spawn = (
+        '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+        '"timestamp":"2026-07-14T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+        '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"tool_use","id":"tu1","name":"Agent",'
+        '"input":{"description":"Explore the failing suite","subagent_type":"Explore",'
+        '"prompt":"go","run_in_background":true}}]}}'
+    )
+    launch_ack = (
+        '{"type":"user","uuid":"t1","timestamp":"2026-07-14T10:00:02.000Z",'
+        '"isSidechain":false,"message":{"role":"user",'
+        '"content":[{"type":"tool_result","tool_use_id":"tu1","content":"Async agent launched"}]}}'
+    )
+    wrap_up = (
+        '{"type":"assistant","uuid":"a2","requestId":"r2","isSidechain":false,'
+        '"timestamp":"2026-07-14T10:00:03.000Z","message":{"id":"m2","role":"assistant",'
+        '"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"text",'
+        '"text":"Kicked off a background exploration; I will check back."}]}}'
+    )
+    _write_lines(claude_home, cwd, sid, [user_line, spawn, launch_ack, wrap_up])
+    # The real on-host shape: the spawn's own sidechain file exists alongside
+    # the main thread while it is still running (unused by the assertions
+    # below — active_subagents is derived purely from the main thread — but
+    # pinning it here matches what's actually on disk for this scenario).
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "sub01",
+        [
+            '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"sub01",'
+            '"timestamp":"2026-07-14T10:00:02.500Z",'
+            '"message":{"role":"user","content":"Find the flaky test, report back."}}',
+            '{"type":"assistant","uuid":"sa1","isSidechain":true,"agentId":"sub01",'
+            '"timestamp":"2026-07-14T10:00:04.000Z","message":{"id":"sm1","role":"assistant",'
+            '"stop_reason":"tool_use",'
+            '"content":[{"type":"tool_use","id":"stu1","name":"Grep","input":{"pattern":"flaky"}}]}}',
+        ],
+        meta={"agentType": "Explore", "description": "Explore the failing suite"},
+    )
+
+    act = adapter.parse_activity(cwd, sid)
+    # Raw tail_state (end_turn) would read WAITING; the active fleet promotes it.
+    assert act.state is AgentActivityState.WORKING
+    assert act.active_subagents == 1
+
+    # The background task finishes: its notification is delivered and the
+    # orchestrator produces one more wrap-up reply, closing its own turn.
+    notice = (
+        "<task-notification><tool-use-id>tu1</tool-use-id><status>completed</status>"
+        "<summary>Found it in test_flaky.py</summary></task-notification>"
+    )
+    closing = (
+        '{"type":"assistant","uuid":"a3","requestId":"r3","isSidechain":false,'
+        '"timestamp":"2026-07-14T10:00:06.000Z","message":{"id":"m3","role":"assistant",'
+        '"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},'
+        '"content":[{"type":"text","text":"Found the flaky test — it races on setup."}]}}'
+    )
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            user_line,
+            spawn,
+            launch_ack,
+            wrap_up,
+            f'{{"type":"user","uuid":"n1","timestamp":"2026-07-14T10:00:05.000Z",'
+            f'"isSidechain":false,"message":{{"role":"user","content":"{notice}"}}}}',
+            closing,
+        ],
+    )
+    act2 = adapter.parse_activity(cwd, sid)
+    assert act2.active_subagents == 0  # the notification closed the fleet
+    assert act2.state is AgentActivityState.WAITING  # closed fleet: no promotion
+
+
+def test_activity_blocked_outranks_fleet_promotion(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """An unanswered AskUserQuestion at the tail stays BLOCKED even with an
+    active background fleet — action-required outranks "the fleet is still
+    working" (only a tail-derived WAITING is ever promoted, never BLOCKED)."""
+    sid = "41414141-4141-4141-8141-414141414141"
+    cwd = Path("/home/dev/work/fleet-blocked")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-07-14T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out and ask me"}}',
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            '"timestamp":"2026-07-14T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
+            '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+            '"content":[{"type":"tool_use","id":"tu1","name":"Agent",'
+            '"input":{"description":"probe","subagent_type":"Explore","prompt":"go",'
+            '"run_in_background":true}}]}}',
+            '{"type":"user","uuid":"t1","timestamp":"2026-07-14T10:00:02.000Z",'
+            '"isSidechain":false,"message":{"role":"user",'
+            '"content":[{"type":"tool_result","tool_use_id":"tu1",'
+            '"content":"Async agent launched"}]}}',
+            '{"type":"assistant","uuid":"a2","requestId":"r2","isSidechain":false,'
+            '"timestamp":"2026-07-14T10:00:03.000Z","message":{"id":"m2","role":"assistant",'
+            '"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1},'
+            '"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion",'
+            '"input":{"questions":[{"question":"Merge or rebase while it runs?"}]}}]}}',
+        ],
+    )
+    act = adapter.parse_activity(cwd, sid)
+    assert act.active_subagents == 1  # tu1 still out
+    assert act.state is AgentActivityState.BLOCKED  # never promoted over BLOCKED
+
+
 def test_unanswered_ask_user_question_reads_blocked(
     adapter: ClaudeCodeAdapter, claude_home: Path
 ) -> None:
@@ -332,7 +758,7 @@ def test_unanswered_ask_user_question_reads_blocked(
     (BLOCKED), not WORKING — the one transcript-visible needs-input signal. Once
     the answer's tool_result lands, the tail advances and it reads WORKING again."""
     sid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    cwd = Path("/home/kk/work/ask")
+    cwd = Path("/home/dev/work/ask")
     question_line = (
         '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
         '"timestamp":"2026-06-01T10:00:01.000Z","message":{"id":"m1","role":"assistant",'
@@ -380,7 +806,7 @@ def test_ask_user_question_batch_emits_question_entries(
     ``group_id`` and addressed ``{id}#0`` / ``{id}#1``. Unanswered until a
     matching tool_result lands."""
     sid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-    cwd = Path("/home/kk/work/ask-batch")
+    cwd = Path("/home/dev/work/ask-batch")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"set it up"}}'
@@ -434,7 +860,7 @@ def test_question_entries_resolve_once_answered(
     in that batch renders ``answered=True`` with the result content as the
     ``answer`` (group-level resolution, no per-question split)."""
     sid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-    cwd = Path("/home/kk/work/ask-answered")
+    cwd = Path("/home/dev/work/ask-answered")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"set it up"}}'
@@ -468,7 +894,7 @@ def test_exit_plan_mode_renders_one_confirm_question(
     """ExitPlanMode is a plan-approval gate → a single ``role="question"``
     entry, ``kind="confirm"``, prompt == the plan text."""
     sid = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-    cwd = Path("/home/kk/work/plan")
+    cwd = Path("/home/dev/work/plan")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"plan it"}}'
@@ -495,7 +921,7 @@ def test_regular_tool_still_renders_as_tool(adapter: ClaudeCodeAdapter, claude_h
     """A non-question tool_use (Bash) keeps the existing ``role="tool"`` entry —
     only the question tools route to the structured question entry."""
     sid = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
-    cwd = Path("/home/kk/work/regular")
+    cwd = Path("/home/dev/work/regular")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"run it"}}'
@@ -522,7 +948,7 @@ def test_edit_tool_emits_one_file_edit_entry(adapter: ClaudeCodeAdapter, claude_
     carrying the structured :class:`FileEdit`, with the one-liner ``text`` set
     to ``"<name> <path>"`` for a role-unaware consumer."""
     sid = "f0000000-0000-4000-8000-000000000001"
-    cwd = Path("/home/kk/work/edit")
+    cwd = Path("/home/dev/work/edit")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"tweak it"}}'
@@ -554,7 +980,7 @@ def test_multi_edit_emits_one_file_edit_entry_per_edit(
     ``role="file_edit"`` row per edit, in order — the file-edit analogue of a
     batched ``AskUserQuestion`` yielding N question rows."""
     sid = "f0000000-0000-4000-8000-000000000002"
-    cwd = Path("/home/kk/work/multiedit")
+    cwd = Path("/home/dev/work/multiedit")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"batch it"}}'
@@ -587,7 +1013,7 @@ def test_write_tool_emits_file_edit_with_empty_old_text(
     ``file_edit`` whose ``old_text`` is empty — an honest all-additions diff,
     never backfilled from disk."""
     sid = "f0000000-0000-4000-8000-000000000003"
-    cwd = Path("/home/kk/work/write")
+    cwd = Path("/home/dev/work/write")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"make it"}}'
@@ -616,7 +1042,7 @@ def test_non_edit_tool_unaffected_by_file_edit_branch(
     """A read-only tool (``Read``) still renders ``role="tool"`` — the file-edit
     branch only fires for the edit tools, never a bystander tool_use."""
     sid = "f0000000-0000-4000-8000-000000000004"
-    cwd = Path("/home/kk/work/read")
+    cwd = Path("/home/dev/work/read")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"look at it"}}'
@@ -641,7 +1067,7 @@ def test_question_tool_unaffected_by_file_edit_branch(
     """A question tool still routes to ``role="question"`` — the file-edit branch
     sits right next to the question branch, so guard that it didn't steal it."""
     sid = "f0000000-0000-4000-8000-000000000005"
-    cwd = Path("/home/kk/work/ask-guard")
+    cwd = Path("/home/dev/work/ask-guard")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"decide"}}'
@@ -669,7 +1095,7 @@ def test_todowrite_emits_one_todo_entry_carrying_the_list(
     for a role-unaware consumer. Before #184 this fell through to a bare
     ``role="tool"`` "TodoWrite" and the list was discarded."""
     sid = "f0000000-0000-4000-8000-000000000006"
-    cwd = Path("/home/kk/work/todo")
+    cwd = Path("/home/dev/work/todo")
     user_line = (
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"plan it"}}'
@@ -709,7 +1135,7 @@ def test_taskcreate_and_taskupdate_reconstruct_a_todo_board(
     snapshot — the same shape ``TodoWrite`` renders — so the existing pinned
     card needs no changes to pick up either provider shape."""
     sid = "f0000000-0000-4000-8000-000000000007"
-    cwd = Path("/home/kk/work/tasks")
+    cwd = Path("/home/dev/work/tasks")
     lines = [
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"track the work"}}',
@@ -767,7 +1193,7 @@ def test_taskcreate_with_unresolvable_id_falls_back_to_generic_tool(
     back to the ordinary ``role="tool"`` entry rather than a fabricated or
     dropped task."""
     sid = "f0000000-0000-4000-8000-000000000008"
-    cwd = Path("/home/kk/work/tasks-unresolved")
+    cwd = Path("/home/dev/work/tasks-unresolved")
     lines = [
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"track it"}}',
@@ -790,7 +1216,7 @@ def test_taskupdate_for_untracked_id_falls_back_to_generic_tool(
     for (its create call may be outside the loaded window) degrades to the
     generic tool entry rather than fabricating a task out of thin air."""
     sid = "f0000000-0000-4000-8000-000000000009"
-    cwd = Path("/home/kk/work/tasks-untracked-update")
+    cwd = Path("/home/dev/work/tasks-untracked-update")
     lines = [
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"mark it done"}}',
@@ -814,7 +1240,7 @@ def test_tasklist_and_taskget_render_as_generic_tool_calls(
     so they render like any other bystander tool call, never touching the
     board or absorbing into a todo entry."""
     sid = "f0000000-0000-4000-8000-00000000000a"
-    cwd = Path("/home/kk/work/tasks-reads")
+    cwd = Path("/home/dev/work/tasks-reads")
     lines = [
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
         '"isSidechain":false,"message":{"role":"user","content":"what is left?"}}',
@@ -893,12 +1319,12 @@ def test_digest_skeleton_excludes_tool_results(
 
 
 def test_locate_finds_main_and_subagents(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
-    cwd = Path("/home/kk/work/svc")
+    cwd = Path("/home/dev/work/svc")
     sid = "33333333-3333-4333-8333-333333333333"
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
     main = folder / f"{sid}.jsonl"
-    main.write_text('{"type":"user","cwd":"/home/kk/work/svc"}\n', encoding="utf-8")
+    main.write_text('{"type":"user","cwd":"/home/dev/work/svc"}\n', encoding="utf-8")
     sub_dir = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd) / sid / "subagents"
     sub_dir.mkdir(parents=True)
     sub = sub_dir / "agent-abc.jsonl"
@@ -921,7 +1347,7 @@ def test_discover_orders_most_recent_first(adapter: ClaudeCodeAdapter, claude_ho
     with no minted id adopts the *live* session — not an arbitrary alphabetical
     one. The older id sorts first alphabetically, so a stable result proves the
     mtime ordering rather than a coincidence."""
-    cwd = Path("/home/kk/work/multi")
+    cwd = Path("/home/dev/work/multi")
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
     older = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"  # alphabetically first
@@ -940,7 +1366,7 @@ def test_discover_skips_cwdless_preamble(adapter: ClaudeCodeAdapter, claude_home
     lines in. Discovery must scan past the preamble — keying off only line 0
     (the old behavior) returns ``None`` for every real transcript and finds
     nothing."""
-    cwd = Path("/home/kk/work/preamble")
+    cwd = Path("/home/dev/work/preamble")
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
     sid = "55555555-5555-4555-8555-555555555555"
@@ -961,7 +1387,7 @@ def test_discover_births_reads_birth_from_head(
     record) from the SAME bounded head read that confirms the cwd — no full parse
     — so the adoption gate rejects history cheaply. Ordered newest-first by mtime
     like ``discover_sessions``, and the cwdless/timestampless preamble is skipped."""
-    cwd = Path("/home/kk/work/births")
+    cwd = Path("/home/dev/work/births")
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
     older = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -984,6 +1410,98 @@ def test_discover_births_reads_birth_from_head(
     assert by_id[older] == datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
 
 
+# ─── discover_all (the host-wide catalog scan, epic: Session Catalog) ──────
+
+
+def test_discover_all_walks_every_folder_across_the_cascade(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The catalog scan is deliberately broader than ``discover_paths``: it
+    must find sessions in EVERY encoded-cwd folder, not just one. Each ref
+    carries the cwd/branch read from the same head-read record, newest-first
+    by mtime."""
+    project_a = Path("/home/dev/work/alpha")
+    project_b = Path("/home/dev/work/beta")
+    folder_a = claude_home / "projects" / _ClaudeHome.encode_cwd(project_a)
+    folder_b = claude_home / "projects" / _ClaudeHome.encode_cwd(project_b)
+    folder_a.mkdir(parents=True)
+    folder_b.mkdir(parents=True)
+    sid_a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    sid_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    path_a = folder_a / f"{sid_a}.jsonl"
+    path_b = folder_b / f"{sid_b}.jsonl"
+    path_a.write_text(
+        f'{{"type":"user","cwd":"{project_a}","gitBranch":"main",'
+        '"timestamp":"2026-06-01T10:00:00.000Z"}\n',
+        encoding="utf-8",
+    )
+    path_b.write_text(
+        f'{{"type":"user","cwd":"{project_b}","gitBranch":"feature/x",'
+        '"timestamp":"2026-06-02T10:00:00.000Z"}\n',
+        encoding="utf-8",
+    )
+    os.utime(path_a, (1000, 1000))
+    os.utime(path_b, (2000, 2000))
+
+    refs = adapter.discover_all()
+    assert [ref.session_id for ref in refs] == [sid_b, sid_a]  # newest-first by mtime
+    by_id = {ref.session_id: ref for ref in refs}
+    assert by_id[sid_a].cwd == str(project_a)
+    assert by_id[sid_a].git_branch == "main"
+    assert by_id[sid_a].adapter_kind == "claude_code"
+    assert by_id[sid_b].cwd == str(project_b)
+    assert by_id[sid_b].git_branch == "feature/x"
+
+
+def test_discover_all_degrades_a_cwdless_transcript_instead_of_dropping_it(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """~2 % of real transcripts never reveal a cwd in a bounded head read
+    (#226 evidence). The row still surfaces with ``cwd=None`` — it is never
+    silently dropped from the catalog."""
+    folder = claude_home / "projects" / "some-unresolvable-folder"
+    folder.mkdir(parents=True)
+    sid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    (folder / f"{sid}.jsonl").write_text(
+        '{"type":"mode","mode":"default"}\n{"type":"summary","summary":"no cwd here"}\n',
+        encoding="utf-8",
+    )
+
+    refs = adapter.discover_all()
+    assert len(refs) == 1
+    assert refs[0].session_id == sid
+    assert refs[0].cwd is None
+    assert refs[0].git_branch is None
+
+
+def test_discover_paths_never_walks_the_projects_root(
+    adapter: ClaudeCodeAdapter, claude_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 2 s activity poll's cost must not change (#227): per-cwd discovery
+    must reach its answer through the one forward-encoded folder, never by
+    iterating every folder under ``projects/`` — that broader walk belongs to
+    ``discover_all`` alone. Proven by making a host-wide ``iterdir`` a hard
+    error; ``discover_paths``/``discover_sessions`` never call it (only the
+    direct encoded-folder ``glob``, which pathlib implements without
+    ``Path.iterdir``)."""
+    cwd = Path("/home/dev/work/one-folder")
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    sid = "66666666-6666-4666-8666-666666666666"
+    (folder / f"{sid}.jsonl").write_text(f'{{"type":"user","cwd":"{cwd}"}}\n', encoding="utf-8")
+    (claude_home / "projects" / "some-other-encoded-folder").mkdir(parents=True)
+
+    real_iterdir = Path.iterdir
+
+    def _guarded_iterdir(self: Path) -> Iterator[Path]:
+        if self == claude_home / "projects":
+            raise AssertionError("discover_paths must not walk the projects root")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _guarded_iterdir)
+    assert adapter.discover_sessions(cwd) == [sid]
+
+
 # ─── encode_cwd (the documented folder rule) ────────────────────────────────
 
 
@@ -991,8 +1509,8 @@ def test_encode_cwd_replaces_every_non_alphanumeric() -> None:
     """The Agent SDK documents the encoding as *every* non-alphanumeric char →
     ``-`` — not just ``/`` ``.`` ``_``. A cwd with ``@``/``+``/space must still
     hit the fast path."""
-    assert _ClaudeHome.encode_cwd(Path("/home/kk/my proj+v2@x")) == "-home-kk-my-proj-v2-x"
-    assert _ClaudeHome.encode_cwd(Path("/home/kk/.claude_dir")) == "-home-kk--claude-dir"
+    assert _ClaudeHome.encode_cwd(Path("/home/dev/my proj+v2@x")) == "-home-dev-my-proj-v2-x"
+    assert _ClaudeHome.encode_cwd(Path("/home/dev/.claude_dir")) == "-home-dev--claude-dir"
 
 
 # ─── list_sessions (summaries for the explorer) ─────────────────────────────
@@ -1026,7 +1544,7 @@ def _write_realistic_transcript(folder: Path, sid: str, cwd: Path, *, mtime: int
 def test_list_sessions_builds_summaries_newest_first(
     adapter: ClaudeCodeAdapter, claude_home: Path
 ) -> None:
-    cwd = Path("/home/kk/work/listing")
+    cwd = Path("/home/dev/work/listing")
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
     older = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -1096,7 +1614,7 @@ def test_read_turns_leading_continuation_block(
 ) -> None:
     """Assistant records before any human turn (resumed/compacted head) collect
     under an empty-prompt turn instead of being dropped."""
-    cwd = Path("/home/kk/work/cont")
+    cwd = Path("/home/dev/work/cont")
     sid = "88888888-8888-4888-8888-888888888888"
     folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True)
@@ -1213,7 +1731,7 @@ def test_read_messages_preserves_subagent_lineage(
     lineage — ``is_sidechain`` / ``thread_id`` (= agentId) / ``parent_tool_use_id``
     (= the spawning assistant uuid) — while the main-thread turn projection
     excludes them (byte-identical: sub-agent threads never were turns)."""
-    cwd = Path("/home/kk/work/fleet-spine")
+    cwd = Path("/home/dev/work/fleet-spine")
     sid = "12121212-1212-4121-8121-121212121212"
     _write_lines(
         claude_home,
@@ -1262,7 +1780,7 @@ def test_read_messages_notification_carries_spawning_tool_id(
     closes the right in-flight id), with the cooked summary as its text — never
     raw XML."""
     sid = "13131313-1313-4131-8131-131313131313"
-    cwd = Path("/home/kk/work/notify-spine")
+    cwd = Path("/home/dev/work/notify-spine")
     notice = (
         "<task-notification><tool-use-id>tu_bg</tool-use-id><status>completed</status>"
         "<summary>Explore done</summary><result>found it</result></task-notification>"
@@ -1321,7 +1839,7 @@ def test_final_result_none_before_any_assistant_reply(
 ) -> None:
     """No assistant has spoken yet (a lone human turn) — degrade to ``None``
     rather than a misleading empty result."""
-    cwd = Path("/home/kk/work/final-result-none")
+    cwd = Path("/home/dev/work/final-result-none")
     sid = "21212121-2121-4121-8121-212121212121"
     _write_lines(
         claude_home,
@@ -1341,7 +1859,7 @@ def test_final_result_incomplete_while_a_tool_call_is_open(
     """A tail assistant message still holding a ``tool_use`` block (the
     ``stop_reason == "tool_use"`` shape) is not a final answer — working or
     blocked-on-a-question either way."""
-    cwd = Path("/home/kk/work/final-result-open-tool")
+    cwd = Path("/home/dev/work/final-result-open-tool")
     sid = "22222222-2222-4222-8222-222222222222"
     _write_lines(
         claude_home,
@@ -1368,7 +1886,7 @@ def test_final_result_incomplete_when_a_tool_result_trails_the_assistant(
     assistant that called it — ``is_complete`` stays ``False`` even though
     that assistant message alone carries no unresolved question, because the
     agent still owes a reply to the tool result."""
-    cwd = Path("/home/kk/work/final-result-tool-trails")
+    cwd = Path("/home/dev/work/final-result-tool-trails")
     sid = "23232323-2323-4232-8232-232323232323"
     _write_lines(
         claude_home,
@@ -1400,7 +1918,7 @@ def test_final_result_skips_a_trailing_sidechain_message(
     """A sub-agent reply is not the main thread's final answer even when it is
     the newest record on disk — the projection must look past it to the
     real main-thread tail."""
-    cwd = Path("/home/kk/work/final-result-sidechain")
+    cwd = Path("/home/dev/work/final-result-sidechain")
     sid = "24242424-2424-4242-8242-242424242424"
     _write_lines(
         claude_home,
@@ -1437,7 +1955,7 @@ def test_latest_todo_none_before_any_todo_tool_is_called(
 ) -> None:
     """A session that never called a todo/Task tool projects to ``None`` —
     never a misleading empty card."""
-    cwd = Path("/home/kk/work/latest-todo-none")
+    cwd = Path("/home/dev/work/latest-todo-none")
     sid = "31313131-3131-4131-8131-313131313131"
     _write_lines(
         claude_home,
@@ -1459,7 +1977,7 @@ def test_latest_todo_from_a_todowrite_call(adapter: ClaudeCodeAdapter, claude_ho
     """A single ``TodoWrite`` call is the whole list — the projection reads
     straight through to it, mirroring the ``final_result_from_messages``
     recipe over the same spine."""
-    cwd = Path("/home/kk/work/latest-todo-todowrite")
+    cwd = Path("/home/dev/work/latest-todo-todowrite")
     sid = "32323232-3232-4232-8232-323232323232"
     _write_lines(
         claude_home,
@@ -1491,7 +2009,7 @@ def test_latest_todo_reflects_the_boards_final_snapshot(
     """Multiple ``TaskCreate``/``TaskUpdate`` calls fold onto one running
     board (#188) — the projection reports the board's state AFTER the last
     mutating call, not the first one it ever saw."""
-    cwd = Path("/home/kk/work/latest-todo-board")
+    cwd = Path("/home/dev/work/latest-todo-board")
     sid = "33333333-3333-4333-8333-333333333333"
     lines = [
         '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
@@ -1539,7 +2057,7 @@ def test_latest_todo_folds_a_taskupdate_correlated_many_turns_after_its_taskcrea
     would wrongly report ``None`` (or a stale board) instead of the real
     final state.
     """
-    cwd = Path("/home/kk/work/latest-todo-many-turns")
+    cwd = Path("/home/dev/work/latest-todo-many-turns")
     sid = "34343434-3434-4343-8343-343434343434"
     lines = [
         '{"type":"user","uuid":"u0","timestamp":"2026-06-01T10:00:00.000Z",'
@@ -1627,7 +2145,7 @@ def test_fleet_activity_identity_status_turns_model(
     under an opus primary) — a status derived from the tail's own block SHAPE,
     since the spine deliberately carries no raw ``stop_reason``."""
     sid = "14141414-1414-4141-8141-141414141414"
-    cwd = Path("/home/kk/work/fleet-basic")
+    cwd = Path("/home/dev/work/fleet-basic")
     _write_lines(
         claude_home,
         cwd,
@@ -1698,7 +2216,7 @@ def test_fleet_activity_working_when_tail_holds_a_tool_call(
 ) -> None:
     """A sub-agent whose tail is still mid tool-loop reads WORKING, not WAITING."""
     sid = "15151515-1515-4151-8151-151515151515"
-    cwd = Path("/home/kk/work/fleet-working")
+    cwd = Path("/home/dev/work/fleet-working")
     _write_lines(
         claude_home,
         cwd,
@@ -1736,7 +2254,7 @@ def test_fleet_activity_falls_back_when_meta_json_missing(
     can be absent) → identity degrades honestly: no title, and ``current_task``
     falls back to the truncated first task prompt rather than nothing."""
     sid = "16161616-1616-4161-8161-161616161616"
-    cwd = Path("/home/kk/work/fleet-no-meta")
+    cwd = Path("/home/dev/work/fleet-no-meta")
     _write_lines(
         claude_home,
         cwd,
@@ -1775,7 +2293,7 @@ def test_fleet_activity_ignores_malformed_meta_json(
     """A malformed sidecar degrades to the same fallback as a missing one —
     never raises."""
     sid = "17171717-1717-4171-8171-171717171717"
-    cwd = Path("/home/kk/work/fleet-bad-meta")
+    cwd = Path("/home/dev/work/fleet-bad-meta")
     _write_lines(
         claude_home,
         cwd,
@@ -1809,7 +2327,7 @@ def test_fleet_activity_multiple_threads_grouped_independently(
     """Two concurrent sub-agents stay in separate entries, each with its own
     turns/model — a fan-out fleet, not a merged blob."""
     sid = "18181818-1818-4181-8181-181818181818"
-    cwd = Path("/home/kk/work/fleet-multi")
+    cwd = Path("/home/dev/work/fleet-multi")
     _write_lines(
         claude_home,
         cwd,
@@ -1855,6 +2373,98 @@ def test_fleet_activity_multiple_threads_grouped_independently(
     assert by_id["agentA"][1].model == "claude-opus-4-8"
     assert by_id["agentB"][1].model == "claude-haiku-4-5-20251001"
     assert all(session.parent_session_id == sid for session, _ in fleet)
+
+
+def test_subagent_turns_returns_the_threads_own_turns(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A fleet child's own conversation, rendered through the SAME projection
+    the main thread's ``turns()`` uses — the turns sibling of
+    :meth:`ClaudeCodeAdapter.fleet_activity`, and what makes a fleet row's
+    ``session_id`` (the sub-agent thread id) reachable at all, since it never
+    appears in any workspace's own session listing (``discover_paths``
+    deliberately skips ``subagents/``)."""
+    sid = "19191919-1919-4191-8191-191919191919"
+    cwd = Path("/home/dev/work/fleet-turns")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out"}}',
+        ],
+    )
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agent09",
+        [
+            '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"agent09",'
+            '"timestamp":"2026-06-01T10:00:01.000Z",'
+            '"message":{"role":"user","content":"Explore the config loader."}}',
+            '{"type":"assistant","uuid":"sa1","isSidechain":true,"agentId":"agent09",'
+            '"timestamp":"2026-06-01T10:00:02.000Z","message":{"id":"sm1","role":"assistant",'
+            '"stop_reason":"tool_use",'
+            '"content":[{"type":"tool_use","id":"stu1","name":"Read",'
+            '"input":{"file_path":"config.py"}}]}}',
+            '{"type":"user","uuid":"sr1","isSidechain":true,"agentId":"agent09",'
+            '"timestamp":"2026-06-01T10:00:03.000Z","message":{"role":"user","content":['
+            '{"type":"tool_result","tool_use_id":"stu1","content":"def load(): ..."}]}}',
+            '{"type":"assistant","uuid":"sa2","isSidechain":true,"agentId":"agent09",'
+            '"timestamp":"2026-06-01T10:00:04.000Z","message":{"id":"sm2","role":"assistant",'
+            '"stop_reason":"end_turn",'
+            '"content":[{"type":"text","text":"It loads from config.py."}]}}',
+        ],
+    )
+
+    turns = adapter.subagent_turns(cwd, sid, "agent09")
+    assert len(turns) == 1
+    (turn,) = turns
+    assert turn.user_text == "Explore the config loader."
+    assert [(e.role, e.text) for e in turn.entries] == [
+        ("tool", "Read"),
+        ("assistant", "It loads from config.py."),
+    ]
+
+
+def test_subagent_turns_empty_for_unknown_thread(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """An id that isn't one of this session's own sub-agent threads degrades
+    to ``()``, never raises — the same posture as ``fleet_activity``."""
+    sid = "20202020-2020-4202-8202-202020202020"
+    cwd = Path("/home/dev/work/fleet-turns-unknown")
+    _write_lines(
+        claude_home,
+        cwd,
+        sid,
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"fan out"}}',
+        ],
+    )
+    _write_subagent(
+        claude_home,
+        cwd,
+        sid,
+        "agent10",
+        [
+            '{"type":"user","uuid":"su1","isSidechain":true,"agentId":"agent10",'
+            '"timestamp":"2026-06-01T10:00:01.000Z","message":{"role":"user","content":"go"}}',
+        ],
+    )
+    assert adapter.subagent_turns(cwd, sid, "nonexistent") == ()
+
+
+def test_subagent_turns_empty_when_no_subagents_dir(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """No ``subagents/`` dir at all is the common case — the cheap early exit
+    mirroring ``fleet_activity``'s own no-op."""
+    _install(claude_home, BASIC_CWD, BASIC_SID, BASIC)
+    assert adapter.subagent_turns(BASIC_CWD, BASIC_SID, "whatever") == ()
 
 
 def test_claude_offline_decoration_disallows_web_tools() -> None:
@@ -1916,6 +2526,26 @@ def test_session_controls_empty_when_no_dot_claude(
     assert controls.mcp_servers == ()
 
 
+def test_project_mcp_servers_reads_the_worktrees_committed_registry(
+    adapter: ClaudeCodeAdapter, claude_home: Path, tmp_path: Path
+) -> None:
+    """The bare-names projection of the same scan, in declaration order.
+
+    Public because the container trust stamp pre-approves exactly this list, and
+    a second parser for one JSON object is how the two come to disagree. The
+    USER registry is not included — a container cannot reach it.
+    """
+    del claude_home
+    cwd = tmp_path / "wt"
+    cwd.mkdir()
+    (cwd / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"gitea": {}, "playwright": {}}}), encoding="utf-8"
+    )
+
+    assert adapter.project_mcp_servers(cwd) == ("gitea", "playwright")
+    assert adapter.project_mcp_servers(tmp_path / "bare") == ()
+
+
 def test_session_controls_tolerates_malformed_mcp_json(
     adapter: ClaudeCodeAdapter, claude_home: Path, tmp_path: Path
 ) -> None:
@@ -1930,7 +2560,7 @@ def test_session_controls_tolerates_malformed_mcp_json(
 # ─── incremental re-reads (transcript-cache integration, daemon-CPU fix) ────
 
 INC_SID = "33333333-3333-4333-8333-333333333333"
-INC_CWD = Path("/home/kk/work/inc")
+INC_CWD = Path("/home/dev/work/inc")
 
 
 def _write_session(claude_home: Path, cwd: Path, sid: str, lines: list[dict]) -> Path:

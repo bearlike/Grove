@@ -9,13 +9,12 @@ export type AgentTab = "transcript" | "terminal";
 export type AgentView = "tabs" | "split";
 
 /**
- * The session page's pane view selector — the ONLY tab UI after the chrome
- * teardown (#130). Two quiet text tabs pick which pane fills a single-pane
- * view; the lg-only icon pair toggles single-pane vs. side-by-side split.
- * Radix `Tabs` left the page entirely: this is plain controlled buttons with a
- * hand-rolled `tablist`/`tab`/`aria-selected` contract, so it rides the header
- * identity cluster with no `TabsList` pill chrome (separation by tone + space,
- * the teardown's core rule).
+ * The session page's pane view selector — the ONLY tab UI on the page. Two
+ * quiet text tabs pick which pane fills a single-pane view; the lg-only icon
+ * pair toggles single-pane vs. side-by-side split. This is plain controlled
+ * buttons with a hand-rolled `tablist`/`tab`/`aria-selected` contract (not
+ * radix `Tabs`), so it rides the header identity cluster with no `TabsList`
+ * pill chrome — separation by tone + space, not a drawn line.
  *
  * In a split both panes render at once, so no single text tab reads as
  * "selected"; clicking one drops to single-pane focus on that pane. The

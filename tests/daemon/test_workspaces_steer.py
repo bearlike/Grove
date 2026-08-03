@@ -1,4 +1,4 @@
-"""POST /workspaces/{id}/message and /interrupt — the steer surface (#37)."""
+"""POST /workspaces/{id}/message and /interrupt — the steer surface."""
 
 from __future__ import annotations
 
@@ -110,7 +110,7 @@ def test_interrupt_is_501_steering_unsupported(
     daemon: TestClient, created_ws: str, fake_tmux: FakeTmux
 ) -> None:
     # Capability refusal, not a state conflict: no tmux-hosted agent kind
-    # has a safe interrupt (the mewbo API arm lands with issue #36).
+    # has a safe interrupt.
     resp = daemon.post(f"/workspaces/{created_ws}/interrupt")
 
     assert resp.status_code == 501

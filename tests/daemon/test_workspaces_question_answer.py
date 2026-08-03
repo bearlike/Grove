@@ -1,4 +1,4 @@
-"""POST /workspaces/{id}/question-answer — the live-question answer surface (#109)."""
+"""POST /workspaces/{id}/question-answer — the live-question answer surface."""
 
 from __future__ import annotations
 
@@ -106,8 +106,8 @@ def test_answer_question_unknown_workspace_is_404(daemon: TestClient) -> None:
 def test_answer_question_foreign_session_id_is_409(
     daemon: TestClient, tmp_repo: Path, fake_tmux: FakeTmux, sidecar_dir: Path
 ) -> None:
-    """A session_id that isn't this workspace's minted agent session is refused
-    (#110) — otherwise a foreign or cross-workspace session_id could drive
+    """A session_id that isn't this workspace's minted agent session is
+    refused — otherwise a foreign or cross-workspace session_id could drive
     keystrokes into this workspace's pane."""
     ws_id, sid = _create(daemon, tmp_repo)
     foreign_sid = sid + "-foreign"
@@ -201,8 +201,8 @@ def test_answer_question_control_character_in_text_is_422(
     daemon: TestClient, tmp_repo: Path, fake_tmux: FakeTmux, sidecar_dir: Path
 ) -> None:
     """An ESC byte in free text would cancel the whole question if typed
-    verbatim into the pane (#110) — rejected by the wire model before the
-    handler runs, same as any other structurally invalid body."""
+    verbatim into the pane — rejected by the wire model before the handler
+    runs, same as any other structurally invalid body."""
     ws_id, sid = _create(daemon, tmp_repo)
     _capture(sidecar_dir, sid)
 

@@ -18,15 +18,13 @@ import type { AgentActivityState } from "@/lib/grove/types";
 import { cn } from "@/lib/utils";
 
 /**
- * The rail's compact filter (ADE #140 → #156 glyph cohesion → #158 the single
- * organizing instrument). Now that the rail is a flat, section-less list (#158),
+ * The rail's compact filter. Since the rail is a flat, section-less list,
  * this ONE quiet menu is where all organizing happens: hide states, keep only
  * attention rows, hide whole projects, and reveal the unmapped/metadata-only
  * rows. It is also the reachable clear-path that makes persisting every filter
- * safe (the §4.9 drop had unpersisted them precisely because no UI could clear a
- * stale filter).
+ * safe (a filter with no UI to clear it would otherwise strand a stale state).
  *
- * Cohesion (#156): each state row leads with its `AgentStateMark` glyph (the ONE
+ * Each state row leads with its `AgentStateMark` glyph (the ONE
  * agent-state icon system), "Needs attention only" with a `BellRing`, project
  * rows are plain checkboxes (hidden-set: a checked project shows), and every menu
  * row drops to the rail's dense 13px tier so the menu reads as part of the same

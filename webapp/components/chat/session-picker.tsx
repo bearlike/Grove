@@ -17,11 +17,10 @@ function shortId(id: string): string {
 }
 
 /**
- * The workspace's session picker + remap affordance (issues #121, #132). Quiet,
- * secondary chrome — a ghost trigger, not a hero element — riding the header
- * identity cluster since the chrome-teardown (#130), so the trigger is
- * borderless and the remap-error notice lives INSIDE the popover (a
- * header-anchored floating notice would have nowhere to sit).
+ * The workspace's session picker + remap affordance. Quiet, secondary chrome
+ * — a ghost trigger, not a hero element — riding the header identity cluster,
+ * so the trigger is borderless and the remap-error notice lives INSIDE the
+ * popover (a header-anchored floating notice would have nowhere to sit).
  *
  * TWO modes, one component:
  *
@@ -31,7 +30,7 @@ function shortId(id: string): string {
  *   repins the daemon's `agent_session_id` (see `useRemapSession`). The two are
  *   decoupled: looking at a session doesn't repin it.
  *
- * - **Track** (`candidates` non-empty, ≤1 tracked session): the stuck case (#132)
+ * - **Track** (`candidates` non-empty, ≤1 tracked session): the stuck case
  *   — the workspace tracks a DEAD pointer whose live successor the adoption gate
  *   rejects, so the gated list self-hides the switcher and there's no way out.
  *   `candidates` is the UNGATED cwd-scoped set (`?candidates=true`) that KEEPS the
@@ -60,7 +59,7 @@ function shortId(id: string): string {
 type SessionPickerProps = {
   sessions: SessionSummaryView[];
   /**
-   * Ungated candidate sessions to adopt when none is usefully tracked (#132).
+   * Ungated candidate sessions to adopt when none is usefully tracked.
    * Absent/empty ⇒ no track affordance; the picker falls back to switch-or-null.
    */
   candidates?: SessionSummaryView[];
@@ -148,9 +147,9 @@ export function SessionPickerList({
           </ul>
         </>
       )}
-      {/* The remap refusal notice lives at the list's foot now (#130): a
-          header-anchored trigger has nowhere to float a sibling notice.
-          Borderless-quiet — a passing note, not a boxed alert. */}
+      {/* The remap refusal notice lives at the list's foot: a header-anchored
+          trigger has nowhere to float a sibling notice. Borderless-quiet —
+          a passing note, not a boxed alert. */}
       {error && (
         <p
           data-testid="session-picker-notice"
@@ -222,6 +221,9 @@ function SessionRow({
   onMakePrimary: () => void;
 }) {
   const label = session.title || session.first_prompt || "untitled session";
+  // A listing that never parsed the transcript carries no activity ("not
+  // measured at this scope") — `unknown` is the honest render, not idle.
+  const state = session.activity?.state ?? "unknown";
   return (
     <li
       data-testid="session-picker-item"
@@ -238,7 +240,7 @@ function SessionRow({
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         )}
       >
-        <AgentStateMark state={session.activity.state} />
+        <AgentStateMark state={state} />
         <span className="min-w-0 flex-1 truncate text-xs font-medium">{label}</span>
         {isSelected && (
           <CheckIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
@@ -250,7 +252,7 @@ function SessionRow({
             {shortId(session.session_id)}
           </span>
           <RelativeTime iso={session.modified_at} />
-          <span>{agentStateLabel(session.activity.state)}</span>
+          <span>{agentStateLabel(state)}</span>
         </MetaRow>
         {!isSelected && (
           <button
@@ -274,7 +276,7 @@ function SessionRow({
 }
 
 /**
- * A candidate row (track mode, #132): one pick button whose only action is to
+ * A candidate row (track mode): one pick button whose only action is to
  * ADOPT this session as the workspace's primary (a remap). There is no "selected"
  * or "switch view" here — nothing is tracked yet, so picking IS the whole gesture.
  * The pick button carries only phrasing content; the meta div is a NON-interactive
@@ -291,6 +293,7 @@ function CandidateRow({
   onTrack: () => void;
 }) {
   const label = session.title || session.first_prompt || "untitled session";
+  const state = session.activity?.state ?? "unknown";
   return (
     <li
       data-testid="session-picker-candidate"
@@ -308,7 +311,7 @@ function CandidateRow({
           "disabled:pointer-events-none disabled:opacity-50",
         )}
       >
-        <AgentStateMark state={session.activity.state} />
+        <AgentStateMark state={state} />
         <span className="min-w-0 flex-1 truncate text-xs font-medium">{label}</span>
         <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
           {pending ? "Tracking…" : "Track"}
@@ -320,7 +323,7 @@ function CandidateRow({
             {shortId(session.session_id)}
           </span>
           <RelativeTime iso={session.modified_at} />
-          <span>{agentStateLabel(session.activity.state)}</span>
+          <span>{agentStateLabel(state)}</span>
         </MetaRow>
       </div>
     </li>

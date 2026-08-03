@@ -20,7 +20,7 @@ const ResizablePanelGroup = ({
 
 const ResizablePanel = ResizablePrimitive.Panel
 
-// De-bordered (teardown v1, 2026-07-05): the seam between panes is invisible
+// De-bordered: the seam between panes is invisible
 // at rest — `bg-transparent` — and only resolves to a line while it matters
 // (hover intent, active drag), via `react-resizable-panels`' own
 // `data-resize-handle-state` (`inactive`/`hover`/`drag`). A hairline that's

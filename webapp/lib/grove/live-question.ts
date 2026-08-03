@@ -47,8 +47,8 @@ export function livePendingQuestions(
 }
 
 /**
- * The daemon's tracked PRIMARY session id for one workspace (issue #121),
- * read straight off the activity snapshot. The engine's `sessions_for()`
+ * The daemon's tracked PRIMARY session id for one workspace, read straight
+ * off the activity snapshot. The engine's `sessions_for()`
  * always places `state.agent_session_id` (the minted-or-remapped pointer)
  * first when it resolves live — `WorkspaceActivityView.sessions[0]`, the same
  * source `displayState()` (`dashboard-filter.ts`) reads for the card's status.

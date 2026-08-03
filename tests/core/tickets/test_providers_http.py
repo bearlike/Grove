@@ -297,7 +297,7 @@ def test_linear_uses_raw_authorization_header() -> None:
     assert seen["auth"] == "lin_api_key"  # raw, no "Bearer "
 
 
-# ─── comment I/O (#193) ───────────────────────────────────────────────────
+# ─── comment I/O ─────────────────────────────────────────────────────────
 
 
 def test_gitea_list_comments_normalizes() -> None:
@@ -485,3 +485,109 @@ def test_linear_comment_methods_raise_capability_gap() -> None:
         p.edit_comment("c1", "x")
     with pytest.raises(TicketCommentsUnsupported):
         p.react("c1", "eyes")
+
+
+# ─── link/web-root URL builders (commit_url / branch_url / web_root) ───────
+#
+# All pure: no network, no transport injected. web_root strips the leading
+# "api." the same way `host` does (so a pasted-link match and a built link
+# agree on which forge they mean) but keeps the PORT, which `host` drops —
+# a self-hosted forge on a non-default port is unreachable without it.
+
+
+def test_gitea_commit_and_branch_url_shape() -> None:
+    p = GiteaProvider(
+        GiteaTicketConfig(
+            enabled=True, owner="o", repo="r", token_env="T", base_url="https://git.example.com"
+        ),
+        env={"T": "tok"},
+    )
+    assert p.commit_url("abc123") == "https://git.example.com/o/r/commit/abc123"
+    assert p.branch_url("main") == "https://git.example.com/o/r/src/branch/main"
+
+
+def test_github_commit_and_branch_url_shape() -> None:
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"), env={"T": "tok"}
+    )
+    assert p.commit_url("abc123") == "https://github.com/o/r/commit/abc123"
+    assert p.branch_url("main") == "https://github.com/o/r/tree/main"
+
+
+def test_github_web_root_never_carries_the_api_subdomain() -> None:
+    """A built link must land on github.com, never on the api host it was built from."""
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"), env={"T": "tok"}
+    )
+    assert p.web_root == "https://github.com"
+    assert "api." not in (p.commit_url("abc123") or "")
+
+
+def test_github_enterprise_base_url_strips_api_v3_to_the_browser_root() -> None:
+    """A GHE base_url (`https://host/api/v3`) has no `api.` subdomain to strip —
+    the `/api/v3` path is dropped by urlsplit's own path/host split, and the
+    browser root is just the bare host."""
+    p = GitHubProvider(
+        GitHubTicketConfig(
+            enabled=True,
+            owner="o",
+            repo="r",
+            token_env="T",
+            base_url="https://ghe.example.com/api/v3",
+        ),
+        env={"T": "tok"},
+    )
+    assert p.web_root == "https://ghe.example.com"
+    assert p.commit_url("abc123") == "https://ghe.example.com/o/r/commit/abc123"
+
+
+def test_web_root_keeps_a_non_default_port_that_host_deliberately_drops() -> None:
+    """`host` (the link-matching side) has no use for a port and would gain a
+    false mismatch by keeping one; `web_root` (the link-building side) needs it
+    back, or a forge on a non-standard port produces an unreachable URL."""
+    p = GiteaProvider(
+        GiteaTicketConfig(
+            enabled=True, owner="o", repo="r", token_env="T", base_url="http://git.example.com:3000"
+        ),
+        env={"T": "tok"},
+    )
+    assert p.host == "git.example.com"
+    assert p.web_root == "http://git.example.com:3000"
+    assert p.commit_url("abc123") == "http://git.example.com:3000/o/r/commit/abc123"
+
+
+def test_branch_url_keeps_slashes_but_percent_quotes_everything_else() -> None:
+    """A branch name's `/` is a path separator in the forge's own URL and must
+    survive unquoted; any other character that would otherwise read as syntax
+    (space, `#`, `?`) is quoted so the name can never be mistaken for it."""
+    p = GiteaProvider(
+        GiteaTicketConfig(
+            enabled=True, owner="o", repo="r", token_env="T", base_url="https://git.example.com"
+        ),
+        env={"T": "tok"},
+    )
+    assert (
+        p.branch_url("feature/my branch")
+        == "https://git.example.com/o/r/src/branch/feature/my%20branch"
+    )
+    assert p.branch_url("fix#42?") == "https://git.example.com/o/r/src/branch/fix%2342%3F"
+
+
+def test_unscoped_provider_has_no_repo_to_link_into() -> None:
+    """No owner/repo configured means no repo_web_url and no commit/branch link —
+    `None` is the honest answer, never a link that lands nowhere."""
+    p = GiteaProvider(GiteaTicketConfig(enabled=True, token_env="T"), env={"T": "tok"})
+    assert p.repo_web_url is None
+    assert p.commit_url("abc123") is None
+    assert p.branch_url("main") is None
+
+
+def test_linear_has_no_commit_or_branch_destination() -> None:
+    """Linear fronts no git repo at all, so it inherits HttpTicketProvider's base
+    `None` default for both — a caller renders plain text rather than a link
+    that lands nowhere (the same contract the unscoped-forge case pins above)."""
+    p = LinearProvider(
+        LinearTicketConfig(enabled=True, team_key="ENG", token_env="T"), env={"T": "lin_xxx"}
+    )
+    assert p.commit_url("abc123") is None
+    assert p.branch_url("main") is None

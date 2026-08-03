@@ -26,7 +26,9 @@ import { GroveProtocolError } from "@/lib/grove/client";
 import type { CreateWorkspaceRequest } from "@/lib/grove/types";
 import { cn } from "@/lib/utils";
 import { AgentPicker } from "./agent-picker";
+import { BriefPicker } from "./brief-picker";
 import { ModelPicker } from "./model-picker";
+import { RuntimePicker } from "./runtime-picker";
 import { branchPlanReady, buildBranchPlan, ContextChips, type RepoOption } from "./context-chips";
 
 // The markdown preview rides streamdown — the chat panel's whole bundle cost.
@@ -75,13 +77,11 @@ export function deriveTitle(prompt: string): string {
 
 /**
  * The composer — the always-present hero create surface at the top of the main
- * column (issue #96 deliverable A; expanded #98). The prompt textarea IS the
- * create surface: type a task, hit Enter, a workspace is created and you're
- * routed to it. The title is auto-derived from the first prompt line; the full
- * prompt boots the agent as its first task.
+ * column. The prompt textarea IS the create surface: type a task, hit Enter,
+ * a workspace is created and you're routed to it. The title is auto-derived
+ * from the first prompt line; the full prompt boots the agent as its first task.
  *
- * #98 additions (all on the store-backed draft so inline + fullscreen share one
- * source of truth):
+ * All on the store-backed draft so inline + fullscreen share one source of truth:
  *  - Expand-on-focus: the inline textarea grows + the card lifts while focused
  *    or non-empty, relaxing back when blurred AND empty (a calm 200ms tween).
  *  - Fullscreen mode: a `Maximize` toggle opens a near-viewport Dialog with a
@@ -104,11 +104,11 @@ export function Composer() {
   const scopeRepo = useUiStore((s) => s.scopeRepo);
 
   // Repos from the authoritative project list (the `/activity` snapshot), NOT the
-  // workspace list — an empty / config-declared project (#95) has zero workspaces
+  // workspace list — an empty / config-declared project has zero workspaces
   // but is still a valid create target, and each group carries name + root.
   // Routed through `computeFacets` (the same seam the rail uses) so nested-project
-  // groups that share a `repo_root` (#101) collapse to one picker row instead of
-  // one per `cwd` (#151) — a create target is a repo, never a sub-cwd.
+  // groups that share a `repo_root` collapse to one picker row instead of
+  // one per `cwd` — a create target is a repo, never a sub-cwd.
   const { snapshot } = useActivityStream();
   const repos: RepoOption[] = useMemo(
     () =>
@@ -178,6 +178,8 @@ export function Composer() {
       branch_plan: buildBranchPlan(composer),
       skip_init: composer.skipInit,
       resume_session_id: composer.resumeSessionId.trim() || null,
+      runtime: composer.runtime,
+      brief: composer.brief,
       repo_root: composer.repoRoot,
     };
     create.mutate(req, {
@@ -238,7 +240,8 @@ export function Composer() {
           )}
         />
 
-        <div className="mt-2 flex items-center gap-2">
+        {/* Wraps: a third selector pill overflows a phone viewport on one row. */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           {/* Quiet selector pills — everything outline/ghost; never --primary. */}
           <AgentPicker
             value={composer.agentName}
@@ -252,6 +255,11 @@ export function Composer() {
               onChange={(model) => patch({ model })}
             />
           ) : null}
+          <RuntimePicker
+            value={composer.runtime}
+            onChange={(runtime) => patch({ runtime })}
+          />
+          <BriefPicker value={composer.brief} onChange={(brief) => patch({ brief })} />
 
           <div className="ml-auto flex items-center gap-1">
             {/* Quiet fullscreen affordance — write long Markdown with a preview. */}

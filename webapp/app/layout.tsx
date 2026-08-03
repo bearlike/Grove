@@ -30,8 +30,8 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
   // Browser-chrome tint (the mobile status-bar / notch fill). A meta value can't
   // read a CSS var, so these are the one place a canvas hex is unavoidable — kept
-  // in lock-step with the `--background` tokens in globals.css (detuned #139:
-  // dark hsl(45 10% 8%) = #171613, light hsl(48 33% 97%) = #faf9f5).
+  // in lock-step with the `--background` tokens in globals.css
+  // (dark hsl(45 10% 8%) = #171613, light hsl(48 33% 97%) = #faf9f5).
   themeColor: [
     { media: "(prefers-color-scheme: dark)", color: "#171613" },
     { media: "(prefers-color-scheme: light)", color: "#faf9f5" },

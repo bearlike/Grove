@@ -1,4 +1,4 @@
-"""DashboardScreen — the cross-project Activity Dashboard (epic #11 §8, issue #16).
+"""DashboardScreen — the cross-project Activity Dashboard.
 
 Where ``WorkspaceListScreen`` shows one repo's workspaces, this shows *every*
 workspace across *every* repo as a wall of agent-activity tiles grouped by

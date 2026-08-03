@@ -15,13 +15,15 @@ Two refresh cadences keep the rail live without burning resources:
   appear without a restart), full `peek` (git ahead/behind/diff/dirty),
   refreshes the cache, and recomputes the agent-activity axis for the
   visible rows (cards + rail metrics line).
-Both ticks are frozen when a modal is on top of us. Number keys 1-9 jump
+Every tick asks `_ticks_live()` first, so none of them run while a modal
+owns the foreground or while the terminal is handed to an attach — polling
+a screen the user cannot see is pure waste, and never more so than when
+they are inside the very workspace being polled. Number keys 1-9 jump
 cursor.
 """
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import replace as _dc_replace
@@ -33,6 +35,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Header, Input, ListView, Static
@@ -57,7 +60,8 @@ from grove.core import (
 )
 from grove.core.activity import ActivityService
 from grove.core.agents import AgentActivity, SessionTurn
-from grove.core.workspace import LIVE_STATUSES, Placement
+from grove.core.tmux import ContainerAttach, fit_window_to_client
+from grove.core.workspace import LIVE_STATUSES, Placement, ProvisionProgress
 from grove.tui._status import ACTIVE_PULSE_FRAMES
 from grove.tui.keys import (
     DEFAULT_BINDINGS,
@@ -67,7 +71,7 @@ from grove.tui.keys import (
 from grove.tui.screens.confirm import ConfirmScreen, KillConfirmScreen, KillDecision
 from grove.tui.screens.create import CreateWorkspaceScreen
 from grove.tui.screens.dashboard import DashboardScreen
-from grove.tui.screens.edit import EditWorkspaceScreen
+from grove.tui.screens.edit import EditWorkspaceScreen, RetryContainerization
 from grove.tui.screens.help import HelpScreen
 from grove.tui.screens.message import SendMessageScreen
 from grove.tui.screens.project_picker import ProjectPickerScreen, RepoChoice
@@ -93,6 +97,78 @@ _RAIL_TURNS = 20
 # == ACTIVE` watcher; non-ACTIVE rows skip entirely. When no visible row
 # is ACTIVE the tick early-exits and CPU is zero.
 _PULSE_TICK_SECONDS = 0.25
+
+
+class LifecycleDone(Message):
+    """A lifecycle verb finished on a worker thread.
+
+    Carries the outcome back to the UI thread: ``error_text`` is the
+    already-formatted flash copy (formatting is pure, so the worker does it)
+    or ``None`` on success. Posting a message rather than calling
+    ``call_from_thread`` is what makes the hop uniform — ``post_message`` is
+    thread-safe from either side, while ``call_from_thread`` *raises* when
+    it happens to be called on the app's own thread.
+    """
+
+    def __init__(self, label: str, error_text: str | None, key: str | None) -> None:
+        super().__init__()
+        self.label = label
+        self.error_text = error_text
+        # Whatever `_InFlightVerbs` key the verb claimed, so the handler can
+        # release it — the claim has to outlive the worker, not the action.
+        self.key = key
+
+
+class _InFlightVerbs:
+    """Which lifecycle verb is running on which workspace.
+
+    The single-threaded UI was an implicit mutex over the whole lifecycle
+    surface: no two verbs could interleave because there was only one thread
+    to run them on. Moving every verb to a worker thread deleted that
+    invariant silently, and a double-pressed key is then two genuinely
+    concurrent verbs on one workspace — a `kill` tearing down the worktree
+    while a `respawn` is halfway through `devcontainer up`.
+
+    Keyed per workspace, never globally: verbs on *different* workspaces
+    running at once is the entire point of the worker, so a global lock
+    would give the invariant back by taking the fix away.
+
+    Needs no lock of its own — both halves run on the UI thread (claimed from
+    an action handler, released from the `LifecycleDone` handler); the worker
+    never touches it.
+    """
+
+    def __init__(self) -> None:
+        self._by_key: dict[str, str] = {}
+
+    def claim(self, key: str, label: str) -> str | None:
+        """Reserve `key` for `label`; returns the label already holding it."""
+        holder = self._by_key.get(key)
+        if holder is None:
+            self._by_key[key] = label
+        return holder
+
+    def release(self, key: str) -> None:
+        self._by_key.pop(key, None)
+
+    @property
+    def busy_label(self) -> str | None:
+        """Any verb still in flight — the quit guard's question, not a count."""
+        return next(iter(self._by_key.values()), None)
+
+
+class ManagerSignal(Message):
+    """A ``WorkspaceEvent`` from the engine, re-posted onto the UI thread.
+
+    The manager emits from whatever thread called the verb — since lifecycle
+    verbs now run in worker threads, its subscribers fire off-loop and must
+    not touch widgets directly. Every event takes the same one-hop route
+    whether it originated on the UI thread or in a worker.
+    """
+
+    def __init__(self, event: WorkspaceEvent) -> None:
+        super().__init__()
+        self.event = event
 
 
 class WorkspaceListScreen(Screen[None]):
@@ -155,7 +231,7 @@ class WorkspaceListScreen(Screen[None]):
     ) -> None:
         super().__init__()
         self._manager = manager
-        # Newer-release nudge (#80). The TUI is a separate process from the
+        # Newer-release nudge. The TUI is a separate process from the
         # daemon, so it holds its OWN checker — same engine code + bounded cache,
         # not a second polling implementation. Best-effort and run in a thread
         # worker so the GitHub GET never blocks the UI. Injectable for tests.
@@ -207,6 +283,20 @@ class WorkspaceListScreen(Screen[None]):
         # workspace's tail into another selection.
         self._cached_turns: tuple[SessionTurn, ...] = ()
         self._turns_wid: str | None = None
+        # Build progress of the selected row, but only while it is
+        # PROVISIONING — `None` for every other status, which is what makes
+        # the rail's provisioning branch disappear the moment the container
+        # comes up. Read on the same slow path as the peek.
+        self._cached_provision: ProvisionProgress | None = None
+        # True between handing the terminal to an attach and the user's next
+        # input. Every periodic tick asks `_ticks_live()` before doing any
+        # work, so a screen the user cannot see costs nothing.
+        self._handed_over = False
+        # One lifecycle verb per workspace at a time (see `_InFlightVerbs`).
+        self._inflight = _InFlightVerbs()
+        # A thread worker cannot be interrupted, so quitting mid-verb waits
+        # for it; the first `q` says so instead of looking like a hang.
+        self._quit_warned = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -240,7 +330,7 @@ class WorkspaceListScreen(Screen[None]):
         self._stats_timer = self.set_interval(cfg.peek_stats_refresh_seconds, self._tick_stats)
         self._pane_timer = self.set_interval(cfg.peek_pane_refresh_seconds, self._tick_pane)
         self._pulse_timer = self.set_interval(_PULSE_TICK_SECONDS, self._tick_pulse)
-        # One-shot newer-release check (#80) in a thread worker — the GitHub GET
+        # One-shot newer-release check in a thread worker — the GitHub GET
         # is bounded + best-effort, and a session is short-lived relative to the
         # 6h release cadence, so checking once at mount is enough (a daemon/web
         # client re-checks on its own TTL). `thread=True` keeps the blocking GET
@@ -262,6 +352,10 @@ class WorkspaceListScreen(Screen[None]):
     # can use the full width. Threshold is conservative; users can resize up.
     def on_resize(self, event: events.Resize) -> None:
         del event
+        # A resize reaches us only when a client is actually displaying this
+        # pane — switching a tmux client back onto it is one of the ways it
+        # fires, and it costs nothing to treat that as "the user is back".
+        self._take_back_terminal()
         if self.size.width < self.NARROW_THRESHOLD:
             self.add_class("-narrow")
         else:
@@ -270,6 +364,27 @@ class WorkspaceListScreen(Screen[None]):
     # ─── action handlers ──────────────────────────────────────────────────
 
     def action_quit(self) -> None:
+        """Quit — but warn once if a lifecycle verb would hold the exit.
+
+        A thread worker cannot be cancelled: Textual runs it on asyncio's
+        default executor, whose threads are non-daemon and joined by
+        `asyncio.run`'s `shutdown_default_executor`. Measured on Textual
+        8.2.5: `app.run()` returns only after the worker's own function does,
+        however long the `devcontainer up` inside it takes. So quitting
+        during a create restores the terminal and then sits there silently,
+        which reads exactly like a hang.
+
+        The alternative — a daemon thread we can abandon at exit — is worse:
+        it kills a half-built container and worktree mid-write and leaves a
+        store record describing neither state. Side-effecting work gets to
+        finish; what it does NOT get is to finish in silence. So the first
+        `q` names what is running, and a second one quits for real.
+        """
+        busy = self._inflight.busy_label
+        if busy is not None and not self._quit_warned:
+            self._quit_warned = True
+            self._flash(f"{busy} still running — press q again to quit and wait for it")
+            return
         self.app.exit()
 
     def action_refresh(self) -> None:
@@ -336,11 +451,12 @@ class WorkspaceListScreen(Screen[None]):
                 self._explorer,
                 workspace_id=wid,
                 workspace_title=title,
+                registry=self._registry,
             )
         )
 
     def action_remap_session(self) -> None:
-        """Manually pin a session as the selected workspace's tracked primary (#132).
+        """Manually pin a session as the selected workspace's tracked primary.
 
         Sources candidates from ``SessionExplorer.candidates_for`` — the
         UNGATED cwd-scoped scan — never ``for_workspace``, which drops
@@ -364,7 +480,7 @@ class WorkspaceListScreen(Screen[None]):
         def _on_result(session_id: str | None) -> None:
             if session_id is None:
                 return
-            self._safe_call("remap", lambda: self._manager.remap_session(wid, session_id))
+            self._safe_call("remap", lambda: self._manager.remap_session(wid, session_id), key=wid)
 
         self.app.push_screen(RemapSessionScreen(candidates, workspace_title=title), _on_result)
 
@@ -388,7 +504,7 @@ class WorkspaceListScreen(Screen[None]):
         def _on_result(text: str | None) -> None:
             if text is None:
                 return
-            self._safe_call("message", lambda: self._manager.send_message(wid, text))
+            self._safe_call("message", lambda: self._manager.send_message(wid, text), key=wid)
 
         self.app.push_screen(SendMessageScreen(workspace_title=title), _on_result)
 
@@ -402,6 +518,21 @@ class WorkspaceListScreen(Screen[None]):
         self.query_one(WorkspaceList).jump_to(index - 1)
 
     def action_new_workspace(self) -> None:
+        """Open the create modal for a new workspace.
+
+        Refuses (with a flash) when the resolved roster is empty — the same
+        guard-at-the-caller shape as the ORPHANED check in
+        ``action_edit_workspace``: ``CreateWorkspaceScreen`` asserts a non-empty
+        roster as its precondition, and the user-facing recovery belongs here.
+        An empty roster means ``builtin_agents: false`` with nothing declared,
+        so the flash names that field rather than just the symptom —
+        every other route to an empty list is impossible, since the built-ins
+        seed layer 0 of the cascade.
+        """
+        agents = self._manager.config.agents
+        if not agents:
+            self._flash("no agents configured — declare one or set builtin_agents: true")
+            return
         # Branch read helpers populate the modal's dropdowns (Existing /
         # Remote / Base). Eager fetch at modal-open time — two subprocess
         # calls that finish well under the user's perception threshold;
@@ -417,7 +548,7 @@ class WorkspaceListScreen(Screen[None]):
             local = remote = ()
             default_base = "HEAD"
         screen = CreateWorkspaceScreen(
-            self._manager.config.agents,
+            agents,
             cfg=self._manager.config,
             repo_root=self._manager.repo_root,
             local_branches=local,
@@ -449,24 +580,35 @@ class WorkspaceListScreen(Screen[None]):
         screen = EditWorkspaceScreen(
             current_title=state.title,
             current_description=state.description,
+            current_runtime=state.runtime,
+            current_runtime_fallback_reason=state.runtime_fallback_reason,
+            current_runtime_no_tmux=state.runtime_no_tmux,
         )
         self.app.push_screen(screen, self._handle_edit_result)
 
-    def _handle_edit_result(self, request: UpdateWorkspaceRequest | None) -> None:
-        if request is None:
+    def _handle_edit_result(
+        self, result: UpdateWorkspaceRequest | RetryContainerization | None
+    ) -> None:
+        if result is None:
             return
         wid = self._selected_id()
         if wid is None:
+            return
+        if isinstance(result, RetryContainerization):
+            # A verb, not a field edit — respawn re-evaluates the
+            # runtime decision tree only when a fallback reason is set;
+            # this button only renders when it is, so no extra guard here.
+            self._safe_call("respawn", lambda: self._manager.respawn(wid), key=wid)
             return
         # UpdateWorkspaceRequest's None on a field means "do not change";
         # the manager accepts the same convention via its _UNSET sentinel,
         # so we forward only the fields the user actually populated.
         kwargs: dict[str, str] = {}
-        if request.title is not None:
-            kwargs["title"] = request.title
-        if request.description is not None:
-            kwargs["description"] = request.description
-        self._safe_call("edit", lambda: self._manager.update(wid, **kwargs))
+        if result.title is not None:
+            kwargs["title"] = result.title
+        if result.description is not None:
+            kwargs["description"] = result.description
+        self._safe_call("edit", lambda: self._manager.update(wid, **kwargs), key=wid)
 
     def action_pause_workspace(self) -> None:
         wid = self._selected_id()
@@ -477,7 +619,7 @@ class WorkspaceListScreen(Screen[None]):
         def _on_confirm(confirmed: bool | None) -> None:
             if not confirmed:
                 return
-            self._safe_call("pause", lambda: self._manager.pause(wid))
+            self._safe_call("pause", lambda: self._manager.pause(wid), key=wid)
 
         peek = self._safe_peek(wid)
         self.app.push_screen(
@@ -494,7 +636,7 @@ class WorkspaceListScreen(Screen[None]):
         if wid is None:
             self._flash("nothing selected")
             return
-        self._safe_call("resume", lambda: self._manager.resume(wid))
+        self._safe_call("resume", lambda: self._manager.resume(wid), key=wid)
 
     def action_respawn_workspace(self) -> None:
         """Recreate the tmux session for an OFFLINE workspace.
@@ -511,7 +653,7 @@ class WorkspaceListScreen(Screen[None]):
         if peek is not None and peek.state.status != WorkspaceStatus.OFFLINE:
             self._flash("respawn applies only to offline workspaces")
             return
-        self._safe_call("respawn", lambda: self._manager.respawn(wid))
+        self._safe_call("respawn", lambda: self._manager.respawn(wid), key=wid)
 
     def action_kill_workspace(self) -> None:
         wid = self._selected_id()
@@ -525,6 +667,7 @@ class WorkspaceListScreen(Screen[None]):
             self._safe_call(
                 "kill",
                 lambda: self._manager.kill(wid, delete_branch=decision.delete_branch),
+                key=wid,
             )
 
         peek = self._safe_peek(wid)
@@ -542,6 +685,15 @@ class WorkspaceListScreen(Screen[None]):
         )
 
     def action_attach_workspace(self) -> None:
+        """Hand the terminal to the workspace's tmux session.
+
+        Stays on the UI thread deliberately — `app.suspend()` is the UI
+        thread's to give. That also means the two suspending branches need no
+        tick gate: the whole event loop is blocked inside `subprocess.run`
+        for the attach's duration, so no timer callback can run (measured on
+        Textual 8.2.5: zero ticks across a suspend, then exactly one per
+        timer on resume — `Timer._run`'s `skip` drops the missed ones).
+        """
         wid = self._selected_id()
         if wid is None:
             self._flash("nothing selected")
@@ -551,35 +703,36 @@ class WorkspaceListScreen(Screen[None]):
         except GroveError as exc:
             self._flash(f"attach failed: {exc}")
             return
-        target = instr.tmux_session
-        cols, rows = _attach_dimensions(instr.inside_outer_tmux)
+        argv = instr.terminal_argv()
+        if isinstance(instr, ContainerAttach):
+            # The container's own tmux owns this session, so there is no
+            # host session to pre-size and no host client to re-point:
+            # `fit_window_to_client` and `switch-client` both address THIS
+            # host's server, and the target lives on another one. Suspend and
+            # exec in, whether or not Grove itself is running inside tmux.
+            with self.app.suspend():
+                subprocess.run(argv, check=False)
+            return
+        # Let tmux size the workspace's windows to the client we're about to
+        # hand over to, BEFORE the switch/attach — so the client's own resize
+        # pass applies it. Never `resize-window -x/-y`: explicit dimensions pin
+        # the window to `window-size: manual` (tmux then stops re-fitting it
+        # forever) and must exclude the status-bar rows that `#{client_height}`
+        # counts but the window never gets. See `tmux.fit_window_to_client`.
+        fit_window_to_client(instr.tmux_session)
         if instr.inside_outer_tmux:
-            # Inside outer tmux — switch the existing client; Grove keeps running.
-            subprocess.run(["tmux", "switch-client", "-t", target], check=False)
-            # Resize the workspace's window to OUR client's terminal size.
-            # We pass explicit dimensions (not `-a`/`-A`) because sessions
-            # imported from claude-squad have `window-size manual` set AND
-            # may have other clients viewing at smaller sizes — `-A` would
-            # pick the smaller one, leaving Grove's user with a dotted gap.
-            # Explicit dimensions guarantee the attaching user sees their
-            # full terminal. Other viewers get cropped, which is the
-            # expected trade-off for an attach (active user wins).
-            if cols and rows:
-                subprocess.run(
-                    ["tmux", "resize-window", "-t", target, "-x", cols, "-y", rows],
-                    check=False,
-                )
+            # Inside outer tmux — switch the existing client; Grove keeps
+            # running, unwatched, in a session the user has just left. This is
+            # the ONLY attach branch that needs the tick gate: `switch-client`
+            # returns immediately, so without it the pane tick keeps paying a
+            # `docker exec` at 4 Hz for the entire attach (measured ~24%
+            # of a core) to repaint a screen nobody is looking at.
+            self._hand_over_terminal()
+            subprocess.run(argv, check=False)
         else:
             # Not in tmux — suspend Textual, attach, resume after detach.
-            # Pre-resize for the same reason as above (sessions with
-            # `window-size manual` won't auto-fit on attach).
-            if cols and rows:
-                subprocess.run(
-                    ["tmux", "resize-window", "-t", target, "-x", cols, "-y", rows],
-                    check=False,
-                )
             with self.app.suspend():
-                subprocess.run(["tmux", "attach", "-t", target], check=False)
+                subprocess.run(argv, check=False)
 
     # ─── selection-driven rail recompute ─────────────────────────────────
 
@@ -614,6 +767,46 @@ class WorkspaceListScreen(Screen[None]):
             self._peek_timer.stop()
             self._peek_timer = None
 
+    # ─── tick gating ─────────────────────────────────────────────────────
+
+    def _ticks_live(self) -> bool:
+        """Should a periodic tick do any work right now?
+
+        Two reasons it shouldn't, and both mean the same thing: whatever the
+        tick would render, nobody can see. A modal owns the foreground, or we
+        handed the terminal to an attach and the user is inside the workspace
+        we would be polling — the worst possible moment to spend a
+        ``docker exec`` per pane tick on a screen that isn't on screen.
+
+        Deliberately NOT gated on `app.app_focus`: an unfocused Grove is a
+        legitimate live surface (watching the fleet on a second monitor while
+        typing elsewhere is a primary use), so blur would freeze a screen the
+        user is looking straight at.
+        """
+        return self.app.screen is self and not self._handed_over
+
+    def _hand_over_terminal(self) -> None:
+        """Stop ticking — the user's terminal now belongs to something else.
+
+        Open-ended on purpose: `switch-client` returns the instant tmux
+        re-points the client, so the *call* finishing tells us nothing about
+        when the user comes back. `_take_back_terminal` is wired to the
+        signals that do mean they are back (a key, a mouse move, a resize).
+        """
+        self._handed_over = True
+
+    def _take_back_terminal(self) -> None:
+        """The user is back — go live again and snap the screen current.
+
+        The refresh matters because the ticks were off for the whole attach:
+        without it the first thing they'd see is a frame that could be hours
+        stale, quietly correcting itself a tick later.
+        """
+        if not self._handed_over:
+            return
+        self._handed_over = False
+        self.action_refresh()
+
     def _tick_stats(self) -> None:
         """Slow ticker: re-enumerate the workspace set, then full peek refresh.
 
@@ -638,7 +831,7 @@ class WorkspaceListScreen(Screen[None]):
         rail's metrics line renders from this tick's data, not the previous
         one's.
         """
-        if self.app.screen is not self:
+        if not self._ticks_live():
             return
         self._refresh()
         self._tick_agent_states()
@@ -679,7 +872,7 @@ class WorkspaceListScreen(Screen[None]):
         an idle agent costs ~one capture-pane call per tick and zero
         Static repaints.
         """
-        if self.app.screen is not self:
+        if not self._ticks_live():
             return
         wid = self._selected_id()
         if wid is None or self._cached_peek is None:
@@ -713,7 +906,7 @@ class WorkspaceListScreen(Screen[None]):
         means no work to do and CPU floors at zero. Frame wraps modulo
         ``ACTIVE_PULSE_FRAMES`` so the int never grows unbounded.
         """
-        if self.app.screen is not self:
+        if not self._ticks_live():
             return
         ws_list = self.query_one(WorkspaceList)
         if not any(s.status == WorkspaceStatus.ACTIVE for s in ws_list.visible_states):
@@ -729,6 +922,7 @@ class WorkspaceListScreen(Screen[None]):
             self._cached_peek = None
             self._cached_turns = ()
             self._turns_wid = None
+            self._cached_provision = None
             rail.set_peek(None)
             return
         try:
@@ -739,14 +933,42 @@ class WorkspaceListScreen(Screen[None]):
             self._cached_peek = None
             self._cached_turns = ()
             self._turns_wid = None
+            self._cached_provision = None
             rail.set_peek(None)
             return
         self._cached_peek = peek
         self._cached_turns = self._recent_turns(wid)
         self._turns_wid = wid
+        self._cached_provision = self._provision_progress(peek)
         # The agent map is fed by the slow tick; a row it hasn't covered yet
         # (fresh selection, sessionless workspace) simply renders no line.
-        rail.set_peek(peek, agent=self._agent_activity.get(wid), turns=self._cached_turns)
+        rail.set_peek(
+            peek,
+            agent=self._agent_activity.get(wid),
+            turns=self._cached_turns,
+            provision=self._cached_provision,
+        )
+
+    def _provision_progress(self, peek: WorkspacePeek) -> ProvisionProgress | None:
+        """Build progress for a PROVISIONING selection, else ``None``.
+
+        Rides the slow path (selection debounce + 3 s stats tick), never the
+        4 Hz pane tick: this is a file read of a log that reaches ~1 MB on a
+        cold build, which is the same cost class as the ``peek()`` git work
+        beside it and emphatically not the class the fast tick is allowed to
+        pay. One selected row, not the whole fleet — the cards get their
+        elapsed time from the persisted stamp with no I/O at all.
+
+        Best-effort like every other read on this path: a failure renders the
+        provisioning affordance without a tail rather than breaking the rail.
+        """
+        if peek.state.status != WorkspaceStatus.PROVISIONING:
+            return None
+        try:
+            return self._manager.provision_progress(peek.state.id)
+        except Exception as exc:  # best-effort, peek contract
+            logger.debug("provision progress for {} failed: {}", peek.state.id, exc)
+            return None
 
     def _recent_turns(self, wid: str) -> tuple[SessionTurn, ...]:
         """Tail turns of the selected row's newest session, for the rail.
@@ -758,9 +980,9 @@ class WorkspaceListScreen(Screen[None]):
         already have a tail for keeps the last-good tuple instead of
         returning empty: a remote session's ``/events`` fetch times out
         routinely, and flapping the rail to "(no transcript)" and back on
-        every degraded tick was the cloud-session transcript flicker
-        (2026-07-11; the engine's ``_settle`` precedent applied at this
-        seam). A different workspace never inherits the stale cache.
+        every degraded tick would flicker the transcript for no reason
+        (the engine's ``_settle`` precedent applied at this seam). A
+        different workspace never inherits the stale cache.
         """
         try:
             listings = self._explorer.for_workspace(wid)
@@ -786,6 +1008,10 @@ class WorkspaceListScreen(Screen[None]):
             self.query_one(WorkspaceList).focus()
 
     def on_key(self, event: events.Key) -> None:
+        # Any key means the user is looking at us again — a key can only
+        # reach this pane from a client that is displaying it. Resuming here
+        # (rather than swallowing the key) keeps the press doing its own job.
+        self._take_back_terminal()
         # Esc on the filter bar clears it and returns focus to the table.
         if event.key == "escape" and isinstance(self.focused, FilterBar):
             bar = self.query_one(FilterBar)
@@ -803,18 +1029,24 @@ class WorkspaceListScreen(Screen[None]):
     def _handle_create_result(self, request: CreateWorkspaceRequest | None) -> None:
         if request is None:
             return
-        try:
-            self._manager.create(request)
-        except BranchConflict as exc:
-            self._flash(f"branch already exists: {exc}", level="error")
-        except BranchNotFound as exc:
-            self._flash(f"branch not found: {exc}", level="error")
-        except BranchAlreadyCheckedOut as exc:
-            self._flash(f"branch is already checked out at {exc.worktree}", level="error")
-        except GroveError as exc:
-            self._flash(f"create failed: {exc}", level="error")
+        # Create rides the same off-thread seam as every other verb; only its
+        # error copy differs, and that lives in one pure formatter.
+        self._safe_call(
+            "create",
+            lambda: self._manager.create(request),
+            key=None,
+            describe=_create_error_message,
+        )
 
     def _on_manager_event(self, event: WorkspaceEvent) -> None:
+        # May arrive on a lifecycle worker thread — hop to the UI thread
+        # before anything reads or writes a widget.
+        self.post_message(ManagerSignal(event))
+
+    def on_manager_signal(self, message: ManagerSignal) -> None:
+        self._apply_manager_event(message.event)
+
+    def _apply_manager_event(self, event: WorkspaceEvent) -> None:
         # Subscriptions fire from arbitrary call sites; re-list to stay accurate.
         self._refresh()
         self._refresh_peek()
@@ -849,11 +1081,69 @@ class WorkspaceListScreen(Screen[None]):
             elif session_remapped:
                 self._flash(f"session remapped to {session_remapped[:8]}", level="success")
 
-    def _safe_call(self, label: str, fn: Callable[[], object]) -> None:
-        try:
-            fn()
-        except GroveError as exc:
-            self._flash(f"{label} failed: {exc}", level="error")
+    def _safe_call(
+        self,
+        label: str,
+        fn: Callable[[], object],
+        *,
+        key: str | None,
+        describe: Callable[[str, GroveError], str] | None = None,
+    ) -> None:
+        """Run a blocking engine verb on a worker THREAD, never the UI loop.
+
+        Textual is single-threaded: calling `manager.create(...)` inline froze
+        the *whole* application for the verb's duration — every timer (the
+        stats tick, the pane tick, the pulse), every keypress and every
+        repaint — which for a container provision is minutes of dead UI.
+        The verb therefore runs in a thread worker and its outcome comes back
+        as a `LifecycleDone` message; only that handler touches widgets.
+
+        `key` is the exclusion domain — the workspace id for every verb that
+        names one, `None` for `create` (there is no workspace yet, and two
+        creates are two different workspaces, so they may legitimately
+        overlap). A second verb on a busy workspace is REFUSED, not queued:
+        the press was decided against a view of the workspace that the verb
+        already in flight is busy invalidating, so running it three minutes
+        later — `pause` landing after the `respawn` it was meant to follow —
+        obeys the keystroke while betraying the intent. Refusing says so at
+        the moment the user can still choose again.
+
+        Not `run_worker(exclusive=True)`, which would be worse than doing
+        nothing: it cancels the *other* worker in the group, and a thread
+        worker cannot be interrupted (Textual runs it on the default executor
+        and merely drops the awaiting task), so a cancelled `devcontainer up`
+        keeps provisioning with nothing left to reconcile its result. It is
+        also group-wide, so it would cancel verbs on other workspaces.
+
+        `describe` formats the error flash (pure — it runs in the worker);
+        the default is the `"<label> failed: <exc>"` copy every verb but
+        `create` uses.
+        """
+        if key is not None:
+            holder = self._inflight.claim(key, label)
+            if holder is not None:
+                self._flash(f"{label} ignored — {holder} still running on this workspace")
+                return
+        self._flash(f"{label} in progress…")
+
+        def _body() -> None:
+            error_text: str | None = None
+            try:
+                fn()
+            except GroveError as exc:
+                error_text = (describe or _verb_error_message)(label, exc)
+            self.post_message(LifecycleDone(label, error_text, key))
+
+        self.run_worker(_body, thread=True, group="lifecycle", description=label)
+
+    def on_lifecycle_done(self, message: LifecycleDone) -> None:
+        """Apply a worker-run verb's outcome — the UI-thread half of `_safe_call`."""
+        if message.key is not None:
+            self._inflight.release(message.key)
+        if self._inflight.busy_label is None:
+            self._quit_warned = False
+        if message.error_text is not None:
+            self._flash(message.error_text, level="error")
             return
         self._refresh()
         self._refresh_peek()
@@ -939,6 +1229,28 @@ class WorkspaceListScreen(Screen[None]):
             return None
 
 
+def _verb_error_message(label: str, exc: GroveError) -> str:
+    """Default failure copy for a lifecycle verb — pure, so a worker can format it."""
+    return f"{label} failed: {exc}"
+
+
+def _create_error_message(label: str, exc: GroveError) -> str:
+    """Create's failure copy: the three branch refusals name the fix, not the verb.
+
+    An isinstance chain, not ordered `except` clauses — the exception
+    crosses a thread boundary as a value, so the dispatch has to be one
+    too. Order matters: the specific branch errors are `GroveError`
+    subclasses, so they must be tested first.
+    """
+    if isinstance(exc, BranchConflict):
+        return f"branch already exists: {exc}"
+    if isinstance(exc, BranchNotFound):
+        return f"branch not found: {exc}"
+    if isinstance(exc, BranchAlreadyCheckedOut):
+        return f"branch is already checked out at {exc.worktree}"
+    return _verb_error_message(label, exc)
+
+
 def _breakdown(states: list[WorkspaceState]) -> dict[WorkspaceStatus, int]:
     """Count workspaces by status. Empty input → empty dict (clean -empty class flip)."""
     out: dict[WorkspaceStatus, int] = {}
@@ -984,6 +1296,15 @@ _AVAILABLE_KEYS_BY_STATUS: dict[WorkspaceStatus, frozenset[str]] = {
     WorkspaceStatus.OFFLINE: frozenset({"e", "s", "x", "o", "k"}),
     WorkspaceStatus.ORPHANED: frozenset({"s", "k"}),
     WorkspaceStatus.ERROR: frozenset({"e", "s", "x", "k"}),
+    # Provisioning offers what ERROR does, and the omissions carry the
+    # message: attach ('enter,a') and message ('m') need a session the
+    # container has not started yet (the engine refuses both with a typed
+    # error naming the elapsed time), and respawn ('o') is OFFLINE-only —
+    # dimming it is the point, since restarting a build that is already
+    # running is exactly the reflex this status exists to head off. Kill ('k')
+    # stays: it is the universal escape hatch and the honest way out of a
+    # build the user no longer wants.
+    WorkspaceStatus.PROVISIONING: frozenset({"e", "s", "x", "k"}),
 }
 
 # Keys a placement strips out *after* the status gate. ROOT workspaces have no
@@ -1019,39 +1340,6 @@ def _key_available(
         # Unknown / unhandled status: keep permissive so the user isn't stuck.
         return True
     return key in allowed
-
-
-def _attach_dimensions(inside_outer_tmux: bool) -> tuple[str, str] | tuple[None, None]:
-    """Return (cols, rows) as strings for the user's effective terminal.
-
-    Inside an outer tmux: ask tmux for the current client's dimensions.
-    The current client is Grove's outer-tmux client (we're a process
-    inside its pane). Outside tmux: use the controlling terminal directly.
-
-    Returns ``(None, None)`` if dimensions can't be determined. Best-effort —
-    callers must tolerate the missing values and skip the resize.
-    """
-    if inside_outer_tmux:
-        try:
-            result = subprocess.run(
-                ["tmux", "display-message", "-p", "-F", "#{client_width}x#{client_height}"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=2,
-            )
-        except (subprocess.SubprocessError, OSError):
-            return (None, None)
-        spec = result.stdout.strip()
-        if "x" in spec:
-            cols, _, rows = spec.partition("x")
-            if cols.isdigit() and rows.isdigit():
-                return (cols, rows)
-        return (None, None)
-    size = shutil.get_terminal_size((0, 0))
-    if size.columns and size.lines:
-        return (str(size.columns), str(size.lines))
-    return (None, None)
 
 
 def _pause_details(peek: WorkspacePeek | None) -> str | None:

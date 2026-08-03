@@ -1,4 +1,4 @@
-"""Grove channel — native delivery + permission relay via Claude Code Channels (#182).
+"""Grove channel — native delivery + permission relay via Claude Code Channels.
 
 A *channel* is Claude Code's native seam for pushing a message a **running,
 interactive** session acts on, and for relaying a permission decision back to
@@ -25,8 +25,8 @@ Wiring (all opt-in behind ``cfg.channels.enabled``, default off):
 3. A loopback HTTP **receiver** accepts queued messages the Grove daemon POSTs;
    each delivery is emitted into the live session as a channel notification.
    The daemon-side POST route is a deliberate TODO seam (see ``ChannelReceiver``)
-   — the launch composition + this server + the config toggle are the #182
-   deliverable; the queue plumbing lands with the daemon work.
+   — the launch composition, this server, and the config toggle are the
+   deliverable here; the queue plumbing lands with the daemon work.
 
 Side-effect discipline: the MCP SDK ships behind the opt-in ``[mcp]`` extra (a
 ``.[daemon]``-only host lacks it), so every SDK import is **lazy**, exactly like
@@ -52,11 +52,19 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from loguru import logger
 
+from grove._mcp_sdk import McpSdk
 from grove.core import paths
 from grove.core.config import ChannelsConfig, load_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+# The MCP SDK is behind the opt-in `[mcp]` extra, so every import of it here is
+# deferred. `McpSdk` reports an SDK that is installed but incompatible as such,
+# naming its version — a bare `except ImportError` around a deep submodule
+# import cannot tell that apart from an absent distribution and hands the
+# operator an install hint for something they already have.
+_SDK = McpSdk("grove channel server")
 
 # The experimental capability key Claude Code negotiates a channel over. A bare
 # ``{}`` value is the "present, no sub-options" declaration — the mechanism is
@@ -184,7 +192,7 @@ class ChannelPolicy:
     def resolve_permission(self, request: dict[str, Any]) -> PermissionDecision:
         """Relay a ``claude/channel/permission`` request to an allow/deny decision.
 
-        TODO(#182 daemon plumbing): route this to the human/daemon (the same
+        TODO(daemon plumbing): route this to the human/daemon (the same
         loopback channel the receiver uses) so an operator answers a live
         permission prompt. Until that resolver is wired, this is fail-closed:
         every request is DENIED with a clear reason, so enabling channels can
@@ -273,7 +281,7 @@ class ChannelReceiver:
     parsing + the allowlist decision are the pure ``handle_body`` seam so the
     accept/reject logic is testable without a socket.
 
-    TODO(#182 daemon plumbing): the matching daemon-side POST route (read the
+    TODO(daemon plumbing): the matching daemon-side POST route (read the
     endpoint file, authenticate, forward a delivery) is intentionally deferred —
     this receiver is the ready seam it targets.
     """
@@ -445,13 +453,8 @@ class ChannelServer:
         ``claude/channel/*`` methods have no typed shapes and this is the single
         narrow boundary.
         """
-        try:
-            from mcp.server.lowlevel import Server  # noqa: PLC0415
-            from mcp.types import TextContent, Tool  # noqa: PLC0415
-        except ImportError as exc:  # pragma: no cover - missing extra
-            raise ImportError(
-                "grove channel server requires the MCP SDK — install 'grove[mcp]'"
-            ) from exc
+        (Server,) = _SDK.load("mcp.server.lowlevel", "Server")
+        TextContent, Tool = _SDK.load("mcp.types", "TextContent", "Tool")
 
         server: Any = Server("grove-channel")
         holder: dict[str, Any] = {}

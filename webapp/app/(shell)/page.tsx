@@ -13,16 +13,15 @@ import { cn } from "@/lib/utils";
 import type { DashboardSnapshotView } from "@/lib/grove/types";
 
 /**
- * The landing surface (ADE #140, design §4.1). A persisted `Hero | Overview`
- * toggle reconciles the familiar-chat vs power-fleet tension (ruling 1.1):
+ * The landing surface (design §4.1). A persisted `Hero | Overview` toggle
+ * reconciles the familiar-chat vs power-fleet tension (ruling 1.1):
  *
  *  - **Hero** (default; clean first-run + demos): the always-present
  *    composer-hero — type a task, press Enter, a workspace is born — plus a
  *    quiet "Recent" strip. The fleet is never hidden: it lives in the left
  *    session rail one glance away.
- *  - **Overview**: today's rich repo-grouped card grid VERBATIM (cards + the
- *    Live focused pane untouched — zero-functionality-loss, D2), for the
- *    power-user who wants the whole wall at once.
+ *  - **Overview**: the rich repo-grouped card grid (cards + the Live focused
+ *    pane), for the power-user who wants the whole wall at once.
  *
  * The choice rides ONE persisted `ui-store` slice (`landingView`) alongside
  * `sidebarCollapsed` — zero new machinery, mechanism-not-policy applied to

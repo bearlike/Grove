@@ -1,4 +1,4 @@
-"""Manager steering policy (#37): send_message / interrupt.
+"""Manager steering policy: send_message / interrupt.
 
 Pins the policy seams: injection goes to the `pane_target`-resolved target
 via `tmux.send_text`, every refusal is a typed error, and — critically —
@@ -216,7 +216,7 @@ def test_interrupt_mewbo_kind_interrupts_via_api(
     assert fake_tmux.sent_texts == []
 
 
-# ─── control triggers (#178): invoke_control / switch_model ────────────────────
+# ─── control triggers: invoke_control / switch_model ────────────────────────
 
 
 def test_invoke_control_delivers_slash_command_and_emits_event(
@@ -286,7 +286,7 @@ def test_invoke_control_unsupported_kind_refuses_before_delivery(
     assert fake_mewbo.messages == []
 
 
-# ─── session controls enumeration (#178): manager composition ──────────────────
+# ─── session controls enumeration: manager composition ──────────────────────
 
 
 def test_session_controls_composes_scan_with_model_catalog(
@@ -309,7 +309,7 @@ def test_session_controls_composes_scan_with_model_catalog(
     assert controls.permission_mode is None  # permission answering off by default
 
 
-# ─── latest-todo projection (#194): manager resolution ─────────────────────
+# ─── latest-todo projection: manager resolution ─────────────────────────────
 
 
 def test_latest_todo_raises_agent_session_not_found_when_sessionless(

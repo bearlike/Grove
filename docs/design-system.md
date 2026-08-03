@@ -57,6 +57,8 @@ this doc in the same PR.
   - [4.5 Init-status tokens](#45-init-status-tokens)
   - [4.6 Chrome tokens](#46-chrome-tokens)
   - [4.7 How to consume each token](#47-how-to-consume-each-token)
+  - [4.8 Agent-state tokens](#48-agent-state-tokens)
+  - [4.9 Runtime tokens](#49-runtime-tokens)
 - [5. Layout](#5-layout)
   - [5.1 Screen anatomy — list screen](#51-screen-anatomy--list-screen)
   - [5.2 Modal anatomy](#52-modal-anatomy)
@@ -513,6 +515,9 @@ in terminal-supported fonts.
 | `│` | U+2502 | Group divider (StatusBar inner; ContextualFooter) |
 | `·` | U+00B7 | In-group separator (footer; card body; rail stats) |
 | `…` | U+2026 | Truncation suffix |
+| `⇒` | U+21D2 | Pull-request segment (row card, peek rail) |
+| `■` | U+25A0 | Runtime: HOST (row card + dashboard tile, leading line 2) |
+| `▣` | U+25A3 | Runtime: CONTAINER (same) |
 
 **Adding a glyph:** prefer single-char Unicode in the General
 Punctuation, Geometric Shapes, or Miscellaneous Technical blocks.
@@ -520,6 +525,31 @@ Verify it renders in three reference terminals (alacritty, iTerm2,
 Windows Terminal). Avoid emoji (variable width, sometimes color-only).
 Pin the glyph as a module-level `Final = "..."` constant alongside its
 peers — never inline a literal in a render function.
+
+`⇒` (rightwards double arrow) is deliberately the first glyph drawn
+from the **Arrows** block (U+2190–U+21FF) rather than General
+Punctuation / Geometric Shapes / Miscellaneous Technical — it needed a
+family disjoint from both the status/agent-state circles-and-shapes
+(`● ○ ◐ ◑ ◌ ‖ ⊘ ⚠ ✗ ·`) and the task-phase growing blocks
+(`▁▂▄▆█ ✓`), so a PR token can never be mistaken for either axis at a
+glance. It reads as "leads to": issues are a workspace's INPUT, a pull
+request is its OUTCOME, and the arrow is what signals that direction
+without spending a second row — see [§6.4](#64-workspacecard) and
+[§6.5](#65-peekrail).
+
+`■` / `▣` are the **squares** family, the runtime (isolation) axis, and the
+pair is literal: `▣` is `■` with a boundary drawn around it, which is exactly
+what the axis says — the work, versus the work enclosed. Two rules came out of
+picking it. **Check the CHROME glyphs, not only the axis maps**: a house `⌂`
+was the obvious host mark and is already the status bar's repo chip, so one
+character would have meant two things in one app (the collision test now covers
+both, `tests/tui/test_card_render.py::…_do_not_collide_with_any_other_axis_or_chrome`).
+And **verify coverage rather than assuming it**: `fc-list ":charset=25A3"`
+answers which fonts actually carry a candidate — `⌂`, `■`, `□` are in the
+legacy sets, `▣` needs a font with full Geometric Shapes (every modern
+programming font has it; Courier New does not). Prefer a filled glyph over a
+hollow one where you can: a hollow box is what a terminal draws for a MISSING
+character, so tofu and a real mark read the same.
 
 ---
 
@@ -660,6 +690,47 @@ Glyphs are picked from the same terminal-safe blocks as the status
 glyphs (§3.7) and stay visually distinct from them — a glance separates
 "the workspace is live" (`●`) from "the agent is working" (`▶`). No Nerd
 Font dependency.
+
+### 4.9 Runtime tokens
+
+The **isolation axis**: where the agent process actually runs, and
+therefore what it can reach. Independent of both axes above — an ACTIVE
+workspace with a WORKING agent is a different proposition on the host
+than inside a container.
+
+```python
+from grove.tui._status import runtime_color, runtime_glyph, runtime_label
+from grove.core.workspace import Runtime
+
+runtime_glyph(Runtime.CONTAINER)             # "▣"
+runtime_label(Runtime.CONTAINER)             # "container"
+runtime_color(Runtime.CONTAINER, dark=dark)  # info cyan
+```
+
+| Runtime | Glyph | Hue | Meaning |
+|---|---|---|---|
+| HOST | `■` | muted gray | runs on this machine — shares its filesystem, network and credentials |
+| CONTAINER | `▣` | info cyan | runs inside the workspace's devcontainer |
+
+Three things make this axis different from its three siblings.
+
+1. **Neither state is silent.** Every other optional segment renders
+   nothing in its common case; this one always draws a mark, because an
+   unmarked workspace would be ambiguous between "runs on your machine"
+   and "the component did not render" for the one fact that says what an
+   agent can touch. The silence-is-the-signal rule still stands for
+   `Placement` (§6.4) — do not "fix" this axis back to it.
+2. **The GLYPH is a wire contract, not a convention.**
+   `grove.core.contracts.runtime_palette` exports `RUNTIME_GLYPH`,
+   `RUNTIME_LABEL` and `DARK_RUNTIME_HEX`; the TUI imports all three, and
+   the web client mirrors them under a drift test that reads that Python
+   file. The other axes pin only their hex cross-client and mirror their
+   glyphs by hand — that was tolerable for a seven-member map nobody
+   recites, and is not for a two-member mark a user carries between the
+   TUI and the browser mid-task.
+3. **Degradations keep their own tone.** Amber and red are deliberately
+   unused here so `⚠ container fallback` and `⚠ no in-container tmux`
+   stay unmistakably louder than a healthy mark (§6.4, §6.5).
 
 ---
 
@@ -841,7 +912,7 @@ One row, two lines, fixed `height: 4` (1 border + 2 content + 1 border).
 ```
 ╭──────────────────────────────────────────────────────────────────╮
 │ ● my-feature-task                                · 3 minutes ago │   ← line 1
-│ grove/feat-x  · claude  · active                                 │   ← line 2
+│ ■ grove/feat-x  · claude  · active                               │   ← line 2
 ╰──────────────────────────────────────────────────────────────────╯
 ↑ border: round $surface (transparent vs list bg) by default
   WorkspaceCard:hover                              → round $secondary (gray outline)
@@ -871,18 +942,25 @@ The selection rule out-specifies hover, so hovering the keyboard-selected card k
 
 | Token | Style | Color |
 |---|---|---|
+| `■`/`▣` runtime mark (leading, no `·`) | bold | `runtime_color(state.runtime)` — **always present** |
 | Branch | bold | `ref_color('branch')` (teal) |
 | `·` separator | (none) | `chrome_color('muted')` |
 | Agent name | bold | `ref_color('info')` (cyan) |
 | `· ▶ working` agent-state glyph + label | bold | `agent_state_color(state)` (only when the screen's activity tick has resolved a session) |
 | `·` separator | (none) | `chrome_color('muted')` |
 | Status label (`active`/`idle`/`offline`/`paused`/`orphaned`/`error`) | bold | `status_color(state.status)` |
+| `· <pill>` issue pill(s) | bold | `ref_color('info')` (cyan); one per `TicketRef` with `kind == "issue"` (the default) |
+| `⇒ <pill> <status>` pull-request segment(s) | bold | `pr_status_color(ref.status)`; one per `TicketRef` with `kind == "pull_request"` |
 | `· root` | (none) | `chrome_color('muted')` (only if `placement == ROOT`) |
 | `· ! init failed` | bold | `init_status_color(FAILED)` (only if `init_status == FAILED`) |
 
 The agent-state segment is the *agent axis* (what the session is doing: `starting`/`working`/`waiting`/`blocked`/`idle`/`error` — see [§4.8](#48-agent-state-tokens)), a separate dimension from the workspace lifecycle status that follows it. It sits right after the agent name so "who · what they're doing" reads as one chunk, in the same bold-plus-semantic-color tier as the status label. Absence is the default (same convention as the `root` tag): a sessionless workspace — or one the slow activity tick hasn't covered yet — renders a byte-identical line 2 to the pre-agent card.
 
-The `root` tag is a quiet qualifier, not a status token: muted and lowercase, it tells the user this workspace runs in the repo root with no isolated worktree. Worktree workspaces render nothing here, so the absence is the default. It sits after the status label and before any init-failed badge, so the badge stays the rightmost (most urgent) element on the row.
+**The runtime mark is the one axis that is never absent — silence is deliberately NOT the signal here.** `Placement` renders nothing for its `worktree` default because placement is an implementation detail; runtime is the isolation boundary — whether the agent can reach the host filesystem, the host network and the user's credentials — so both `host` and `container` carry a permanent mark, and "no mark" is never a state a reader has to interpret. It LEADS line 2 (a bare glyph, no `· ` connector, exactly as the status glyph leads line 1) for a mechanical reason as well as a semantic one: line 2 crops with an ellipsis on a narrow terminal, so a mark placed among the trailing qualifiers would be the first thing to vanish on precisely the workspaces a user is squinting at. Color reuses existing atoms rather than minting a hue — muted gray for host (the ambient default, the same atom the `root` tag uses), info cyan for container (noteworthy, never a warning) — which keeps amber and red free for the degradations that must stay distinct from a healthy mark: `⚠ container fallback` (a workspace that wanted a container, got the host, and had its isolation contract voided for life) and `⚠ no in-container tmux`. A fallback workspace therefore shows the host mark AND the amber badge; the two are never folded into one token. The glyph, label and dark hex all come from `grove.core.contracts.runtime_palette`, which the TUI imports and the web client mirrors under a drift test — one vocabulary, two clients, no convention to remember.
+
+**Issue pills and the pull-request segment are the INPUT/OUTCOME pair, not two flavors of the same list.** A `TicketRef` carries `kind` (`"issue"` default, or `"pull_request"`) — the card renders every issue first with the pre-existing plain `· <pill>` treatment (bold cyan, unchanged), then any pull request(s) with `⇒ <pill> <status>` instead. The `⇒` glyph (not another `· `) is the whole signal: a plain dot reads as "one more item in the list", the arrow reads as "leads to" — several issues typically resolve to ONE pull request, and the arrow names that relationship without a second row. The **entire** PR segment (glyph, pill, and status word) takes one color from `pr_status_color`, because a PR's real state is the single most informative token on the card once one exists: `open` → the same live lime `WorkspaceStatus.ACTIVE` uses (work still in flight), `merged` → the same muted gray `PAUSED`/`OFFLINE` use for "no live signal, nothing left to do" (visually terminal/settled, never confused with "still open"), `closed` → the same destructive red `ERROR` uses (this branch of work did not land). An unset/unrecognized status (a PR ref that exists before enrichment fills `status`) settles to muted gray rather than red — see `_status.pr_status_color`. A workspace with only issues (or no tickets at all) renders **byte-identical** to before this segment existed — pinned by `tests/tui/test_card_render.py::test_render_card_no_pr_ref_is_byte_identical_to_pre_pr_render` — same absence-is-the-default convention as agent state, phase, and the `root` tag. The peek rail's `_ticket_block` (read-deeply surface) applies the identical rule per-ref, so the row card and the rail can never disagree about what a PR's color means.
+
+The `root` tag is a quiet qualifier, not a status token: muted and lowercase, it tells the user this workspace runs in the repo root with no isolated worktree. Worktree workspaces render nothing here, so the absence is the default. It sits after the ticket/PR segments and before any init-failed badge, so the badge stays the rightmost (most urgent) element on the row.
 
 **Renderer purity.** `_render_card` is identical for highlighted and
 unhighlighted cards. Adding a `focused: bool` parameter would
@@ -962,7 +1040,17 @@ Each surface is one `Static` with its own plain-text diff guard.
    (the dashboard's `_human_tokens` formatter — one formatter, two
    surfaces) and muted; the state label takes `agent_state_color`
    ([§4.8](#48-agent-state-tokens)), mirroring the row card's segment.
-3. **Description** — only if the workspace has one. Plain default-fg
+3. **Associated tickets** (`_ticket_block`) — only if the workspace has any
+   `ticket_refs`; one line per ref. An issue (`kind == "issue"`, the
+   default) keeps the pill in `ref_color('info')` cyan, unstyled `status`
+   word. A pull request (`kind == "pull_request"`) leads with `PR_GLYPH`
+   (`⇒`) and takes `pr_status_color(ref.status)` on both the pill AND the
+   `status` value — the same open/merged/closed color rule [§6.4](#64-workspacecard)
+   documents for the row card's PR segment, so the two surfaces never
+   disagree about what a PR's color means. Title, `assignee`, and `url`
+   render identically for both kinds; absent fields are skipped, never
+   blank-filled.
+4. **Description** — only if the workspace has one. Plain default-fg
    text, trimmed at 200 chars with an ellipsis. Skipped entirely when
    empty (no `(no description)` placeholder — visual noise on every
    workspace). Lives on the rail (not the row card) because the row
@@ -970,14 +1058,14 @@ Each surface is one `Static` with its own plain-text diff guard.
    is the read-deeply affordance — and a free-form note belongs in the
    read-deeply zone. Markup characters in user input are rendered as
    literals (we use `Text.append`, not `Text.from_markup`).
-4. **Init failure** — only if `init_status == FAILED`. Two lines:
+5. **Init failure** — only if `init_status == FAILED`. Two lines:
    `✗ init failed` (bold red) and `log: <path>` (muted).
-5. **Affordance line** — exactly one of:
+6. **Affordance line** — exactly one of:
    - `‖ paused  press R to resume` (paused color = gray, bold key).
    - `○ offline  press o to respawn` (offline color = gray, bold key).
    - `⊘ worktree missing on disk  press k to clean up` (orphaned amber).
    - `error: <error_detail>` (when ERROR + has detail).
-6. **Recent commits** — `recent` heading (teal, bold) and a list of
+7. **Recent commits** — `recent` heading (teal, bold) and a list of
    `  <SHA[:8]>  <subject>  <age>`. Subject is trimmed at 56 chars.
    SHA + heading share the branch hue (teal) so the eye groups them as
    one column. Subject = default fg; age = muted.
@@ -1240,8 +1328,8 @@ long line crops rather than stealing a row from the pane-fill math). Border:
 `.-attention`. A root-placement workspace carries a quiet muted `root` tag after
 the age (the metadata seam). Two shapes:
 
-- **compact** (3 rows): glyph (state color, §4.8) · **bold-underlined** title · muted age — then branch (teal) · agent (cyan) · agent-state label — then `+X / -Y` numstat · `↑ahead ↓behind` · `Nt Nr N⚒` counts (muted).
-- **promoted** (8 rows): glyph · title · **state label** · age · `root` — then branch · agent · model — then the agent's own one-line summary (`interpreted_status` first once the LLM interpreter (#20) fills it, else ai-title, else current task; the row is omitted, not blank-filled, when absent) — then the stat line plus `↑in ↓out` token usage — then a live, fit-to-cell `Text.from_ansi` pane tail (SGR backgrounds stripped like PeekRail, `no_wrap`) sized to the remaining rows, or a quiet `· · ·` placeholder until the screen captures it.
+- **compact** (3 rows): glyph (state color, §4.8) · **bold-underlined** title · muted age — then the runtime mark (§4.9, leading, always present) · branch (teal) · agent (cyan) · agent-state label — then `+X / -Y` numstat · `↑ahead ↓behind` · `Nt Nr N⚒` counts (muted).
+- **promoted** (8 rows): glyph · title · **state label** · age · `root` — then the runtime mark · branch · agent · model — then the agent's own one-line summary (`interpreted_status` first once the LLM interpreter (#20) fills it, else ai-title, else current task; the row is omitted, not blank-filled, when absent) — then the stat line plus `↑in ↓out` token usage — then a live, fit-to-cell `Text.from_ansi` pane tail (SGR backgrounds stripped like PeekRail, `no_wrap`) sized to the remaining rows, or a quiet `· · ·` placeholder until the screen captures it.
 
 WORKING pulses the line-1 glyph (`▶` ↔ `▷`) on the screen's ~4 Hz
 heartbeat — same one-screen-clock discipline as the list screen, color

@@ -13,7 +13,9 @@ from datetime import UTC, datetime, timedelta
 
 from grove.core.activity import SessionActivity, WorkspaceActivity
 from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
-from grove.core.workspace import Placement, WorkspaceState, WorkspaceStatus
+from grove.core.phase import PhaseReport
+from grove.core.workspace import Placement, Runtime, WorkspaceState, WorkspaceStatus
+from grove.tui._status import phase_glyph, phase_label, runtime_color, runtime_glyph
 from grove.tui.widgets.dashboard_grid import _render_card_body, is_promoted
 
 _NOW = datetime(2026, 5, 6, 12, 0, tzinfo=UTC)
@@ -42,6 +44,7 @@ def _activity(
     *,
     agent_state: AgentActivityState | None = None,
     pane_target: str | None = "test-fix-auth:agent.0",
+    phase: PhaseReport | None = None,
     **act: object,
 ) -> WorkspaceActivity:
     """A WorkspaceActivity with an optional single agent session.
@@ -72,6 +75,7 @@ def _activity(
         pane_target=pane_target,
         recent_commits=(),
         observed_at=_NOW,
+        phase=phase,
     )
 
 
@@ -84,7 +88,7 @@ def _lines(activity: WorkspaceActivity, **kw: object) -> list[str]:
 
 def test_compact_tile_is_exactly_three_rows() -> None:
     # Idle → compact: title / identity / stats, an exact fit for a one-track
-    # cell. No wasted rows (the redesign's whole point) and no pane placeholder.
+    # cell. No wasted rows and no pane placeholder.
     lines = _lines(_activity(agent_state=AgentActivityState.IDLE))
     assert len(lines) == 3
     assert "fix-auth" in lines[0]
@@ -132,8 +136,8 @@ def test_promoted_tile_renders_fit_to_cell_pane_tail() -> None:
 
 
 def test_interpreted_status_wins_over_raw_task() -> None:
-    # The reserved #20 seam: an LLM interpreter's one-liner is preferred as the
-    # summary over the raw ai-title / current task.
+    # An LLM interpreter's one-liner is preferred as the summary over the
+    # raw ai-title / current task.
     activity = _activity(
         agent_state=AgentActivityState.WAITING,
         title="raw ai title",
@@ -177,3 +181,59 @@ def test_is_promoted_tracks_live_states() -> None:
     assert not is_promoted(_activity(agent_state=AgentActivityState.IDLE))
     assert not is_promoted(_activity(agent_state=AgentActivityState.STARTING))
     assert not is_promoted(_activity(agent_state=None))
+
+
+# ─── task-phase segment (third axis) ────────────────────────────────────────
+
+
+def test_tile_phase_shows_glyph_and_label_no_progress_fraction() -> None:
+    """The tile deliberately omits the `N/M` fraction the row card shows —
+    tighter width budget, and the glyph/color ramp already carries the
+    coarse signal."""
+    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW)
+    plain = _render_card_body(
+        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+    ).plain
+    assert f"{phase_glyph('verifying')} {phase_label('verifying')}" in plain
+    assert "4/6" not in plain
+
+
+def test_tile_phase_none_is_byte_identical_to_pre_phase_render() -> None:
+    """`phase=None` (the field's default) renders identical bytes to a tile
+    built with no phase param at all — absence is the default."""
+    baseline = _render_card_body(
+        _activity(agent_state=AgentActivityState.WORKING), dark=True, now=_NOW
+    )
+    explicit = _render_card_body(
+        _activity(agent_state=AgentActivityState.WORKING, phase=None), dark=True, now=_NOW
+    )
+    assert baseline.plain == explicit.plain
+    assert baseline.spans == explicit.spans
+
+
+# ─── runtime mark (the isolation axis) ──────────────────────────────────────
+
+
+def test_tile_marks_every_runtime_leading_row_two() -> None:
+    """The wall speaks the row card's vocabulary: the same two enclosure
+    glyphs, in the same lead-in position, for BOTH runtimes — this axis has no
+    silent state, so an unmarked tile is never "the ordinary case"."""
+    for runtime in (Runtime.HOST, Runtime.CONTAINER):
+        lines = _lines(
+            _activity(state=_state(runtime=runtime), agent_state=AgentActivityState.IDLE)
+        )
+        assert lines[1].startswith(f"{runtime_glyph(runtime)} feat/auth")
+
+
+def test_tile_runtime_mark_uses_the_shared_contract_color() -> None:
+    text = _render_card_body(
+        _activity(state=_state(runtime=Runtime.CONTAINER), agent_state=AgentActivityState.IDLE),
+        dark=True,
+        now=_NOW,
+    )
+    glyph = f"{runtime_glyph(Runtime.CONTAINER)} "
+    hex_ = runtime_color(Runtime.CONTAINER, dark=True).lower()
+    assert any(
+        text.plain[start:end] == glyph and hex_ in str(style).lower()
+        for start, end, style in text.spans
+    )

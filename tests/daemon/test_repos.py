@@ -73,7 +73,6 @@ def test_registry_resolves_project_scoped_agent_and_init_script(
     """A `config_loader` makes each Manager see its OWN repo cascade, so a
     project-only agent and a project-enabled init_script are honored — the
     daemon's global config (no `repo_root`) never saw `<repo>/.grove/config.json`.
-    Regression for #46 (create rejected a project agent) and #47 (init skipped).
     """
     _write_project_config(
         tmp_repo,
@@ -90,14 +89,14 @@ def test_registry_resolves_project_scoped_agent_and_init_script(
     registry = RepoRegistry(cfg=global_cfg, store=JsonWorkspaceStore(), config_loader=load_config)
     mgr = registry.get(tmp_repo)
 
-    assert mgr.config.find_agent("Project Only") is not None  # #46
-    assert mgr.config.init_script.enabled is True  # #47
+    assert mgr.config.find_agent("Project Only") is not None
+    assert mgr.config.init_script.enabled is True
 
 
 def test_registry_without_loader_uses_shared_cfg(tmp_state_dir: Path, tmp_repo: Path) -> None:
-    """No `config_loader` → every Manager shares the injected cfg (the legacy
-    behavior tests rely on). This is exactly the path that made the daemon blind
-    to project config, so it must stay an explicit opt-in, not the default."""
+    """No `config_loader` → every Manager shares the injected cfg. This is
+    exactly the path that made the daemon blind to project config, so it must
+    stay an explicit opt-in, not the default."""
     _write_project_config(
         tmp_repo, {"agents": [{"name": "Project Only", "command": "claude", "kind": "claude_code"}]}
     )
@@ -106,7 +105,7 @@ def test_registry_without_loader_uses_shared_cfg(tmp_state_dir: Path, tmp_repo: 
     assert mgr.config.find_agent("Project Only") is None
 
 
-# ─── known_roots() union: config-declared empty projects stay visible (#95) ──
+# ─── known_roots() union: config-declared empty projects stay visible ───────
 
 
 def _init_git_repo(path: Path) -> Path:
@@ -137,7 +136,7 @@ def _persist_workspace(store: JsonWorkspaceStore, repo_root: Path) -> None:
 
 
 def test_known_roots_includes_declared_only_repo(tmp_state_dir: Path, tmp_path: Path) -> None:
-    """A config-declared repo with ZERO workspaces still appears (the #95 fix)."""
+    """A config-declared repo with ZERO workspaces still appears."""
     empty_repo = _init_git_repo(tmp_path / "empty")
     cfg = GroveConfig(projects=[str(empty_repo)])
     registry = RepoRegistry(cfg=cfg, store=JsonWorkspaceStore(tmp_path / "state.json"))

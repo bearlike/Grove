@@ -1,4 +1,4 @@
-"""GroveClient.list_workspaces — pin the repo/ticket query-param wire contract (#195).
+"""GroveClient.list_workspaces — pin the repo/ticket query-param wire contract.
 
 Modeled on ``test_tickets.py``: an ``httpx.MockTransport`` swapped into a
 connected client's own ``httpx.AsyncClient``, so the request never leaves the

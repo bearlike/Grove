@@ -86,9 +86,13 @@ Each class answers one question, owns its own state, and exposes behavior over t
 - `AgentLiveStatus`: what is this workspace's agent doing right now (task / metrics / state)?
 - `status-tokens.ts`: single TS source for status hex / glyph / label / polarity-aware stat color. Drift-tested against `grove.core.contracts.status_palette`.
 
-## Read-only by design
+## Observability-first, with a thin action layer
 
-V1 has no lifecycle controls (no create / pause / kill / respawn / update / attach). The dashboard is glance-only; manage workspaces from the TUI or `grove` CLI.
+Reads are the bulk of the surface, but the webapp is **not** read-only and has not been for many releases. It drives every mutation the daemon already exposes: create, pause, resume, respawn, kill, message, interrupt, question-answer, control invoke, model switch, and session remap. It adds no backend logic of its own — each verb is a faithful client call against the daemon's existing wire contract.
+
+Read-only **is** structural in exactly one place: the `/sessions` catalog and its transcripts (a browse-history surface with no live workspace to steer), where the absence of controls is the screen's shape, not a disabled prop.
+
+The three workspace **status axes** — lifecycle (`WorkspaceStatus`), agent activity (`AgentActivityState`), and task phase (`TaskPhase`) — plus the linked issue/PR refs are **display-only** here by standing product decision. Their write paths live on the CLI, MCP, and HTTP, which is where an orchestrator lives.
 
 ## Mobile parity with the TUI
 

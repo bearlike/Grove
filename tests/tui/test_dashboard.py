@@ -1,4 +1,4 @@
-"""DashboardScreen — cross-project activity wall (issue #16).
+"""DashboardScreen — cross-project activity wall.
 
 Pilot tests over a real in-memory store + the FakeTmux seam: opening from the
 list screen, grouping by project, the status lens, the agent-state glyphs, and a

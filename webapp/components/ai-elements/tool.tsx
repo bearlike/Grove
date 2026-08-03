@@ -1,6 +1,6 @@
 "use client";
 
-// The transcript's tool-call surface, rebuilt modern-chat-native (#154). The
+// The transcript's tool-call surface, modern-chat-native. The
 // upstream AI-Elements/assistant-ui template renders a tool call as a
 // BORDERLESS expander — a ghost trigger ("Used tool: <b>name</b>") over an
 // indented content well — not an outlined card. Grove adopts that grammar.
@@ -10,8 +10,8 @@
 // (`DigestEntryView` role "tool", e.g. "Edit app/page.tsx" — always completed,
 // no separate args/result payload). So the leaf row IS the digest, with nothing
 // further to disclose; the single collapse level is the "Used N tools" group
-// (the #124 collapse-by-default invariant — a lone tool run must not dump detail
-// into the scroll). If the wire ever gains a structured args/result payload,
+// (a lone tool run must not dump detail into the scroll by default). If the
+// wire ever gains a structured args/result payload,
 // THAT is when a per-row second disclosure earns its chevron.
 //
 // Borderless throughout: no frame, no hairline, no bordered card — a transcript
@@ -31,7 +31,7 @@ export type ToolGroupProps = HTMLAttributes<HTMLDivElement> & {
 
 /**
  * One consecutive tool run as a single borderless expander — a "Used N tools"
- * ghost trigger (the template's grammar) collapsed by default (#124), so a long
+ * ghost trigger (the template's grammar) collapsed by default, so a long
  * Read/Bash/Edit spree stays one calm line until the reader asks. Expanding
  * reveals the digest of each call in an indented column. Disclosure is plain
  * local state + a conditional mount (no radix Collapsible, no new dep).

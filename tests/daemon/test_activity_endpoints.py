@@ -25,6 +25,7 @@ from grove.core.contracts.views import WorkspacePaneView
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
+from grove.daemon import app as daemon_app
 from grove.daemon import build_app
 from grove.daemon._pane_stream import _PaneStreamer
 from grove.daemon._sse import _SseHub
@@ -147,7 +148,7 @@ def test_pane_endpoint_unknown_workspace_404(client: TestClient) -> None:
     assert client.get("/workspaces/nope/pane").status_code == 404
 
 
-# ─── GET /workspaces/{id}/pane/stream (#19, the live focused-pane push) ──────
+# ─── GET /workspaces/{id}/pane/stream (the live focused-pane push) ───────────
 
 
 async def test_pane_stream_emits_pane_snapshot_first(tmp_state_dir: Path) -> None:
@@ -240,6 +241,132 @@ async def test_events_emits_snapshot_first(tmp_state_dir: Path) -> None:
     payload = json.loads(data_line[len("data:") :].strip())
     assert payload["kind"] == "snapshot"
     assert payload["snapshot"]["total_workspaces"] == 2
+
+
+# ─── the heartbeat producer ───────────────────────────────────────────────────
+#
+# The quiet-stream beat must be a NAMED `EventSource` frame, not a bare
+# `: keepalive` comment — a comment keeps a proxy's connection open but fires
+# no listener, so the webapp's `lastEventAt` would never advance on a quiet
+# fleet and its stale-tab self-heal would reconnect against a perfectly
+# healthy stream. The two frame-level properties below are what make the named
+# frame work at all, and both were verified against a real browser.
+
+
+async def _sse_frames(app: FastAPI, path: str, count: int) -> list[str]:
+    """Drive the ASGI app directly and capture the first ``count`` SSE frames.
+
+    The wider sibling of ``_first_sse_frame`` — same hand-rolled ASGI dance and
+    the same reason for it, but it keeps reading until enough frames have
+    arrived, which is the only way to observe a beat (it is by definition the
+    frame AFTER the snapshot).
+    """
+    scope: dict[str, Any] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 80),
+    }
+    buffer = ""
+    frames: list[str] = []
+    got_enough = asyncio.Event()
+    request_delivered = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_delivered
+        if not request_delivered:
+            request_delivered = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await got_enough.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        nonlocal buffer
+        if message["type"] != "http.response.body" or not message.get("body"):
+            return
+        buffer += message["body"].decode()
+        # A chunk boundary is not a frame boundary, so re-split the whole buffer
+        # rather than treating each write as one frame.
+        while "\n\n" in buffer and len(frames) < count:
+            frame, buffer = buffer.split("\n\n", 1)
+            frames.append(frame)
+        if len(frames) >= count:
+            got_enough.set()
+
+    await asyncio.wait_for(app(scope, receive, send), timeout=10)
+    return frames
+
+
+async def test_quiet_events_stream_beats_with_a_named_heartbeat_frame(
+    tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A quiet stream emits `event: heartbeat`, not a comment a listener can't see."""
+    monkeypatch.setattr(daemon_app, "_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    store = JsonWorkspaceStore()
+    store.save(_state("a1", str(tmp_state_dir / "repo-a")))
+    app = build_app(cfg=daemon_test_config(), store=store)
+
+    snapshot_frame, beat = await _sse_frames(app, "/events", 2)
+
+    assert "event: snapshot" in snapshot_frame
+    lines = beat.splitlines()
+    assert "event: heartbeat" in lines, f"quiet stream did not beat by name: {beat!r}"
+    # A comment frame would fire no listener at all — this is the regression.
+    assert not beat.startswith(":"), f"beat is still an SSE comment: {beat!r}"
+
+
+async def test_heartbeat_frame_carries_data_so_the_browser_dispatches_it(
+    tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dispatch algorithm returns early on an empty data buffer.
+
+    So an `event: heartbeat` frame with no `data:` line is delivered to the
+    browser and silently dropped — the same "no listener fires" outcome the
+    comment had, which is exactly how this fix could have shipped inert.
+    """
+    monkeypatch.setattr(daemon_app, "_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    store = JsonWorkspaceStore()
+    store.save(_state("a1", str(tmp_state_dir / "repo-a")))
+    app = build_app(cfg=daemon_test_config(), store=store)
+
+    _, beat = await _sse_frames(app, "/events", 2)
+
+    data_line = next((item for item in beat.splitlines() if item.startswith("data:")), None)
+    assert data_line is not None, f"heartbeat has no data line, so nothing dispatches: {beat!r}"
+    assert json.loads(data_line[len("data:") :].strip())["kind"] == "heartbeat"
+
+
+async def test_heartbeat_carries_no_id_so_the_resume_point_stays_put(
+    tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A beat must not move `Last-Event-ID` onto a frame the replay ring never held.
+
+    The browser's last-event-ID buffer is not reset between events, so omitting
+    `id:` leaves the resume point at the last REAL event — here, the snapshot.
+    """
+    monkeypatch.setattr(daemon_app, "_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    store = JsonWorkspaceStore()
+    store.save(_state("a1", str(tmp_state_dir / "repo-a")))
+    app = build_app(cfg=daemon_test_config(), store=store)
+
+    snapshot_frame, beat = await _sse_frames(app, "/events", 2)
+
+    assert not any(item.startswith("id:") for item in beat.splitlines()), (
+        f"heartbeat stamped an id, moving the client's resume point: {beat!r}"
+    )
+    # It still REPORTS the resume point in its body, so a beat is diagnosable.
+    snapshot_id = next(item for item in snapshot_frame.splitlines() if item.startswith("id:"))
+    beat_data = next(item for item in beat.splitlines() if item.startswith("data:"))
+    payload = json.loads(beat_data[len("data:") :].strip())
+    assert str(payload["seq"]) == snapshot_id[len("id:") :].strip()
 
 
 def test_events_and_activity_require_auth(tmp_state_dir: Path) -> None:

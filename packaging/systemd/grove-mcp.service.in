@@ -1,0 +1,33 @@
+[Unit]
+Description=Grove MCP server (Streamable HTTP)
+Documentation=https://github.com/bearlike/Grove
+# The MCP server is a client of the daemon: every tool call proxies through the
+# daemon's HTTP API, so the daemon should come up first. `Wants=` (not
+# `Requires=`) for the same reason as the webapp — a daemon blip must not tear
+# this service down; requests fail individually and the client retries.
+Wants=grove-daemon.service
+After=grove-daemon.service network.target
+
+[Service]
+Type=simple
+# `grove-mcp` is its own console script, NOT a `grove` subcommand. Under stdio
+# the MCP client spawns it per connection; this unit is the long-lived network
+# transport, which binds a socket and therefore needs its own bearer token.
+ExecStart=@MCP_BIN@ --transport streamable-http --host @MCP_HOST@ --port @MCP_PORT@
+# GROVE_MCP_TOKEN (the inbound bearer clients must present) lives here, mode
+# 0600, one KEY=value per line. The leading `-` keeps a missing file from being
+# a unit-level error, matching how Gotify/LangFuse secrets are supplied — but
+# the server itself fails closed: under a network transport it exits 2 without
+# a token rather than publish workspace lifecycle control unauthenticated.
+EnvironmentFile=-%h/.config/grove/mcp.env
+# No `Environment=PATH=` bake here. The daemon unit needs one because it runs
+# user-authored init scripts against systemd's bare PATH (issue #9); this
+# process only serves MCP over HTTP and shells out to nothing.
+Restart=on-failure
+RestartSec=2
+# stdout/stderr -> journalctl --user -u grove-mcp
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

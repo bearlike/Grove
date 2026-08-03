@@ -80,8 +80,8 @@ export class AgentLiveStatus {
 
   /**
    * Muted metrics one-liner (turns · tools · tokens); `null` when sessionless.
-   * The card renders these as discrete `Stat` atoms now (#161); this composite
-   * string survives for the work panel's Info tab, which reads as one dense line.
+   * The card renders these as discrete `Stat` atoms; this composite string
+   * survives for the work panel's Info tab, which reads as one dense line.
    */
   get metricsLine(): string | null {
     if (!this.activity) return null;
@@ -90,11 +90,10 @@ export class AgentLiveStatus {
   }
 
   /**
-   * Whether a live token tier is actively reporting right now (#181). `false`
-   * for a pre-field daemon payload or whenever no fast side-channel is wired
-   * (the #177 proxy is the primary source) — the whole `live` block is absent
-   * rather than zeroed, so a caller gates the indicator on this rather than on
-   * a truthy-but-zero token count.
+   * Whether a live token tier is actively reporting right now. `false` for a
+   * pre-field daemon payload or whenever no fast side-channel is wired — the
+   * whole `live` block is absent rather than zeroed, so a caller gates the
+   * indicator on this rather than on a truthy-but-zero token count.
    */
   get isGenerating(): boolean {
     return this.activity?.live != null;

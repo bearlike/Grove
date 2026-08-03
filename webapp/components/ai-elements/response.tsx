@@ -21,7 +21,7 @@ export type ResponseProps = ComponentProps<typeof Streamdown>;
 // CSS, so we kill them at the real API: the code DOWNLOAD button
 // (`controls.code.download`), the per-line number gutters (`lineNumbers`), and
 // the entire TABLE controls row — copy/download/fullscreen (`controls.table`),
-// which the assistant-ui table grammar (#162's target) doesn't carry. Code copy
+// which the assistant-ui table grammar doesn't carry. Code copy
 // stays. Module-level so the object identity is stable — Streamdown memoizes on
 // its props. Mermaid controls are left at default.
 const STREAMDOWN_CONTROLS: ControlsConfig = {
@@ -38,7 +38,7 @@ export const Response = memo(
         // (the user's readability ruling; the upstream template's `text-base`
         // agrees). The markdown element map below mirrors assistant-ui's own
         // styled template (packages/ui markdown-text.tsx), so agent prose reads
-        // modern-chat-native (#154).
+        // modern-chat-native.
         "size-full text-prose [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         "[&_p]:my-3 [&_p]:leading-relaxed [&_li]:leading-relaxed",
         // Links ride terracotta-AS-TEXT (`--primary-fg`), never bare `--primary`
@@ -49,7 +49,7 @@ export const Response = memo(
         "[&_:not(pre)>code]:rounded-md [&_:not(pre)>code]:bg-muted [&_:not(pre)>code]:px-1.5 [&_:not(pre)>code]:py-0.5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-[0.85em]",
         // Fenced code — flatten streamdown's stock card-within-a-card (a
         // bg-sidebar chrome shell wrapping a nested bg-background body, double
-        // borders) into the assistant-ui single well (#160). Download + line
+        // borders) into the assistant-ui single well. Download + line
         // numbers are gone via CODE_CONTROLS/lineNumbers on <Streamdown>; these
         // attribute overrides re-tone the surfaces the props can't reach. The
         // (0,2,0) variant+attribute specificity beats streamdown's own (0,1,0)
@@ -70,8 +70,8 @@ export const Response = memo(
         "[&_[data-streamdown=code-block-body]]:rounded-t-none [&_[data-streamdown=code-block-body]]:rounded-b-xl [&_[data-streamdown=code-block-body]]:border [&_[data-streamdown=code-block-body]]:border-border/50 [&_[data-streamdown=code-block-body]]:bg-muted/30 [&_[data-streamdown=code-block-body]]:p-3.5 [&_[data-streamdown=code-block-body]]:font-mono [&_[data-streamdown=code-block-body]]:text-[13px]",
         // Markdown tables — flatten the SAME card-within-a-card streamdown wraps
         // them in (a bg-sidebar shell around a nested bg-background bordered
-        // scroll card, double borders) into the assistant-ui single frame
-        // (#162). The copy/download/fullscreen controls row is gone via
+        // scroll card, double borders) into the assistant-ui single frame.
+        // The copy/download/fullscreen controls row is gone via
         // STREAMDOWN_CONTROLS.table above; these overrides re-tone the surfaces
         // the prop can't reach (same (0,2,x) specificity win as the code block).
         // Wrapper: strip the chrome shell so the framed table IS the block.

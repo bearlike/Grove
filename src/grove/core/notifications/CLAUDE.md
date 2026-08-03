@@ -1,70 +1,211 @@
-# grove.core.notifications — push on agent-state edges (#70)
+# grove.core.notifications — push on workspace edges
 
 > ↑ [grove.core](../CLAUDE.md) · [root](../../../../CLAUDE.md)
 
-Turns the existing activity stream into push notifications. One nameable job:
-*deliver a notification when an agent crosses into a state that wants the human*.
-The broker decides; channels deliver. Off by default (`cfg.notifications`).
+Turns the existing activity stream into push notifications: *deliver a
+notification when a workspace crosses into a state that wants the human*. The
+broker decides; channels deliver. Off by default (`cfg.notifications`).
 
-Three atomic types, one concern each — no free functions, no module-level
-factories. `Notification` (the event, owns its own shape), `NotificationChannel`
-(the ABC contract), `NotificationBroker` (the edge engine + the one factory).
+One concern per type, no free functions and no module-level factories:
+`WorkspaceIdentity`, `NotificationReason` (the phrase + the urgency, together),
+`Notification`, `NotificationChannel` (the ABC contract), `NotificationBroker`
+(the edge engine + the one factory).
 
-- **Reuse the activity bus; add NO status computation (the KISS rule).** The
-  broker subscribes via `bind(ActivityService.subscribe)` exactly like `_SseHub`
-  and reads each session's already-blended `AgentActivityState`. A notification
-  is the *rising edge* into a notifiable state — never a new status engine. `bind`
-  takes the `subscribe` callable, not the service, so the broker depends only on
-  the bus shape and tests drive it with a bare stub.
-- **`NotificationBroker.from_config(cfg.notifications)` is the single factory** —
-  returns the broker or `None` (disabled / no channel). It is the one place
-  config coerces to runtime: channel objects built from `_CHANNEL_TYPES` (the
-  `(config-attr, channel-class)` registry — adding email/Slack/Teams is one tuple
-  entry plus a config field plus the channel class, nothing else), and the `on`
-  strings coerced to the state enum. There are deliberately no standalone
-  `build_channels` / `resolve_notify_states` helpers — that logic belongs to the
-  broker that owns it, not to root-level functions.
-- **`evaluate` is pure; `dispatch` is the I/O edge — the split is the whole
-  design.** `evaluate(delta)` folds one delta against per-session last-state +
-  per-workspace debounce under a lock and returns `Notification`s, fully testable
-  with a fake clock and hand-built deltas (which use the real engine IR, so a
-  contract drift fails to compile). `dispatch` fans out, each channel in the
+## The engine seam
+
+- **Reuse the activity bus; add NO status computation.** The broker subscribes
+  via `bind(ActivityService.subscribe)` exactly like `_SseHub` and reads each
+  session's already-blended `AgentActivityState`. A notification is an *edge* in
+  what already flows past it — never a new status engine. `bind` takes the
+  `subscribe` callable, not the service, so the broker depends only on the bus
+  shape and tests drive it with a bare stub.
+- **`evaluate` is pure; `dispatch` is the I/O edge.** `evaluate(delta)` folds one
+  delta against the memory under a lock and returns `Notification`s, fully
+  testable with a fake clock and hand-built deltas (which use the real engine IR,
+  so a contract drift fails to compile). `dispatch` fans out, each channel in the
   best-effort guard.
 - **The bus callback must never block or break the poll.** `_on_delta` runs
   `evaluate` synchronously on the emitting (executor) thread, then `submit`s
   `dispatch` to a single-worker `ThreadPoolExecutor` — channel HTTP never touches
-  the activity path; a dead/slow sink degrades one delivery and is logged, never
-  re-raised. (A `ThreadPoolExecutor`, not a hand-rolled queue+thread+sentinel:
-  `shutdown(wait=True)` drains on close for free — less code, same semantics.)
-- **Two storm guards, both load-bearing.** First observation of a session seeds
-  its state *without firing* (else every already-finished workspace buzzes on
-  daemon restart). After a fire the workspace is debounced for a window (else a
-  `waiting`→`working`→`waiting` tool round-trip rings twice). Edge + debounce =
-  one buzz per genuine attention episode.
-- **`Notification` owns its own shape — construction, phrasing, rendering.**
-  `from_activity` builds it from the activity row (the only place that knows
-  `repo_name`/`deep_link` derivation); `REASONS` maps state→English AND *is* the
-  notifiable set (a state absent from it can never fire — the broker intersects
-  against `frozenset(Notification.REASONS)`, so adding a notifiable state is a
-  one-line edit); `title()`/`body()` render once so channels stay dumb formatters.
+  the activity path; a dead or slow sink degrades one delivery and is logged,
+  never re-raised. Not a hand-rolled queue+thread+sentinel: `shutdown(wait=True)`
+  drains on close for free.
+- **`NotificationBroker.from_config(cfg.notifications)` is the single factory**,
+  returning the broker or `None` (disabled / no channel), and the one place
+  config coerces to runtime. Channels are built from `_CHANNEL_TYPES`, the
+  `(config-attr, channel-class)` registry — **adding a channel is one tuple
+  entry, one config field and the channel class, nothing else**.
+- **The broker lives in the daemon only** (`daemon/app.py` lifespan). The TUI runs
+  its own in-process `ActivityService` and never builds one: push wants a
+  long-lived process. A TUI-only user gets no notifications — a deliberate
+  boundary, not an oversight.
+
+## The three triggers
+
+Each trigger has its own detector, its own storm guard and its own config
+switch; all three produce the same `Notification`, so channels stay dumb.
+
+- **Agent-state edge** (`_state_edge`, `cfg.on`) — the *rising edge* into a
+  notifiable state (WAITING = turn finished, BLOCKED, ERROR, IDLE).
+- **Question edge** (`_question_edge`, `cfg.on_question`) — **the harness-parity
+  seam, and the reason the subsystem is not Claude-only.** A question is a
+  *content* signal (`AgentActivity.questions`, the provider-neutral
+  `AgentQuestion` every adapter normalizes its native ask-the-human tool onto),
+  whereas BLOCKED is a *state* only some adapters can ever reach — Codex's
+  approval prompts are interactive and never persisted to its rollout, so
+  `codex.py` has no BLOCKED-producing code path at all. Firing on the question
+  itself means **any** harness that surfaces one gets the push, with the prompt
+  and options in the body, without a line of per-provider code.
+- **Lifecycle edge** (`_evaluate_lifecycle`, `cfg.on_lifecycle`) — the
+  `workspace_changed` deltas: a create that failed at `init_script`, a tmux
+  session that vanished under a running agent, a worktree deleted underneath a
+  workspace. This is the "the work was *interrupted*" arm, as opposed to "the
+  work *finished*". The default set is exactly the unexpected half; the routine
+  verbs are phrased and available but off — a user-initiated pause needs no push
+  back to the user who initiated it.
+
+**Storm guards, each matched to its trigger:**
+
+- First observation of a session **seeds silently** (state *and* open-question
+  ids), or every already-finished workspace and every already-open question
+  buzzes on daemon restart.
+- A state edge is **debounced per workspace** (a WAITING→WORKING→WAITING tool
+  round-trip must ring once, not twice).
+- A question is **deduped by question id and deliberately NOT debounced.** Time
+  is the wrong guard: two questions 5 seconds apart are two answers the agent is
+  blocked on, and swallowing the second strands it while the human believes they
+  are done. Re-asking the *same* id can never re-fire, so the guard is exact
+  rather than temporal — strictly stronger than a window.
+- **A question outranks the state edge behind it** — they are the same attention
+  episode (an agent is BLOCKED *because of* the question) and the question push
+  is strictly richer, so it wins and stamps the debounce that keeps the state
+  edge quiet. Without this you buzz twice for one event.
+- **…but suppressing an edge means RECORDING it, not out-voting it.** Every
+  detector *folds its own memory* on every tick, so `_evaluate_session` runs
+  **both** `_state_edge` and `_question_edge` and only then picks the winner. An
+  early `return` on the question would skip `_state_edge` and leave that
+  session's last-seen state stale at WORKING — so the WORKING→BLOCKED edge stays
+  *pending* and rings a second, redundant bare "needs your input" push the
+  instant the debounce window lapses. **A short-circuit that skips a stateful
+  detector is a latent duplicate notification**; a fourth trigger must be run for
+  its memory and chosen afterwards.
+- The identity cache (`_identity`) exists because **a lifecycle delta carries no
+  activity row** — only an id and the manager's `detail`. The broker caches the
+  `WorkspaceIdentity` it learns from activity deltas;
+  `WorkspaceIdentity.unresolved` is the honest fallback for a workspace that
+  broke *before* it ever reported activity (a create that died at
+  `worktree_add`), and it still deep-links.
+
+## The event and the contract
+
+- **`Notification` owns its own shape** — three classmethod constructors, one per
+  trigger, and three renderers: `title()`, `body()` (plain), `markdown()` (rich).
+  `REASONS` / `LIFECYCLE` map state/event → `NotificationReason` AND *are* the
+  notifiable sets (the broker intersects its config against them), so adding a
+  notifiable edge is a one-line table edit with no other coupling.
+- **An ERROR push renders `error_detail`, never the task line.** `current_task`
+  is *what the agent was doing*, which next to the word "error" is actively
+  misleading; `error_detail` is *why it broke*. Gated on the edge's own state,
+  not on `error_detail` merely being non-empty — a recovered session can still
+  carry a stale detail, and a finished turn must never read as a failure.
+- **Severity is the abstraction that keeps channels dumb.** The *event* decides
+  how much it matters (`low`/`normal`/`high`/`urgent`); each *channel* maps that
+  onto its own native scale **in config** (Gotify's 0-10, ntfy's 1-5). Without
+  this axis every sink re-implements "is this important?" keyed off the state
+  enum — four sinks, four drifting policies, a hard-coded number in a branch.
+  Pairing the phrase and the urgency in one `NotificationReason` entry is what
+  stops the two tables drifting apart.
 - **`NotificationChannel` is an ABC, not a Protocol — the contract for every
   future sink.** One abstract action, `deliver(notification)`; `close()` a
-  concrete overridable no-op (stateless sinks inherit it; HTTP ones override —
-  `# noqa: B027` marks the empty body deliberate). The rule for divergent
-  capabilities (attachments, threading): add the method here with a base body
-  that `raise NotImplementedError`, sinks override what they support — keep "what
-  a channel can do" in one readable contract, never capability flags at call
-  sites. Today `deliver` + a rich `Notification` is the honest complete surface;
-  resist speculative methods (YAGNI) until a real second action appears.
+  concrete overridable no-op (`# noqa: B027` marks the empty body deliberate).
+  For divergent capabilities (attachments, threading): add the method here with a
+  base body that raises `NotImplementedError` and let sinks override what they
+  support — never capability flags at call sites. A sink renders what it can and
+  ignores the rest; it never re-derives a phrase, a priority or a URL.
 - **Channels mirror `MewboClient`'s boundary exactly.** Config holds the env-var
-  *name* of each token (never the secret — committed config stays publishable);
+  *name* of each token, never the secret (committed config stays publishable);
   `httpx.MockTransport` is the test seam; every httpx failure narrows to a typed
-  `NotificationError` subclass. Gotify deep-links via the
-  `client::notification.click` extra; the webhook speaks ntfy's JSON-publish
-  shape (`topic`/`click`/`tags`) so it doubles as a generic sink.
+  `NotificationError` subclass.
 - **Config can't import the agents enum (cycle: agents → registry → adapters →
-  config).** `NotifyTransition` is a `Literal` mirroring the `AgentActivityState`
-  values; `from_config` is the single edge that coerces it back to the enum.
-- **Web Push (VAPID/PWA) is the next channel (#75)** — it needs the webapp
-  service-worker + subscription surface first, then drops in as one more
-  `_CHANNEL_TYPES` entry with no broker change.
+  config).** `NotifyTransition` / `NotifyLifecycle` / `NotifySeverity` are
+  `Literal`s mirroring the engine's values; `from_config` is the single edge that
+  coerces them back.
+
+## The deep link IS the feature (and its quietest failure)
+
+- **A push without a reachable tap target is worth nothing.** The link is
+  `{deep_link_base_url}/w/{id}` — the webapp's workspace route, where the human
+  can read the transcript *and answer the question*.
+- **`deep_link_base_url` defaults to `http://localhost:3000`** (the webapp's own
+  `next start` origin). An empty default renders **no link at all**, i.e. the
+  feature is dead by default.
+- **But loopback is a silent trap: a phone resolves `localhost` to *itself*.** The
+  push lands, the tap dies, nothing errors, no log. So the *config model answers
+  this about itself* — `NotificationsConfig.deep_link_is_loopback` (pure,
+  `urlparse`, no I/O) — and `from_config` logs one warning at construction. A LAN
+  address is deliberately NOT loopback: a phone on the same network can follow it.
+  Validate at the point of definition, act at the edge — the failure is otherwise
+  undiscoverable except on a lock screen.
+
+## The rising edge is a BAND, not a transition
+
+`_is_rising_edge` fires on crossing **into** the notifiable set (`cfg.on`) from
+**outside** it, and a first sighting seeds without firing. So `BLOCKED → WAITING`
+never fires under the default set: both are notifiable, and the human is already
+being asked for. The agent must pass back through WORKING (which is exactly what
+happens in life: you answer, it resumes, it finishes).
+
+Consequence for any harness driving the broker: a scripted
+`WORKING → BLOCKED → WAITING → ERROR` sequence produces **2** pushes, not 4, and
+that is correct. Interleave the working state between episodes or the harness
+will "lose" notifications that were never owed.
+
+## Gotify: the facts worth not re-deriving
+
+Observed against the server's OpenAPI spec and the Android client's Kotlin
+source, then confirmed end-to-end against a live server — the official docs
+under-specify most of this.
+
+- **`POST /message` is the entire integration.** Auth via `X-Gotify-Key`,
+  `Authorization: Bearer`, or `?token=`. Body: `message` (required, markdown
+  allowed), `title`, `priority`, `extras`. Errors 400/401/403. **No rate limiting
+  exists anywhere in the server** — none to design around.
+- **Exactly four `extras` keys are honored, and only one of them by the web
+  client:** `client::display.contentType` (`text/markdown` — Android renders via
+  Markwon/CommonMark, web via react-markdown/GFM; **HTML is never rendered**, so
+  never emit any), `client::notification.click.url` (**Android only** — the web
+  client has no code reading it, which is *why* `markdown()` also renders the deep
+  link inline: one link, two ways to reach it), `client::notification.bigImageUrl`
+  (Android only), and `android::action.onReceive.intentUrl` (fires *on receipt*,
+  not on tap, behind a user prompt — **not** an "open on click" mechanism; do not
+  reach for it).
+- **Priority is a real dial, not decoration.** The Android client bins it: `<=0`
+  min, `1-3` low/silent, `4-7` default (vibrate), `>=8` high (heads-up + sound).
+  The web client only tints the message's left border. Our defaults are chosen
+  against those bins, so "question" (8) actually wakes the phone and "paused" (2)
+  never does.
+- **An application token (`Axxx…`) can only send — PROVEN, not inferred.** A live
+  `DELETE /message/{id}` with the app token returns **401**; `POST /application`
+  and image upload require a *client* token (`Cxxx…`); and **there is no PUT/PATCH
+  on messages at all** — no update, no supersede. So "retract the needs-input push
+  once the agent moves on" is *not implementable* with a send-only token, and we
+  do not fake it. It would need a client token plus tracking the message id the
+  POST returns.
+- **The POST echoes the stored `Message` back** (id, appid, priority, extras,
+  message) — the cheapest ground truth there is. Assert against it before
+  believing any future claim about this API.
+- **One app token = one Gotify application**, and the clients group messages by
+  application — so a dedicated "Grove" application is the grouping mechanism;
+  there is nothing to build.
+- **Depend on no Gotify SDK.** The only real PyPI package is Alpha-status and
+  wraps this one endpoint over the `httpx` we already have; direct `httpx.post` is
+  fewer lines than the import, and it is the same boundary discipline as
+  `core/mewbo.py`. Do not re-open this.
+
+## The webhook sink
+
+Carries both renderings (`message` plain, `markdown` rich) plus the structured
+facts (`severity`, `trigger`, and the open `questions` with their ids and
+options) so a relay can render — or eventually *answer* — rather than re-parse
+prose. `priority` is ntfy's own 1-5 integer, mapped from `severity` through
+config: never put a state string in an integer field.

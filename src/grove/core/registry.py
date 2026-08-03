@@ -28,7 +28,7 @@ from grove.core.store import JsonWorkspaceStore
 @dataclass(frozen=True, slots=True)
 class Project:
     """A listable project: an agent working directory plus the git repo that
-    anchors its worktrees (#101).
+    anchors its worktrees.
 
     For a top-level repo, ``cwd == repo_root``. For a nested project, ``cwd`` is
     a subdirectory of the repo and ``repo_root`` is the enclosing repo — distinct
@@ -49,17 +49,25 @@ class RepoRegistry:
         cfg: GroveConfig,
         store: JsonWorkspaceStore,
         config_loader: Callable[[Path], GroveConfig] | None = None,
+        on_project_registered: Callable[[Path], None] | None = None,
     ) -> None:
         self._cfg = cfg
         self._store = store
+        # Fired exactly once per repo, the moment its Manager is first cached —
+        # the engine's definition of "project registration". A caller wires
+        # this to `ProjectInfra.ensure` (best-effort, never blocking `get()`)
+        # to move the devcontainer image build off the per-workspace create
+        # path and onto first project access instead. ``None`` (default) keeps
+        # `get()` a pure cache, matching ``config_loader``'s own opt-in shape.
+        self._on_project_registered = on_project_registered
         # How each repo's config is resolved at first access. The daemon
         # injects ``load_config`` so every Manager sees its OWN cascade
         # (defaults → user → project ``<repo>/.grove/config.json`` →
         # project-local). Without this the daemon validated ``create`` against
         # the single global config it loaded with ``repo_root=None`` — so a
         # project-scoped agent read as "unknown" and a project ``init_script``
-        # read as disabled → ``SKIPPED`` (issues #46/#47). ``None`` falls back
-        # to the shared ``cfg`` for every repo — the seam tests use to inject
+        # read as disabled → ``SKIPPED``. ``None`` falls back to the shared
+        # ``cfg`` for every repo — the seam tests use to inject
         # an in-memory config with no files on disk. Auth/daemon sections are
         # safe to vary per repo here: they are consumed only from the global
         # ``cfg`` build_app holds, never off a registry Manager.
@@ -80,6 +88,8 @@ class RepoRegistry:
             cfg = self._config_loader(key) if self._config_loader is not None else self._cfg
             mgr = WorkspaceManager(repo_root=key, cfg=cfg, store=self._store)
             self._cache[key] = mgr
+            if self._on_project_registered is not None:
+                self._on_project_registered(key)
         return mgr
 
     def known_roots(self) -> list[Path]:
@@ -102,7 +112,7 @@ class RepoRegistry:
         return list(roots)
 
     def known_projects(self) -> list[Project]:
-        """Listable projects, by union of two sources — the listing seam (#101).
+        """Listable projects, by union of two sources — the listing seam.
 
         Where ``known_roots()`` answers "which *repos* exist" (the Manager-dispatch
         + repo-validation seam), this answers "which *projects* should a client
@@ -110,7 +120,7 @@ class RepoRegistry:
         subdirectory projects. The deduped (by ``cwd``) union of:
 
         - store-derived repo roots, each as a repo-level ``Project`` (``cwd ==
-          repo_root``) — the empty-project-visibility arm (#95) carried forward;
+          repo_root``) — the empty-project-visibility arm carried forward;
         - config-declared projects, each ``Project(repo_root=<enclosing repo>,
           cwd=<declared path>)`` so a declared *subdirectory* lists distinctly
           while still anchoring its worktrees at the true repo root.
@@ -135,8 +145,9 @@ class RepoRegistry:
         the same symlink-collapse rule store roots and Manager keys follow.
 
         The common case — an entry that IS a repo root — is decided by a cheap
-        ``.git`` stat (the hot-path discipline #95 established) and yields
-        ``cwd == repo_root``. Only an entry that ISN'T itself a repo root pays one
+        ``.git`` stat (a stat is far cheaper than a subprocess on this hot path)
+        and yields ``cwd == repo_root``. Only an entry that ISN'T itself a repo
+        root pays one
         ``git rev-parse`` to find its enclosing repo, which is what lets a nested
         subdirectory surface as a distinct project anchored at the real root.
         """

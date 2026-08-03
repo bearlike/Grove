@@ -1,4 +1,4 @@
-"""Release-skew check: pure semver compare + best-effort cached fetcher (#80)."""
+"""Release-skew check: pure semver compare + best-effort cached fetcher."""
 
 from __future__ import annotations
 

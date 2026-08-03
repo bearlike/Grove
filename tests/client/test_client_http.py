@@ -43,7 +43,7 @@ _SESSION_PREFIX = "grove-cli-test-"
 
 
 @pytest.fixture
-def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_repo: Path) -> Path:
     """Redirect daemon subprocess state + config into ``tmp_path``.
 
     The subprocess inherits this process's env, and platformdirs
@@ -59,7 +59,7 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
     # Sandbox the daemon subprocess's claude transcript dir too, so a resume-ref
-    # resolution (#F8) can find a session the test materializes under tmp_path.
+    # resolution can find a session the test materializes under tmp_path.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
 
     config_dir = config_home / "grove"
@@ -68,6 +68,26 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         json.dumps(
             {
                 "tmux": {"session_prefix": _SESSION_PREFIX},
+                # THE daemon-subprocess escape from the suite's offline
+                # discipline. `_offline_container_runtime` (tests/conftest.py)
+                # neutralizes the container boundary in the PYTEST process; the
+                # daemon this file spawns is a separate process that never sees
+                # it, and containers are the default runtime — so an unpinned
+                # config here would make every create actually run
+                # `devcontainer up` and build a real image, one real container
+                # per create, each test running minutes long, with
+                # `pause`/`kill` blowing past the client's 30s non-lifecycle
+                # budget as TransportError. Config, not a patch, is the only
+                # lever that reaches another process — and it is the runtime
+                # these assertions were always written for: a host tmux
+                # session name, a host `sh` agent, a host tmux teardown.
+                "container": {"enabled": False},
+                # Declared so the repo is a KNOWN root before it holds any
+                # workspace: every repo-dispatched read answers only for a
+                # registered root, which is what `grove config add-project`
+                # exists to do for a repo you have not created a workspace in
+                # yet.
+                "projects": [str(tmp_repo)],
                 # Keep the default agent name "claude" so payloads in the
                 # tests below need no per-fixture override; only the command
                 # changes — sleep keeps the pane open through the test.

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
-// Gitea #111 (epic #109): a pending `AskUserQuestion` GROUP must appear the
-// moment it's asked — pushed over the SAME `/events` connection the chat
+// A pending `AskUserQuestion` GROUP must appear the moment it's asked —
+// pushed over the SAME `/events` connection the chat
 // panel already holds — and be answerable from the page. `questions` is a
 // LIST (a real batch can carry more than one, answered atomically in one
 // POST — research-findings.md's Color/Toppings tab-bar case). The fake

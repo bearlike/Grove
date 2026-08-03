@@ -1,4 +1,4 @@
-"""The ``TaskBoard`` reconstruction — Claude Code's Jan-2026 Task system (#188).
+"""The ``TaskBoard`` reconstruction — Claude Code's Task system.
 
 Anthropic split the single ``TodoWrite`` call into ``TaskCreate``-per-item +
 ``TaskUpdate``-per-change (``TaskList``/``TaskGet`` are read-only queries of the
@@ -9,12 +9,12 @@ folding Task calls needs a running accumulator, so this pins ``TaskBoard`` in
 isolation; the adapter-level wiring (where the reconstructed board rides the
 turn stream) is pinned in ``test_claude_code.py``.
 
-Payloads mirror the REAL on-host shapes (verified 2026-07-08): ``TaskCreate``
-carries ``subject``/``description``/``activeForm``; ``TaskUpdate`` carries
-``taskId`` plus whichever of ``status``/``subject``/``description``/
-``activeForm``/``owner``/``addBlocks``/``addBlockedBy`` changed; a
-``TaskCreate``'s own ``tool_result`` reads ``"Task #<n> created successfully:
-<subject>"`` — the only place the assigned id appears.
+Payloads mirror the REAL on-host shapes: ``TaskCreate`` carries
+``subject``/``description``/``activeForm``; ``TaskUpdate`` carries ``taskId``
+plus whichever of ``status``/``subject``/``description``/``activeForm``/
+``owner``/``addBlocks``/``addBlockedBy`` changed; a ``TaskCreate``'s own
+``tool_result`` reads ``"Task #<n> created successfully: <subject>"`` — the
+only place the assigned id appears.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ def test_task_tool_names_covers_exactly_create_and_update() -> None:
     assert sorted(TASK_TOOL_NAMES) == ["TaskCreate", "TaskUpdate"]
 
 
-# ─── apply() — the one dispatch seam every caller shares (#194) ─────────────
+# ─── apply() — the one dispatch seam every caller shares ───────────────────
 #
 # ``apply`` is the create-vs-update dispatch previously private to the Claude
 # adapter (`_apply_task_call`); it moved onto `TaskBoard` itself so the

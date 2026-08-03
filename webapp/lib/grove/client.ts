@@ -6,6 +6,7 @@ import type {
   CreateWorkspaceRequest,
   DashboardSnapshotView,
   HealthView,
+  ProvisionProgressView,
   SessionControlsView,
   SessionDetailView,
   SessionSummaryView,
@@ -73,7 +74,7 @@ export class GroveClient {
   /**
    * Recorded agent sessions for one workspace, newest-first. Default is the
    * daemon's ATTRIBUTED history (adoption-gated). `candidates: true` flips the
-   * scan to the UNGATED cwd-scoped set (#132) — the remap-picker seam that KEEPS
+   * scan to the UNGATED cwd-scoped set — the remap-picker seam that KEEPS
    * the sessions the gate drops (a dead-minted-pointer's live successor, a
    * foreign session in a shared ROOT cwd) so a UI can offer them to pin.
    */
@@ -101,6 +102,40 @@ export class GroveClient {
     return this._get<SessionSummaryView[]>(`/sessions?repo=${encodeURIComponent(repo)}${qs}`);
   }
 
+  /**
+   * The host-wide Session Catalog — the SAME `GET /sessions` route with
+   * `repo` OMITTED. Not a variant of `getProjectSessions`: omitting `repo`
+   * widens the scope to every session in every adapter's store, including repos
+   * Grove has never managed, and swaps the cost model (one bounded head read per
+   * session, no transcript parse) — so rows carry `project`/`cwd`/`live` but
+   * leave `activity`/`size_bytes` null. `limit` is daemon-bounded to 200.
+   */
+  async getSessionCatalog(limit?: number): Promise<SessionSummaryView[]> {
+    const qs = limit != null ? `?limit=${limit}` : "";
+    return this._get<SessionSummaryView[]>(`/sessions${qs}`);
+  }
+
+  /**
+   * A catalog row's conversation — the workspace-LESS drill-in. Resolves
+   * by the `(kind, cwd, session_id)` coordinate a catalog row carries, because
+   * most sessions on a host were never launched by Grove and so cannot be
+   * reached through a workspace. `cwd` MUST be the exact string the row
+   * reported: the adapters match a recorded cwd byte-for-byte. A row with no
+   * `cwd` is not drillable at all — callers must not call this for one.
+   */
+  async getCatalogTurns(
+    sessionId: string,
+    kind: string,
+    cwd: string,
+    last?: number,
+  ): Promise<SessionDetailView> {
+    const params = new URLSearchParams({ kind, cwd });
+    if (last != null) params.set("last", String(last));
+    return this._get<SessionDetailView>(
+      `/sessions/${encodeURIComponent(sessionId)}/turns?${params.toString()}`,
+    );
+  }
+
   /** One session's conversation digest — the last `last` turns, oldest-first. */
   async getSessionTurns(
     id: string,
@@ -119,7 +154,7 @@ export class GroveClient {
   }
 
   /**
-   * The session's available input controls (#178) — enumerated slash commands,
+   * The session's available input controls — enumerated slash commands,
    * skills, MCP servers, the model catalog + current model, permission posture.
    * Fetch-on-demand (never SSE); read-only display is the core value. Best-effort
    * daemon-side: an agent with no control surface yields empty lists, not an error.
@@ -129,7 +164,7 @@ export class GroveClient {
   }
 
   /**
-   * Invoke a named session control — a slash command or a skill (#178). The
+   * Invoke a named session control — a slash command or a skill. The
    * daemon composes `/name` and delivers it through the steer path (204 on
    * dispatch — "delivered", not "ran"; the result rides the transcript later).
    * Refusals: 501 `capability_unavailable` (a shell/remote kind), 409 pane/state.
@@ -139,12 +174,27 @@ export class GroveClient {
   }
 
   /**
-   * Switch the running session's model (#178) — delivered as the interactive
+   * Switch the running session's model — delivered as the interactive
    * `/model <id>` control. `model` is forwarded verbatim (the provider boundary).
    * Refusals mirror `invokeControl`.
    */
   async switchModel(id: string, model: string): Promise<void> {
     await this._post(`/workspaces/${encodeURIComponent(id)}/controls/model`, { model });
+  }
+
+  /**
+   * Live progress of an in-flight container provision — elapsed time, the last
+   * line the provisioner wrote, and a bounded tail of the build log.
+   *
+   * Fetch-on-demand, never SSE: the state view already streams *whether* a
+   * workspace is provisioning, and re-emitting a log tail for every workspace on
+   * every activity tick would cost a file read per workspace per tick. Callers
+   * poll this only while the workspace's status is `provisioning`.
+   */
+  async getProvisionProgress(id: string): Promise<ProvisionProgressView> {
+    return this._get<ProvisionProgressView>(
+      `/workspaces/${encodeURIComponent(id)}/provision`,
+    );
   }
 
   /** One-shot agent-pane ANSI snapshot — the focused live pane's poll fallback. */
@@ -153,7 +203,7 @@ export class GroveClient {
   }
 
   /**
-   * BFF URL for the focused live-pane SSE stream (#19). The browser opens a
+   * BFF URL for the focused live-pane SSE stream. The browser opens a
    * cookie-auth `EventSource` here; the BFF pipes the daemon's diff-guarded
    * `pane_snapshot` frames. Mirrors how `useActivityStream` builds `/events`.
    */
@@ -172,7 +222,7 @@ export class GroveClient {
   }
 
   /**
-   * Answer a live pending `AskUserQuestion` (Gitea #111) — POST
+   * Answer a live pending `AskUserQuestion` — POST
    * `/workspaces/{id}/question-answer`, 204 on dispatch. This is "dispatched",
    * not "resolved": the daemon drives the terminal's keystrokes and the actual
    * resolution rides back later via the SSE-carried `questions` list emptying,
@@ -195,7 +245,7 @@ export class GroveClient {
     });
   }
 
-  // ─── Lifecycle mutations (workspace parity, #56) ───────────────────────────
+  // ─── Lifecycle mutations (workspace parity) ────────────────────────────────
   // These mirror the daemon's WorkspaceManager routes 1:1; the wire contract is
   // the engine's, so we send the exact request shapes and let the engine own
   // every precondition (a non-running pause, a non-OFFLINE respawn). Refusals
@@ -241,7 +291,7 @@ export class GroveClient {
   }
 
   /**
-   * Pin an existing agent session as this workspace's tracked primary (#121) —
+   * Pin an existing agent session as this workspace's tracked primary —
    * POST `/workspaces/{id}/session`, 200 with the updated `WorkspaceStateView`.
    * `sessionRef` is a full session id or a unique id-prefix, resolved in the
    * workspace's project scope (engine-side, like `grove sessions show`).

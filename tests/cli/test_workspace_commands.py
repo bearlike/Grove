@@ -1,4 +1,4 @@
-"""``grove create`` / ``grove message`` Typer surface (issue #45).
+"""``grove create`` / ``grove message`` Typer surface.
 
 In-process via CliRunner against a real tmp git repo and the FakeTmux seam —
 no daemon, no real tmux. Exercises the real engine create/steer path: only the
@@ -16,10 +16,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from grove.core import (
-    AttachInstruction,
     AutoBranch,
     ExistingLocalBranch,
     GroveError,
@@ -30,8 +30,9 @@ from grove.core import (
 )
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.git import GitRepo
+from grove.core.tmux import ContainerAttach, HostAttach
 from grove.tui.cli import app
-from grove.tui.cli_workspace import BranchFlags, _attach_argv
+from grove.tui.cli_workspace import BranchFlags
 from tests.conftest import FakeTmux
 
 
@@ -146,8 +147,8 @@ def test_create_model_flag_forwards_to_launch(
     runner: CliRunner, project: Path, fake_tmux: FakeTmux
 ) -> None:
     """``--model`` rides ``CreateWorkspaceRequest.model`` verbatim onto the
-    agent's launch decoration (#96/#98 model-catalog work) — Grove never
-    validates the id, it just forwards it to the tool's ``--model`` flag."""
+    agent's launch decoration — Grove never validates the id, it just forwards
+    it to the tool's ``--model`` flag."""
     del project
     result = runner.invoke(app, ["create", "model test", "--agent", "claude", "--model", "opus"])
     assert result.exit_code == 0, result.output
@@ -189,7 +190,7 @@ def test_message_resolves_prefix_and_sends(
     created = runner.invoke(app, ["create", "steer me", "--agent", "claude"])
     assert created.exit_code == 0, created.output
     # Pull the new id off the `created <id>` line.
-    new_id = created.output.splitlines()[0].split("created ", 1)[1].strip()
+    new_id = _created_id(created)
 
     result = runner.invoke(app, ["message", new_id[:8], "run the tests"])
     assert result.exit_code == 0, result.output
@@ -212,7 +213,25 @@ def _create(runner: CliRunner, title: str = "work") -> str:
     """Create a workspace via the CLI and return its id (helper for the verbs)."""
     created = runner.invoke(app, ["create", title, "--agent", "claude"])
     assert created.exit_code == 0, created.output
-    return created.output.splitlines()[0].split("created ", 1)[1].strip()
+    # Scan for the line rather than indexing line 0: the engine legitimately
+    # logs before the result (a container runtime that is unavailable falls
+    # back to the host *loudly*), and a helper that assumes the confirmation
+    # is the first line turns any new log line into four unrelated failures.
+    return _created_id(created)
+
+
+def _created_id(created: Result) -> str:
+    """The id off a `grove create` result, wherever the confirmation line sits.
+
+    Scanning beats indexing line 0: the engine legitimately logs before the
+    result (an unavailable container runtime falls back to the host
+    *loudly*), and a helper that assumes the confirmation is the first
+    line turns any new log line into a fistful of unrelated failures.
+    """
+    for line in created.output.splitlines():
+        if "created " in line:
+            return line.split("created ", 1)[1].strip()
+    raise AssertionError(f"no `created <id>` line in CLI output:\n{created.output}")
 
 
 def test_pause_then_resume(runner: CliRunner, project: Path) -> None:
@@ -276,10 +295,16 @@ def test_lifecycle_unknown_workspace_error(runner: CliRunner, project: Path) -> 
 
 
 def test_attach_argv_switch_inside_tmux_else_attach() -> None:
-    inside = _attach_argv(AttachInstruction(tmux_session="grove-x", inside_outer_tmux=True))
+    inside = HostAttach(tmux_session="grove-x", inside_outer_tmux=True).terminal_argv()
     assert inside == ["tmux", "switch-client", "-t", "grove-x"]
-    outside = _attach_argv(AttachInstruction(tmux_session="grove-x", inside_outer_tmux=False))
+    outside = HostAttach(tmux_session="grove-x", inside_outer_tmux=False).terminal_argv()
     assert outside == ["tmux", "attach", "-t", "grove-x"]
+
+
+def test_container_attach_argv_is_the_engine_argv_verbatim() -> None:
+    """No host tmux anywhere in it — the engine already composed the way in."""
+    argv = ("devcontainer", "exec", "--workspace-folder", "/w", "--", "tmux", "new-session")
+    assert ContainerAttach(argv=argv).terminal_argv() == list(argv)
 
 
 def test_attach_resolves_then_execs_tmux(
@@ -302,7 +327,7 @@ def test_attach_resolves_then_execs_tmux(
     assert args[0] == "tmux" and args[1] in {"attach", "switch-client"} and args[2] == "-t"
 
 
-# ─── #120 resume-into-workspace (grove create --resume-session) ──────────────
+# ─── resume-into-workspace (grove create --resume-session) ──────────────────
 
 
 def test_create_resume_session_flag_emits_resume(
@@ -318,7 +343,7 @@ def test_create_resume_session_flag_emits_resume(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     resume = "12345678-1111-2222-3333-444455556666"
-    _write_transcript(claude_home, project, resume)  # #F8: must resolve first
+    _write_transcript(claude_home, project, resume)  # must exist before resume resolves it
     result = runner.invoke(
         app, ["create", "resume me", "--agent", "claude", "--resume-session", resume]
     )
@@ -335,7 +360,7 @@ def test_create_resume_session_rejected_for_shell(runner: CliRunner, project: Pa
     assert "cannot resume" in result.output
 
 
-# ─── #120 grove sessions remap ───────────────────────────────────────────────
+# ─── grove sessions remap ────────────────────────────────────────────────────
 
 
 def _write_transcript(claude_home: Path, cwd: Path, session_id: str) -> None:
@@ -358,7 +383,7 @@ def test_sessions_remap_pins_discovered_session(
 
     created = runner.invoke(app, ["create", "remap host", "--agent", "claude"])
     assert created.exit_code == 0, created.output
-    ws_id = created.output.splitlines()[0].split("created ", 1)[1].strip()
+    ws_id = _created_id(created)
     worktree = next(
         line.split("worktree:", 1)[1].strip()
         for line in created.output.splitlines()
@@ -383,7 +408,7 @@ def test_sessions_remap_unknown_workspace_error(runner: CliRunner, project: Path
 def test_sessions_remap_unknown_session_error(runner: CliRunner, project: Path) -> None:
     del project
     created = runner.invoke(app, ["create", "host", "--agent", "claude"])
-    ws_id = created.output.splitlines()[0].split("created ", 1)[1].strip()
+    ws_id = _created_id(created)
     result = runner.invoke(app, ["sessions", "remap", ws_id[:8], "no-such-session"])
     assert result.exit_code == 1
     assert "no session matches" in result.output
@@ -400,9 +425,9 @@ def test_ls_outside_a_repo_errors_cleanly(
 ) -> None:
     """`grove ls` outside any git repo is a typed one-line error, exit 1.
 
-    Regression for #105's harness finding: `build(Path.cwd())` treated the cwd
-    AS the repo root, so a non-repo directory listed `[]` (and the TUI opened
-    empty) instead of surfacing the documented error.
+    `build(Path.cwd())` must not treat the cwd AS the repo root — that would
+    list `[]` for a non-repo directory (and open the TUI empty) instead of
+    surfacing the documented error.
     """
     del tmp_state_dir
     monkeypatch.chdir(tmp_path)

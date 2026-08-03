@@ -27,6 +27,9 @@ import { TerminalPane } from "@/components/terminal/terminal-pane";
 import { StatTrio } from "@/components/workspace/stat-trio";
 import { CommitList } from "@/components/workspace/commit-list";
 import { PlacementBadge } from "@/components/workspace/placement-badge";
+import { RuntimeBadge } from "@/components/workspace/runtime-badge";
+import { PhaseMeter } from "@/components/workspace/phase-meter";
+import { TicketLinkage } from "@/components/workspace/ticket-refs";
 import { FleetTree } from "@/components/workspace/fleet-tree";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { buildFleetTree, fleetMemberCount } from "@/lib/grove/fleet";
@@ -35,6 +38,7 @@ import { cn } from "@/lib/utils";
 import type { AgentLiveStatus } from "@/lib/grove/agent-activity";
 import type {
   CommitSummaryView,
+  PhaseView,
   SessionActivityView,
   SessionControlView,
   WorkspacePeekView,
@@ -46,26 +50,29 @@ const SECTION_LABEL =
 type PanelTab = "terminal" | "diff" | "info" | "controls";
 
 /**
- * The session page's work panel (ADE #142) — the tabbed surface that fills
- * `AgentWorkspace`'s right pane, replacing the once-bare `TerminalPane`. Three
- * tabs, wire-data only:
+ * The session page's work panel — the tabbed surface that fills
+ * `AgentWorkspace`'s right pane. Three tabs, wire-data only:
  *
  * - **Terminal** — the existing `TerminalPane` machinery, verbatim (this is
  *   still Grove's D2 differentiator — a real tmux pane, not a builder-style
  *   activity log). Its tab carries a permanent live-pulse dot, the same
- *   convention `ViewSwitcher`'s old terminal tab and the pane's own capture
+ *   convention `ViewSwitcher`'s terminal tab and the pane's own capture
  *   badge already use — one glyph language, not a second "unread" heuristic.
  * - **Diff** — ahead/behind/dirty (`StatTrio`) + the ± line-changed summary +
- *   the full `CommitList`. Exactly the "Changes"/"Commits" sections the old
- *   `SessionIdentity` popover held, re-homed verbatim; still wire-data only
- *   (no hunk view — the daemon doesn't expose per-file diffs).
- * - **Info** — the metrics one-liner (turns · tools · tokens, `metrics` testid
- *   — the SAME seam the dashboard card uses, so a drift test can't miss it)
- *   plus subagent count (or the itemized fleet tree, #174, when the session's
- *   sub-agents are itemized on the wire — see below), agent + model identity,
- *   placement, and created/paused timestamps. Deliberately omits
- *   `worktree_path` — a host filesystem path is host-private-ish and was
- *   never rendered anywhere in the old UI either.
+ *   the full `CommitList`. Still wire-data only (no hunk view — the daemon
+ *   doesn't expose per-file diffs).
+ * - **Info** — the workspace's whole identity read, in reading order:
+ *   **Task** (the `PhaseMeter` — the task-phase axis in its expanded, read
+ *   register: phase · step n/6 · note · when it was reported) · **Links**
+ *   (`TicketLinkage` — the issue(s) and the PR, independently clickable) ·
+ *   **Activity** (the metrics one-liner, `metrics` testid — the SAME seam the
+ *   dashboard card uses, so a drift test can't miss it — plus subagent count,
+ *   or the itemized fleet tree when the session's sub-agents are itemized on
+ *   the wire) · **Identity** (agent + model, placement, runtime) ·
+ *   **Timeline** (created/paused). Task and Links self-hide when the wire
+ *   carries neither, so the tab is unchanged for a workspace with no phase and
+ *   no refs. Deliberately omits `worktree_path` — a host filesystem path is
+ *   host-private-ish and is never rendered anywhere in the UI.
  *
  * Tab selection is page-session-local `useState` (design ruling: "smallest
  * seam, don't add a store slice") — it resets on navigation, which is exactly
@@ -73,17 +80,17 @@ type PanelTab = "terminal" | "diff" | "info" | "controls";
  * (`fixed inset-0`), not a portal/Dialog, so it composes with the resizable
  * split underneath without fighting focus-trap semantics.
  *
- * `sessions` (`WorkspaceActivityView.sessions`, #173) is optional and
- * defaults to `[]` so every pre-existing caller/test keeps working unchanged
- * — it's the same flat parent/child list the header identity popover and the
- * session rail already read off the activity snapshot, just threaded here
- * too for the Info tab's `FleetTree` (#174). When it carries no itemized
- * sub-agent (a plain single-session workspace, or a kind that doesn't itemize
- * its fleet), the tab falls back to the old bare `active_subagents` count
- * line — never both, and never empty tree chrome.
+ * `sessions` (`WorkspaceActivityView.sessions`) is optional and defaults to
+ * `[]` so every caller/test keeps working unchanged — it's the same flat
+ * parent/child list the header identity popover and the session rail already
+ * read off the activity snapshot, just threaded here too for the Info tab's
+ * `FleetTree`. When it carries no itemized sub-agent (a plain single-session
+ * workspace, or a kind that doesn't itemize its fleet), the tab falls back to
+ * the bare `active_subagents` count line — never both, and never empty tree
+ * chrome.
  *
- * - **Controls** — the session's input-control surface (#178): the enumerated
- *   slash commands, skills, and configured MCP servers, plus the model catalog
+ * - **Controls** — the session's input-control surface: the enumerated slash
+ *   commands, skills, and configured MCP servers, plus the model catalog
  *   with a switch action. Read-only display is the core value; commands/skills
  *   carry a "Run" trigger and the model a switch, all thin best-effort verbs over
  *   the daemon's `/controls/*` routes. Degrades cleanly — an agent with no
@@ -102,6 +109,7 @@ export function WorkPanel({
   commits,
   commitsLoading,
   sessions = [],
+  phase = null,
   className,
 }: {
   workspaceId: string;
@@ -109,8 +117,11 @@ export function WorkPanel({
   live: AgentLiveStatus;
   commits: CommitSummaryView[] | undefined;
   commitsLoading?: boolean;
-  /** The workspace's flat session list (primary + itemized fleet), #173/#174. */
+  /** The workspace's flat session list (primary + itemized fleet). */
   sessions?: SessionActivityView[];
+  /** Task phase — rides `WorkspaceActivityView` (the SSE snapshot), not the
+   *  peek, so it arrives from the same lookup `sessions` already comes from. */
+  phase?: PhaseView | null;
   className?: string;
 }) {
   const [tab, setTab] = useState<PanelTab>("terminal");
@@ -197,7 +208,13 @@ export function WorkPanel({
         )}
         {tab === "diff" && <DiffTab peek={peek} commits={commits} commitsLoading={commitsLoading} />}
         {tab === "info" && (
-          <InfoTab workspaceId={workspaceId} peek={peek} live={live} sessions={sessions} />
+          <InfoTab
+            workspaceId={workspaceId}
+            peek={peek}
+            live={live}
+            sessions={sessions}
+            phase={phase}
+          />
         )}
         {tab === "controls" && <ControlsTab workspaceId={workspaceId} />}
       </div>
@@ -242,20 +259,40 @@ function InfoTab({
   peek,
   live,
   sessions,
+  phase,
 }: {
   workspaceId: string;
   peek: WorkspacePeekView;
   live: AgentLiveStatus;
   sessions: SessionActivityView[];
+  phase: PhaseView | null;
 }) {
   const s = peek.state;
-  // The itemized fleet (#173) wins over the bare count — a workspace whose
+  const ticketRefs = s.ticket_refs ?? [];
+  // The itemized fleet wins over the bare count — a workspace whose
   // adapter/session doesn't itemize its sub-agents (or has none) falls back
-  // to the old one-liner; never both, never empty tree chrome.
+  // to the plain one-liner; never both, never empty tree chrome.
   const fleetRoots = useMemo(() => buildFleetTree(sessions), [sessions]);
   const hasFleet = fleetMemberCount(fleetRoots) > 0;
   return (
     <div data-testid="work-panel-info-content" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+      {/* Task and Links lead: they answer "what is this work and what is it
+          for" — the questions Activity/Identity/Timeline only qualify. Both
+          self-hide, so a workspace reporting neither reads exactly as before. */}
+      {phase && (
+        <section className="space-y-1.5">
+          <p className={SECTION_LABEL}>Task</p>
+          <PhaseMeter phase={phase} />
+        </section>
+      )}
+
+      {ticketRefs.length > 0 && (
+        <section className="space-y-1.5">
+          <p className={SECTION_LABEL}>Links</p>
+          <TicketLinkage refs={ticketRefs} className="flex-wrap" />
+        </section>
+      )}
+
       <section className="space-y-1.5">
         <p className={SECTION_LABEL}>Activity</p>
         <p data-testid="metrics" className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -284,6 +321,12 @@ function InfoTab({
             </Badge>
           )}
           <PlacementBadge placement={s.placement} size="sm" />
+          <RuntimeBadge
+            runtime={s.runtime}
+            runtimeFallbackReason={s.runtime_fallback_reason}
+            runtimeDefaultConfig={s.runtime_default_config}
+            size="sm"
+          />
         </div>
       </section>
 
@@ -303,7 +346,7 @@ function InfoTab({
 }
 
 /**
- * The Controls tab (#178): the session's input-control surface. Read-only
+ * The Controls tab: the session's input-control surface. Read-only
  * enumeration is the core value — the model catalog (with a switch), the
  * slash commands, the skills, and the configured MCP servers. Commands and
  * skills carry a thin "Run" trigger (`/name` over the steer path); MCP servers

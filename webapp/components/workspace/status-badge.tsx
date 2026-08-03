@@ -11,6 +11,7 @@ const STATUS_CSS_VAR: Record<WorkspaceStatus, string> = {
   paused: "var(--status-paused)",
   orphaned: "var(--status-orphaned)",
   error: "var(--status-error)",
+  provisioning: "var(--status-provisioning)",
 };
 
 /**
@@ -32,7 +33,12 @@ export function StatusBadge({
   size?: "sm" | "md";
   className?: string;
 }) {
-  const isActive = status === "active" || status === "running";
+  // The glyph pulses for every status where something is HAPPENING right now —
+  // an agent working, or a container being built. PROVISIONING is the whole
+  // reason the pulse matters: a still glyph is what made the old OFFLINE read
+  // as dead and got the build killed.
+  const isActive =
+    status === "active" || status === "running" || status === "provisioning";
   const color = STATUS_CSS_VAR[status];
   return (
     <Badge

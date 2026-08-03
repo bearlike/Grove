@@ -14,8 +14,9 @@ Design invariants (CLAUDE.md):
   daemon at consume time, returned in the HTTP response, hashed via SHA-256
   (constant-time compared on validate), and the hash alone is persisted.
 - The on-disk JSON contains only *metadata*: pairing labels, codes, TTLs,
-  state, and session hashes. A user-readable file (mode 600 by virtue of
-  living in the user's config dir) does not become a credential cache.
+  state, and session hashes. The file is written 0600 explicitly (the config
+  dir it lives in is world-traversable under a default umask, so the mode is
+  the protection, not the directory) and holds no credential cache.
 - Sessions slide their TTL on each `validate()` so daily users never
   re-pair; idle for `session_ttl` → re-pair.
 - Side effects (clock, RNG, file I/O) are injectable for tests.
@@ -28,11 +29,9 @@ its dep; TUI / CLI call it via `LocalTransport` / direct import.
 from __future__ import annotations
 
 import base64
-import contextlib
 import hashlib
 import hmac
 import json
-import os
 import secrets
 import threading
 from collections.abc import Callable
@@ -49,6 +48,7 @@ from grove.core import paths
 from grove.core.errors import (
     AuthInvalidToken,
     AuthRateLimited,
+    AuthStoreUnreadable,
     GroveError,
     PairingAlreadyResolved,
     PairingNotFound,
@@ -190,13 +190,15 @@ class SessionStore:
     challenges + sessions on the way out so the on-disk file stays bounded.
 
     Concurrency: daemon and TUI/CLI run in different processes but share
-    the same JSON file. Each operation is read-modify-write-with-os.replace.
-    A process-local `RLock` guards the in-memory mutation; cross-process
-    races on the disk file are vanishingly rare in practice (one user, low
-    operation rate) and fail safely (last-writer-wins; the lost transition
-    can be retried by the user). We accept this rather than introduce a
-    fcntl-based lock (cross-platform fragility outweighs the benefit at
-    V1 scale).
+    the same JSON file, and "the daemon slides a session TTL while the user
+    approves a pairing" is ordinary use, not an exotic race. Each operation is
+    a read-modify-write published by `paths.write_atomic`, whose private temp
+    name is what makes a concurrent write fail *safely* — the accepted residual
+    is last-writer-wins (a lost transition the user can retry), never the
+    interleaved file a shared temp name produced, which no verb can repair and
+    which costs every paired device its session. A process-local `RLock`
+    guards the in-memory mutation; a cross-process advisory lock would
+    be needed to close the lost update too, and is deliberately still absent.
     """
 
     _PAIR_INIT_WINDOW: ClassVar[timedelta] = timedelta(minutes=1)
@@ -427,6 +429,17 @@ class SessionStore:
 
     # ─── internal: persistence + rate + gc ─────────────────────────────────
 
+    def _unreadable(self, reason: str) -> AuthStoreUnreadable:
+        """One typed storage fault for the four ways `auth.json` can be unusable.
+
+        The PATH goes to the log and never into the exception: the daemon puts
+        this message on the wire from `POST /auth/pair`, which is
+        unauthenticated by design, and an operator reads the file location out
+        of the daemon log anyway.
+        """
+        logger.error("auth store at {} is unusable: {}", self._path, reason)
+        return AuthStoreUnreadable(f"auth store is unusable: {reason}")
+
     def _load(self, now: datetime) -> _StoreData:
         """Read the file, GC expired records, return the working set.
 
@@ -440,14 +453,14 @@ class SessionStore:
             with self._path.open(encoding="utf-8") as fh:
                 raw = json.load(fh)
         except json.JSONDecodeError as exc:
-            raise GroveError(f"corrupt auth file at {self._path}: {exc}") from exc
+            raise self._unreadable(f"invalid JSON ({exc})") from exc
         except OSError as exc:
-            raise GroveError(f"cannot read auth file at {self._path}: {exc}") from exc
+            raise self._unreadable(f"cannot be read ({exc})") from exc
         if not isinstance(raw, dict):
-            raise GroveError(f"unexpected auth shape at {self._path}")
+            raise self._unreadable("unexpected shape (not an object)")
         if raw.get("version") != _FILE_VERSION:
-            raise GroveError(
-                f"auth file version {raw.get('version')!r} not supported (expected {_FILE_VERSION})"
+            raise self._unreadable(
+                f"version {raw.get('version')!r} is not supported (expected {_FILE_VERSION})"
             )
         challenges = [self._decode_challenge(c) for c in raw.get("challenges", [])]
         sessions = [self._decode_session(s) for s in raw.get("sessions", [])]
@@ -460,10 +473,16 @@ class SessionStore:
             for c in challenges
             if not (c.state in _TERMINAL_CHALLENGE_STATES and c.expires_at < gc_cutoff)
         ]
-        sessions = [s for s in sessions if s.expires_at > now or s.revoked_at is None]
-        # If something we GC'd changes the on-disk picture, save now so the
-        # next reader sees the cleaner file. Cheap; only emits when records
-        # actually drop out.
+        # TTL alone decides, revocation never keeps a record alive: the
+        # `or s.revoked_at is None` this replaced kept every expired session
+        # that was never explicitly revoked — i.e. all of them, since expiry is
+        # the normal end of a session — so the file only ever grew and
+        # `validate`'s O(N) constant-time scan paid for it on every
+        # authenticated request. A revoked session still lives out
+        # its TTL so `list_sessions(include_revoked=True)` can show it.
+        # Pruning reaches disk on the next mutating call (`_save` writes this
+        # working set); reads stay reads.
+        sessions = [s for s in sessions if s.expires_at > now]
         return {"challenges": challenges, "sessions": sessions}
 
     def _save(self, data: _StoreData) -> None:
@@ -474,14 +493,13 @@ class SessionStore:
             "sessions": [self._encode_session(s) for s in data["sessions"]],
         }
         text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8", newline="\n")
-        os.replace(tmp, self._path)
-        # Best-effort restrict perms (Unix only). Daemon's umask should
-        # already make this 600 but defense-in-depth.
-        if hasattr(os, "chmod") and os.name == "posix":
-            with contextlib.suppress(OSError):  # best-effort hardening
-                os.chmod(self._path, 0o600)
+        # 0600 is applied to the staged file BEFORE it is renamed into place —
+        # the config directory is world-traversable under a default umask, so
+        # this mode is the ONLY thing protecting the file, not defence in depth
+        # over a restrictive umask. `write_atomic`'s private temp name is what
+        # keeps a concurrent daemon TTL-refresh and a TUI approve from
+        # publishing an interleaved file.
+        paths.write_atomic(self._path, text, mode=0o600)
 
     @staticmethod
     def _find_challenge(challenges: list[PairingChallenge], challenge_id: UUID) -> PairingChallenge:

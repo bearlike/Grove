@@ -1,4 +1,4 @@
-"""POST /issue-ops/events — the CI-forwarder ingest route (#196).
+"""POST /issue-ops/events — the CI-forwarder ingest route.
 
 The engine's routing is covered exhaustively in ``tests/core/issueops``; here we
 pin only the daemon seam: the request body validates as an ``IssueOpsEvent``, the

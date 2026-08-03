@@ -17,25 +17,32 @@ adapter automatically.
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from grove.core import paths as core_paths
+from grove.core import process as process_module
 from grove.core.agents import (
     SessionProvenance,
+    SessionRef,
     SessionSummary,
     SessionTurn,
     all_adapters,
     get_adapter,
 )
-from grove.core.agents.hook import ClaudeHook
+from grove.core.agents.claude_code import ClaudeCodeAdapter
+from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook
 from grove.core.errors import GroveError
 from grove.core.git import GitRepo, detect_root
 from grove.core.manager import WorkspaceManager, build
+from grove.core.process import LiveRuntime
 
 if TYPE_CHECKING:
+    from grove.core.registry import RepoRegistry
     from grove.core.workspace import WorkspaceState
 
 # Aware epoch for "no mtime" rows so the newest-first sort never compares
@@ -91,10 +98,10 @@ class SessionExplorer:
         Union of the live ``git worktree list`` (main first; covers hand-made
         worktrees Grove never managed), every workspace's persisted ``agent_cwd``
         (worktree/subpath — where a nested project's agent actually runs and
-        records its transcript's cwd, #101/#118), its ``worktree_path``
+        records its transcript's cwd), its ``worktree_path``
         (covers paused workspaces whose directory is gone — their transcripts
         still live under the encoded-cwd projects folder), and, for a workspace
-        with a ``transcript_context`` override (#147), the recorded cwd it names
+        with a ``transcript_context`` override, the recorded cwd it names
         instead — a container-launched agent's real cwd, which can never equal
         either host path. ``agent_cwd`` collapses to the worktree root for the
         common empty-subpath case, so the extra entries only matter for nested
@@ -137,8 +144,8 @@ class SessionExplorer:
         """
         states = self._manager.list()
         # A scanned root binds to its workspace by cwd — key on agent_cwd (a
-        # nested project's real cwd, #118), worktree_path, and a
-        # transcript_context override's recorded cwd (#147) so a session found
+        # nested project's real cwd), worktree_path, and a
+        # transcript_context override's recorded cwd so a session found
         # under any resolves to its workspace. First-wins on collision.
         by_cwd: dict[str, WorkspaceState] = {}
         for s in states:
@@ -154,15 +161,7 @@ class SessionExplorer:
         # legacy records): the cwd fallback below tags a session only when its
         # kind matches, so it's read per state, not per session.
         eff_kind: dict[str, str] = {s.id: self._manager.effective_kind(s) for s in states}
-        # Root → (kind, config_dir) for a workspace's transcript_context
-        # override (#147) — scopes the adapter's config-dir env var while
-        # scanning that one root, so its bind-mounted host directory is what
-        # `list_sessions` actually searches.
-        override_by_root: dict[str, tuple[str, str]] = {
-            s.transcript_context.agent_cwd: (eff_kind[s.id], s.transcript_context.config_dir)
-            for s in states
-            if s.transcript_context is not None
-        }
+        override_by_root = self._override_by_root(states, eff_kind)
 
         listings: list[SessionListing] = []
         seen: set[tuple[str, str]] = set()
@@ -191,7 +190,7 @@ class SessionExplorer:
                         # own (its adapter can't read it; remap rejects a kind
                         # mismatch). So the cwd fallback tags only a same-kind
                         # session; otherwise the browse row stays unmapped,
-                        # honest history (#164).
+                        # honest history.
                         state = minted.get(summary.session_id)
                         if state is None:
                             candidate = by_cwd.get(str(root))
@@ -233,6 +232,37 @@ class SessionExplorer:
         listings.sort(key=lambda ls: ls.summary.modified_at or _EPOCH, reverse=True)
         return listings[:limit] if limit is not None else listings
 
+    @staticmethod
+    def _override_by_root(
+        states: Sequence[WorkspaceState], eff_kind: dict[str, str]
+    ) -> dict[str, tuple[str, str]]:
+        """Scanned root → ``(kind, config_dir)`` for the workspaces that pin one.
+
+        Lets :meth:`list` scope the adapter's config-dir env var while scanning
+        that root, so the pinned/bind-mounted host directory is what
+        ``list_sessions`` actually searches.
+
+        Keyed off EVERY entry of ``transcript_scan_cwds``, not just the context's
+        own recorded cwd: :meth:`scan_roots` also yields each workspace's
+        worktree root, so keying on the recorded cwd alone left a NESTED pinned
+        workspace's root scan running under the *ambient* config dir — silently
+        missing a session recorded at the worktree root under the pinned one
+        (the union this exists to preserve).
+
+        Two workspaces sharing a root with divergent pins is last-wins. Seen and
+        deliberately left: it needs a shared cwd (ROOT placement) with different
+        overrides, and the honest fix is per-scan attribution rather than a
+        root→override map — a larger change than this seam warrants.
+        """
+        out: dict[str, tuple[str, str]] = {}
+        for state in states:
+            ctx = state.transcript_context
+            if ctx is None:
+                continue
+            for cwd in state.transcript_scan_cwds:
+                out[str(cwd)] = (eff_kind[state.id], ctx.config_dir)
+        return out
+
     def for_workspace(self, workspace_id: str) -> tuple[SessionListing, ...]:
         """Every session recorded for one workspace's directory, newest-first.
 
@@ -269,7 +299,7 @@ class SessionExplorer:
 
     def candidates_for(self, workspace_id: str) -> tuple[SessionListing, ...]:
         """Every session recorded in one workspace's directories, newest-first,
-        UNGATED — the remap-picker seam (#132).
+        UNGATED — the remap-picker seam.
 
         The ungated sibling of :meth:`for_workspace`: the same bounded one-cwd
         scan (cheap per request), but applying NO ``adopts_session`` birth/pane
@@ -303,7 +333,7 @@ class SessionExplorer:
         #F1) — the minted (``grove_launched``) listing is never gated either way.
         One derivation so the gated and ungated reads can't drift.
 
-        The single-adapter restriction (#164) is the kind counterpart of the cwd
+        The single-adapter restriction is the kind counterpart of the cwd
         scope: a workspace runs exactly one agent kind, so only that adapter's
         sessions can be its own. A ROOT workspace's cwd is the shared repo root,
         where the human also runs *other* tools — a foreign-kind transcript there
@@ -315,11 +345,11 @@ class SessionExplorer:
         matches the read path (``ActivityService.sessions_for`` discovers through
         this same one adapter).
 
-        Honors ``state.transcript_context`` (#147): ``transcript_scan_cwds``
+        Honors ``state.transcript_context``: ``transcript_scan_cwds``
         substitutes the container-recorded cwd for the union above, and the
         whole scan is wrapped in the matching config-dir env scope so the
         adapter searches the override's host directory instead of the ambient
-        one. No override (the default) is byte-for-byte the pre-#147 scan.
+        one. No override (the default) is byte-for-byte the plain scan.
         """
         kind = self._manager.effective_kind(state)
         adapter = get_adapter(kind)
@@ -398,7 +428,7 @@ class SessionExplorer:
         remote-backed session (no local files).
 
         Scoped to the owning workspace's ``transcript_context.config_dir``
-        override, if any (#147) — ``_session_cwd`` already resolves to the
+        override, if any — ``_session_cwd`` already resolves to the
         session's own recorded cwd (a container path, when relevant), so only
         the adapter's config-dir env needs redirecting to find that host
         directory at all.
@@ -411,7 +441,7 @@ class SessionExplorer:
             return tuple(adapter.locate_transcripts(self._session_cwd(listing), summary.session_id))
 
     def _transcript_config_dir(self, listing: SessionListing) -> str | None:
-        """The config-dir override for reading ``listing``'s session (#147).
+        """The config-dir override for reading ``listing``'s session.
 
         ``None`` (today's behavior) when the listing isn't attributed to a
         workspace, that workspace has since vanished (a kill racing a read —
@@ -437,7 +467,7 @@ class SessionExplorer:
         :meth:`resolve` scan.
 
         Scoped to the owning workspace's config-dir override, if any — same
-        reasoning as :meth:`transcripts` (#147).
+        reasoning as :meth:`transcripts`.
         """
         adapter = get_adapter(listing.summary.adapter_kind)
         with self._manager.transcript_config_dir_scope(
@@ -446,6 +476,87 @@ class SessionExplorer:
             return adapter.read_turns(
                 self._session_cwd(listing), listing.summary.session_id, last=last
             )
+
+    def subagent_turns(
+        self, workspace_id: str, thread_id: str, *, last: int | None = None
+    ) -> tuple[SessionListing, tuple[SessionTurn, ...]] | None:
+        """The resolution fallback for a fleet-child ``thread_id`` — one that
+        `for_workspace` never lists.
+
+        A fleet row's ``session_id`` IS the Claude sub-agent thread id
+        (``agentId``), and ``discover_paths`` deliberately skips
+        ``subagents/`` — so it never appears in any workspace's own session
+        listing, and a direct id lookup always misses. Kind-scoped to
+        ``claude_code`` exactly like ``ActivityService._fleet_entries`` (a
+        direct :class:`ClaudeCodeAdapter` instantiation, never a widened
+        ``AgentAdapter`` Protocol for one kind's capability — the in-session
+        sidechain fleet is a Claude Code transcript concept). Tries
+        ``thread_id`` against each of the workspace's own top-level sessions
+        (its own :meth:`for_workspace` listing) via the adapter's
+        ``subagent_turns``/``fleet_activity`` projections — both already read
+        off the same memoized spine, so this pays no second parser — and
+        returns the first match's turns plus a ``SessionListing`` synthesized
+        from that SAME per-thread identity (title/current_task degrade
+        exactly as ``fleet_activity`` already does: the ``.meta.json``
+        sidecar, else the truncated first task prompt). ``None`` when
+        ``thread_id`` belongs to none of them, or the workspace isn't
+        ``claude_code``.
+        """
+        state = self._manager.get(workspace_id)
+        if self._manager.effective_kind(state) != "claude_code":
+            return None
+        adapter = ClaudeCodeAdapter()
+        for listing in self.for_workspace(workspace_id):
+            cwd = self._session_cwd(listing)
+            top_id = listing.summary.session_id
+            # Both projections are ambient-env reads, and the scope `for_workspace`
+            # opens is long gone by the time this body runs — it closed when that
+            # call returned. Scoping the loop HEADER would have looked
+            # right and fixed nothing: the listing resolved, then the reads below
+            # found nothing and this returned None, i.e. a 404 on the fleet
+            # drill-in for any pinned workspace. `fleet_activity` returns a list,
+            # so the rows are fully materialized before the scope closes.
+            with self._manager.transcript_scope(state):
+                turns = adapter.subagent_turns(cwd, top_id, thread_id, last=last)
+                fleet = adapter.fleet_activity(cwd, top_id) if turns else []
+            if not turns:
+                continue
+            for session, activity in fleet:
+                if session.session_id != thread_id:
+                    continue
+                fleet_listing = SessionListing(
+                    summary=SessionSummary(
+                        session_id=thread_id,
+                        adapter_kind=session.adapter_kind,
+                        transcript_path=session.transcript_path,
+                        cwd=str(cwd),
+                        created_at=activity.started_at,
+                        modified_at=activity.last_event_at,
+                        size_bytes=self._stat_size(session.transcript_path),
+                        git_branch=listing.summary.git_branch,
+                        title=activity.title,
+                        first_prompt=activity.current_task,
+                        activity=activity,
+                    ),
+                    provenance="fs_discovered",
+                    workspace_id=state.id,
+                    workspace_title=state.title,
+                    workspace_branch=state.branch,
+                )
+                return (fleet_listing, turns)
+        return None
+
+    @staticmethod
+    def _stat_size(path: Path | None) -> int:
+        """Best-effort file size for a synthesized fleet-child summary — never
+        raises (a vanished/unreadable file just reads as ``0``, the same
+        degrade-honestly posture as the rest of this seam)."""
+        if path is None:
+            return 0
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
 
     def _session_cwd(self, listing: SessionListing) -> Path:
         """The cwd key the owning adapter resolves this session under.
@@ -468,4 +579,269 @@ class SessionExplorer:
         return self.turns_for(self.resolve(ref), last=last)
 
 
-__all__ = ["SessionExplorer", "SessionListing"]
+@dataclass(slots=True, frozen=True)
+class ProjectContext:
+    """The repo identity a scanned session cwd resolves to (the host-wide
+    Session Catalog).
+
+    Resolved by a WALK-UP ``.git`` stat, never a ``git rev-parse``
+    subprocess: measured ~12x cheaper over 92 distinct on-host cwds (0.036s
+    vs 0.429s) — the same hot-path discipline
+    ``RepoRegistry._declared_projects`` already applies to its common case.
+    ``.git`` is a FILE inside a linked worktree (a ``gitdir:`` pointer), so
+    the walk tests ``exists()`` — an ``is_dir()`` test would silently miss
+    every worktree, which is most of what this catalog exists to surface.
+
+    Deliberately carries NO branch: the correct branch for a catalog row is
+    the one the SESSION recorded (``SessionRef.git_branch``), not whatever
+    the worktree happens to be checked out to right now — a different,
+    more expensive question. See :class:`CatalogEntry`.
+    """
+
+    repo_root: Path
+    repo_name: str
+    is_worktree: bool
+    is_grove_managed: bool
+
+
+@dataclass(slots=True, frozen=True)
+class CatalogEntry:
+    """One host-wide session row — :class:`SessionListing`'s sibling at wider
+    scope: the same session identity + Grove provenance/workspace
+    annotation, plus the resolved project context.
+
+    ``project`` is ``None`` exactly when the row can't be placed on a
+    project — the session's head read never recovered a cwd (~2 % of Claude
+    transcripts on the reference host) or the cwd resolves to no enclosing
+    git repo (10 sessions on the reference host). Neither case drops the
+    row; both render as the bare directory.
+
+    ``live`` is a HONEST cwd-level signal, never a fabricated 1:1
+    pid-to-session binding — see :meth:`SessionCatalog.fold_liveness`, the
+    pure function that sets it.
+    """
+
+    ref: SessionRef
+    provenance: SessionProvenance
+    project: ProjectContext | None
+    workspace_id: str | None = None
+    workspace_title: str | None = None
+    live: bool = False
+
+
+class SessionCatalog:
+    """Host-wide session enumeration — :class:`SessionExplorer`'s sibling at
+    wider scope.
+
+    ``SessionExplorer`` answers *"which agent sessions belong to THIS
+    project, and how do I read one?"*; this answers the sibling question at
+    host scope: *"which agent sessions exist on this HOST, and where did
+    each come from?"* Same question shape, wider scope — same module, a
+    sibling class, not a new subpackage.
+
+    Repos are discovered FROM the sessions' own recorded cwds — never a
+    host-wide filesystem crawl for ``.git`` directories. ``discover_all()``
+    already walks each adapter's whole store; this only resolves each
+    DISTINCT cwd upward to its enclosing repo, memoized once per scan (on
+    the reference host, 373 transcripts sit behind 90 distinct cwds — the
+    resolution cost tracks the cwd count, not the session count).
+
+    Grove-workspace annotation reuses ``RepoRegistry.known_roots()`` (never
+    a filesystem crawl either — the existing store-roots-union-declared-roots
+    union) and the identical minted-id-first, cwd-second, kind-gated
+    provenance rule ``SessionExplorer.list`` already established, just
+    unioned across every known repo instead of one.
+    """
+
+    def __init__(self, registry: RepoRegistry) -> None:
+        self._registry = registry
+
+    def scan(self, *, limit: int | None = None) -> tuple[CatalogEntry, ...]:
+        """Every discoverable session, newest-first by transcript mtime.
+
+        Metadata only — never a full parse: ``discover_all()`` is built
+        entirely from each adapter's bounded head reads. ``limit`` caps the
+        result AFTER sorting, for a fast first paint on a large host.
+        """
+        minted, by_cwd, eff_kind = self._workspace_maps()
+        known_resolved = set(self._registry.known_roots())  # already resolved
+        project_cache: dict[str, ProjectContext | None] = {}
+        entries: list[CatalogEntry] = []
+        seen: set[tuple[str, str]] = set()
+        for adapter in all_adapters():
+            for ref in adapter.discover_all():
+                key = (ref.adapter_kind, ref.session_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Minted-id equality first, cwd equality second — the exact
+                # rule `SessionExplorer.list` uses, reused rather than
+                # re-derived (kind-gated so a foreign-kind session sharing a
+                # ROOT workspace's cwd doesn't borrow its identity).
+                state = minted.get(ref.session_id)
+                if state is None and ref.cwd is not None:
+                    candidate = by_cwd.get(ref.cwd)
+                    if candidate is not None and ref.adapter_kind == eff_kind[candidate.id]:
+                        state = candidate
+                project: ProjectContext | None = None
+                if ref.cwd is not None:
+                    if ref.cwd not in project_cache:
+                        project_cache[ref.cwd] = self._resolve_project(
+                            Path(ref.cwd), known_resolved
+                        )
+                    project = project_cache[ref.cwd]
+                entries.append(
+                    CatalogEntry(
+                        ref=ref,
+                        provenance=(
+                            "grove_launched" if ref.session_id in minted else "fs_discovered"
+                        ),
+                        project=project,
+                        workspace_id=state.id if state else None,
+                        workspace_title=state.title if state else None,
+                    )
+                )
+        # ONE bounded /proc scan per catalog request (never per row, never on
+        # the 2 s poll) — folded in by the pure `fold_liveness` below so the
+        # I/O and the liveness JUDGMENT stay separate and independently testable.
+        entries = list(
+            self.fold_liveness(entries, process_module.list_agent_runtimes(), now=time.time())
+        )
+        entries.sort(key=lambda e: e.ref.mtime, reverse=True)
+        return tuple(entries[:limit]) if limit is not None else tuple(entries)
+
+    @staticmethod
+    def fold_liveness(
+        entries: Sequence[CatalogEntry], runtimes: Sequence[LiveRuntime], *, now: float
+    ) -> tuple[CatalogEntry, ...]:
+        """Fold ``LiveRuntime`` signals into catalog rows — PURE, zero I/O
+        (unit-testable with synthetic runtimes and rows, no ``/proc``, no
+        subprocess).
+
+        A row is marked ``live`` only when BOTH hold: a runtime of the SAME
+        adapter kind exists at the row's cwd, AND the row's transcript is
+        fresh (within ``DEFAULT_SIDECAR_MAX_AGE_SECONDS`` of ``now`` — the
+        identical staleness window ``ActivityService._blend`` already uses to
+        decide whether a transcript is recent enough to trust a live state).
+        Multiple runtimes sharing one cwd (routine — 20+ concurrent
+        ``claude`` processes were observed on one host) fold to the SAME
+        honest cwd-level ``True``; this NEVER picks one and calls it "the"
+        live session — that would be exactly the fabricated 1:1 binding the
+        evidence forbids.
+        """
+        live_cwds = {(rt.kind, str(rt.cwd)) for rt in runtimes}
+        folded: list[CatalogEntry] = []
+        for entry in entries:
+            ref = entry.ref
+            is_live = (
+                ref.cwd is not None
+                and (ref.adapter_kind, ref.cwd) in live_cwds
+                and (now - ref.mtime) <= DEFAULT_SIDECAR_MAX_AGE_SECONDS
+            )
+            folded.append(replace(entry, live=True) if is_live else entry)
+        return tuple(folded)
+
+    def _workspace_maps(
+        self,
+    ) -> tuple[dict[str, WorkspaceState], dict[str, WorkspaceState], dict[str, str]]:
+        """Minted-id / cwd / effective-kind maps, unioned across every KNOWN
+        repo — the same three maps :meth:`SessionExplorer.list` builds for one
+        repo, just widened. Reused verbatim, not re-derived, so the
+        provenance rule can't drift between the project-scoped and host-wide
+        views. Never a filesystem crawl: ``known_roots()`` is the existing
+        store-roots-union-declared-roots union.
+        """
+        minted: dict[str, WorkspaceState] = {}
+        by_cwd: dict[str, WorkspaceState] = {}
+        eff_kind: dict[str, str] = {}
+        for root in self._registry.known_roots():
+            manager = self._registry.get(root)
+            for state in manager.list():
+                eff_kind[state.id] = manager.effective_kind(state)
+                if state.agent_session_id:
+                    minted[state.agent_session_id] = state
+                cwd_keys = [str(state.agent_cwd), state.worktree_path]
+                if state.transcript_context is not None:
+                    cwd_keys.append(state.transcript_context.agent_cwd)
+                for cwd_key in cwd_keys:
+                    by_cwd.setdefault(cwd_key, state)
+        return minted, by_cwd, eff_kind
+
+    @staticmethod
+    def _resolve_repo_root(cwd: Path) -> Path | None:
+        """Walk UP from ``cwd`` to the first ``.git`` — a cheap stat, never a
+        ``git rev-parse`` subprocess (see :class:`ProjectContext`). ``.git``
+        is a FILE inside a linked worktree, so ``exists()`` catches both a
+        real repo and a worktree; ``is_dir()`` would miss the latter.
+        """
+        current = cwd
+        while True:
+            if (current / ".git").exists():
+                return current
+            parent = current.parent
+            if parent == current:
+                return None
+            current = parent
+
+    def _resolve_project(self, cwd: Path, known_resolved: set[Path]) -> ProjectContext | None:
+        """``cwd`` → its enclosing repo, or ``None`` when no repo encloses it
+        (10 sessions on the reference host) — honest, never dropped, never a
+        fabricated project.
+
+        The nearest ``.git`` is a linked worktree's own pointer FILE, not the
+        main repo — so a worktree cwd's walk-up stops one level short of the
+        canonical root ``known_roots()`` deals in. Resolving that pointer
+        (one more small file read, still no subprocess) is what lets every
+        worktree of one repo group under the SAME project instead of each
+        becoming its own, and what makes ``is_grove_managed`` compare against
+        the right root at all.
+        """
+        nearest = self._resolve_repo_root(cwd)
+        if nearest is None:
+            return None
+        git_marker = nearest / ".git"
+        is_worktree = git_marker.is_file()
+        root = nearest
+        if is_worktree:
+            main_root = self._read_worktree_main_root(git_marker)
+            if main_root is not None:
+                root = main_root
+        return ProjectContext(
+            repo_root=root,
+            repo_name=root.name,
+            is_worktree=is_worktree,
+            is_grove_managed=root.resolve() in known_resolved,
+        )
+
+    @staticmethod
+    def _read_worktree_main_root(git_file: Path) -> Path | None:
+        """A linked worktree's ``.git`` is a pointer file
+        (``gitdir: <main>/.git/worktrees/<name>``, verified against a real
+        ``git worktree add`` layout) — one small text read (never a
+        subprocess) recovers the TRUE main repo root. Best-effort: a
+        malformed or unreadable pointer degrades to ``None`` (the caller
+        keeps the worktree's own directory as the root).
+        """
+        try:
+            line = git_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not line.startswith("gitdir:"):
+            return None
+        target = Path(line.removeprefix("gitdir:").strip())
+        if not target.is_absolute():
+            target = (git_file.parent / target).resolve()
+        parts = target.parts
+        if ".git" not in parts:
+            return None
+        idx = len(parts) - 1 - parts[::-1].index(".git")
+        return Path(*parts[:idx])
+
+
+__all__ = [
+    "CatalogEntry",
+    "ProjectContext",
+    "SessionCatalog",
+    "SessionExplorer",
+    "SessionListing",
+]

@@ -4,14 +4,15 @@ bounding, destructive-tool safety, capability degradation."""
 from __future__ import annotations
 
 import inspect
+import shlex
 from pathlib import Path
 
 import pytest
 
-from grove.client import ProtocolError
-from grove.core.contracts import RootBranch
+from grove.client import ProtocolError, TransportError
+from grove.core.contracts import ContainerAttachView, RootBranch
 from grove.mcp.tools import GroveTools
-from tests.mcp.conftest import FakeGroveClient, make_peek
+from tests.mcp.conftest import FakeGroveClient, make_peek, make_snapshot
 
 # ─── read tools ──────────────────────────────────────────────────────────────
 
@@ -45,6 +46,21 @@ async def test_get_workspace_passes_id(fake_client: FakeGroveClient) -> None:
     assert fake_client.calls == [("get_workspace", {"ws_id": "ws-42"})]
 
 
+async def test_list_projects_returns_rows_and_takes_no_arguments(
+    fake_client: FakeGroveClient,
+) -> None:
+    """The discovery entry point: callable with nothing in hand, and each row
+    hands back the `repo_root` every repo-scoped tool then wants."""
+    tools = GroveTools(fake_client)
+    result = await tools.list_projects()
+    assert [p.repo_name for p in result] == ["acme-api", "acme-web"]
+    assert [p.repo_root for p in result] == ["/repos/acme-api", "/repos/acme-web"]
+    # A nested project keeps the enclosing repo as its root while carrying its
+    # own cwd, which is the distinction an agent needs to start in the subdir.
+    assert result[1].cwd == "/repos/acme-web/frontend"
+    assert fake_client.calls == [("list_projects", {})]
+
+
 async def test_list_agents_passes_repo_root_and_returns_roster(
     fake_client: FakeGroveClient,
 ) -> None:
@@ -55,6 +71,26 @@ async def test_list_agents_passes_repo_root_and_returns_roster(
     assert fake_client.calls == [("list_agents", {"repo": Path("/repo")})]
 
 
+async def test_list_sessions_defaults_to_host_scope(fake_client: FakeGroveClient) -> None:
+    """The zero-argument call is the "what has been running on this host"
+    question: no repo, so the daemon answers with the catalog — rows for
+    directories no workspace owns included."""
+    tools = GroveTools(fake_client)
+    result = await tools.list_sessions()
+    assert [s.session_id for s in result] == ["s-grove", "s-loose"]
+    assert result[0].workspace_id == "ws-1"
+    assert result[0].live is True
+    assert result[1].workspace_id is None
+    assert result[1].project is None
+    assert fake_client.calls == [("list_sessions", {"repo": None, "limit": 50})]
+
+
+async def test_list_sessions_narrows_to_one_repo(fake_client: FakeGroveClient) -> None:
+    tools = GroveTools(fake_client)
+    await tools.list_sessions("/repo", limit=5)
+    assert fake_client.calls == [("list_sessions", {"repo": Path("/repo"), "limit": 5})]
+
+
 async def test_attach_instruction_builds_paste_ready_command(
     fake_client: FakeGroveClient,
 ) -> None:
@@ -62,6 +98,18 @@ async def test_attach_instruction_builds_paste_ready_command(
     result = await tools.attach_instruction("ws-1")
     assert result.tmux_session == "grove-ws-1"
     assert result.command == "tmux attach -t grove-ws-1"
+    assert result.inside_outer_tmux is False
+
+
+async def test_attach_instruction_hands_over_the_container_argv(
+    fake_client: FakeGroveClient,
+) -> None:
+    """A containerized workspace names no host session — the command IS the way in."""
+    argv = ("devcontainer", "exec", "--workspace-folder", "/w", "--", "tmux", "new-session")
+    fake_client.attach_view = ContainerAttachView(argv=argv)
+    result = await GroveTools(fake_client).attach_instruction("ws-1")
+    assert result.tmux_session is None
+    assert result.command == shlex.join(argv)
     assert result.inside_outer_tmux is False
 
 
@@ -90,6 +138,44 @@ async def test_peek_tolerates_missing_snapshot(fake_client: FakeGroveClient) -> 
     tools = GroveTools(fake_client)
     result = await tools.peek_workspace("ws-1")
     assert result.agent_snapshot is None
+
+
+# ─── fleet status ────────────────────────────────────────────────────────────
+
+
+async def test_fleet_status_reports_the_two_axes_no_other_read_carries(
+    fake_client: FakeGroveClient,
+) -> None:
+    """The reason this tool exists: `grove_list_workspaces` answers the lifecycle
+    axis and `grove_peek_workspace` answers git + pane, so the blended agent
+    state and the reported task phase were the fleet facts MCP could not read
+    for every workspace at once."""
+    tools = GroveTools(fake_client)
+    snapshot = await tools.get_fleet_status()
+    row = snapshot.projects[0].workspaces[0]
+    assert row.phase is not None
+    assert row.phase.phase == "implementing"
+    assert row.sessions[0].activity.state.value == "working"
+    assert row.sessions[0].activity.needs_attention is False
+    assert fake_client.calls == [("get_activity", {})]
+
+
+async def test_fleet_status_takes_no_arguments(fake_client: FakeGroveClient) -> None:
+    """Zero-argument like `grove_list_projects`: a supervisor holding nothing
+    still has a first call to make."""
+    sig = inspect.signature(GroveTools(fake_client).get_fleet_status)
+    assert list(sig.parameters) == []
+
+
+async def test_fleet_status_tolerates_an_unreported_phase(
+    fake_client: FakeGroveClient,
+) -> None:
+    """`None` is a real answer (the agent has said nothing), never an error —
+    the same distinction `PhaseFile.read` draws engine-side."""
+    fake_client.activity_view = make_snapshot(phase=None)
+    tools = GroveTools(fake_client)
+    snapshot = await tools.get_fleet_status()
+    assert snapshot.projects[0].workspaces[0].phase is None
 
 
 # ─── create ──────────────────────────────────────────────────────────────────
@@ -205,9 +291,9 @@ async def test_send_message_reports_sent(fake_client: FakeGroveClient) -> None:
 async def test_send_message_degrades_when_endpoint_missing(
     fake_client: FakeGroveClient, status: int
 ) -> None:
-    """A daemon predating issue #37's endpoint answers with a framework
-    404/405 (code ``http_error``) — the tool reports the capability as
-    unavailable instead of erroring."""
+    """A daemon predating this endpoint answers with a framework 404/405 (code
+    ``http_error``) — the tool reports the capability as unavailable instead
+    of erroring."""
     fake_client.send_message_error = ProtocolError(
         code="http_error", message="Not Found", status=status
     )
@@ -230,7 +316,26 @@ async def test_send_message_propagates_workspace_not_found(
         await tools.send_workspace_message("ws-9", "hello")
 
 
-# ─── #120 resume + remap ─────────────────────────────────────────────────────
+async def test_send_message_never_reports_sent_on_a_transport_failure(
+    fake_client: FakeGroveClient,
+) -> None:
+    """A transport failure is neither ``sent`` nor ``unavailable``.
+
+    ``unavailable`` is the *capability* branch — "this daemon has no message
+    endpoint", a permanent answer a caller should stop retrying. A timeout or a
+    dropped connection is neither permanent nor a statement that delivery failed,
+    and quietly folding one into a status field would hand an orchestrator a
+    successful-looking result for a message that may never arrive — the exact
+    hazard that makes a vanished steering message worse than a loud failure.
+    """
+    fake_client.send_message_error = TransportError("daemon timed out after 30s")
+    tools = GroveTools(fake_client)
+    with pytest.raises(TransportError) as excinfo:
+        await tools.send_workspace_message("ws-1", "hello")
+    assert str(excinfo.value)
+
+
+# ─── resume + remap ───────────────────────────────────────────────────────────
 
 
 async def test_create_workspace_threads_resume_session_id(
@@ -263,3 +368,26 @@ async def test_remap_workspace_session_passes_ref(fake_client: FakeGroveClient) 
     result = await tools.remap_workspace_session("ws-7", "cafef00d")
     assert result.id == "ws-7"
     assert fake_client.calls == [("remap_session", {"ws_id": "ws-7", "session_ref": "cafef00d"})]
+
+
+# ─── ticket links ──────────────────────────────────────────────────────────
+#
+# Resolution (URL / '#42' / '42' / 'owner/repo#42' -> provider + kind) is
+# SERVER-SIDE (the daemon's TicketProviderRegistry.resolve_link) — MCP owns no
+# parser of its own. These pin the pass-through only; the parsing/ambiguity
+# behavior itself is covered where it lives: tests/core/tickets/test_links.py
+# (engine) and tests/daemon/test_tickets.py (HTTP wiring + error mapping).
+
+
+async def test_attach_ticket_passes_ref_straight_through(fake_client: FakeGroveClient) -> None:
+    tools = GroveTools(fake_client)
+    result = await tools.attach_ticket("ws-1", "#42")
+    assert result.id == "ws-1"
+    assert fake_client.calls[-1] == ("attach_ticket_by_ref", {"ws_id": "ws-1", "ref": "#42"})
+
+
+async def test_detach_ticket_passes_ref_straight_through(fake_client: FakeGroveClient) -> None:
+    tools = GroveTools(fake_client)
+    result = await tools.detach_ticket("ws-1", "#42")
+    assert result.id == "ws-1"
+    assert fake_client.calls[-1] == ("detach_ticket_by_ref", {"ws_id": "ws-1", "ref": "#42"})

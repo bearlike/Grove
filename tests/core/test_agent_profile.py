@@ -1,12 +1,12 @@
-"""#82: the daemon's ambient env must not dictate an agent's profile.
+"""The daemon's ambient env must not dictate an agent's profile.
 
-The fix is the *generic hermetic launch boundary* — `AgentSpec.env_unset` clears
-the vars the config names (no var name is hard-coded in code) before ``env`` is
-applied — plus the read side's pre-existing union-scan, which finds a
-default-profile transcript in the tool's default dir regardless of any
-``CLAUDE_CONFIG_DIR`` the daemon happens to carry. No per-agent typed field, no
-``config_dir`` threaded through the read path: the env mechanism is the contract,
-and a future container launcher applies the same ``env`` / ``env_unset`` at create.
+The *generic hermetic launch boundary* — `AgentSpec.env_unset` clears the vars
+the config names (no var name is hard-coded in code) before ``env`` is
+applied — plus the read side's union-scan, which finds a default-profile
+transcript in the tool's default dir regardless of any ``CLAUDE_CONFIG_DIR``
+the daemon happens to carry. No per-agent typed field, no ``config_dir``
+threaded through the read path: the env mechanism is the contract, and a
+future container launcher applies the same ``env`` / ``env_unset`` at create.
 """
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ def _launch_env(fake: FakeTmux, session: str) -> tuple[dict[str, str], tuple[str
 # ─── the generic env mechanism (config contract) ─────────────────────────────
 
 
-def test_no_var_name_is_hardcoded_in_default_agents() -> None:
+def test_no_var_name_is_hardcoded_in_builtin_agents() -> None:
     """Pure mechanism: the built-in agents name no env var to set/clear. Hermetic
-    profiles are the operator's policy, expressed in their config — not baked into
-    Grove's code (the anti-pattern #82's first fixes fell into)."""
+    profiles are the operator's policy, expressed in their config — never baked
+    into Grove's code as a hard-coded var name."""
     for agent in GroveConfig().agents:
         assert agent.env == {}
         assert agent.env_unset == ()
@@ -101,11 +101,11 @@ def test_configured_env_unset_carries_through_to_launch(
 def test_default_profile_transcript_found_despite_daemon_config_dir_skew(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Regression for symptom #3 ("stuck at starting"): with the daemon carrying a
-    mismatched ``CLAUDE_CONFIG_DIR`` (a stale value the long-lived tmux server may
-    still hold), a hermetic default-profile agent writes its transcript to Claude's
-    default dir. ``projects_dirs`` always unions that default in, so the read side
-    still finds the transcript and activity advances out of the empty/UNKNOWN state."""
+    """With the daemon carrying a mismatched ``CLAUDE_CONFIG_DIR`` (a stale
+    value the long-lived tmux server may still hold), a hermetic
+    default-profile agent writes its transcript to Claude's default dir.
+    ``projects_dirs`` always unions that default in, so the read side still
+    finds the transcript and activity advances out of the empty/UNKNOWN state."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))

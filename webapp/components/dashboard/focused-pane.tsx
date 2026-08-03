@@ -8,7 +8,7 @@ import { TerminalView } from "@/components/terminal/terminal-view";
 import { useWorkspacePane } from "@/lib/grove/hooks";
 
 /**
- * The dashboard's single live focus pane (#19).
+ * The dashboard's single live focus pane.
  *
  * Streams one workspace's agent pane over SSE (`useWorkspacePane` opens an
  * `EventSource` to `GET /workspaces/{id}/pane/stream`, diff-guarded server-side)
@@ -54,9 +54,8 @@ export function FocusedPane({
         ansi={data?.ansi ?? null}
         ariaLabel={`Live terminal for ${title}`}
         emptyLabel={emptyLabel}
-        // The deeper `bg-background` well (the terminal-emulator tier, #92) reads
-        // as inset against the card's `bg-card` — siblings with the detail page's
-        // TerminalPane, not the lighter muted strip it used before.
+        // The deeper `bg-background` well reads as inset against the card's
+        // `bg-card` — siblings with the detail page's TerminalPane.
         className="h-64 rounded-md border border-border bg-background"
       />
     </Card>

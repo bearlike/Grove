@@ -122,10 +122,10 @@ test("interrupt is WORKING-gated and POSTs through the BFF", async ({ page }) =>
 test("the session rail pins a chosen session as the workspace's primary (#121/#132, rehomed to the rail #140)", async ({
   page,
 }) => {
-  // Session management moved OUT of the header popover into the persistent
-  // session rail (#140). Rail listing + `?s=` transcript switching + inert
-  // metadata rows are covered in sidebar.spec.ts; this owns the one flow unique
-  // to the picker's successor — "make primary", the durable remap (#121/#132).
+  // Session management lives in the persistent session rail, not the header
+  // popover. Rail listing + `?s=` transcript switching + inert metadata rows
+  // are covered in sidebar.spec.ts; this owns the one flow unique to the
+  // picker — "make primary", the durable remap.
   await page.goto("/w/w-grove-1");
   await expect(page.getByTestId("chat-panel")).toBeVisible();
 

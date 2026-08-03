@@ -18,11 +18,10 @@ import type { WorkspaceStateView } from "@/lib/grove/types";
  * The one destructive-confirm modal for `kill` — the single op that drops a
  * branch + worktree — carrying the delete-branch checkbox whose default follows
  * the engine's provenance rule (`defaultDeleteBranch`), matching the engine's
- * required-explicit-input stance. Extracted to its own file (#136) when the kill
- * TRIGGER moved from the `⋯` actions menu into the identity popover's danger
- * zone: the dialog is portalled + placement-agnostic, so it renders correctly
- * regardless of which control hosts the trigger, and lives once as its own
- * concern rather than nested inside either host.
+ * required-explicit-input stance. Its own file since the kill TRIGGER lives in
+ * the identity popover's danger zone: the dialog is portalled + placement-
+ * agnostic, so it renders correctly regardless of which control hosts the
+ * trigger, and lives once as its own concern rather than nested inside a host.
  *
  * The kill→Dialog open flow (a control opening a Radix Dialog) is e2e-only: the
  * Radix focus-trap handoff blows the stack under jsdom, so no component test

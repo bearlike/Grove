@@ -1,7 +1,7 @@
-"""``GET /workspaces/{id}/todo`` (#194): the latest-todo projection, bounded to
-one workspace and resolved through the same manager seam the issueops
-publisher calls in-process. Same fetch-on-demand shape as the sibling
-session-history routes — never on the SSE stream.
+"""``GET /workspaces/{id}/todo``: the latest-todo projection, bounded to one
+workspace and resolved through the same manager seam the issueops publisher
+calls in-process. Same fetch-on-demand shape as the sibling session-history
+routes — never on the SSE stream.
 """
 
 from __future__ import annotations

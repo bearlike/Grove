@@ -12,9 +12,8 @@ import { cn } from "@/lib/utils";
  * freshness without us standing up a second SSE transport the page doesn't
  * need (the polled peek already carries the grid).
  *
- * Edge-to-edge, no frame (#124 density pass, tightened in the de-border pass
- * 2026-07-05): the pane's own rounded border (#92) is gone — its neighbor is
- * now the tabs strip's `border-b` (tabs mode) or the `ResizableHandle` (split
+ * Edge-to-edge, no frame: the pane has no rounded border of its own — its
+ * neighbor is the tabs strip's `border-b` (tabs mode) or the `ResizableHandle` (split
  * mode), never a border of its own, so no `overflow-clip` is needed either
  * (that was only clipping this pane's own rounded corners). The title bar
  * separates from the terminal grid below it by tone alone (`bg-muted/40` vs

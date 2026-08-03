@@ -7,7 +7,7 @@ import { useUiStore } from "@/lib/grove/ui-store";
 import { workspace } from "@/tests/_helpers/activity-fixtures";
 import type { DashboardSnapshotView, WorkspaceActivityView } from "@/lib/grove/types";
 
-// The rail (ADE #140) is now a session-tree navigator: its scrollable BODY is
+// The rail is a session-tree navigator: its scrollable BODY is
 // the `SessionRail` (project → date session tree), the search box at top writes
 // the one `query` store field (filtering the tree AND the Overview grid), and
 // the daemon/identity footer stays at the bottom. This test pins the SHELL
@@ -53,7 +53,7 @@ const WHOAMI = {
   started_at: "2026-05-09T10:00:00Z",
   uptime_seconds: 10,
   host: "grove-host",
-  user: "kk",
+  user: "dev",
   platform: "linux",
   python_version: "3.12.7",
 };
@@ -112,7 +112,7 @@ describe("WorkspaceSidebar", () => {
   it("pins the daemon user identity in the footer", async () => {
     renderSidebar();
     const footer = await screen.findByTestId("sidebar-footer");
-    expect(footer).toHaveTextContent("kk@grove-host");
+    expect(footer).toHaveTextContent("dev@grove-host");
   });
 
   it("re-homes the deleted status bar's system context into the rail footer (#138)", async () => {

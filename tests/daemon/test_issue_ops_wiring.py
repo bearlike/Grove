@@ -1,4 +1,4 @@
-"""Daemon ↔ issue-ops status-publisher lifespan wiring (#197).
+"""Daemon ↔ issue-ops lifespan wiring: the status publisher and the assignee poll.
 
 The publisher is the activity bus's third subscriber (alongside the SSE hub and
 the notification broker). This pins the daemon's job — that ``build_app`` binds
@@ -98,3 +98,52 @@ def test_lifespan_binds_and_closes_the_injected_status_publisher(
         assert app.state.status_publisher is pub
 
     assert pub.closed  # closed on shutdown
+
+
+class _CapturingPoller:
+    """Records the assignee poller's own lifecycle wiring.
+
+    Deliberately NOT a bus subscriber: the poller drives its own timer against
+    the trackers and consumes no deltas, which is why the lifespan does not
+    ``audience.join()`` for it.
+    """
+
+    def __init__(self) -> None:
+        self.bound = False
+        self.closed = False
+
+    def bind(self) -> None:
+        self.bound = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_lifespan_binds_and_closes_the_injected_assignee_poller(
+    fake_tmux: FakeTmux,
+    tmp_state_dir: Path,
+) -> None:
+    del fake_tmux, tmp_state_dir
+    poller = _CapturingPoller()
+    app = build_app(
+        cfg=daemon_test_config(),
+        store=JsonWorkspaceStore(),
+        assignee_poller=poller,  # type: ignore[arg-type]
+    )
+    with TestClient(app) as client:
+        del client
+        assert poller.bound
+        assert app.state.assignee_poller is poller
+    assert poller.closed
+
+
+def test_no_poller_is_built_when_both_halves_are_off(
+    fake_tmux: FakeTmux,
+    tmp_state_dir: Path,
+) -> None:
+    """The default daemon does no tracker polling at all — both halves are opt-in."""
+    del fake_tmux, tmp_state_dir
+    app = build_app(cfg=daemon_test_config(), store=JsonWorkspaceStore())
+    with TestClient(app) as client:
+        del client
+        assert getattr(app.state, "assignee_poller", None) is None

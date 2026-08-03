@@ -25,6 +25,7 @@ from starlette.status import (
     HTTP_404_NOT_FOUND,
     HTTP_409_CONFLICT,
     HTTP_429_TOO_MANY_REQUESTS,
+    HTTP_503_SERVICE_UNAVAILABLE,
 )
 
 from grove.core.agents.hook import ClaudeHook
@@ -38,6 +39,7 @@ from grove.core.contracts.auth import (
 from grove.core.errors import (
     AuthInvalidToken,
     AuthRateLimited,
+    AuthStoreUnreadable,
     GroveError,
     PairingAlreadyResolved,
     PairingNotFound,
@@ -52,18 +54,27 @@ def _envelope(code: str, message: str) -> dict[str, str]:
     return {"error": code, "message": message}
 
 
+#: Auth-domain error → (status, wire code). A linear ``isinstance`` scan like
+#: the engine map in ``app.py``, so the same rule applies: a subclass entry MUST
+#: precede its parent. ``AuthStoreUnreadable`` is 503 and never a 4xx — a
+#: server-side storage fault the caller did nothing to cause and no re-request
+#: fixes; it has to be listed rather than left to fall through, because the
+#: pair routes read a bare ``GroveError`` as bad caller input.
+_AUTH_ERROR_HTTP: tuple[tuple[type[GroveError], int, str], ...] = (
+    (AuthInvalidToken, HTTP_401_UNAUTHORIZED, "auth_invalid"),
+    (PairingNotFound, HTTP_404_NOT_FOUND, "pair_not_found"),
+    (PairingAlreadyResolved, HTTP_409_CONFLICT, "pair_already_resolved"),
+    (AuthRateLimited, HTTP_429_TOO_MANY_REQUESTS, "rate_limited"),
+    (SessionNotFound, HTTP_404_NOT_FOUND, "session_not_found"),
+    (AuthStoreUnreadable, HTTP_503_SERVICE_UNAVAILABLE, "auth_store_unavailable"),
+)
+
+
 def _http_for(exc: GroveError) -> HTTPException:
     """Map auth/pair engine errors to HTTP. First match wins."""
-    if isinstance(exc, AuthInvalidToken):
-        return HTTPException(HTTP_401_UNAUTHORIZED, _envelope("auth_invalid", str(exc)))
-    if isinstance(exc, PairingNotFound):
-        return HTTPException(HTTP_404_NOT_FOUND, _envelope("pair_not_found", str(exc)))
-    if isinstance(exc, PairingAlreadyResolved):
-        return HTTPException(HTTP_409_CONFLICT, _envelope("pair_already_resolved", str(exc)))
-    if isinstance(exc, AuthRateLimited):
-        return HTTPException(HTTP_429_TOO_MANY_REQUESTS, _envelope("rate_limited", str(exc)))
-    if isinstance(exc, SessionNotFound):
-        return HTTPException(HTTP_404_NOT_FOUND, _envelope("session_not_found", str(exc)))
+    for cls, status, code in _AUTH_ERROR_HTTP:
+        if isinstance(exc, cls):
+            return HTTPException(status, _envelope(code, str(exc)))
     return HTTPException(500, _envelope("grove_error", str(exc)))
 
 
@@ -110,7 +121,7 @@ def make_require_session(
 
 
 def make_require_hook_token(*, enabled: bool) -> Callable[[Request], Awaitable[None]]:
-    """Build the hook-ingest route's auth dependency (#171).
+    """Build the hook-ingest route's auth dependency.
 
     A same-host shared secret (:meth:`ClaudeHook.ensure_ingest_token`), never
     the `SessionStore` pairing bearer `require_session` checks — pairing needs
@@ -164,7 +175,13 @@ def build_auth_router(
                 label=req.label,
                 requester_addr=request.client.host if request.client else None,
             )
-        except AuthRateLimited as exc:
+        except (AuthRateLimited, AuthStoreUnreadable) as exc:
+            # AuthStoreUnreadable MUST be caught before the bare `GroveError`
+            # below, which exists only for the label rules: otherwise a corrupt
+            # or unreadable `auth.json` would be reported as `invalid_label`,
+            # telling a user with a perfectly good label that their input was
+            # wrong — and handing an unauthenticated caller the absolute path
+            # of the file while doing it.
             raise _http_for(exc) from exc
         except GroveError as exc:
             raise HTTPException(
@@ -180,7 +197,7 @@ def build_auth_router(
                 challenge_id,
                 requester_addr=request.client.host if request.client else None,
             )
-        except (PairingNotFound, AuthRateLimited) as exc:
+        except (PairingNotFound, AuthRateLimited, AuthStoreUnreadable) as exc:
             raise _http_for(exc) from exc
         if token is not None:
             # Find the freshly-minted session so we can attach its expiry.

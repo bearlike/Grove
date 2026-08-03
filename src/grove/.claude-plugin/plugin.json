@@ -1,0 +1,9 @@
+{
+  "name": "grove",
+  "description": "Grove's fleet-orchestration, in-workspace reporting, configuration and reinstall skills, shipped from the package that implements them.",
+  "version": "1.2.0",
+  "author": {
+    "name": "bearlike"
+  },
+  "homepage": "https://github.com/bearlike/Grove"
+}

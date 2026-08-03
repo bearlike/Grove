@@ -1,4 +1,4 @@
-"""HTTP surface for manual session remap + resume-into-workspace (#120).
+"""HTTP surface for manual session remap + resume-into-workspace.
 
 Two routes exercised against a real git repo + FakeTmux:
   * ``POST /workspaces`` with ``resume_session_id`` — the launch adopts the id
@@ -75,7 +75,7 @@ def test_create_with_resume_session_id_pins_it(daemon: Daemon) -> None:
     deliberately omits the session id."""
     _, repo, cfg_home, store = daemon
     resume = "12345678-1111-2222-3333-444455556666"
-    # #F8: the resume ref must resolve to a real session in the project BEFORE any
+    # The resume ref must resolve to a real session in the project BEFORE any
     # side effect — materialize one at the repo root (the only scan root before
     # the workspace exists).
     folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(repo)

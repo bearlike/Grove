@@ -1,11 +1,11 @@
-"""Native steering — deliver a message/interrupt to a paneless agent (#172).
+"""Native steering — deliver a message/interrupt to a paneless agent.
 
 The tmux backend types steering into a live pane (``tmux.send_text`` /
-``send_keys``); a **paneless** runtime (``provides_pane = False``, #146 — a
+``send_keys``); a **paneless** runtime (``provides_pane = False`` — a
 headless detached process) has no pane, so steering must ride the agent's own
 native input channel instead. This module is that delivery seam: the
 :class:`NativeSteerClient` Protocol and its default :class:`ChannelSteerClient`,
-which forwards a message over the #182 Grove **channel** receiver (Claude Code's
+which forwards a message over the Grove **channel** receiver (Claude Code's
 native "act on this message" transport).
 
 It is the paneless twin of ``grove.core.mewbo``'s remote steering: the manager's
@@ -15,11 +15,11 @@ socket. Best-effort by contract — a delivery failure logs and returns; steerin
 must never raise into the caller's hot path (the render loop, the daemon route).
 
 Concrete-transport status: message delivery rides the channel receiver (real when
-``cfg.channels.enabled`` spawned the server, a logged no-op otherwise, exactly as
-#182 left its daemon-side plumbing a deferred seam). A native *interrupt* has no
+``cfg.channels.enabled`` spawned the server, a logged no-op otherwise — the
+daemon-side plumbing is a deliberately deferred seam). A native *interrupt* has no
 channel primitive yet — the stream-json/SDK ``control_request`` ``interrupt`` is
-the eventual home — so it is a best-effort logged no-op today, which is still the
-#172 win over the old ``CapabilityUnavailable`` raise. Dependencies flow inward —
+the eventual home — so it is a best-effort logged no-op today, which is still a
+win over the old ``CapabilityUnavailable`` raise. Dependencies flow inward —
 this imports ``channel`` (its public receiver seams) and the agent model, never
 the manager.
 """
@@ -44,7 +44,7 @@ _SENDER = "grove"
 
 
 class NativeSteerClient(Protocol):
-    """Deliver steering to a paneless agent over its native channel (#172).
+    """Deliver steering to a paneless agent over its native channel.
 
     Two ops, mirroring the mewbo remote surface ``_steer_remote`` dispatches to
     (``send_message`` / ``interrupt``), keyed by the workspace's agent session id.
@@ -58,7 +58,7 @@ class NativeSteerClient(Protocol):
 
 
 class ChannelSteerClient:
-    """Default :class:`NativeSteerClient` — deliver over the #182 channel receiver.
+    """Default :class:`NativeSteerClient` — deliver over the Grove channel receiver.
 
     Reads the channel server's published ``{port, token}`` endpoint file and POSTs
     the message to its loopback receiver, which emits it into the running session
@@ -89,7 +89,7 @@ class ChannelSteerClient:
     def interrupt(self, session_id: str) -> None:
         # No channel-protocol interrupt primitive exists yet; the stream-json /
         # SDK `control_request` interrupt is the eventual home. Best-effort no-op
-        # so the manager's paneless interrupt no longer raises (the #172 contract).
+        # so the manager's paneless interrupt never raises.
         logger.debug(
             "native interrupt for session {} is not yet a channel primitive; "
             "deferred to the stream-json control channel",

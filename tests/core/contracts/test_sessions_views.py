@@ -6,6 +6,8 @@ endpoint behavior lives in tests/daemon/test_sessions_endpoints.py.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from grove.core.agents import (
@@ -15,13 +17,14 @@ from grove.core.agents import (
     AgentQuestionOption,
     DigestEntry,
     FileEdit,
+    SessionRef,
     SessionSummary,
     SessionTurn,
     TodoItem,
     TodoList,
 )
 from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView, SessionTurnView
-from grove.core.sessions import SessionListing
+from grove.core.sessions import CatalogEntry, ProjectContext, SessionListing
 
 SID = "11111111-1111-4111-8111-111111111111"
 
@@ -43,7 +46,7 @@ def _summary() -> SessionSummary:
     )
 
 
-def test_summary_view_flattens_listing_and_omits_host_paths() -> None:
+def test_summary_view_flattens_listing_and_omits_the_transcript_path() -> None:
     listing = SessionListing(
         summary=_summary(),
         provenance="grove_launched",
@@ -54,13 +57,100 @@ def test_summary_view_flattens_listing_and_omits_host_paths() -> None:
     view = SessionSummaryView.from_listing(listing)
     assert view.session_id == SID
     assert view.provenance == "grove_launched"
+    assert view.primary is True  # the explicit pin marker
     assert view.workspace_id == "w1"
     assert view.first_prompt == "please fix"
+    assert view.activity is not None
     assert view.activity.state is AgentActivityState.WAITING
-    # Host-private paths never cross the wire (views serialize, never expose).
+    # The transcript's own path stays host-private (views serialize, never
+    # expose); the working directory deliberately crosses, because "where did
+    # this session happen" is the question a session row exists to answer.
     payload = view.model_dump_json()
     assert "transcript_path" not in payload
-    assert "/home/someone" not in payload
+    assert ".claude/projects" not in payload
+    assert view.cwd == "/home/someone/project"
+    # Catalog-only fields stay at their defaults for a project-scoped row.
+    assert view.project is None
+    assert view.live is False
+
+
+def _catalog_entry(*, cwd: str | None = "/home/someone/project", **over: object) -> CatalogEntry:
+    fields: dict[str, object] = {
+        "ref": SessionRef(
+            session_id=SID,
+            adapter_kind="claude_code",
+            cwd=cwd,
+            transcript_path=Path("/home/someone/.claude/projects/x") / f"{SID}.jsonl",
+            birth=datetime(2026, 7, 20, 9, 0, tzinfo=UTC),
+            mtime=1_800_000_000.0,
+            git_branch="main",
+        ),
+        "provenance": "fs_discovered",
+        "project": ProjectContext(
+            repo_root=Path("/home/someone/project"),
+            repo_name="project",
+            is_worktree=False,
+            is_grove_managed=False,
+        ),
+    }
+    fields.update(over)
+    return CatalogEntry(**fields)  # type: ignore[arg-type]
+
+
+def test_catalog_view_reports_unparsed_fields_as_null_not_zero() -> None:
+    """A host-scope row is built from one bounded head read, so everything a
+    full parse would have produced is honestly absent — a client must be able
+    to tell "not measured" from "measured as empty"."""
+    view = SessionSummaryView.from_catalog(_catalog_entry())
+    assert view.session_id == SID
+    assert view.activity is None
+    assert view.size_bytes is None
+    assert view.title is None
+    assert view.first_prompt is None
+    assert view.workspace_branch is None
+    # ...while everything the head read DID yield is present.
+    assert view.git_branch == "main"
+    assert view.created_at == datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
+    assert view.modified_at == datetime.fromtimestamp(1_800_000_000.0, UTC)
+    assert view.cwd == "/home/someone/project"
+    assert view.project is not None
+    assert view.project.repo_name == "project"
+    assert "transcript_path" not in view.model_dump_json()
+
+
+def test_catalog_view_primary_tracks_provenance_and_liveness_rides_through() -> None:
+    minted = SessionSummaryView.from_catalog(
+        _catalog_entry(
+            provenance="grove_launched", workspace_id="w1", workspace_title="W", live=True
+        )
+    )
+    assert minted.primary is True
+    assert minted.workspace_id == "w1"
+    assert minted.live is True
+    assert SessionSummaryView.from_catalog(_catalog_entry()).primary is False
+
+
+def test_catalog_view_keeps_an_unplaceable_row_rather_than_inventing_a_project() -> None:
+    view = SessionSummaryView.from_catalog(_catalog_entry(cwd=None, project=None))
+    assert view.cwd is None
+    assert view.project is None
+
+
+def test_catalog_view_maps_a_failed_stat_to_no_timestamp() -> None:
+    """``mtime`` is ``0.0`` exactly when the stat failed — a missing value, not
+    a session last written in 1970."""
+    entry = _catalog_entry()
+    view = SessionSummaryView.from_catalog(
+        replace(entry, ref=replace(entry.ref, mtime=0.0)),
+    )
+    assert view.modified_at is None
+
+
+def test_summary_view_primary_false_for_a_discovered_session() -> None:
+    """A non-minted (`fs_discovered`) listing is never the pin — `primary`
+    stays `False`, the field's default."""
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    assert SessionSummaryView.from_listing(listing).primary is False
 
 
 def test_turn_view_caps_entry_text() -> None:

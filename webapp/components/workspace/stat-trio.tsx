@@ -11,13 +11,12 @@ interface Props {
 }
 
 /**
- * Compact diff-stat triplet (issue #96 deliverable C: pipes → middots). Three
- * inline `value AHEAD · value BEHIND · value DIRTY` stats, middot-separated to
- * match the rest of the card's quiet meta texture (the old vertical Separator
- * "pipes" read as loud chrome on a demoted footer line). The numerals carry the
- * polarity hue (`statColor` — green ahead, amber behind/dirty, muted at zero);
- * the unit labels stay hard-muted so color appears only where a count means
- * something. Presentational: all color policy is delegated to `statColor`.
+ * Compact diff-stat triplet. Three inline `value AHEAD · value BEHIND ·
+ * value DIRTY` stats, middot-separated to match the rest of the card's quiet
+ * meta texture. The numerals carry the polarity hue (`statColor` — green
+ * ahead, amber behind/dirty, muted at zero); the unit labels stay hard-muted
+ * so color appears only where a count means something. Presentational: all
+ * color policy is delegated to `statColor`.
  */
 export function StatTrio({ ahead, behind, dirty, className }: Props) {
   const { resolvedTheme } = useTheme();

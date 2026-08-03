@@ -20,9 +20,13 @@ from grove.core.contracts import (
     AgentSummaryView,
     AttachInstructionView,
     CreateWorkspaceRequest,
+    HostAttachView,
+    ProjectView,
+    SessionSummaryView,
     WorkspacePeekView,
     WorkspaceStateView,
 )
+from grove.core.contracts.activity import DashboardSnapshotView
 
 
 def make_state(ws_id: str = "ws-1", **overrides: Any) -> WorkspaceStateView:
@@ -41,6 +45,76 @@ def make_state(ws_id: str = "ws-1", **overrides: Any) -> WorkspaceStateView:
     }
     data.update(overrides)
     return WorkspaceStateView.model_validate(data)
+
+
+def make_snapshot(*, phase: str | None = "implementing") -> DashboardSnapshotView:
+    """One activity snapshot carrying the two axes only this read reports:
+    the workspace's task ``phase`` and its session's blended agent state."""
+    activity: dict[str, Any] = {
+        "state": "working",
+        "title": None,
+        "current_task": "wiring the client",
+        "human_turns": 1,
+        "assistant_replies": 2,
+        "replies_per_turn": [2],
+        "tool_calls": 3,
+        "model": "claude-opus-4",
+        "tokens_in": 10,
+        "tokens_out": 20,
+        "last_event_at": "2026-07-31T00:00:00Z",
+        "needs_attention": False,
+        "error_detail": None,
+    }
+    return DashboardSnapshotView.model_validate(
+        {
+            "generated_at": "2026-07-31T00:00:00Z",
+            "total_workspaces": 1,
+            "needs_attention": 0,
+            "projects": [
+                {
+                    "repo_root": "/projects/demo",
+                    "repo_name": "demo",
+                    "cwd": "/projects/demo",
+                    "workspaces": [
+                        {
+                            "state": make_state(),
+                            "sessions": [
+                                {
+                                    "session": {
+                                        "session_id": "sess-1",
+                                        "adapter_kind": "claude_code",
+                                        "provenance": "grove_launched",
+                                        "tmux_window": "agent",
+                                    },
+                                    "activity": activity,
+                                }
+                            ],
+                            "base_ahead": 1,
+                            "base_behind": 0,
+                            "diff_added": 4,
+                            "diff_removed": 1,
+                            "dirty_files": 0,
+                            "pane_target": "grove-demo:agent",
+                            "needs_attention": False,
+                            "recent_commits": [],
+                            "observed_at": "2026-07-31T00:00:00Z",
+                            "phase": (
+                                None
+                                if phase is None
+                                else {
+                                    "phase": phase,
+                                    "note": None,
+                                    "updated_at": "2026-07-31T00:00:00Z",
+                                    "index": 2,
+                                    "total": 6,
+                                }
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+    )
 
 
 def make_peek(snapshot: str | None = "agent output") -> WorkspacePeekView:
@@ -65,7 +139,9 @@ class FakeGroveClient(GroveClient):
     def __init__(self) -> None:  # deliberately no super().__init__()
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.peek_view: WorkspacePeekView = make_peek()
+        self.activity_view: DashboardSnapshotView = make_snapshot()
         self.send_message_error: Exception | None = None
+        self.attach_view: AttachInstructionView | None = None
 
     async def list_workspaces(
         self,
@@ -107,11 +183,17 @@ class FakeGroveClient(GroveClient):
 
     async def get_attach(self, ws_id: str) -> AttachInstructionView:
         self.calls.append(("get_attach", {"ws_id": ws_id}))
-        return AttachInstructionView(tmux_session=f"grove-{ws_id}", inside_outer_tmux=False)
+        if self.attach_view is not None:
+            return self.attach_view
+        return HostAttachView(tmux_session=f"grove-{ws_id}", inside_outer_tmux=False)
 
     async def peek(self, ws_id: str) -> WorkspacePeekView:
         self.calls.append(("peek", {"ws_id": ws_id}))
         return self.peek_view
+
+    async def get_activity(self) -> DashboardSnapshotView:
+        self.calls.append(("get_activity", {}))
+        return self.activity_view
 
     async def send_message(self, ws_id: str, text: str) -> None:
         self.calls.append(("send_message", {"ws_id": ws_id, "text": text}))
@@ -122,11 +204,89 @@ class FakeGroveClient(GroveClient):
         self.calls.append(("remap_session", {"ws_id": ws_id, "session_ref": session_ref}))
         return make_state(ws_id)
 
+    async def attach_ticket_by_ref(self, ws_id: str, ref: str) -> WorkspaceStateView:
+        # Resolution is server-side: the fake just records the raw ref it was
+        # handed, mirroring the daemon route's actual contract instead of
+        # re-parsing it here.
+        self.calls.append(("attach_ticket_by_ref", {"ws_id": ws_id, "ref": ref}))
+        return make_state(ws_id, ticket_refs=[{"provider": "gitea", "id": "42"}])
+
+    async def detach_ticket_by_ref(self, ws_id: str, ref: str) -> WorkspaceStateView:
+        self.calls.append(("detach_ticket_by_ref", {"ws_id": ws_id, "ref": ref}))
+        return make_state(ws_id, ticket_refs=[])
+
     async def list_agents(self, repo: Path) -> list[AgentSummaryView]:
         self.calls.append(("list_agents", {"repo": repo}))
         return [
             AgentSummaryView(name="claude", kind="claude_code", models=("opus", "sonnet")),
             AgentSummaryView(name="shell", kind="generic"),
+        ]
+
+    async def list_sessions(
+        self, *, repo: Path | None = None, limit: int = 50
+    ) -> list[SessionSummaryView]:
+        self.calls.append(("list_sessions", {"repo": repo, "limit": limit}))
+        # A host-scope pair: one Grove-launched row, one the catalog found in a
+        # directory no workspace owns — the two shapes an agent must handle.
+        return [
+            SessionSummaryView.model_validate(
+                {
+                    "session_id": "s-grove",
+                    "adapter_kind": "claude_code",
+                    "provenance": "grove_launched",
+                    "primary": True,
+                    "workspace_id": "ws-1",
+                    "workspace_title": "fix login bug",
+                    "workspace_branch": None,
+                    "git_branch": "main",
+                    "created_at": None,
+                    "modified_at": None,
+                    "size_bytes": None,
+                    "title": None,
+                    "first_prompt": None,
+                    "last_prompt": None,
+                    "activity": None,
+                    "cwd": "/projects/demo",
+                    "project": {
+                        "repo_root": "/projects/demo",
+                        "repo_name": "demo",
+                        "is_worktree": False,
+                        "is_grove_managed": True,
+                    },
+                    "live": True,
+                }
+            ),
+            SessionSummaryView.model_validate(
+                {
+                    "session_id": "s-loose",
+                    "adapter_kind": "codex",
+                    "provenance": "fs_discovered",
+                    "workspace_id": None,
+                    "workspace_title": None,
+                    "workspace_branch": None,
+                    "git_branch": None,
+                    "created_at": None,
+                    "modified_at": None,
+                    "size_bytes": None,
+                    "title": None,
+                    "first_prompt": None,
+                    "last_prompt": None,
+                    "activity": None,
+                    "cwd": "/elsewhere",
+                    "project": None,
+                }
+            ),
+        ]
+
+    async def list_projects(self) -> list[ProjectView]:
+        self.calls.append(("list_projects", {}))
+        # One top-level project (cwd == repo_root) and one nested project whose
+        # cwd sits under its enclosing repo — the two shapes a caller must handle.
+        return [
+            ProjectView(repo_root="/repos/acme-api", repo_name="acme-api", cwd="/repos/acme-api"),
+            ProjectView(
+                repo_root="/repos/acme-web", repo_name="acme-web", cwd="/repos/acme-web/frontend"
+            ),
         ]
 
 

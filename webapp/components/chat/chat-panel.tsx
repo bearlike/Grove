@@ -17,8 +17,7 @@ import { useGroveChatRuntime } from "@/lib/grove/assistant-runtime";
 import type { AgentActivityState, DashboardSnapshotView } from "@/lib/grove/types";
 
 /**
- * The steer-capable chat surface on `/w/[id]` (issue #38, rebuilt on
- * `@assistant-ui/react` in Phase D #141): the latest session's transcript
+ * The steer-capable chat surface on `/w/[id]`: the latest session's transcript
  * rendered through the headless `ThreadPrimitive` / `MessagePrimitive` /
  * `ComposerPrimitive`, over Grove's own external-store runtime
  * (`useGroveChatRuntime`, which wraps the unchanged `useSessionTurns` +
@@ -26,16 +25,16 @@ import type { AgentActivityState, DashboardSnapshotView } from "@/lib/grove/type
  * page (streamdown + assistant-ui) — the page loads it via `next/dynamic`, so
  * always import this module lazily.
  *
- * A LIVE pending `AskUserQuestion` GROUP (Gitea #111) is sourced from the SSE
- * activity `snapshot` (page-owned since #130) and appended as one more message
- * (keyed by group_id), rendered by the same `PendingQuestionCard`. The panel
- * does not OWN session selection (#121/#130): the page hands down the resolved
- * `sessionId`, the activity `snapshot`, and the selected session's `agentState`
- * — this is a pure renderer of that one session's transcript + composer.
+ * A LIVE pending `AskUserQuestion` GROUP is sourced from the SSE activity
+ * `snapshot` (page-owned) and appended as one more message (keyed by
+ * group_id), rendered by the same `PendingQuestionCard`. The panel does not
+ * OWN session selection — the page hands down the resolved `sessionId`, the
+ * activity `snapshot`, and the selected session's `agentState` — this is a
+ * pure renderer of that one session's transcript + composer.
  *
  * Test seams: `chat-panel`, `chat-message` + `data-role` (each carrying a
  * `role-label` speaker tag), `tool-group`, `chat-tool` (inside an expanded
- * group), `chat-notification`, `chat-question` (read-only #74 card OR the live
+ * group), `chat-notification`, `chat-question` (read-only card OR the live
  * interactive `pending-question-card`), `chat-composer`, `chat-interrupt`,
  * `chat-notice`, `user-message-collapse`/`user-message-toggle`.
  */
@@ -55,7 +54,7 @@ export function ChatPanel({
   /** The selected session's agent state — gates the WORKING-only interrupt. */
   agentState: AgentActivityState;
   /**
-   * The page-wired track picker (#132). Present ONLY when the workspace tracks no
+   * The page-wired track picker. Present ONLY when the workspace tracks no
    * usable session but ungated candidates exist — its presence flips the empty
    * state from the generic "send a message" copy to a "pick a session to follow"
    * CTA. Absent ⇒ the generic empty state.
@@ -86,7 +85,7 @@ export function ChatPanel({
 }
 
 /**
- * Thread layout tokens from assistant-ui's own styled template (#154), set on
+ * Thread layout tokens from assistant-ui's own styled template, set on
  * the panel root so every descendant (the column measure, the composer) reads
  * one source. `--thread-max-width` is the Claude reading measure (44rem/704px)
  * while the transcript shares the row with the work panel (split view); with
@@ -108,7 +107,7 @@ function threadTokens(wide: boolean): CSSProperties {
 }
 
 /**
- * The one shared column measure (LibreChat's no-drift rule, #124): transcript
+ * The one shared column measure (LibreChat's no-drift rule): transcript
  * content, notice, and composer all mount inside it so they stay column-aligned
  * at every width. `px-3` makes mobile effectively edge-to-edge; the max-width is
  * the `--thread-max-width` token, set per-pane-mode by `threadTokens()`.
@@ -211,7 +210,7 @@ function ChatPanelInner({
           </p>
         )}
 
-        {/* The agent's current todo/plan list (#184) — pinned as a card directly
+        {/* The agent's current todo/plan list — pinned as a card directly
             above the composer (a sibling of the transcript, not a message), so
             the plan stays visible while you scroll. Column-aligned; absent
             entirely when the session has no todo (degrade to nothing). */}
@@ -222,7 +221,7 @@ function ChatPanelInner({
         )}
 
         {/* Breathing room under the composer: the tone-filled composer floats in
-            whitespace; never re-add a separator line here (#130). The bottom pad
+            whitespace; never re-add a separator line here. The bottom pad
             grows to the home-indicator safe-area inset so the composer clears the
             bezel on a notched phone (0 elsewhere); the viewport's
             `interactiveWidget: resizes-content` keeps it above the keyboard. */}
@@ -239,7 +238,7 @@ function ChatPanelInner({
   );
 }
 
-/** The steer composer on `ComposerPrimitive`, restyled modern-chat-native (#154): a
+/** The steer composer on `ComposerPrimitive`, modern-chat-native: a
  * floating input plane — the textarea over an action row — at the 24px composer
  * radius (`--composer-radius`) on the muted-tinted `--composer-bg`, Enter=send
  * (Shift+Enter newline). The send is a circular terracotta CTA (ArrowUp); the
@@ -307,7 +306,7 @@ function SteerComposer({
   );
 }
 
-/** The empty transcript — generic prompt, or the #132 track-a-session CTA when
+/** The empty transcript — generic prompt, or a track-a-session CTA when
  * the page hands down a picker (its presence IS the "candidates exist" signal). */
 function EmptyState({ picker }: { picker?: ReactNode }) {
   return (
@@ -332,7 +331,7 @@ function EmptyState({ picker }: { picker?: ReactNode }) {
 }
 
 /** A calm "agent working" pulse under the transcript — visual only; the bounded
- * state label is already announced by the header aria-live region (#136), so
+ * state label is already announced by the header aria-live region, so
  * this stays out of the accessibility tree to avoid a double announce.
  *
  * The dot pulses on the SAME stepped `grove-pulse` cadence as the working

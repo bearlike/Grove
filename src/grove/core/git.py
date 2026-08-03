@@ -24,6 +24,7 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 from loguru import logger
 
@@ -34,6 +35,39 @@ from grove.core.workspace import CommitSummary
 
 _DIFFSTAT_INSERTIONS = re.compile(r"(\d+) insertion")
 _DIFFSTAT_DELETIONS = re.compile(r"(\d+) deletion")
+
+
+def _assert_not_flaglike(**values: str | None) -> None:
+    """Refuse a ref/branch value git would parse as an option.
+
+    The second of two layers, and the one that makes the fix stay fixed: the
+    contract (`contracts/branch_plan.BRANCH_NAME_PATTERN`) validates intent at
+    the boundary, and this refuses an argv the side-effect module should never
+    have been handed — so a future call site that bypasses the contract, or a
+    new variant that forgets the pattern, cannot reintroduce the hole.
+
+    **`shell=False` and list-form argv do not help here**, which is the whole
+    trap: they prevent a value being *embedded* in a command, and this value
+    *is* the command. Measured against real git 2.43 —
+    `git worktree add -b -m <path> origin/main` renamed the checked-out branch,
+    and `-b -D <path> feature/x` printed `Deleted branch feature/x`. Both then
+    exited `fatal:`, so the caller saw a failure while the damage was done.
+
+    Nor can `--` or `--end-of-options` fix it: `git worktree add` hands the
+    `-b` value to an internal `git branch` that re-parses it as its own argv,
+    where no separator of ours is present. Validation is the only defence.
+
+    Applied to the MUTATING ref-takers only. The read-only helpers pass refs
+    too, but a misparsed flag there costs a wrong answer, not a destroyed
+    branch, and they are already `check=False` best-effort — guarding them
+    would trade a real property for noise.
+    """
+    for label, value in values.items():
+        if value is not None and value.startswith("-"):
+            raise GitError(
+                f"refusing to run git with {label}={value!r}: a leading '-' would be "
+                "parsed as a command-line flag, not a ref"
+            )
 
 
 class GitRepo:
@@ -47,6 +81,19 @@ class GitRepo:
     empty / zeros on failure so the caller (peek loops, branch
     dropdowns) doesn't break on transient issues.
     """
+
+    #: Wall-clock bound on every git subprocess. Generous rather than
+    #: tuned: the point is that no git invocation can hang FOREVER, because a
+    #: single one that does takes the whole caller with it — the daemon runs
+    #: these on its event loop, so one wedged `git` (a credential prompt on a
+    #: `fetch`-shaped call, a stale NFS mount, a `.git/index.lock` holder) stops
+    #: every repo's dashboard, not just this repo's. A bound sized to the
+    #: slowest legitimate operation (`worktree add` materializing a large tree)
+    #: costs nothing on the healthy path and is the only thing standing between
+    #: a hung child and an unrecoverable surface. Not a config knob: `GitRepo`
+    #: is constructed from a bare path at a dozen call sites, and threading a
+    #: cascade value through all of them would buy nothing a constant does not.
+    TIMEOUT_SECONDS: ClassVar[float] = 120.0
 
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -98,6 +145,7 @@ class GitRepo:
         """
         if bool(new_branch) == bool(existing_branch):
             raise ValueError("specify exactly one of new_branch or existing_branch")
+        _assert_not_flaglike(new_branch=new_branch, existing_branch=existing_branch, base=base)
         paths.ensure_dir(worktree_path.parent)
         if new_branch:
             cmd = ["git", "worktree", "add", "-b", new_branch, str(worktree_path), base]
@@ -143,6 +191,7 @@ class GitRepo:
     def branch_delete(self, branch: str, *, force: bool = True) -> bool:
         """Delete a branch. Returns False (no raise) if it was already gone."""
         flag = "-D" if force else "-d"
+        _assert_not_flaglike(branch=branch)
         result = self._run(["git", "branch", flag, branch], cwd=self._root, check=False)
         if result.returncode == 0:
             return True
@@ -160,6 +209,7 @@ class GitRepo:
         `GitError`. Used by `WorkspaceManager.create()` after a
         `TrackRemoteBranch` resolved into a fresh local tracking branch.
         """
+        _assert_not_flaglike(branch=branch, upstream=upstream)
         self._run(
             ["git", "branch", "--set-upstream-to", upstream, branch],
             cwd=self._root,
@@ -168,12 +218,27 @@ class GitRepo:
     # ─── worktree state ────────────────────────────────────────────────────
 
     def is_clean(self, worktree_path: Path) -> bool:
-        """True iff the worktree has no staged or unstaged changes (untracked ignored)."""
-        result = self._run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=worktree_path,
-            check=False,
-        )
+        """True iff removing this worktree would verifiably discard nothing.
+
+        **Untracked files count**, and that is the whole correctness of this
+        method rather than a detail. It answers exactly one question — may
+        `pause` remove this worktree? — and `git worktree remove` refuses on
+        "modified **or untracked** files". The original `--untracked-files=no`
+        form disagreed with the very command it was gating: a worktree holding
+        only new files reported clean and git still refused, which is the
+        commonest shape there is, since an agent's first act is usually to
+        create files. Wiring that version as the precondition would have left
+        the half-torn-down state intact for the majority case while looking
+        fixed. Verified against real git, not assumed.
+
+        ``False`` also covers "cannot tell" — a missing directory, a git that
+        errored. That is deliberate and fail-closed: the caller's remedy is
+        ``force``, and refusing to pause something we cannot inspect is strictly
+        safer than tearing down a session and a container to find out.
+        """
+        if not worktree_path.is_dir():
+            return False
+        result = self._run(["git", "status", "--porcelain"], cwd=worktree_path, check=False)
         return result.returncode == 0 and not result.stdout.strip()
 
     def dirty_file_count(self, worktree_path: Path) -> int:
@@ -431,6 +496,108 @@ class GitRepo:
         sha = result.stdout.strip()
         return sha or None
 
+    def common_dir(self) -> Path | None:
+        """Absolute path of the repo's SHARED git dir, or `None` if unreadable.
+
+        For the main checkout this is its own `.git` directory; for a linked
+        worktree it is `<main>/.git`, because a worktree's `.git` is only a
+        pointer *file* (`gitdir: <main>/.git/worktrees/<name>`). Anything that
+        gives a worktree its own filesystem namespace — a container bind mount
+        above all — must carry this directory across too, or every git command
+        inside it fails to resolve the repository.
+        """
+        result = self._run(["git", "rev-parse", "--git-common-dir"], cwd=self._root, check=False)
+        if result.returncode != 0:
+            return None
+        raw = result.stdout.strip()
+        if not raw:
+            return None
+        # git answers relatively (`.git`) for the main checkout, absolutely for
+        # a linked worktree — resolve against the root so callers get one shape.
+        return (self._root / raw).resolve()
+
+    def remote_urls(self) -> tuple[str, ...]:
+        """Every configured remote URL, deduped in `git remote -v` order.
+
+        The one input the egress allowlist cannot derive without git: a
+        containerized agent must be able to fetch and push its own repository,
+        and a self-hosted LAN forge is first-class — so the destinations come
+        from the repo itself rather than a list the user has to restate. Raw URLs,
+        never parsed here: host extraction is pure policy and lives in
+        ``core.container_policy``. Best-effort — an unreadable repo yields ``()``.
+        """
+        result = self._run(["git", "remote", "-v"], cwd=self._root, check=False)
+        if result.returncode != 0:
+            return ()
+        seen: dict[str, None] = {}
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                seen.setdefault(parts[1], None)
+        return tuple(seen)
+
+    def ensure_excluded(self, *patterns: str) -> None:
+        """Add *patterns* to the repo's local exclude file, idempotently.
+
+        For Grove's OWN generated artifacts — the complete devcontainer override
+        and the egress script, which must live inside the worktree for relative
+        config paths and the container mount to resolve. Without this they are
+        untracked files, and untracked files have two costs, both real:
+        ``git worktree remove`` refuses (so ``pause`` and ``kill`` fail on every
+        containerized workspace), and every ``git status`` the user runs inside
+        the workspace shows Grove's plumbing as their own uncommitted work.
+
+        It must be the **common** dir's ``info/exclude``: a linked worktree's own
+        ``$GIT_DIR/info/exclude`` is not read at all (verified against real git),
+        so the per-worktree location that looks right silently does nothing. The
+        file is local-only and never committed, which is exactly what it is for.
+
+        Best-effort — a read-only ``.git`` yields noisier status output, not a
+        failed workspace.
+        """
+        common = self.common_dir() or (self._root / ".git")
+        target = common / "info" / "exclude"
+        try:
+            existing = target.read_text(encoding="utf-8") if target.exists() else ""
+            missing = [p for p in patterns if p not in existing.splitlines()]
+            if not missing:
+                return
+            target.parent.mkdir(parents=True, exist_ok=True)
+            prefix = "" if not existing or existing.endswith("\n") else "\n"
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(prefix + "\n".join(missing) + "\n")
+        except OSError as exc:
+            logger.warning("git: could not update {}: {}", target, exc)
+
+    @classmethod
+    def global_config(cls) -> dict[str, str]:
+        """The host's global git settings as a flat mapping. Best-effort, never raises.
+
+        Read so ``CuratedGitConfig`` can forward an ALLOWLIST of them into a
+        container — the host ``~/.gitconfig`` is never mounted, because it
+        carries credential helpers and signing keys. Reading the whole file here
+        and filtering there is the right split: the subprocess is a side effect
+        and belongs in this module, the choice of what may cross is pure policy.
+
+        A repeated multivar key keeps its LAST value, matching how git itself
+        resolves a single-valued read.
+        """
+        result = cls(Path.cwd())._run(
+            ["git", "config", "--global", "--list", "--null"], check=False
+        )
+        if result.returncode != 0:
+            return {}
+        entries: dict[str, str] = {}
+        # `--null` separates ENTRIES with NUL and key from value with a newline,
+        # so a value containing newlines (a multi-line editor command) parses
+        # correctly where the default `key=value` line format would not.
+        for record in result.stdout.split("\0"):
+            if not record:
+                continue
+            key, _, value = record.partition("\n")
+            entries[key.strip()] = value
+        return entries
+
     # ─── internal ──────────────────────────────────────────────────────────
 
     def _worktree_branches(self) -> dict[str, Path]:
@@ -460,8 +627,9 @@ class GitRepo:
                 current_path = None
         return locations
 
-    @staticmethod
+    @classmethod
     def _run(
+        cls,
         cmd: list[str],
         *,
         cwd: Path | None = None,
@@ -473,16 +641,36 @@ class GitRepo:
         injection risk. The single home for "how does Grove shell out to
         git"; the various code paths (worktree lifecycle, branch reads,
         peek stats) all funnel through here.
+
+        Bounded by `TIMEOUT_SECONDS`, and a timeout is reported through the
+        SAME two channels a non-zero exit is: `GitError` when `check=True`, a
+        failed `CompletedProcess` when not. That asymmetry is the whole reason
+        it is not simply left to raise `TimeoutExpired` — the `check=False`
+        callers are peek/dashboard reads whose contract is "never raise", so a
+        bare `TimeoutExpired` there would break exactly the render loops the
+        `check=False` was chosen to protect. Exit code 124 is `timeout(1)`'s
+        convention; nothing branches on it, it just must not be 0.
         """
         logger.debug("git: {} (cwd={})", " ".join(cmd), cwd)
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            shell=False,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=False,
+                timeout=cls.TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            message = (
+                f"`{' '.join(cmd)}` timed out after {cls.TIMEOUT_SECONDS:g}s "
+                "and was killed (cwd=" + str(cwd) + ")"
+            )
+            logger.warning("git: {}", message)
+            if check:
+                raise GitError(message) from None
+            return subprocess.CompletedProcess(cmd, 124, "", message)
         if check and result.returncode != 0:
             raise GitError(
                 f"`{' '.join(cmd)}` failed with exit {result.returncode}: "

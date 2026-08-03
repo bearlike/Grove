@@ -1,4 +1,4 @@
-"""Manager orchestration for answering a live question (#109): answer_question.
+"""Manager orchestration for answering a live question: answer_question.
 
 Pins the policy: a pending capture must match the requested ``tool_use_id`` (else
 ``QuestionNotPending``), the plan must fit the captured questions (else
@@ -97,7 +97,7 @@ def _request(session_id: str, **kw: object) -> QuestionAnswerRequest:
 def test_question_answer_item_rejects_control_characters_in_text(bad_char: str) -> None:
     """A raw control byte (ESC/CR/LF/tab/etc.) in free text would type verbatim
     into the pane via ``send-keys -l`` — ESC cancels the whole question, CR/LF
-    act as an early Enter mid-sequence (#110). The wire model rejects it outright
+    act as an early Enter mid-sequence. The wire model rejects it outright
     rather than let it reach the keystroke builder."""
     with pytest.raises(ValidationError, match="control characters"):
         QuestionAnswerItem(text=f"hello{bad_char}world")
@@ -176,9 +176,9 @@ def test_answer_question_foreign_session_id_is_not_pending_and_never_sends(
     manager: WorkspaceManager, fake_tmux: FakeTmux, sidecar_dir: Path
 ) -> None:
     """A session_id that isn't this workspace's minted agent session must be
-    refused before the sidecar is even read (#110) — otherwise a captured
-    question belonging to a different workspace (or a second session of this
-    one) would drive keystrokes into THIS workspace's pane."""
+    refused before the sidecar is even read — otherwise a captured question
+    belonging to a different workspace (or a second session of this one)
+    would drive keystrokes into THIS workspace's pane."""
     state = _create(manager)
     sid = str(state.agent_session_id)
     _capture(sidecar_dir, sid)

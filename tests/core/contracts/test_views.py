@@ -11,17 +11,22 @@ from datetime import UTC, datetime
 
 from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.views import (
-    AttachInstructionView,
+    ATTACH_INSTRUCTION_ADAPTER,
     CommitSummaryView,
+    ProvisionProgressView,
     WorkspacePeekView,
     WorkspaceStateView,
+    attach_instruction_view,
 )
-from grove.core.tmux import AttachInstruction
+from grove.core.tmux import ContainerAttach, HostAttach
 from grove.core.workspace import (
     BranchProvenance,
     CommitSummary,
     InitStatus,
     Placement,
+    ProvisionProgress,
+    ProvisionStatus,
+    Runtime,
     WorkspacePeek,
     WorkspaceState,
     WorkspaceStatus,
@@ -43,8 +48,7 @@ def _fake_state() -> WorkspaceState:
         updated_at=datetime(2026, 5, 7, 12, 5, tzinfo=UTC),
         init_status=InitStatus.OK,
         init_duration_ms=4321,
-        init_log_path="/home/kk/.grove/logs/ws-abc12345-init.log",
-        init_env={"PATH": "/usr/bin"},
+        init_log_path="/home/dev/.grove/logs/ws-abc12345-init.log",
     )
 
 
@@ -60,6 +64,9 @@ def test_workspace_state_view_excludes_internal_fields() -> None:
     view = WorkspaceStateView.from_state(_fake_state())
     payload = view.model_dump()
     assert "init_log_path" not in payload
+    # `init_env` is DERIVED on the state since #275 (it was a stored field with
+    # no producer and no consumer), and it stays off the wire either way — the
+    # four GROVE_* values are already carried by the fields it derives from.
     assert "init_env" not in payload
 
 
@@ -135,10 +142,22 @@ def test_workspace_peek_view_round_trip() -> None:
 
 
 def test_attach_instruction_view_round_trip() -> None:
-    ai = AttachInstruction(tmux_session="grove-add-login-abc12345", inside_outer_tmux=False)
-    view = AttachInstructionView.from_instruction(ai)
-    reloaded = AttachInstructionView.model_validate_json(view.model_dump_json())
+    view = attach_instruction_view(
+        HostAttach(tmux_session="grove-add-login-abc12345", inside_outer_tmux=False)
+    )
+    reloaded = ATTACH_INSTRUCTION_ADAPTER.validate_json(view.model_dump_json())
     assert reloaded == view
+    assert view.kind == "host"
+
+
+def test_container_attach_view_round_trips_by_discriminator() -> None:
+    """A wire client tells the arms apart by ``kind`` alone, with no host fields."""
+    argv = ("devcontainer", "exec", "--workspace-folder", "/w", "--", "tmux", "new-session")
+    view = attach_instruction_view(ContainerAttach(argv=argv))
+    assert view.kind == "container"
+    reloaded = ATTACH_INSTRUCTION_ADAPTER.validate_json(view.model_dump_json())
+    assert reloaded == view
+    assert reloaded.attach_argv() == list(argv)
 
 
 # ─── ticket_refs on the wire (#7) ────────────────────────────────────────────
@@ -162,3 +181,44 @@ def test_workspace_state_view_carries_ticket_refs() -> None:
     ]
     reloaded = WorkspaceStateView.model_validate_json(view.model_dump_json())
     assert reloaded.ticket_refs == view.ticket_refs
+
+
+def test_workspace_state_view_carries_the_provisioning_facts() -> None:
+    """The three provisioning fields cross together, because a client reading
+    one without the others cannot tell an in-flight build from a finished one."""
+    state = _fake_state()
+    state.runtime = Runtime.CONTAINER
+    state.provision_status = ProvisionStatus.PROVISIONING
+    state.provision_started_at = "2026-05-07T12:00:00+00:00"
+
+    view = WorkspaceStateView.from_state(state)
+
+    assert view.provision_status is ProvisionStatus.PROVISIONING
+    assert view.provision_started_at == datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+    assert view.provision_duration_ms is None
+    reloaded = WorkspaceStateView.model_validate_json(view.model_dump_json())
+    assert reloaded == view
+
+
+def test_workspace_state_view_excludes_the_provision_log_path() -> None:
+    """A host path, exactly like ``init_log_path`` — clients read the tail
+    through ``GET /workspaces/{id}/provision`` instead."""
+    state = _fake_state()
+    state.provision_log_path = "/home/dev/.local/state/grove/logs/ws-abc12345-provision.log"
+
+    assert "provision_log_path" not in WorkspaceStateView.from_state(state).model_dump()
+
+
+def test_provision_progress_view_round_trip() -> None:
+    progress = ProvisionProgress(
+        elapsed_ms=49_000,
+        headline="grove: applying egress allowlist",
+        lines=("[+] Building 0.4s", "grove: applying egress allowlist"),
+    )
+
+    view = ProvisionProgressView.from_progress(progress)
+
+    assert view.elapsed_ms == 49_000
+    assert view.headline == "grove: applying egress allowlist"
+    assert view.lines == list(progress.lines)
+    assert ProvisionProgressView.model_validate_json(view.model_dump_json()) == view

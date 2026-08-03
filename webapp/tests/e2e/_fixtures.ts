@@ -3,7 +3,7 @@ export const FIXTURE_WORKSPACES = [
     id: "w-grove-1",
     title: "feat dashboard",
     repo_root: "/repos/Grove",
-    branch: "kk/feat-dashboard",
+    branch: "dev/feat-dashboard",
     base_branch: "main",
     worktree_path: "/repos/Grove/.worktrees/dash",
     tmux_session: "grove-dash",
@@ -18,12 +18,26 @@ export const FIXTURE_WORKSPACES = [
     init_duration_ms: 350,
     branch_provenance: "grove",
     placement: "worktree",
+    // Issue-only: the state a workspace lives in from create until a PR
+    // exists. Linkage must render even in this state.
+    ticket_refs: [
+      {
+        provider: "gitea",
+        id: "330",
+        kind: "issue",
+        title: "surface the status axes",
+        url: "https://git.example/bearlike/Grove/issues/330",
+        status: "open",
+        assignee: null,
+        ambiguous: false,
+      },
+    ],
   },
   {
     id: "w-grove-2",
     title: "fix tests",
     repo_root: "/repos/Grove",
-    branch: "kk/fix-tests",
+    branch: "dev/fix-tests",
     base_branch: "main",
     worktree_path: "/repos/Grove/.worktrees/tests",
     tmux_session: "grove-tests",
@@ -38,6 +52,29 @@ export const FIXTURE_WORKSPACES = [
     init_duration_ms: 220,
     branch_provenance: "grove",
     placement: "worktree",
+    // The other half of the linkage: issue → PR, the row's one colored token.
+    ticket_refs: [
+      {
+        provider: "gitea",
+        id: "331",
+        kind: "issue",
+        title: "flaky test",
+        url: "https://git.example/bearlike/Grove/issues/331",
+        status: "open",
+        assignee: null,
+        ambiguous: false,
+      },
+      {
+        provider: "gitea",
+        id: "332",
+        kind: "pull_request",
+        title: "fix the flake",
+        url: "https://git.example/bearlike/Grove/pulls/332",
+        status: "open",
+        assignee: null,
+        ambiguous: false,
+      },
+    ],
   },
   {
     id: "w-other-1",
@@ -60,6 +97,22 @@ export const FIXTURE_WORKSPACES = [
     placement: "root",
   },
 ];
+
+/**
+ * Task phase per workspace — it rides `WorkspaceActivityView`, NOT the state,
+ * so it lives beside the fixtures rather than inside them. Only `w-grove-1`
+ * reports one, so every spec that touches another workspace also pins the
+ * "reports no phase ⇒ renders nothing" half of the contract for free.
+ */
+export const FIXTURE_PHASES: Record<string, Record<string, unknown>> = {
+  "w-grove-1": {
+    phase: "implementing",
+    note: "wiring the third axis into the header",
+    updated_at: "2026-05-09T10:28:00Z",
+    index: 2,
+    total: 6,
+  },
+};
 
 export const FIXTURE_PEEK_W_GROVE_1 = {
   state: FIXTURE_WORKSPACES[0],

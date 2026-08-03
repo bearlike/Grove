@@ -11,8 +11,8 @@
 #
 # Grove is NOT published on PyPI. The name `grove` there belongs to an
 # unrelated log-collection framework, so a bare `uv tool install grove`
-# installs the wrong product (issue #105). This script always installs
-# from the repo; set GROVE_SOURCE to an explicit spec to point elsewhere.
+# installs the wrong product. This script always installs from the repo;
+# set GROVE_SOURCE to an explicit spec to point elsewhere.
 #
 # Env knobs: GROVE_REPO (owner/name), GROVE_REF (branch/tag),
 #            GROVE_EXTRAS (daemon|mcp|all|none), GROVE_SOURCE (full spec)

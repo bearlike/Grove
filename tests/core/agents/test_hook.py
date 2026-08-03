@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from grove.core.agents.hook import ClaudeHook, HookRecord, PendingQuestion, run_hook_from_stdin
+from grove.core import paths
+from grove.core.agents.hook import (
+    DEFAULT_DAEMON_LOOPBACK_URL,
+    ClaudeHook,
+    HookRecord,
+    PendingQuestion,
+    run_hook_from_stdin,
+)
 from grove.core.agents.model import AgentActivityState
+from grove.core.workspace import WorkspaceState, WorkspaceStatus
 
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -64,7 +74,7 @@ def test_record_event_round_trips(tmp_path: Path) -> None:
     payload = {
         "hook_event_name": "Notification",
         "session_id": "abc-123",
-        "cwd": "/home/kk/work",
+        "cwd": "/home/dev/work",
         "transcript_path": "/t/abc-123.jsonl",
     }
     rec = ClaudeHook.record_event(payload, sidecar_dir=tmp_path, tmux_pane="%7", now=NOW)
@@ -74,7 +84,7 @@ def test_record_event_round_trips(tmp_path: Path) -> None:
     assert back is not None
     assert back.state is AgentActivityState.BLOCKED
     assert back.tmux_pane == "%7"
-    assert back.cwd == "/home/kk/work"
+    assert back.cwd == "/home/dev/work"
 
 
 def test_record_event_ignores_untracked(tmp_path: Path) -> None:
@@ -186,23 +196,40 @@ def test_settings_notification_registers_all_three_matchers() -> None:
     assert ClaudeHook.state_for("Notification", {}) is AgentActivityState.BLOCKED
 
 
-def test_settings_adds_an_http_handler_carrying_the_bearer_token() -> None:
-    """#171: the http handler POSTs to the daemon's ingest route with the
-    same-host ingest token as its bearer — the daemon push half."""
-    hooks = ClaudeHook.settings("grove agent-hook")["hooks"]
-    handlers = hooks["Stop"][0]["hooks"]
-    assert handlers[0] == {"type": "command", "command": "grove agent-hook"}
-    http_handler = handlers[1]
-    assert http_handler["type"] == "http"
-    assert http_handler["url"].endswith("/hooks/agent-events")
-    token = ClaudeHook.ensure_ingest_token()
-    assert http_handler["headers"] == {"Authorization": f"Bearer {token}"}
+def test_settings_registers_exactly_one_handler_per_event() -> None:
+    """The daemon push (#171) rides the ENTRY POINT, not a second `http` handler.
+
+    A registered http handler cannot ask whether the address it names is
+    reachable, and from a container's network namespace the daemon's loopback
+    never is — so every event reported `connect ECONNREFUSED 127.0.0.1:7421` in
+    Claude's own UI, the same user-facing damage the missing binary caused and
+    not fixed by fixing the binary (#269). A host with no daemon running showed
+    the identical banner. One handler, and the push made by the one process
+    that only exists where it can work.
+    """
+    hooks = ClaudeHook.settings()["hooks"]
+
+    for event in ("Stop", "SessionStart", "SubagentStop"):
+        assert [h["type"] for h in hooks[event][0]["hooks"]] == ["command"]
+    for entry in hooks["Notification"]:
+        assert [h["type"] for h in entry["hooks"]] == ["command"]
 
 
-def test_settings_daemon_url_none_omits_the_http_handler() -> None:
-    """The pre-#171 command-only shape is still reachable (the test seam)."""
-    hooks = ClaudeHook.settings("grove agent-hook", daemon_url=None)["hooks"]
-    assert hooks["Stop"][0]["hooks"] == [{"type": "command", "command": "grove agent-hook"}]
+def test_the_settings_command_carries_the_daemon_url_as_an_argv() -> None:
+    """An argv, not a config read: this is the hottest process in the system, and
+    the flag reaching the entry point is also what makes the push structurally
+    host-only — the entry point is exactly what a container does not have."""
+    command = ClaudeHook.settings()["hooks"]["Stop"][0]["hooks"][0]["command"]
+
+    assert f"--daemon-url {DEFAULT_DAEMON_LOOPBACK_URL}" in command
+    assert DEFAULT_DAEMON_LOOPBACK_URL not in ClaudeHook.spool_script(Path("/spool"))
+
+
+def test_settings_daemon_url_none_renders_a_command_that_pushes_nothing() -> None:
+    """The test seam, and the shape an operator gets by pointing the knob nowhere."""
+    command = ClaudeHook.settings(daemon_url=None)["hooks"]["Stop"][0]["hooks"][0]["command"]
+
+    assert "--daemon-url" not in command
 
 
 def test_ensure_ingest_token_is_stable_across_calls() -> None:
@@ -270,6 +297,58 @@ def test_run_hook_from_stdin_tolerates_garbage(
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: tmp_path)
     monkeypatch.setattr("sys.stdin", io.StringIO("not json at all"))
     assert run_hook_from_stdin() == 0  # never fails the agent
+
+
+def test_the_daemon_push_runs_after_the_sidecar_is_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The sidecar is the offline truth; the push only asks the daemon to look
+    at it sooner, so an ordering inversion would push a stale read (#171/#269)."""
+    seen: list[tuple[str, HookRecord | None]] = []
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ClaudeHook,
+        "push",
+        classmethod(
+            lambda _cls, payload, *, daemon_url: seen.append(
+                (daemon_url, ClaudeHook.read(payload["session_id"], sidecar_dir=tmp_path))
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.stdin", io.StringIO(json.dumps({"hook_event_name": "Stop", "session_id": "p-1"}))
+    )
+
+    assert run_hook_from_stdin(["--daemon-url", "http://127.0.0.1:9999"]) == 0
+
+    assert len(seen) == 1
+    url, record = seen[0]
+    assert url == "http://127.0.0.1:9999"
+    assert record is not None and record.state is AgentActivityState.WAITING
+
+
+def test_no_daemon_url_means_no_push_at_all(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The container shape: the flag is never rendered where nothing is reachable."""
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ClaudeHook,
+        "push",
+        classmethod(lambda *_a, **_k: pytest.fail("pushed with no --daemon-url")),
+    )
+    monkeypatch.setattr(
+        "sys.stdin", io.StringIO(json.dumps({"hook_event_name": "Stop", "session_id": "p-2"}))
+    )
+
+    assert run_hook_from_stdin([]) == 0
+
+
+def test_a_daemon_that_is_not_listening_is_not_an_error() -> None:
+    """The ordinary case, not a failure: the sidecar is already on disk. Raising
+    here would fail the hook and put a banner in the agent's UI — which is the
+    exact damage the registered http handler used to do on every event."""
+    ClaudeHook.push({"session_id": "p-3"}, daemon_url="http://127.0.0.1:1")
 
 
 # ─── live-question capture lifecycle (#109) ──────────────────────────────────
@@ -365,3 +444,249 @@ def test_pending_question_from_json_rejects_naive_timestamp() -> None:
         )
         is None
     )
+
+
+# ─── adoption evidence inside a container (#242, documented degradation) ─────
+
+
+def _workspace(tmp_path: Path, *, created_at: datetime) -> WorkspaceState:
+    return WorkspaceState(
+        id="ws-1",
+        title="w",
+        repo_root=str(tmp_path),
+        branch="feat/x",
+        base_branch="main",
+        status=WorkspaceStatus.RUNNING,
+        worktree_path=str(tmp_path / "wt"),
+        tmux_session="grove-w",
+        agent_name="claude",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+
+def _sidecar(cwd: Path, *, ts: datetime, tmux_pane: str | None) -> HookRecord:
+    return HookRecord(
+        session_id="s-live",
+        state=AgentActivityState.WORKING,
+        event="UserPromptSubmit",
+        cwd=str(cwd),
+        transcript_path=None,
+        tmux_pane=tmux_pane,
+        ts=ts,
+    )
+
+
+def test_adoption_falls_back_to_birth_only_without_a_pane(tmp_path: Path) -> None:
+    """A containerized agent has no ``$TMUX_PANE`` (the pane lives on the host,
+    the agent does not), so its sidecar records none and the pane-verified
+    live-here arm cannot fire — adoption degrades to birth-only. Correct rather
+    than a bug worth fixing: the cross-tenant hole the pane check closes needs
+    two workspaces sharing a cwd, and a container's cwd is its own.
+
+    A session born BEFORE the workspace is therefore not adopted even though
+    its sidecar says it was live here after creation..."""
+    created = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    state = _workspace(tmp_path, created_at=created)
+    cwd = Path(state.worktree_path)
+    live_after = _sidecar(cwd, ts=created + timedelta(minutes=5), tmux_pane=None)
+
+    assert not ClaudeHook.adopts(
+        state,
+        created - timedelta(hours=1),
+        candidate=live_after,
+        reference_pane=None,
+        cwd=cwd,
+    )
+
+
+def test_adoption_still_works_on_birth_without_a_pane(tmp_path: Path) -> None:
+    """...and the axis that survives keeps a containerized workspace working:
+    a session born after the workspace is adopted with no pane evidence at
+    all, which is every session a container launch actually mints."""
+    created = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    state = _workspace(tmp_path, created_at=created)
+    cwd = Path(state.worktree_path)
+
+    assert ClaudeHook.adopts(
+        state,
+        created + timedelta(minutes=1),
+        candidate=_sidecar(cwd, ts=created + timedelta(minutes=5), tmux_pane=None),
+        reference_pane=None,
+        cwd=cwd,
+    )
+
+
+# ─── the container arm: spool in, fold on the host (#269) ───────────────────
+
+
+def _sh(script: str, *, stdin: str = "", env: dict[str, str] | None = None) -> int:
+    """Run *script* through a REAL `/bin/sh`, the way Claude Code runs a hook.
+
+    Asserting on the composed text would pin the string and prove nothing about
+    the thing that actually has to work — the same lesson `AgentExit` learned by
+    discovering its shell suffix wrote nothing at all.
+    """
+    return subprocess.run(
+        ["/bin/sh", "-c", script],
+        input=stdin,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", **(env or {})},
+        check=False,
+    ).returncode
+
+
+def test_the_default_command_spools_when_the_entry_point_is_absent(tmp_path: Path) -> None:
+    """The bug: a container has no `grove-agent-hook` — it is a console script
+    of a package the project's image never installed — so every hook fired
+    `/bin/sh: 1: grove-agent-hook: not found` and the whole status axis was
+    dead. The fallback moves bytes, which POSIX sh can do without a JSON parser,
+    a runtime, or a copy of any rule that would drift from this module.
+    """
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    payload = json.dumps({"hook_event_name": "Stop", "session_id": "s-1"})
+
+    assert _sh(ClaudeHook.hook_command(spool), stdin=payload) == 0
+
+    spooled = list(spool.glob("*.json"))
+    assert len(spooled) == 1
+    assert json.loads(spooled[0].read_text(encoding="utf-8"))["session_id"] == "s-1"
+
+
+def test_the_default_command_execs_the_entry_point_when_it_exists(tmp_path: Path) -> None:
+    """A capability probe, not a runtime branch — nothing here asks whether it is
+    in a container, which is what lets ONE rendered settings file serve both."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    marker = tmp_path / "ran"
+    hook = bindir / ClaudeHook.COMMAND
+    hook.write_text(f"#!/bin/sh\ncat > {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+
+    code = _sh(
+        ClaudeHook.hook_command(spool),
+        stdin='{"hook_event_name": "Stop"}',
+        env={"PATH": f"{bindir}:/usr/bin:/bin"},
+    )
+
+    assert code == 0
+    assert marker.read_text(encoding="utf-8") == '{"hook_event_name": "Stop"}'
+    # `exec` replaces the shell, so the real hook's outcome can never fall
+    # through to the `||` arm and spool a duplicate.
+    assert list(spool.glob("*.json")) == []
+
+
+def test_a_missing_spool_mount_fails_loudly_instead_of_writing_nowhere(tmp_path: Path) -> None:
+    """No `mkdir -p`, deliberately: the spool is a bind mount the create path
+    establishes, so an absent one means the mount is gone. Creating it would
+    turn that into events written to a container-local directory nothing ever
+    reads — a recorder that cannot record, reporting itself healthy."""
+    assert _sh(ClaudeHook.hook_command(tmp_path / "never-created"), stdin="{}") != 0
+
+
+def test_the_settings_default_command_names_the_real_spool_directory() -> None:
+    """One rendered file, both namespaces: the path is resolved on the host and
+    the container reaches the very same directory through the bind mount."""
+    handler = ClaudeHook.settings()["hooks"]["Stop"][0]["hooks"][0]
+
+    assert handler["type"] == "command"
+    assert ClaudeHook.COMMAND in handler["command"]
+    assert str(paths.agent_hook_spool_dir()) in handler["command"]
+
+
+def _spool(spool_dir: Path, payload: dict[str, object], *, at: datetime) -> Path:
+    path = spool_dir / f"{at.timestamp()}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    os.utime(path, (at.timestamp(), at.timestamp()))
+    return path
+
+
+def test_drain_folds_a_spooled_payload_through_the_same_state_map(tmp_path: Path) -> None:
+    """The fold stays in Python, run once on the host: a containerized session's
+    status is the map this module already defines, never a second copy of it."""
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    spool.mkdir(parents=True)
+    _spool(spool, {"hook_event_name": "Notification", "session_id": "s-1"}, at=NOW)
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+
+    record = ClaudeHook.read("s-1", sidecar_dir=tmp_path)
+    assert record is not None
+    assert record.state is AgentActivityState.BLOCKED
+    # The event's own clock, not the drain's: stamping it with the reader's
+    # would age every event by however long the reader took to notice it, which
+    # `supersedes_poll` reads as staleness.
+    assert record.ts == NOW
+    assert list(spool.glob("*")) == []
+
+
+def test_drain_folds_in_event_order_so_the_question_machine_holds(tmp_path: Path) -> None:
+    """The pending-question lifecycle is a state machine over the prior sidecar,
+    so folding out of order would leave a question standing that a later event
+    already cleared."""
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    spool.mkdir(parents=True)
+    ask = {
+        "hook_event_name": "PreToolUse",
+        "session_id": "s-1",
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "t-1",
+        "tool_input": _ASK_INPUT,
+    }
+    _spool(spool, ask, at=NOW)
+    _spool(
+        spool,
+        {"hook_event_name": "PostToolUse", "session_id": "s-1"},
+        at=NOW + timedelta(seconds=2),
+    )
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 2
+
+    record = ClaudeHook.read("s-1", sidecar_dir=tmp_path)
+    assert record is not None
+    assert record.question is None  # answered, not still pending
+
+
+def test_read_drains_so_no_consumer_has_to_remember_to(tmp_path: Path) -> None:
+    """Four independent readers (the blend, its question cross-check, session
+    adoption, `answer_question`) already call `read`; this tree has watched the
+    same two-line convention get missed one site at a time until a workspace lit
+    up only partially. Owning it here leaves a reader nothing to get wrong."""
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    spool.mkdir(parents=True)
+    _spool(spool, {"hook_event_name": "SessionStart", "session_id": "s-1"}, at=NOW)
+
+    record = ClaudeHook.read("s-1", sidecar_dir=tmp_path)
+
+    assert record is not None
+    assert record.state is AgentActivityState.WORKING
+
+
+def test_drain_is_a_no_op_with_no_spool_directory(tmp_path: Path) -> None:
+    """The host case, on the hot read path: one directory-listing syscall."""
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 0
+
+
+def test_drain_drops_a_malformed_entry_without_blocking_the_queue(tmp_path: Path) -> None:
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    spool.mkdir(parents=True)
+    (spool / "1.json").write_text("{not json", encoding="utf-8")
+    _spool(spool, {"hook_event_name": "Stop", "session_id": "s-1"}, at=NOW)
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+    assert ClaudeHook.read("s-1", sidecar_dir=tmp_path) is not None
+    assert list(spool.glob("*")) == []
+
+
+def test_drain_ignores_a_partially_written_payload(tmp_path: Path) -> None:
+    """The shim writes `.tmp` then renames, so a drain racing the redirect never
+    reads half a payload."""
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    spool.mkdir(parents=True)
+    (spool / "1.tmp").write_text('{"hook_event_name": "Sto', encoding="utf-8")
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 0
+    assert (spool / "1.tmp").exists()

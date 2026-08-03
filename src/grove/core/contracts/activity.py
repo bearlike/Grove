@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, ConfigDict
 
 from grove.core.agents import AgentActivityState
+from grove.core.contracts.phase import PhaseView
 from grove.core.contracts.questions import AgentQuestionView
 from grove.core.contracts.views import CommitSummaryView, WorkspacePaneView, WorkspaceStateView
 
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
         LiveCounters,
         ProjectGroup,
         SessionActivity,
+        TodoProgress,
         WorkspaceActivity,
     )
     from grove.core.agents import AgentActivity, AgentSession
@@ -49,7 +51,7 @@ class AgentSessionView(BaseModel):
     adapter_kind: str
     provenance: str
     tmux_window: str | None
-    # The parent/child link (#173): ``None`` for a normal top-level session; for
+    # The parent/child link: ``None`` for a normal top-level session; for
     # an itemized sub-agent fleet member, the PRIMARY session's own ``session_id``
     # — lets a client group a workspace's flat ``sessions`` list back into a tree
     # without a second lookup. Defaults so a pre-existing client deserializes
@@ -68,7 +70,7 @@ class AgentSessionView(BaseModel):
 
 
 class LiveCountersView(BaseModel):
-    """Wire mirror of ``grove.core.activity.LiveCounters`` (#181).
+    """Wire mirror of ``grove.core.activity.LiveCounters``.
 
     A *block*, not loose fields: either a live tier is actively reporting (all
     three populated) or the whole block is absent on
@@ -77,7 +79,7 @@ class LiveCountersView(BaseModel):
     transcript-derived, per-turn-settled cumulative totals): a client renders
     ``live`` WHILE generating and falls back to the cumulative fields the
     instant ``live`` goes absent again (a turn flushed, or no fast side-channel
-    is wired yet — #177 is the primary source).
+    is wired yet).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -116,9 +118,9 @@ class AgentActivityView(BaseModel):
     last_event_at: datetime | None
     needs_attention: bool
     error_detail: str | None
-    # Reserved for the future external-LLM interpreter (#20); always None today.
+    # Reserved for the future external-LLM interpreter; always None today.
     interpreted_status: str | None = None
-    # The questions the agent is asking RIGHT NOW (#109), captured live from the
+    # The questions the agent is asking RIGHT NOW, captured live from the
     # hook sidecar and cross-checked against the transcript before they ship. One
     # AskUserQuestion call carries up to four questions answered atomically with
     # one POST, so the whole group rides together (ordered as asked); empty ⇒
@@ -126,13 +128,13 @@ class AgentActivityView(BaseModel):
     # unchanged (additive wire evolution). It rides the live activity stream so a
     # client renders an answer affordance the instant the questions appear.
     questions: list[AgentQuestionView] = []
-    # Live in-flight token counters (#181) — populated only while a fast
-    # side-channel is actively reporting (proxy #177 primary; partial-message
-    # deltas / OTel metrics as fallbacks). ``None`` means no live tier is wired
-    # yet, or the session isn't currently generating: the client hides the
-    # indicator rather than showing zeros, settling to the cumulative
-    # ``tokens_in``/``tokens_out`` above. Defaults to None so a pre-existing
-    # client deserializes unchanged (additive wire evolution).
+    # Live in-flight token counters — populated only while a fast
+    # side-channel is actively reporting (a proxy is the primary source;
+    # partial-message deltas / OTel metrics are fallbacks). ``None`` means no
+    # live tier is wired yet, or the session isn't currently generating: the
+    # client hides the indicator rather than showing zeros, settling to the
+    # cumulative ``tokens_in``/``tokens_out`` above. Defaults to None so a
+    # pre-existing client deserializes unchanged (additive wire evolution).
     live: LiveCountersView | None = None
 
     @classmethod
@@ -179,6 +181,37 @@ class SessionActivityView(BaseModel):
         )
 
 
+class TodoProgressView(BaseModel):
+    """Wire mirror of ``grove.core.activity.TodoProgress`` — counts, never items.
+
+    The deliberate counterpart to the full ``TodoListView``, which stays
+    fetch-on-demand behind ``GET /workspaces/{id}/todo``. This module's rule is
+    that the SSE stream carries only bounded payloads (the same reason session
+    turns never ride it), and a checklist is unbounded in both length and text;
+    four integers render "4/10 done" on every card for a fixed cost.
+
+    Absent (``None`` on the parent view) means the agent has called no todo tool
+    — a client hides the indicator rather than rendering 0/0, exactly as it does
+    for ``live`` and ``phase``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    total: int
+    completed: int
+    in_progress: int
+    pending: int
+
+    @classmethod
+    def from_progress(cls, p: TodoProgress) -> TodoProgressView:
+        return cls(
+            total=p.total,
+            completed=p.completed,
+            in_progress=p.in_progress,
+            pending=p.pending,
+        )
+
+
 class WorkspaceActivityView(BaseModel):
     """Wire mirror of ``grove.core.activity.WorkspaceActivity`` — one dashboard card.
 
@@ -186,6 +219,12 @@ class WorkspaceActivityView(BaseModel):
     ``recent_commits[0]`` is the card's "what was done, when committed" line).
     ``observed_at`` is the per-card "updated Xs ago"; the dashboard-wide refresh
     time stays on ``DashboardSnapshotView.generated_at``.
+
+    ``phase`` and ``todo`` are the task axis: what the agent says it is doing
+    about the task, and how far through its own checklist it is. Both default to
+    ``None`` so a pre-existing client deserializes unchanged (additive wire
+    evolution), and both mean "the agent has not said" when absent — never a
+    zero value.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -201,6 +240,8 @@ class WorkspaceActivityView(BaseModel):
     needs_attention: bool
     recent_commits: list[CommitSummaryView]
     observed_at: datetime
+    phase: PhaseView | None = None
+    todo: TodoProgressView | None = None
 
     @classmethod
     def from_activity(cls, w: WorkspaceActivity) -> WorkspaceActivityView:
@@ -216,6 +257,8 @@ class WorkspaceActivityView(BaseModel):
             needs_attention=w.needs_attention,
             recent_commits=[CommitSummaryView.from_summary(c) for c in w.recent_commits],
             observed_at=w.observed_at,
+            phase=PhaseView.from_report(w.phase) if w.phase is not None else None,
+            todo=TodoProgressView.from_progress(w.todo) if w.todo is not None else None,
         )
 
 
@@ -228,6 +271,14 @@ class ProjectGroupView(BaseModel):
     repo_name: str
     cwd: str
     workspaces: list[WorkspaceActivityView]
+    error: str | None = None
+    """Why this project could not be read, or ``None`` when it was.
+
+    Non-null means the group is DEGRADED: its config would not resolve, so no
+    workspace could be listed and ``workspaces`` is empty. Surfaced rather than
+    dropped, because a repo whose config is broken is the one an operator most
+    needs named — a silently missing project reads as a healthy fleet.
+    """
 
     @classmethod
     def from_group(cls, g: ProjectGroup) -> ProjectGroupView:
@@ -235,6 +286,7 @@ class ProjectGroupView(BaseModel):
             repo_root=g.repo_root,
             repo_name=g.repo_name,
             cwd=g.cwd,
+            error=g.error,
             workspaces=[WorkspaceActivityView.from_activity(w) for w in g.workspaces],
         )
 
@@ -260,14 +312,14 @@ class DashboardSnapshotView(BaseModel):
 
 
 class DashboardEvent(BaseModel):
-    """The SSE streaming envelope (epic #11 §5).
+    """The SSE streaming envelope.
 
     One shape carries every server-sent kind. ``snapshot`` (sent on connect)
     embeds the full ``DashboardSnapshotView``; ``session_activity`` embeds the one
     changed ``WorkspaceActivityView`` so the client patches a single card;
     ``workspace_changed`` is a lifecycle wake-up (re-fetch); ``heartbeat`` keeps
-    the connection warm; ``pane_snapshot`` embeds one ``WorkspacePaneView`` (#19,
-    the live focused-pane push) and rides a *dedicated* per-workspace stream, not
+    the connection warm; ``pane_snapshot`` embeds one ``WorkspacePaneView`` (the
+    live focused-pane push) and rides a *dedicated* per-workspace stream, not
     the cross-project ``/events`` fan-out — its ~1 Hz cadence and per-id scope are
     a different concern from the activity deltas. ``seq`` is the monotonic SSE id
     used for ``Last-Event-ID`` replay.
@@ -310,7 +362,7 @@ class DashboardEvent(BaseModel):
 
     @classmethod
     def pane_event(cls, pane: WorkspacePaneView, *, seq: int) -> DashboardEvent:
-        """One live focused-pane push (#19) — the streaming twin of ``GET .../pane``.
+        """One live focused-pane push — the streaming twin of ``GET .../pane``.
 
         Reuses the one-shot endpoint's ``WorkspacePaneView`` so the snapshot's
         ``ansi``/``taken_at`` shape is identical whether a client polls once or

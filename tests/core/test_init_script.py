@@ -113,7 +113,14 @@ def test_nonzero_exit_returns_exit_code(tmp_path: Path) -> None:
 
 
 def test_inline_and_path_together_raise(tmp_path: Path) -> None:
-    cfg = InitScriptConfig(
+    """The runner's check is defense-in-depth for an UNVALIDATED model.
+
+    `InitScriptConfig` now rejects both-set at validation, so the normal
+    constructor can no longer build this shape; `model_construct` skips
+    validation, which is the only remaining way to reach the runner with both —
+    exactly the case this check still guards.
+    """
+    cfg = InitScriptConfig.model_construct(
         enabled=True,
         shell=_shell(),
         inline="true",

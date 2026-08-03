@@ -13,6 +13,7 @@
 #   ./reinstall.sh                 # do everything (package + webapp + services + verify)
 #   ./reinstall.sh --no-webapp     # skip the webapp rebuild
 #   ./reinstall.sh --no-daemon     # skip restarting the daemon
+#   ./reinstall.sh --no-mcp        # skip restarting a networked grove-mcp service
 #   ./reinstall.sh --no-reinstall  # skip the uv reinstall (editable source is already live)
 #   ./reinstall.sh --extras '.[daemon,mcp]'   # override the install extras (default '.[all]')
 #   ./reinstall.sh -h | --help
@@ -21,7 +22,13 @@
 #   • Package (CLI + TUI)  — `uv tool install --reinstall --editable`
 #   • Webapp               — `make webapp-build` THEN restart the webapp service
 #   • Daemon               — restart the long-lived HTTP + tmux service
-#   • MCP (grove-mcp)      — nothing to restart; the client respawns it per connection
+#   • MCP (grove-mcp)      — stdio: nothing to restart; the client respawns it per
+#                            connection. A networked `--transport streamable-http`
+#                            server is long-lived, so it IS restarted here when a
+#                            grove-mcp unit exists — a stdio-only host simply has
+#                            no unit to find. Skipping it silently was a real gap:
+#                            a newly added tool stayed invisible to networked
+#                            clients while every other surface reported success.
 #
 # Ports and service names are recovered live (never hard-coded) so the script is
 # portable across hosts.
@@ -32,11 +39,12 @@ set -euo pipefail
 DO_REINSTALL=1
 DO_WEBAPP=1
 DO_DAEMON=1
+DO_MCP=1
 DO_VERIFY=1
 EXTRAS=".[all]"
 
 usage() {
-  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -45,6 +53,7 @@ while [ $# -gt 0 ]; do
     --no-reinstall) DO_REINSTALL=0 ;;
     --no-webapp)    DO_WEBAPP=0 ;;
     --no-daemon)    DO_DAEMON=0 ;;
+    --no-mcp)       DO_MCP=0 ;;
     --no-verify)    DO_VERIFY=0 ;;
     --extras)       EXTRAS="${2:?--extras needs a value}"; shift ;;
     --extras=*)     EXTRAS="${1#--extras=}" ;;
@@ -64,10 +73,6 @@ fi
 
 STEP=0
 TOTAL=0
-[ "$DO_REINSTALL" = 1 ] && TOTAL=$((TOTAL + 1))
-[ "$DO_WEBAPP"    = 1 ] && TOTAL=$((TOTAL + 1))
-[ "$DO_DAEMON"    = 1 ] && TOTAL=$((TOTAL + 1))
-[ "$DO_VERIFY"    = 1 ] && TOTAL=$((TOTAL + 1))
 
 ts() { date +%H:%M:%S; }
 step() { STEP=$((STEP + 1)); printf '%s%s[%d/%d]%s %s%s%s\n' "$C_BOLD" "$C_BLUE" "$STEP" "$TOTAL" "$C_OFF" "$C_BOLD" "$1" "$C_OFF"; }
@@ -91,13 +96,26 @@ printf '%s%sGrove reinstall%s  %srepo:%s %s  %shead:%s %s\n\n' \
   "$C_BOLD" "$C_BLUE" "$C_OFF" "$C_DIM" "$C_OFF" "$REPO_ROOT" "$C_DIM" "$C_OFF" "$HEAD_SUBJECT"
 
 # Discover the installed grove-* user services (host-agnostic).
-discover_service() {  # $1 = keyword (daemon|webapp) → echoes unit name or empty
+discover_service() {  # $1 = keyword (daemon|webapp|mcp) → echoes unit name or empty
   [ "$HAVE_SYSTEMCTL" = 1 ] || return 0
   systemctl --user list-unit-files "grove-*.service" --no-legend 2>/dev/null \
     | awk '{print $1}' | grep -E "grove-$1" | head -1
 }
 DAEMON_SVC="$(discover_service daemon)"
 WEBAPP_SVC="$(discover_service webapp)"
+# Only a NETWORKED grove-mcp is a long-lived process worth restarting. A stdio
+# server is respawned by its client per connection, so it needs nothing here and
+# correctly has no unit to find.
+MCP_SVC="$(discover_service mcp)"
+
+# Counted after discovery, not before: the MCP step exists only on a host that
+# actually runs a networked server, and printing "[3/5]" for a step that will
+# never run reads as a silent skip.
+[ "$DO_REINSTALL" = 1 ] && TOTAL=$((TOTAL + 1))
+[ "$DO_WEBAPP"    = 1 ] && TOTAL=$((TOTAL + 1))
+[ "$DO_DAEMON"    = 1 ] && TOTAL=$((TOTAL + 1))
+[ "$DO_MCP" = 1 ] && [ -n "$MCP_SVC" ] && TOTAL=$((TOTAL + 1))
+[ "$DO_VERIFY"    = 1 ] && TOTAL=$((TOTAL + 1))
 
 restart_service() {  # $1 = unit name, $2 = human label
   local unit="$1" label="$2"
@@ -117,9 +135,28 @@ daemon_url() {
   echo "${url:-http://127.0.0.1:7421}"
 }
 
+# Run any grove entrypoint as another user — a root shell, `sudo claude` spawning
+# grove-mcp out of .mcp.json — and CPython writes that run's __pycache__ into this
+# shared venv as uid 0. uv must empty site-packages to reinstall, cannot unlink the
+# foreign bytecode, and aborts with a bare "Permission denied" naming some innocent
+# dependency. The cause is unguessable from that message, so name it here.
+assert_tool_venv_ours() {
+  local dir owner intruder
+  dir="$(uv tool dir 2>/dev/null)/grove"
+  [ -d "$dir" ] || return 0
+  owner="$(id -un)"
+  intruder="$(find "$dir" ! -user "$owner" -print -quit 2>/dev/null)"
+  [ -n "$intruder" ] || return 0
+  die "$(printf '%s\n      %s\n      %s' \
+    "the grove venv holds files not owned by ${owner} — e.g. ${intruder#"${dir}/"}" \
+    "cause: a grove entrypoint ran as another user (usually root); uv cannot delete its bytecode cache" \
+    "fix:   sudo chown -R ${owner}: ${dir}   # then re-run this script")"
+}
+
 # ─── 1. package (CLI + TUI) ───────────────────────────────────────────────────
 if [ "$DO_REINSTALL" = 1 ]; then
   step "Reinstall package (editable) — extras ${EXTRAS}"
+  assert_tool_venv_ours
   info "uv tool install --reinstall --force --editable '${EXTRAS}'"
   uv tool install --reinstall --force --editable "$EXTRAS" 2>&1 | sed 's/^/    /'
   RESOLVED="$(grove version 2>/dev/null || echo '?')"
@@ -147,6 +184,23 @@ if [ "$DO_DAEMON" = 1 ]; then
   restart_service "$DAEMON_SVC" "daemon"
 else
   info "skipping daemon restart (--no-daemon)"
+fi
+
+# ─── 3b. networked MCP server (restart) ───────────────────────────────────────
+# The reinstall above swapped the tool venv this unit's entrypoint lives in, but
+# a running process keeps the modules it already imported — so without this it
+# happily serves the PREVIOUS build while every other surface reports success.
+# The symptom is a newly added tool simply not existing for networked clients,
+# which reads as an MCP client problem rather than a stale server.
+if [ -n "$MCP_SVC" ]; then
+  if [ "$DO_MCP" = 1 ]; then
+    step "Restart networked MCP server"
+    restart_service "$MCP_SVC" "mcp"
+  else
+    info "skipping mcp restart (--no-mcp) — $MCP_SVC still serves the previous build"
+  fi
+else
+  info "no grove-mcp unit — stdio servers respawn per connection, nothing to restart"
 fi
 
 # ─── 4. verify ────────────────────────────────────────────────────────────────
@@ -183,6 +237,30 @@ if [ "$DO_VERIFY" = 1 ]; then
     ok "grove-mcp importable (mcp SDK resolved)"
   else
     warn "grove-mcp not importable — reinstall with an mcp extra (e.g. '.[all]')"
+  fi
+
+  # A networked MCP server is a surface like any other, so prove it came back
+  # rather than assuming the restart took. Port is read off the unit's own
+  # ExecStart — never hard-coded, same rule as the daemon URL above.
+  if [ -n "$MCP_SVC" ]; then
+    mcp_port="$(systemctl --user cat "$MCP_SVC" 2>/dev/null \
+      | sed -n 's/.*--port[= ]\([0-9]\{1,\}\).*/\1/p' | head -1)"
+    if [ "$(systemctl --user is-active "$MCP_SVC" 2>/dev/null)" = active ]; then
+      if [ -n "$mcp_port" ]; then
+        # Any HTTP status proves the listener is up; the MCP endpoint itself
+        # rejects a bare GET (it wants POST + session headers), so a 4xx here is
+        # a healthy server, not a failure. Only a connection refusal is bad.
+        mcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${mcp_port}/mcp" 2>/dev/null || true)"
+        case "$mcode" in
+          000|"") warn "mcp active but nothing answering on :${mcp_port}" ;;
+          *)      ok "mcp serving on :${mcp_port} (HTTP ${mcode})" ;;
+        esac
+      else
+        ok "mcp active ($MCP_SVC)"
+      fi
+    else
+      warn "$MCP_SVC is not active — check 'systemctl --user status $MCP_SVC'"
+    fi
   fi
 
   # Webapp HTTP reachability + build freshness.

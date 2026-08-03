@@ -397,7 +397,7 @@ def test_replay_nests_subagent_agent_span_under_spawning_tool_span(
     instrumentor = TraceInstrumentor(cfg, sink=sink)
 
     sid = "14141414-1414-4141-8141-141414141414"
-    cwd = Path("/home/kk/work/fleet-trace")
+    cwd = Path("/home/dev/work/fleet-trace")
     _write_lines(
         claude_home,
         cwd,

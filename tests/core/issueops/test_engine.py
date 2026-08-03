@@ -1,4 +1,4 @@
-"""IssueOpsEngine routing — the full create/steer/verb/drop/refuse matrix (#196).
+"""IssueOpsEngine routing — the full create/steer/verb/drop/refuse matrix.
 
 In-memory fakes only (no git/tmux/network): a fake registry hands the engine a
 fake Manager holding a REAL ``GroveConfig`` (so trigger/agent/permission/template
@@ -39,12 +39,23 @@ class _FakeProvider:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.comments: list[tuple[str, str]] = []
+        # The create path reads the thread to fill the template's ``{comments}``,
+        # so the fake has to answer it: a fake backing only the WRITE half would
+        # leave the read half untested while the suite stayed green.
+        self.thread: list[TicketComment] = []
+        self.thread_error: Exception | None = None
 
     def post_comment(self, ticket_id: str, body: str) -> TicketComment:
         if self.fail:
             raise TicketProviderError("wire down")
         self.comments.append((ticket_id, body))
         return TicketComment(id="reply-1", body=body)
+
+    def list_comments(self, ticket_id: str) -> list[TicketComment]:
+        del ticket_id
+        if self.thread_error is not None:
+            raise self.thread_error
+        return list(self.thread)
 
 
 class _FakeProviders:
@@ -372,3 +383,32 @@ def test_custom_trigger_from_config_is_honored() -> None:
     mgr.calls.clear()
     ignored = _engine(mgr).handle(_event(comment_body="@grove tweak it", comment_id="c-2"))
     assert (ignored.action, ignored.code) == ("ignored", "not_triggered")
+
+
+# ─── the boot prompt carries the whole thread ───────────────────────────────
+
+
+def test_the_boot_prompt_renders_the_whole_comment_thread() -> None:
+    """One template, one meaning for ``{comments}`` on both create paths."""
+    mgr = _FakeManager(_config())
+    mgr.provider.thread = [
+        TicketComment(id="1", body="first thought", author="alice"),
+        TicketComment(id="2", body="second thought", author="bob"),
+    ]
+    _engine(mgr).handle(_event(comment_body="@grove please fix the login bug"))
+
+    request = next(c[1] for c in mgr.calls if c[0] == "create")
+    prompt = request.initial_prompt or ""
+    assert "first thought" in prompt
+    assert "second thought" in prompt
+    # In the tracker's own order: a thread read out of sequence misrepresents
+    # what was decided last.
+    assert prompt.index("first thought") < prompt.index("second thought")
+
+
+def test_an_unreadable_thread_still_creates_the_workspace() -> None:
+    """Losing the thread costs the agent context, never the workspace."""
+    mgr = _FakeManager(_config())
+    mgr.provider.thread_error = TicketProviderError("wire down")
+    outcome = _engine(mgr).handle(_event(comment_body="@grove please fix the login bug"))
+    assert outcome.action == "created"

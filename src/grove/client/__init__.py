@@ -1,7 +1,7 @@
 """Grove client SDK — single transport for both local and remote backends.
 
 Public surface:
-    GroveClient (Task 12)
+    GroveClient
     BackendConfig
     GroveClientError, TransportError, ProtocolError
 """

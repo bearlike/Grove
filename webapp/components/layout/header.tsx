@@ -1,16 +1,16 @@
 import Link from "next/link";
-import { ArrowLeft, PanelLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ArrowLeft, History, PanelLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "./theme-toggle";
 
 /**
- * The ONE app-wide header (ADE reframe, #138) — rendered once by the shared
- * shell layout and present on every route (the per-route `<Header>` duplication
- * and the detail page's no-sidebar special case are gone). Sticky, full-bleed on
- * the shared chrome tone (`bg-sidebar/85`), a fixed-height row (h-13 = 52px, the
- * clean-familiar chat-app header height). Borderless since the chrome-teardown
- * (#130): the tone alone separates it from the canvas. All interactive elements
- * compose Button so focus rings, hover behavior, and tap targets stay consistent.
+ * The ONE app-wide header — rendered once by the shared shell layout and
+ * present on every route. Its right-hand `<nav>` is the app's ONE navigation
+ * region — a Sessions link plus the theme toggle. Sticky, full-bleed on the
+ * shared chrome tone (`bg-sidebar/85`), a fixed-height row (h-13 = 52px, the
+ * clean-familiar chat-app header height). Borderless: the tone alone separates
+ * it from the canvas. All interactive elements compose Button so focus rings,
+ * hover behavior, and tap targets stay consistent.
  *
  * The header's middle is a GENERIC slot: a `flex-1` div whose DOM node is handed
  * to the layout via `contextSlotRef`. Because the header lives in the layout, a
@@ -22,15 +22,15 @@ import { ThemeToggle } from "./theme-toggle";
  * Two sidebar hooks, both optional:
  * - `onOpenSidebar` — the mobile drawer trigger: renders a `lg:hidden` hamburger
  *   that opens the WorkspaceSidebar as a Sheet.
- * - `onToggleSidebar` + `sidebarCollapsed` — the desktop collapse toggle (#88):
+ * - `onToggleSidebar` + `sidebarCollapsed` — the desktop collapse toggle:
  *   an `lg`-only ghost button that flips the persistent rail; the glyph reflects
  *   the current state and the `[` shortcut mirrors it.
  *
  * `back` is the non-landing brand variant: the wordmark + subtitle text
- * disappear (logo only) and an explicit arrow back to `/` takes their place.
- * The #130 teardown reasoned the brand click alone was the "home" affordance;
- * direct product feedback said that was too implicit for users to discover, so
- * any route that ISN'T the landing shell passes `back` for an unambiguous way
+ * disappear (logo only) and an explicit arrow back to `/` takes their place —
+ * a bare brand click alone is too implicit an affordance for users to
+ * discover, so any route that ISN'T the landing shell passes `back` for an
+ * unambiguous way
  * home. There is only ever one destination (the landing page), so this is a
  * boolean, not a configurable href. The landing shell omits it and keeps the
  * full brand.
@@ -135,9 +135,31 @@ export function Header({
         <div ref={contextSlotRef} className="flex min-w-0 flex-1 items-center gap-2" />
         <nav className="flex items-center gap-1.5" aria-label="Site actions">
           {/* No create button here — the composer at the top of the main column is
-              the single create affordance (#96 deliverable A). The GitHub link
+              the single create affordance. The GitHub link
               lives once, in the status bar; the header keeps only the theme
-              toggle so the action group stays a single quiet control. */}
+              toggle and the one route link so the group stays quiet.
+
+              The Session Catalog lives HERE rather than in the rail
+              footer for one decisive reason: collapsing the rail animates it to
+              `w-0` AND marks it `inert`, so a rail-footer entry would be
+              unreachable — by pointer and by keyboard — in a state the user can
+              enter with one keystroke. The header is also the app's only
+              existing navigation region (this `<nav>`), where a route link
+              belongs; the footer is a system-status strip (daemon health,
+              version, identity), where one would read as chrome. The label
+              collapses to the glyph below `sm` so a phone spends that width on
+              the portaled session identity instead. */}
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 px-2 font-normal text-muted-foreground hover:text-foreground"
+          >
+            <Link href="/sessions" data-testid="nav-sessions" aria-label="Session catalog">
+              <History aria-hidden />
+              <span className="hidden sm:inline">Sessions</span>
+            </Link>
+          </Button>
           <ThemeToggle />
         </nav>
       </div>

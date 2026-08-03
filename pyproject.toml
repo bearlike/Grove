@@ -1,6 +1,6 @@
 [project]
 name = "grove"
-version = "0.0.5"
+version = "0.0.6"
 description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -20,39 +20,43 @@ classifiers = [
     "Topic :: Terminals",
 ]
 dependencies = [
-    "pydantic>=2.7",
-    "platformdirs>=4.0",
+    "pydantic>=2.7,<3",
+    "platformdirs>=4.0,<5",
     "libtmux>=0.55,<0.56",
-    "textual>=0.80",
-    "typer>=0.12",
-    "humanize>=4.9",
-    "loguru>=0.7",
-    "httpx>=0.28.1",
+    "textual>=0.80,<9",
+    "typer>=0.12,<1",
+    "humanize>=4.9,<5",
+    "loguru>=0.7,<1",
+    "httpx>=0.28.1,<1",
 ]
 
 [project.optional-dependencies]
 daemon = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
 ]
 client = [
-    "httpx>=0.27",
-    "asyncssh>=2.14",
+    "httpx>=0.27,<1",
+    "asyncssh>=2.14,<3",
 ]
 mcp = [
     # Official MCP Python SDK (stdio server). Rides on the client extra:
     # the MCP server is a thin adapter over GroveClient.
-    "mcp>=1.2",
+    #
+    # Capped <2: SDK 2.0.0 deleted mcp.server.fastmcp entirely (Grove's
+    # whole MCP surface is built on FastMCP + mcp.server.lowlevel.Server),
+    # so an uncapped `uv tool install` silently shipped a dead grove-mcp.
+    "mcp>=1.2,<2",
     "grove[client]",
 ]
 telemetry = [
-    # LangFuse ingestion via raw OTLP (issue #175) — deliberately NOT the
+    # LangFuse ingestion via raw OTLP — deliberately NOT the
     # `langfuse` SDK package (its `start_observation()` has no `start_time`
     # param, so it can't backfill a session that already happened). Off by
     # default: `TelemetryConfig.enabled` gates it, and `grove.core.trace`
     # imports these lazily so core stays importable without the extra.
-    "opentelemetry-sdk>=1.27",
-    "opentelemetry-exporter-otlp-proto-http>=1.27",
+    "opentelemetry-sdk>=1.27,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
 ]
 all = [
     "grove[daemon]",
@@ -62,11 +66,15 @@ all = [
 
 [project.scripts]
 grove = "grove.cli:app"
+# Dedicated hot-path entry: Claude spawns one process per hook event per
+# session, so this must not import the Typer/FastAPI stack.
+grove-agent-hook = "grove.core.agents.hook:run_hook_from_stdin"
 grove-mcp = "grove.mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/krishnakanth-alagiri/grove"
-Repository = "https://github.com/krishnakanth-alagiri/grove"
+Homepage = "https://github.com/bearlike/Grove"
+Repository = "https://github.com/bearlike/Grove"
+Documentation = "https://bearlike.github.io/Grove/"
 
 [build-system]
 requires = ["hatchling"]
@@ -86,13 +94,13 @@ dev = [
     # Out-of-process surfaces — pinned in dev so the test matrix runs
     # without manually installing extras. Production users opt in via
     # `pip install grove[daemon|client|all]`.
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "httpx>=0.27",
-    "asyncssh>=2.14",
-    "mcp>=1.2",
-    "opentelemetry-sdk>=1.27",
-    "opentelemetry-exporter-otlp-proto-http>=1.27",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "httpx>=0.27,<1",
+    "asyncssh>=2.14,<3",
+    "mcp>=1.2,<2",
+    "opentelemetry-sdk>=1.27,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
 ]
 docs = [
     "mike",

@@ -1,4 +1,4 @@
-# actionlint config (#198). actionlint is GitHub-only, so it can't model two
+# actionlint config. actionlint is GitHub-only, so it can't model two
 # things this repo legitimately does on Gitea: a custom self-hosted runner
 # label, and Gitea's `https://host/owner/repo@ref` absolute-URL `uses:`
 # extension (verified against docs.gitea.com — not a typo in our YAML).

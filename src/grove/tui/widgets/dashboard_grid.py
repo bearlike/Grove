@@ -1,6 +1,6 @@
 """DashboardGrid — responsive grid of agent-activity tiles, grouped by project.
 
-The Activity Dashboard's body (epic #11 §8). Where the list screen shows *one*
+The Activity Dashboard's body. Where the list screen shows *one*
 repo's workspaces in a vertical list, this shows *every* workspace across every
 repo as a wall of tiles — the "what is every agent doing right now" view.
 
@@ -42,13 +42,19 @@ from textual.widgets import Static
 
 from grove.core.activity import WorkspaceActivity
 from grove.core.agents import AgentActivity, AgentActivityState
+from grove.core.phase import PhaseReport
 from grove.core.workspace import Placement, WorkspaceState
 from grove.tui._status import (
     agent_state_color,
     agent_state_glyph,
     agent_state_label,
     chrome_color,
+    phase_color,
+    phase_glyph,
+    phase_label,
     ref_color,
+    runtime_color,
+    runtime_glyph,
 )
 
 # Tile content trims — keep each line legible inside a grid cell. The tile width
@@ -361,8 +367,8 @@ def _render_card_body(
 
     * **promoted** (working / waiting / blocked / error) — eight rows in a
       two-track cell. Same identity, plus the agent's own task summary (or the
-      reserved ``interpreted_status`` once an external-LLM interpreter fills it,
-      #20), a fuller stat line with token usage, and a live, fit-to-cell tmux
+      reserved ``interpreted_status`` once an external-LLM interpreter fills it),
+      a fuller stat line with token usage, and a live, fit-to-cell tmux
       pane tail that fills the remaining rows instead of leaving them blank — the
       whole point of the redesign.
 
@@ -391,7 +397,7 @@ def _render_card_body(
 
     text = Text(no_wrap=True, overflow="ellipsis")
 
-    # Rows 1-2: identity (glyph · title · age · root / branch · agent · model|state).
+    # Rows 1-2: identity (glyph · title · age · root / branch · agent · model|state · phase).
     _append_identity(
         text,
         s,
@@ -404,11 +410,13 @@ def _render_card_body(
         branch_hex=branch_hex,
         agent_hex=agent_hex,
         muted_hex=muted_hex,
+        phase=activity.phase,
+        dark=dark,
     )
     lines = 2
 
     # Row 3 (promoted, when present): the agent's own one-line summary — the
-    # interpreted status when an LLM interpreter has set it (#20), else the
+    # interpreted status when an LLM interpreter has set it, else the
     # session ai-title, else the current task. Omitted (not blank-filled) when
     # absent so the pane tail simply claims one more row.
     if promoted:
@@ -457,13 +465,23 @@ def _append_identity(
     branch_hex: str,
     agent_hex: str,
     muted_hex: str,
+    phase: PhaseReport | None,
+    dark: bool,
 ) -> None:
     """Rows 1-2 of a tile: the identity block both shapes share.
 
     Row 1 is ``glyph · title · [state (promoted)] · age · [root tag]``; row 2 is
-    ``branch · agent · (model on promoted, state on compact)``. Branch teal,
-    agent cyan, state in its activity hue — the same who/what separation the list
-    card uses. A root-placement workspace carries a quiet muted ``root`` tag.
+    ``runtime mark · branch · agent · (model on promoted, state on compact) ·
+    [phase]``. The runtime mark (`■` host / `▣` container) is always present —
+    the one axis that never renders absent, see ``_status.runtime_glyph``. Branch
+    teal, agent cyan, state in its activity hue — the same who/what separation
+    the list card uses. A root-placement workspace carries a quiet muted
+    ``root`` tag. ``phase`` is the task-phase axis (a THIRD axis, orthogonal to
+    agent state — how far through the task, not what it's doing right now);
+    ``None`` (no report yet) appends nothing, same absence convention as the
+    row card. Deliberately no ``N/M`` progress fraction here (unlike the row
+    card): the tile is tighter on width and the glyph/color ramp already
+    carries the coarse signal.
     """
     text.append(f"{glyph} ", style=f"bold {state_hex}")
     text.append(_trim(s.title, _TITLE_TRIM), style="bold underline")
@@ -475,6 +493,14 @@ def _append_identity(
     if s.placement is Placement.ROOT:
         text.append("  root", style=muted_hex)
     text.append("\n")
+    # Row 2 opens with the runtime mark, the same lead-in the row card uses so
+    # the wall and the list read as one vocabulary — and for the same reason it
+    # leads rather than trails: the tile crops at the column width, and the
+    # isolation boundary must not be the token that falls off the end.
+    text.append(
+        f"{runtime_glyph(s.runtime)} ",
+        style=f"bold {runtime_color(s.runtime, dark=dark)}",
+    )
     text.append(_trim(s.branch, _BRANCH_TRIM), style=f"bold {branch_hex}")
     text.append(" · ", style=muted_hex)
     text.append(s.agent_name, style=f"bold {agent_hex}")
@@ -484,13 +510,19 @@ def _append_identity(
     elif not promoted:
         text.append(" · ", style=muted_hex)
         text.append(state_label, style=f"bold {state_hex}")
+    if phase is not None:
+        text.append(" · ", style=muted_hex)
+        text.append(
+            f"{phase_glyph(phase.phase)} {phase_label(phase.phase)}",
+            style=f"bold {phase_color(phase.phase, dark=dark)}",
+        )
 
 
 def _summary(primary: AgentActivity | None) -> str | None:
     """The agent's own one-line summary, interpreter-first.
 
     Prefers ``interpreted_status`` — the slot a future external-LLM interpreter
-    (#20) fills with a human one-liner — then the session ai-title, then the raw
+    fills with a human one-liner — then the session ai-title, then the raw
     current task. ``None`` when a STARTING / generic session has surfaced none.
     """
     if primary is None:

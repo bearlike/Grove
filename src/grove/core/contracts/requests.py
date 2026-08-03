@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from grove.core.contracts.branch_plan import AutoBranch, BranchPlan
 from grove.core.contracts.tickets import TicketSelector
+from grove.core.workspace import Runtime
 
 
 class CreateWorkspaceRequest(BaseModel):
@@ -56,6 +57,30 @@ class CreateWorkspaceRequest(BaseModel):
     ``grove.core.contracts.branch_plan`` for the five variants — four produce a
     worktree, ``RootBranch`` runs in the repo root."""
 
+    runtime: Runtime | None = None
+    """Where this workspace's agent runs: ``"container"`` (the default) or
+    ``"host"``. ``None`` — the default — takes the cascade's answer
+    (``container.enabled``), so a caller that does not care never has to know
+    the field exists.
+
+    Explicit ``"host"`` is the escape hatch, and it is a *recorded choice*, not
+    a fallback: it is never warned about and a later ``respawn`` never
+    auto-upgrades it. It is refused outright when the project's committed
+    devcontainer config declares ``customizations.grove.requires_container``.
+
+    Persisted (unlike ``skip_init`` / ``model``): the answer selects a launch
+    backend and every lifecycle verb needs it, so it lives on the record rather
+    than being re-derived from a config default that may later flip."""
+
+    brief: bool | None = None
+    """Hand this workspace's agent Grove's first-turn brief — one short note
+    pointing it at the ``working-in-grove`` skill. ``None`` — the default —
+    takes the cascade's answer (``brief.enabled``), exactly like ``runtime``.
+
+    Persisted for the same reason ``runtime`` is: the delivery happens at every
+    launch, so a workspace created while the default was on must keep being
+    briefed after somebody flips the default off, and vice versa."""
+
     skip_init: bool = False
     """Skip the init script for this create only, regardless of
     ``init_script.enabled``. A per-create override of a config default
@@ -75,7 +100,7 @@ class CreateWorkspaceRequest(BaseModel):
 
     initial_prompt: str | None = Field(default=None, max_length=10_000)
     """The agent's first task, delivered race-free as the session boots so the
-    workspace starts *working* instead of idling at the prompt (#48). Delivered
+    workspace starts *working* instead of idling at the prompt. Delivered
     through the launch invocation, never typed in post-boot (which races the
     agent's boot — the swallowed-Enter trap): claude_code appends it as a
     trailing positional arg to the launch argv (``claude … "<prompt>"`` starts
@@ -86,7 +111,7 @@ class CreateWorkspaceRequest(BaseModel):
 
     resume_session_id: str | None = Field(default=None, max_length=200)
     """Adopt an EXISTING agent session as this workspace's primary instead of
-    minting a fresh one (#120). ``None`` (the default) mints as usual. When set,
+    minting a fresh one. ``None`` (the default) mints as usual. When set,
     the id is persisted as ``agent_session_id`` (so the dashboard tracks the
     resumed session by construction — no discovery needed) and the agent is
     launched to CONTINUE it: ``claude --resume <id>`` (which keeps the same
@@ -95,7 +120,7 @@ class CreateWorkspaceRequest(BaseModel):
     (``ResumeNotSupported``, 422) before any side effect. Create-only, never
     re-applied on resume/respawn, like ``skip_init``. Accepts a full id OR a
     unique id prefix scoped to the project (resolved through the same
-    ``SessionExplorer`` the remap verb uses, #F8); an unknown/ambiguous ref, or
+    ``SessionExplorer`` the remap verb uses); an unknown/ambiguous ref, or
     one whose adapter kind mismatches the agent, fails with
     ``AgentSessionNotFound`` (404) before any side effect — never a
     fully-provisioned workspace stranded on a bogus id."""
@@ -108,7 +133,7 @@ class CreateWorkspaceRequest(BaseModel):
 
     project_cwd: Path | None = None
     """Absolute path the agent session should start in — a nested *project*
-    directory inside the repo (#101). ``None`` (the default) starts the agent at
+    directory inside the repo. ``None`` (the default) starts the agent at
     the worktree root, the historical behavior. When set it must be the repo
     root or a subdirectory of it; the engine derives the subpath relative to the
     repo root and starts the agent in the matching subdir of the worktree. The

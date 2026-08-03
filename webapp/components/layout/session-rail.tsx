@@ -15,6 +15,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { LandingRing } from "@/components/shared/landing-ring";
 import { MetaRow } from "@/components/shared/meta";
+import { RuntimeMark } from "@/components/shared/runtime-mark";
+import { PhaseBadge } from "@/components/workspace/phase-badge";
 import { relativeTimeLabel } from "@/components/shared/relative-time";
 import { agentStateLabel, ATTENTION_STATES } from "@/lib/grove/agent-state-tokens";
 import { useProjectSessionsAll, useRemapSession } from "@/lib/grove/hooks";
@@ -23,23 +25,24 @@ import type {
   AgentActivityState,
   AgentActivityView,
   DashboardSnapshotView,
+  PhaseView,
+  Runtime,
   SessionSummaryView,
   WorkspaceActivityView,
 } from "@/lib/grove/types";
 import { cn } from "@/lib/utils";
 
 /**
- * The ADE session rail (#140 → modern-chat-native thread list #152 → provenance rows
- * #158) — the rail's scrollable BODY, Grove's fleet as a persistent left "thread
- * list". A FLAT, cross-project list ordered by one rule: `modified_at` DESC
- * (latest first). No project sections, no date buckets, no attention pin — the
- * v2 group machinery is gone; project identity now rides every row's meta line
- * and attention signals inline (dot color + a faint waiting tint), so the filter
- * menu (`SidebarFilter`) is the single organizing instrument.
+ * The session rail — the rail's scrollable BODY, Grove's fleet as a
+ * persistent left "thread list". A FLAT, cross-project list ordered by one
+ * rule: `modified_at` DESC (latest first). No project sections, no date
+ * buckets, no attention pin — project identity rides every row's meta line
+ * and attention signals inline (dot color + a faint waiting tint), so the
+ * filter menu (`SidebarFilter`) is the single organizing instrument.
  *
- * Row shape (the Codex-style session-list pattern, polished #163): TWO quiet
- * lines on a fixed rhythm (`leading-5` head / `leading-4` meta, `gap-0.5`) so
- * every row is structurally identical —
+ * Row shape (the Codex-style session-list pattern): TWO quiet lines on a
+ * fixed rhythm (`leading-5` head / `leading-4` meta, `gap-0.5`) so every row
+ * is structurally identical —
  *   Line 1: a 6px `StateDot` (the session-rail-dot atom, in the state's
  *     `--agent-*` hue) · the title (truncate, first-class) · the created-ago,
  *     right-aligned + muted (the card's "state · title · time" rhythm). On hover
@@ -48,14 +51,16 @@ import { cn } from "@/lib/utils";
  *     project name (a subtle DOTTED underline is the quiet cue separating project
  *     from branch — both are muted, so tone can't) · branch (font-mono, plain
  *     muted — NOT the teal ref token, the rail stays quiet) · `+N/−M` change
- *     stats (`+N` in `--ref-add`, `−M` in `--ref-remove`, tabular). Change stats
+ *     stats (`+N` in `--ref-add`, `−M` in `--ref-remove`, tabular) · the
+ *     `PhaseBadge` glance (the task-phase glyph + `n/6`, from the row's own
+ *     live workspace; absent when the agent reports no phase). Change stats
  *     come from the LIVE workspace (`WorkspaceActivityView.diff_added`/
  *     `.diff_removed`) — real ±line counts, never faked from `dirty_files`/ahead/
  *     behind. A row whose workspace carries zero change data shows nothing in that
  *     slot (blank beats noise). Truncation priority: title first, then branch,
  *     project never fully vanishes (`shrink-0 max-w-[45%]`).
  *
- * Default visibility = actionable only (#158). A row is "mapped" when its
+ * Default visibility = actionable only. A row is "mapped" when its
  * `workspace_id !== null` AND that workspace is present in the live snapshot
  * (`wsById.has(...)`). Unmapped / metadata-only rows are HIDDEN by default
  * (`showUnmapped`, persisted, default false); when hidden and at least one
@@ -76,13 +81,13 @@ import { cn } from "@/lib/utils";
  * their transcript, so they render dimmed, "history only", NOT navigable — a hard,
  * wire-visible rule, never a heuristic. Copy never promises "every session ever".
  *
- * Collapse is a shell concern (#152): the whole rail hides (`w-0`), so there is
- * no collapsed icon-strip variant.
+ * Collapse is a shell concern: the whole rail hides (`w-0`), so there is no
+ * collapsed icon-strip variant.
  *
  * Test seams: `session-rail`, `session-rail-new`, `session-rail-row` (+
  * `data-session-id`, `data-workspace-id`, `data-navigable`, `data-mapped`,
  * `data-attention`, `data-active`), `session-rail-dot`, `session-rail-project-name`,
- * `session-rail-age`, `session-rail-changes`, `session-rail-row-menu`,
+ * `session-rail-age`, `session-rail-changes`, `phase-badge`, `session-rail-row-menu`,
  * `session-rail-make-primary`, `session-rail-hidden-note`, `session-rail-empty`,
  * `session-rail-empty-clear`.
  */
@@ -169,8 +174,12 @@ export function SessionRail({
       if (hiddenProj.has(p.repo_root)) continue;
       for (const s of byRepo.get(p.repo_root) ?? []) {
         if (!matchesQuery(s, q)) continue;
+        // A row's `activity` is nullable on the wire — null means "not parsed
+        // at this scope", so it degrades to `unknown` rather than a
+        // fabricated idle. The rail reads the project scope, which always
+        // parses, so this is a type floor.
         const activity = liveActivity.get(s.session_id) ?? s.activity;
-        if (hidden.has(activity.state)) continue;
+        if (hidden.has(activity?.state ?? "unknown")) continue;
         if (attentionOnly && !isAttention(activity)) continue;
         out.push({ session: s, activity, repoName: p.repo_name });
       }
@@ -199,6 +208,8 @@ export function SessionRail({
       mapped: isMapped(r.session),
       added: ws?.diff_added ?? 0,
       removed: ws?.diff_removed ?? 0,
+      phase: ws?.phase ?? null,
+      runtime: ws?.state.runtime ?? null,
       wsStatus: ws?.state.status ?? null,
       pausedAt: ws?.state.paused_at ?? null,
       active: isActive(r.session),
@@ -278,7 +289,7 @@ export function SessionRail({
 }
 
 /**
- * The quiet "New session" ghost row at the rail top (#152) — the modern-chat
+ * The quiet "New session" ghost row at the rail top — the modern-chat
  * new-thread affordance. Links to `/` (the hero composer IS the create surface).
  */
 function NewSessionRow({ onNavigate }: { onNavigate?: () => void }) {
@@ -300,13 +311,14 @@ function NewSessionRow({ onNavigate }: { onNavigate?: () => void }) {
 
 type RailEntry = {
   session: SessionSummaryView;
-  activity: AgentActivityView;
-  /** The owning project's display name — provenance rides every row (#158). */
+  /** Null = the listing never parsed a transcript; renders `unknown`. */
+  activity: AgentActivityView | null;
+  /** The owning project's display name — provenance rides every row. */
   repoName: string;
 };
 
 /**
- * The quiet state cue (#152): a 6px dot in the state's `--agent-*` hue before the
+ * The quiet state cue: a 6px dot in the state's `--agent-*` hue before the
  * title. Color is an enhancement, never the only signal — the row carries the
  * state label in its `aria-label`/`title`, so the dot is never read alone.
  */
@@ -352,6 +364,8 @@ function RailRow({
   mapped,
   added,
   removed,
+  phase,
+  runtime,
   wsStatus,
   pausedAt,
   attention = false,
@@ -359,11 +373,17 @@ function RailRow({
   onNavigate,
 }: {
   row: SessionSummaryView;
-  activity: AgentActivityView;
+  activity: AgentActivityView | null;
   repoName: string;
   mapped: boolean;
   added: number;
   removed: number;
+  /** The owning workspace's task phase, when it reports one. */
+  phase: PhaseView | null;
+  /** The owning workspace's runtime. `null` ONLY for a history-only row with no
+   *  live workspace behind it, where the isolation boundary is genuinely
+   *  unknowable — never a defaulted "host". Every mapped row carries a mark. */
+  runtime: Runtime | null;
   wsStatus: string | null;
   pausedAt: string | null;
   attention?: boolean;
@@ -374,11 +394,12 @@ function RailRow({
   const label = row.title || row.first_prompt || "untitled session";
   const branch = row.git_branch || row.workspace_branch || null;
   const paused = wsStatus === "paused";
-  const stateLabel = agentStateLabel(activity.state);
+  const state = activity?.state ?? "unknown";
+  const stateLabel = agentStateLabel(state);
   const ageLabel = row.created_at ? relativeTimeLabel(row.created_at) : null;
 
   // Line 1 (dot · title · created-ago). The age is right-aligned and muted — the
-  // same "state · title · time" rhythm the card header wears (#163). It's the
+  // same "state · title · time" rhythm the card header wears. It's the
   // static `relativeTimeLabel` (not a per-row live-ticking <RelativeTime>): the
   // 15 s poll + SSE invalidation re-render the rail often enough to keep it fresh
   // without N intervals. On hover the row's `group-hover:pe-9` slides it left so
@@ -386,7 +407,7 @@ function RailRow({
   // title's box so both sit on one baseline; a fixed line height per row.
   const head = (
     <span className="flex items-center gap-2">
-      <StateDot state={activity.state} />
+      <StateDot state={state} />
       <span className="min-w-0 flex-1 truncate text-sm leading-5">{label}</span>
       {ageLabel ? (
         <span
@@ -412,6 +433,10 @@ function RailRow({
   // then branch shrinks, and project never fully vanishes.
   const meta = (
     <MetaRow className="ps-3.5 flex-nowrap overflow-hidden text-[11px] leading-4">
+      {/* The isolation axis leads the meta line, exactly as it leads line 2 of
+          the TUI card, and `shrink-0` so the row's truncation can never eat the
+          one mark that says whether this agent sits inside a boundary. */}
+      {runtime && <RuntimeMark runtime={runtime} className="shrink-0" />}
       <span
         data-testid="session-rail-project-name"
         className="max-w-[45%] shrink-0 truncate underline decoration-muted-foreground/40 decoration-dotted underline-offset-2"
@@ -425,8 +450,13 @@ function RailRow({
       ) : null}
       {/* Gated at JSX level so MetaRow sees a falsy child and drops the middot
           for clean rows — see the ChangeStat docstring for why null-inside
-          isn't enough. */}
+          isn't enough. `PhaseBadge` needs the SAME gate for the same reason
+          (it renders null on a null phase, but the ELEMENT is still truthy). */}
       {(added > 0 || removed > 0) && <ChangeStat added={added} removed={removed} />}
+      {/* The third axis, in its glance register: a text sigil, not a lucide
+          icon — the rail's no-icons rule is about chrome, and this reads as
+          the same kind of mark as `+N/−M`. */}
+      {phase && <PhaseBadge phase={phase} />}
     </MetaRow>
   );
 
@@ -457,7 +487,9 @@ function RailRow({
       : row.modified_at
         ? relativeTimeLabel(row.modified_at)
         : null;
-  const tip = [`${label} — ${stateLabel}`, activity.model || null, when].filter(Boolean).join(" · ");
+  const tip = [`${label} — ${stateLabel}`, activity?.model || null, when]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <li
@@ -555,7 +587,8 @@ function buildSnapshotIndex(snapshot: DashboardSnapshotView | null): {
   return { liveActivity, wsById };
 }
 
-function isAttention(activity: AgentActivityView): boolean {
+function isAttention(activity: AgentActivityView | null): boolean {
+  if (!activity) return false;
   return activity.needs_attention || ATTENTION_STATES.has(activity.state);
 }
 
@@ -566,7 +599,7 @@ function matchesQuery(s: SessionSummaryView, q: string): boolean {
     .some((v) => (v as string).toLowerCase().includes(q));
 }
 
-/** The one ordering rule (#158): newest activity first. A null timestamp sinks. */
+/** The one ordering rule: newest activity first. A null timestamp sinks. */
 function byModifiedDesc(a: RailEntry, b: RailEntry): number {
   return (b.session.modified_at ?? "").localeCompare(a.session.modified_at ?? "");
 }

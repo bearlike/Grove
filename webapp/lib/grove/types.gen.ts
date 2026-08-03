@@ -214,7 +214,7 @@ export interface paths {
         put?: never;
         /**
          * Ingest Agent Hook
-         * @description Native Claude Code http-hook push (#171) — the live half of the #18 sidecar.
+         * @description Native Claude Code http-hook push — the live half of the command-hook sidecar.
          *
          *     Claude Code dispatches the ``command`` and ``http`` handlers registered
          *     on the SAME event independently (`ClaudeHook.settings`), so by the time
@@ -224,7 +224,12 @@ export interface paths {
          *     payload carries no ``$TMUX_PANE``, so writing here would race the
          *     command handler's more complete record). ``poll_once`` already diffs
          *     per-workspace by fingerprint and emits a delta only for what changed,
-         *     so this is a scoped refresh by construction, not a blanket resnapshot.
+         *     so the wire cost is scoped by construction — the *computation* still
+         *     walks every workspace, which is why this goes through the shared
+         *     ``poll_coalescer`` rather than dispatching its own executor call:
+         *     Claude fires this on every tracked event with no debounce, so
+         *     without coalescing, a burst of hook events during active fleet coding
+         *     ran that many full-fleet scans at once.
          *
          *     Gated by the same-host hook-ingest token (`make_require_hook_token`),
          *     not the `SessionStore` pairing bearer every other route uses — see its
@@ -275,11 +280,72 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Workspaces */
+        /**
+         * List Workspaces
+         * @description Cross-repo (default) or single-repo (``repo=``) workspace listing.
+         *
+         *     ``repo`` dispatches like ``/branches``: given, it scopes to that repo
+         *     and validates it — an unrecognized root is 404 ``unknown_repo_root``
+         *     (the ``/sessions`` precedent) rather than an empty list, so a typo'd
+         *     path can't masquerade as "no workspaces". ``ticket`` (wire format
+         *     ``<provider>:<id>``) narrows to the single workspace
+         *     ``WorkspaceManager.find_by_ticket`` resolves for that ticket — the
+         *     issue-ops "does a workspace already exist for this ticket" lookup —
+         *     scanned within ``repo`` when given, else across every known repo.
+         */
         get: operations["list_workspaces_workspaces_get"];
         put?: never;
-        /** Create Workspace */
+        /**
+         * Create Workspace
+         * @description Create a workspace and return it once it is fully provisioned.
+         *
+         *     Runs on the lifecycle runner's own pool, never the event loop: with containers
+         *     the default runtime, `create` pays a full `devcontainer up` (image pull,
+         *     build, features, lifecycle hooks) plus the init script and the agent
+         *     launch — minutes, during which an event-loop call froze every SSE
+         *     stream, every other repo's dashboard and the activity poll.
+         *     WHEN it returns is unchanged: the response still means "provisioned,
+         *     init script run, agent launched", which is what `grove create` and the
+         *     MCP tool promise their callers. Unkeyed, unlike every other verb —
+         *     the id it would serialize on is minted *by* this call (see
+         *     ``_LifecycleRunner.run``).
+         */
         post: operations["create_workspace_workspaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issue-ops/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Issue Ops Event
+         * @description Ingest one forwarded issue-comment event and route it to a workspace action.
+         *
+         *     The CI forwarder (a stateless composite action on a ``:host`` runner)
+         *     POSTs a normalized :class:`IssueOpsEvent`; the engine dedupes, gates, and
+         *     routes it to the target repo's Manager, returning an
+         *     :class:`IssueOpsOutcome` the action reflects into a comment reaction. 202
+         *     (accepted-and-acted) because the real work — a create/steer, a reply — is
+         *     already done synchronously in the engine; the code only signals the CI
+         *     that this is a fire-and-forget ingest, not a resource creation with a
+         *     canonical URL.
+         *
+         *     ``handle`` does blocking git/tmux/network I/O (``find_by_ticket`` scans,
+         *     ``create``, the reply comment), so it runs in the executor to keep the
+         *     loop responsive — the same discipline as ``/activity``. It catches its own
+         *     lifecycle errors and turns them into ``refused`` outcomes, so it returns an
+         *     outcome rather than raising for an ordinary refusal.
+         */
+        post: operations["ingest_issue_ops_event_issue_ops_events_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -293,7 +359,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Workspace */
+        /**
+         * Get Workspace
+         * @description One workspace's reconciled state — in the executor, since `get`
+         *     reconciles against live tmux and the filesystem like `list`.
+         */
         get: operations["get_workspace_workspaces__ws_id__get"];
         put?: never;
         post?: never;
@@ -321,7 +391,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Pause Workspace */
+        /**
+         * Pause Workspace
+         * @description Pause the workspace — through the lifecycle runner, like every verb.
+         *
+         *     A container workspace runs a bounded in-container shutdown here, so this
+         *     is slow blocking work even though it reads like a state flip — and it is
+         *     keyed on ``ws_id``, so it can never interleave with a kill or respawn of
+         *     the same workspace.
+         */
         post: operations["pause_workspace_workspaces__ws_id__pause_post"];
         delete?: never;
         options?: never;
@@ -338,7 +416,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resume Workspace */
+        /**
+         * Resume Workspace
+         * @description Resume the workspace — lifecycle runner: re-provisioning a
+         *     container and re-running the init script is minutes of blocking work,
+         *     serialized against every other verb on this workspace.
+         */
         post: operations["resume_workspace_workspaces__ws_id__resume_post"];
         delete?: never;
         options?: never;
@@ -355,7 +438,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Respawn Workspace */
+        /**
+         * Respawn Workspace
+         * @description Respawn the workspace's session — lifecycle runner, same
+         *     re-provisioning cost and same per-workspace serialization as ``resume``.
+         */
         post: operations["respawn_workspace_workspaces__ws_id__respawn_post"];
         delete?: never;
         options?: never;
@@ -372,7 +459,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Kill Workspace */
+        /**
+         * Kill Workspace
+         * @description Tear the workspace down — lifecycle runner: removing the
+         *     container and the worktree is slow blocking I/O, and keying it on
+         *     ``ws_id`` is what stops it racing a respawn mid-``devcontainer up``.
+         */
         post: operations["kill_workspace_workspaces__ws_id__kill_post"];
         delete?: never;
         options?: never;
@@ -391,12 +483,16 @@ export interface paths {
         put?: never;
         /**
          * Send Workspace Message
-         * @description Steer the workspace's agent with a follow-up message (issue #37).
+         * @description Steer the workspace's agent with a follow-up message.
          *
          *     Empty 204 on success — the injection has no meaningful response
          *     body. Refusals ride the typed-error envelope: 409
          *     ``workspace_state_error`` / ``pane_not_found``, 501
-         *     ``steering_unsupported``.
+         *     ``steering_unsupported``. ``send_message`` shells a blocking tmux
+         *     keystroke injection (with a settle delay) — off-loaded to the
+         *     executor like every other blocking manager call, so one workspace's
+         *     steer never stalls the loop the SSE stream and every other request
+         *     share.
          */
         post: operations["send_workspace_message_workspaces__ws_id__message_post"];
         delete?: never;
@@ -419,9 +515,11 @@ export interface paths {
          * @description Interrupt the workspace's agent, where its adapter supports it.
          *
          *     Today every kind refuses (501 ``steering_unsupported``) — there is
-         *     no safe generic interrupt for a tmux-hosted CLI, and the mewbo API
-         *     arm lands with issue #36. The route exists now so clients code
-         *     against the final surface.
+         *     no safe generic interrupt for a tmux-hosted CLI. The route exists now
+         *     so clients code against the final surface, ready for a kind whose API
+         *     supports a real interrupt. Off-loaded to the executor like its
+         *     ``/message`` sibling — a future arm that does shell blocking I/O
+         *     (tmux, a remote HTTP call) must not stall the loop.
          */
         post: operations["interrupt_workspace_workspaces__ws_id__interrupt_post"];
         delete?: never;
@@ -441,7 +539,7 @@ export interface paths {
         put?: never;
         /**
          * Answer Question
-         * @description Answer a pending AskUserQuestion by driving the agent's TUI (#109).
+         * @description Answer a pending AskUserQuestion by driving the agent's TUI.
          *
          *     Dispatch semantics — 204 the instant the keystrokes are sent; the
          *     resolution arrives later on the activity stream (the sidecar clears and
@@ -450,6 +548,8 @@ export interface paths {
          *     ``tool_use_id``) / ``pane_not_found``, 422 ``question_answer_invalid``
          *     (plan doesn't fit the captured questions). The wire model rejects a
          *     structurally-malformed body (422) before the handler runs.
+         *     ``answer_question`` drives multiple blocking tmux keystroke writes —
+         *     off-loaded to the executor like the other steer routes.
          */
         post: operations["answer_question_workspaces__ws_id__question_answer_post"];
         delete?: never;
@@ -467,7 +567,7 @@ export interface paths {
         };
         /**
          * Workspace Controls
-         * @description Enumerate the session's available input controls (#178).
+         * @description Enumerate the session's available input controls.
          *
          *     Slash commands, skills, MCP servers, the model catalog + current model,
          *     and the permission posture — the read behind the webapp's control panel.
@@ -498,13 +598,16 @@ export interface paths {
         put?: never;
         /**
          * Invoke Workspace Control
-         * @description Invoke a named session control — a slash command or a skill (#178).
+         * @description Invoke a named session control — a slash command or a skill.
          *
          *     Composes the tool's ``/name`` invocation and delivers it through the same
          *     steer path as ``/message`` — 204 on dispatch (delivered, not "ran"; the
          *     result rides the transcript later). Refusals ride the typed envelope: 501
          *     ``capability_unavailable`` (a shell/remote kind has no slash-control
          *     surface), 409 ``pane_not_found`` / ``workspace_state_error``.
+         *
+         *     In the executor like its ``/message`` sibling: it rides the same
+         *     blocking tmux keystroke injection, settle delay included.
          */
         post: operations["invoke_workspace_control_workspaces__ws_id__controls_invoke_post"];
         delete?: never;
@@ -524,12 +627,14 @@ export interface paths {
         put?: never;
         /**
          * Switch Workspace Model
-         * @description Switch the running session's model (#178).
+         * @description Switch the running session's model.
          *
          *     Delivered as the interactive ``/model <id>`` control through the steer
          *     path — 204 on dispatch. The id is forwarded verbatim (the provider
          *     boundary). Refusals: 501 ``capability_unavailable`` (a kind with no
          *     model-switch channel), 409 ``pane_not_found`` / ``workspace_state_error``.
+         *
+         *     In the executor like every other steer route — same tmux injection path.
          */
         post: operations["switch_workspace_model_workspaces__ws_id__controls_model_post"];
         delete?: never;
@@ -549,7 +654,7 @@ export interface paths {
         put?: never;
         /**
          * Remap Workspace Session
-         * @description Pin an existing agent session as this workspace's tracked primary (#120).
+         * @description Pin an existing agent session as this workspace's tracked primary.
          *
          *     The manual counterpart to Grove's automatic discovery/adoption: the
          *     operator names a session (id or unique prefix, resolved in the
@@ -610,12 +715,13 @@ export interface paths {
         };
         /**
          * Workspace Pane
-         * @description One-shot agent-pane ANSI snapshot for the dashboard's focused live pane (#19).
+         * @description One-shot agent-pane ANSI snapshot for the dashboard's focused live pane.
          *
          *     The web dashboard polls this for the single expanded card (status-gated to
          *     WORKING) instead of mounting N live terminals — the peer-validated "summary
          *     wall + one live focus" shape. Best-effort like peek; never raises (returns
-         *     ``ansi: null`` when the session isn't live).
+         *     ``ansi: null`` when the session isn't live). The tmux capture runs in
+         *     the executor — exactly as the streaming sibling below already does it.
          */
         get: operations["workspace_pane_workspaces__ws_id__pane_get"];
         put?: never;
@@ -635,7 +741,7 @@ export interface paths {
         };
         /**
          * Workspace Pane Stream
-         * @description Live focused-pane SSE push for one workspace (#19, the streaming wall).
+         * @description Live focused-pane SSE push for one workspace.
          *
          *     Resolves the workspace once (404 if unknown), then self-paces: each tick
          *     captures the agent pane via the same best-effort ``peek_pane`` seam the
@@ -668,7 +774,8 @@ export interface paths {
          *     rail summary walking all of branch history. This route returns
          *     every commit done in the workspace since fork from base, newest
          *     first, uncapped — the detail-page consumer wants the full log.
-         *     Best-effort like peek; never raises, returns ``[]`` on failure.
+         *     Best-effort like peek; never raises, returns ``[]`` on failure. The
+         *     ``git log`` walk is blocking, so it runs in the executor.
          */
         get: operations["workspace_commits_workspaces__ws_id__commits_get"];
         put?: never;
@@ -696,7 +803,7 @@ export interface paths {
          *     ``/activity``.
          *
          *     ``candidates=true`` flips the scan to the UNGATED
-         *     :meth:`SessionExplorer.candidates_for` — the remap-picker set (#132),
+         *     :meth:`SessionExplorer.candidates_for` — the remap-picker set,
          *     which keeps a session the adoption gate rejects (a dead-minted-pointer's
          *     pre-birth successor, a foreign session in a shared ROOT cwd) so a UI can
          *     offer it to pin via ``POST .../session``. The default gated view stays
@@ -723,13 +830,115 @@ export interface paths {
          * @description The session's conversation, oldest-first; ``last`` keeps only the tail.
          *
          *     ``session_id`` must be the full id (clients hold it from the sessions
-         *     listing) — prefix resolution stays a CLI affordance. 404
-         *     ``agent_session_not_found`` when the id isn't recorded for this
-         *     workspace.
+         *     listing) — prefix resolution stays a CLI affordance. A fleet child's
+         *     ``session_id`` (the Claude sub-agent thread id) never appears in the
+         *     workspace's own listing — falls back to
+         *     ``SessionExplorer.subagent_turns`` before the typed 404, so a fleet
+         *     child's transcript stays reachable. 404 ``agent_session_not_found``
+         *     when the id isn't recorded for this workspace either way.
          */
         get: operations["workspace_session_turns_workspaces__ws_id__sessions__session_id__turns_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/todo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Todo
+         * @description The workspace's current todo/checklist state.
+         *
+         *     Fetch-on-demand like the sibling session-history routes above, bounded
+         *     to one workspace and resolved through ``WorkspaceManager.latest_todo``
+         *     — the same engine seam the issueops sticky-comment publisher calls
+         *     in-process. That method folds a full transcript parse, so it runs in
+         *     the executor. 404 ``agent_session_not_found`` when the workspace has
+         *     no recorded agent session; a session with no todo/Task tool called yet
+         *     answers 200 with an empty ``TodoListView`` (a real, not-yet-populated
+         *     state — never conflated with the 404).
+         */
+        get: operations["workspace_todo_workspaces__ws_id__todo_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/provision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Provision
+         * @description How far along this workspace's container provision is.
+         *
+         *     The fetch-on-demand half of the provisioning axis: ``PROVISIONING``
+         *     rides the activity stream (it is the workspace's reconciled status), but
+         *     the headline and the log tail do not, because reading them is a file
+         *     read per workspace and the poll walks the whole host every ~2 s. A
+         *     client that sees the status opens this route and closes it again when
+         *     the status leaves.
+         *
+         *     Always 200 for a known workspace — a host workspace, or one whose
+         *     provision finished long ago, answers with an empty headline and no
+         *     lines rather than a 404, because "nothing to report" is a real answer
+         *     (the ``/phase`` precedent, not the ``/todo`` one). The read runs in the
+         *     executor: a cold build's log reaches ~1 MB.
+         */
+        get: operations["workspace_provision_workspaces__ws_id__provision_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/phase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Phase
+         * @description The workspace's current task-phase claim.
+         *
+         *     ``null`` (200, never 404) means the agent has not reported one yet —
+         *     a real, distinct answer from "phase=scoping", not an error: a fleet
+         *     watcher needs to tell "hasn't reported" from "is at step zero". Runs
+         *     in the executor: ``WorkspaceManager.phase`` reads the phase file.
+         */
+        get: operations["workspace_phase_workspaces__ws_id__phase_get"];
+        put?: never;
+        /**
+         * Set Workspace Phase
+         * @description Set or correct the workspace's task-phase claim from outside.
+         *
+         *     The agent itself never calls this — it reports by writing the per-agent
+         *     file Grove names in its launch env, inside its own worktree (the file
+         *     channel ``grove.core.phase`` documents). This route is the manual
+         *     counterpart,
+         *     for a human or an orchestrator to set/correct the claim, mirroring
+         *     ``remap_workspace_session``'s trusted-write shape. Runs in the
+         *     executor: ``WorkspaceManager.set_phase`` does blocking file I/O.
+         */
+        post: operations["set_workspace_phase_workspaces__ws_id__phase_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -744,22 +953,106 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Project Sessions
-         * @description Every agent session across one project's worktrees, newest-first.
+         * List Sessions
+         * @description Agent sessions, newest-first — one project's (``repo``) or the whole
+         *     host's (``repo`` omitted).
          *
-         *     The project-landing analogue of ``GET /workspaces/{id}/sessions``: spans
-         *     every scan root (Grove-managed and hand-staged worktrees alike), so rows
-         *     carry the ``workspace_*`` attribution trio when Grove owns the directory
-         *     and ``None`` when staged by hand. ``repo`` follows the ``/branches``
-         *     convention for repo dispatch; an unknown root is a 404 rather than an
-         *     empty list so a typo'd path can't masquerade as "no sessions yet".
+         *     Scope is a value of the SAME parameter, never a second endpoint: both
+         *     answer "which sessions exist and where did they come from", and
+         *     ``GET /workspaces`` already established that omitting ``repo`` widens a
+         *     listing rather than narrowing it.
          *
-         *     ``SessionExplorer.list`` full-parses every transcript across every
-         *     worktree — heavy per request, acceptable here because the UI fetches it
-         *     only when the user expands the collapsed sessions section. Blocking I/O,
-         *     so it runs in the executor like the sibling sessions endpoints.
+         *     **Project scope** spans every scan root of one repo (Grove-managed and
+         *     hand-staged worktrees alike) via ``SessionExplorer.list``, which
+         *     full-parses every transcript — heavy, and acceptable because a UI
+         *     fetches it only on section expand. An unknown root is a 404 rather than
+         *     an empty list so a typo'd path can't masquerade as "no sessions yet".
+         *
+         *     **Host scope** is the Session Catalog: every session in every adapter's
+         *     store, across every repo (and none), built from one bounded head read
+         *     per session — so it is fast on a several-hundred-session host but
+         *     carries no ``activity``/``size_bytes`` (the class docstring on
+         *     ``SessionSummaryView`` spells out what a catalog row cannot know). It
+         *     adds the resolved ``project``, the recording ``cwd``, and an honest
+         *     ``live`` flag. Request-scoped behind a short TTL memo — the catalog is
+         *     never on the activity poll.
+         *
+         *     Both scopes block, so both run in the executor.
          */
-        get: operations["project_sessions_sessions_get"];
+        get: operations["list_sessions_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Session Turns
+         * @description The conversation of a session identified WITHOUT a workspace — the
+         *     catalog's drill-in, and the one real wire change the catalog needs.
+         *
+         *     ``GET /workspaces/{id}/sessions/{sid}/turns`` resolves a session
+         *     *through* a workspace, which a catalog row may not have: most sessions
+         *     on a host were never launched by Grove. So this resolves by the
+         *     coordinates a catalog row actually carries — ``(kind, cwd,
+         *     session_id)`` — which is also exactly what an adapter needs to read a
+         *     transcript. Pass ``cwd`` back verbatim as the row reported it; the
+         *     adapters match a recorded cwd by string. A row whose head read never
+         *     recovered a cwd (~2 % of Claude transcripts) is not drillable at all,
+         *     and 404s here.
+         *
+         *     The row itself comes from the same TTL-memoized catalog the listing
+         *     served, so list → drill-in is one scan. 404 ``agent_session_not_found``
+         *     when no catalog row matches — including an unrecognized ``kind``. Runs
+         *     in the executor: both the lookup and the parse block. Sessions written
+         *     under a workspace's pinned transcript config dir stay on the
+         *     workspace-scoped route, which resolves that override; the host scan
+         *     sees only what the daemon's own environment can reach.
+         */
+        get: operations["session_turns_sessions__session_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Projects
+         * @description Every project this daemon serves — the repo-discovery seam.
+         *
+         *     The entry point for a client that holds no path yet: `repo_root` from a
+         *     row here is what `/agents`, `/branches`, and `POST /workspaces` all take
+         *     as their `repo` argument. In-process callers (the TUI's project picker)
+         *     read `known_projects()` directly; a remote one cannot, so this returns
+         *     the same union of store-derived and config-declared projects, which is
+         *     what keeps an empty or freshly added repo visible.
+         *
+         *     No `repo` query param, deliberately: this is the route you call *before*
+         *     you know a repo root, so it is the one listing that is not repo-scoped.
+         *
+         *     Runs in the executor because `known_projects()` re-reads the store and
+         *     may pay a `git rev-parse` per declared nested project, the same reason
+         *     `/agents` off-loads its build.
+         */
+        get: operations["list_projects_projects_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -782,12 +1075,13 @@ export interface paths {
          *     The TUI reads ``cfg.agents`` in-process to build its create-modal dropdown;
          *     a remote create form can't, so this returns the same merged list. ``repo``
          *     dispatches like ``/branches`` (per-repo cascade), so a project-scoped agent
-         *     defined in ``<repo>/.grove/config.json`` shows up here too. Read-only and
-         *     non-git, so it can't raise — an arbitrary path just yields the default
-         *     cascade. Each row's ``models`` catalog is resolved via the single
-         *     ``resolve_models`` seam (config override, else live adapter discovery);
-         *     Codex discovery shells out (``codex debug models``), so the whole list is
-         *     built in the executor to keep that subprocess off the event loop.
+         *     defined in ``<repo>/.grove/config.json`` shows up here too, and it must be
+         *     a root the user registered — this route runs the command that cascade
+         *     names (see ``_known_root``). Each row's ``models`` catalog is resolved via
+         *     the single ``resolve_models`` seam (config override, else live adapter
+         *     discovery); Codex discovery shells out (``codex debug models``), so the
+         *     whole list is built in the executor to keep that subprocess off the event
+         *     loop.
          */
         get: operations["list_agents_agents_get"];
         put?: never;
@@ -824,7 +1118,7 @@ export interface paths {
         };
         /**
          * Ticket Providers
-         * @description The repo's enabled ticket providers — the client's picker source (#7).
+         * @description The repo's enabled ticket providers — the client's picker source.
          *
          *     ``repo`` dispatches per-repo cascade like ``/branches``: a project
          *     enables its tracker in ``<repo>/.grove/config.json``. Pure (no network);
@@ -849,14 +1143,15 @@ export interface paths {
         };
         /**
          * Tickets Assigned
-         * @description Tickets assigned to the authenticated user (#7).
+         * @description Tickets assigned to the authenticated user.
          *
          *     With ``provider`` given, query exactly that tracker. Without it,
          *     aggregate across every enabled provider, SKIPPING any whose credential
          *     is absent (``configured`` is False) — so a half-configured repo still
          *     returns its working providers' tickets instead of failing the whole
          *     request on one unconfigured tracker. A configured provider whose API
-         *     call fails still surfaces its 502.
+         *     call fails still surfaces its 502. Every arm is a blocking HTTP call to
+         *     a remote tracker, so the whole aggregation runs in the executor.
          */
         get: operations["tickets_assigned_tickets_assigned_get"];
         put?: never;
@@ -876,10 +1171,11 @@ export interface paths {
         };
         /**
          * Get Ticket
-         * @description Fetch one ticket by its canonical key (#7).
+         * @description Fetch one ticket by its canonical key.
          *
          *     404 ``ticket_provider_not_configured`` when the named tracker isn't
          *     enabled; 502 ``ticket_provider_error`` when the upstream API fails.
+         *     The upstream GET is blocking, so it runs in the executor.
          */
         get: operations["get_ticket_tickets__provider___ticket_id__get"];
         put?: never;
@@ -901,14 +1197,35 @@ export interface paths {
         put?: never;
         /**
          * Attach Ticket
-         * @description Manually associate a ticket with a workspace (#7).
+         * @description Manually associate a ticket with a workspace.
          *
-         *     Pure association (no network): the selector reuses the contract
-         *     ``TicketSelector`` as the body. Idempotent by ``(provider, id)`` in the
-         *     engine. Returns the updated workspace with its refreshed ``ticket_refs``.
+         *     The body is either a resolved ``TicketSelector`` (``{provider, id[,
+         *     kind]}``) or a raw ``{ref}`` — a URL, ``#42``, ``42``, or
+         *     ``owner/repo#42``, resolved SERVER-SIDE through
+         *     ``TicketProviderRegistry.resolve_link``
+         *     (``WorkspaceManager.attach_link``) rather than a client re-parsing
+         *     it. No network either way: association is pure, and link resolution
+         *     only matches the ref's shape against the repo's *enabled* providers.
+         *     Idempotent by ``(provider, id)`` in the engine. An ambiguous or
+         *     unparseable ``ref`` is 422 (``ticket_link_ambiguous`` /
+         *     ``ticket_link_invalid``), never a silent guess. Returns the updated
+         *     workspace with its refreshed ``ticket_refs``.
          */
         post: operations["attach_ticket_workspaces__ws_id__tickets_post"];
-        delete?: never;
+        /**
+         * Detach Ticket By Ref
+         * @description Remove a ticket association by raw reference.
+         *
+         *     The ref-resolving sibling of ``DELETE .../tickets/{provider}/{ticket_id}``
+         *     above: ``ref`` rides as a query param (a DELETE with no path-named
+         *     ticket carries no conventional body here) rather than a JSON body,
+         *     matching the ``ticket=<provider>:<id>`` query-filter precedent on
+         *     ``GET /workspaces``. Resolved through the same
+         *     ``TicketProviderRegistry.resolve_link`` the attach-by-ref body uses,
+         *     then dispatched to the same ``detach_ticket`` engine call. Idempotent
+         *     — detaching a ticket that was never attached is a no-op.
+         */
+        delete: operations["detach_ticket_by_ref_workspaces__ws_id__tickets_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -926,7 +1243,7 @@ export interface paths {
         post?: never;
         /**
          * Detach Ticket
-         * @description Remove a ticket association (#7). Idempotent — a missing ref is a no-op.
+         * @description Remove a ticket association. Idempotent — a missing ref is a no-op.
          */
         delete: operations["detach_ticket_workspaces__ws_id__tickets__provider___ticket_id__delete"];
         options?: never;
@@ -940,13 +1257,13 @@ export interface components {
     schemas: {
         /**
          * AgentActivityState
-         * @description What one agent session is doing right now (epic #11 §6).
+         * @description What one agent session is doing right now.
          *
          *     Computed live from the transcript blended with tmux activity; never
          *     persisted. The transcript-only adapter emits a subset (WORKING / WAITING /
          *     ERROR / UNKNOWN); the ``ActivityService`` is the single policy site that
          *     layers in STARTING (session id known, no file yet), IDLE (alive but tmux
-         *     quiet), and — once #18 lands — BLOCKED (permission prompt from a hook).
+         *     quiet), and BLOCKED (permission prompt from a hook).
          * @enum {string}
          */
         AgentActivityState: "starting" | "working" | "waiting" | "blocked" | "idle" | "error" | "unknown";
@@ -1006,11 +1323,11 @@ export interface components {
         };
         /**
          * AgentQuestionView
-         * @description Wire mirror of ``grove.core.agents.AgentQuestion`` (epic #74).
+         * @description Wire mirror of ``grove.core.agents.AgentQuestion``.
          *
          *     The structured payload a transcript renderer draws as a choice card. ``id``
          *     /``group_id`` are the stable answer-back addresses a client keys on — for the
-         *     live pending question (#109), ``group_id`` is the ``tool_use_id`` the answer
+         *     live pending question, ``group_id`` is the ``tool_use_id`` the answer
          *     POST must carry back.
          */
         AgentQuestionView: {
@@ -1093,16 +1410,7 @@ export interface components {
              */
             models: string[];
         };
-        /**
-         * AttachInstructionView
-         * @description Wire mirror of ``grove.core.tmux.AttachInstruction``.
-         */
-        AttachInstructionView: {
-            /** Tmux Session */
-            tmux_session: string;
-            /** Inside Outer Tmux */
-            inside_outer_tmux: boolean;
-        };
+        AttachInstructionView: components["schemas"]["HostAttachView"] | components["schemas"]["ContainerAttachView"];
         /**
          * AutoBranch
          * @description Grove generates ``{branch_prefix}{slug(title)}-{ts}`` off ``base_ref``.
@@ -1190,6 +1498,103 @@ export interface components {
             committed_at: string;
         };
         /**
+         * ContainerAttachView
+         * @description Wire mirror of ``grove.core.tmux.ContainerAttach``.
+         */
+        ContainerAttachView: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "container";
+            /** Argv */
+            argv: string[];
+        };
+        /**
+         * ContainerRuntimeState
+         * @description One workspace's container identity, and every argv that may name it.
+         *
+         *     ``None`` on a :class:`~grove.core.workspace.WorkspaceState` means host mode;
+         *     a value means the workspace's agent lives in a container.
+         *
+         *     Every field here is a DURABLE fact about the container's identity — what
+         *     ``up`` reported, and what a later command may name. Nothing observable is
+         *     stored, because a stored copy is a second source of truth that can disagree:
+         *     :attr:`is_compose` is derived (``compose_project is not None`` — the mode
+         *     discriminator), and the live substate is
+         *     :meth:`ContainerLifecycle.status`'s return value rather than a field. It
+         *     used to be a field, written once at provision and never refreshed, so a
+         *     container the user stopped by hand still read RUNNING everywhere the record
+         *     is rendered.
+         */
+        ContainerRuntimeState: {
+            /**
+             * Container Id
+             * @default
+             */
+            container_id: string;
+            /**
+             * Image Ref
+             * @default
+             */
+            image_ref: string;
+            /** Compose Project */
+            compose_project?: string | null;
+            /**
+             * Compose Owned
+             * @default false
+             */
+            compose_owned: boolean;
+            /**
+             * Remote User
+             * @default
+             */
+            remote_user: string;
+            /**
+             * Remote Workspace Folder
+             * @default
+             */
+            remote_workspace_folder: string;
+            /**
+             * Config Path
+             * @default
+             */
+            config_path: string;
+            /** Override Config Path */
+            override_config_path?: string | null;
+            /**
+             * Config Hash
+             * @default
+             */
+            config_hash: string;
+            /**
+             * Provisioned
+             * @default false
+             */
+            provisioned: boolean;
+            /**
+             * Provisioned Start
+             * @default
+             */
+            provisioned_start: string;
+            /** Id Labels */
+            id_labels?: {
+                [key: string]: string;
+            };
+            /**
+             * Tmux Conf
+             * @default
+             */
+            tmux_conf: string;
+            /**
+             * Tmux Command
+             * @default
+             */
+            tmux_command: string;
+            /** Owned Volumes */
+            owned_volumes?: string[];
+        };
+        /**
          * CreateWorkspaceRequest
          * @description Payload for ``WorkspaceManager.create()``.
          *
@@ -1207,6 +1612,9 @@ export interface components {
             /** Model */
             model?: string | null;
             branch_plan?: components["schemas"]["BranchPlan"];
+            runtime?: components["schemas"]["Runtime"] | null;
+            /** Brief */
+            brief?: boolean | null;
             /**
              * Skip Init
              * @default false
@@ -1224,14 +1632,14 @@ export interface components {
         };
         /**
          * DashboardEvent
-         * @description The SSE streaming envelope (epic #11 §5).
+         * @description The SSE streaming envelope.
          *
          *     One shape carries every server-sent kind. ``snapshot`` (sent on connect)
          *     embeds the full ``DashboardSnapshotView``; ``session_activity`` embeds the one
          *     changed ``WorkspaceActivityView`` so the client patches a single card;
          *     ``workspace_changed`` is a lifecycle wake-up (re-fetch); ``heartbeat`` keeps
-         *     the connection warm; ``pane_snapshot`` embeds one ``WorkspacePaneView`` (#19,
-         *     the live focused-pane push) and rides a *dedicated* per-workspace stream, not
+         *     the connection warm; ``pane_snapshot`` embeds one ``WorkspacePaneView`` (the
+         *     live focused-pane push) and rides a *dedicated* per-workspace stream, not
          *     the cross-project ``/events`` fan-out — its ~1 Hz cadence and per-id scope are
          *     a different concern from the activity deltas. ``seq`` is the monotonic SSE id
          *     used for ``Last-Event-ID`` replay.
@@ -1371,14 +1779,107 @@ export interface components {
             version: string;
         };
         /**
+         * HostAttachView
+         * @description Wire mirror of ``grove.core.tmux.HostAttach``.
+         */
+        HostAttachView: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "host";
+            /** Tmux Session */
+            tmux_session: string;
+            /** Inside Outer Tmux */
+            inside_outer_tmux: boolean;
+        };
+        /**
          * InitStatus
          * @description Outcome of the init script for one workspace, persisted on `WorkspaceState`.
          * @enum {string}
          */
         InitStatus: "ok" | "failed" | "skipped";
         /**
+         * IssueOpsEvent
+         * @description One normalized issue-comment event the CI forwarder POSTs to the daemon.
+         *
+         *     Provider-neutral and self-contained: the engine never calls back to the forge
+         *     to enrich it. ``actor_permission`` / ``actor_is_bot`` are the forwarder's
+         *     assertions (it read them off the webhook payload with the event token); the
+         *     engine's permission and bot-drop policies act on those verbatim — patching the
+         *     provider boundary, not re-deriving forge state.
+         */
+        IssueOpsEvent: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "linear" | "github" | "gitea";
+            /** Owner */
+            owner: string;
+            /** Repo */
+            repo: string;
+            /** Issue Number */
+            issue_number: number;
+            /**
+             * Issue Title
+             * @default
+             */
+            issue_title: string;
+            /**
+             * Issue Body
+             * @default
+             */
+            issue_body: string;
+            /**
+             * Issue Url
+             * @default
+             */
+            issue_url: string;
+            /** Comment Id */
+            comment_id: string;
+            /**
+             * Comment Body
+             * @default
+             */
+            comment_body: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Actor Permission
+             * @default
+             */
+            actor_permission: string;
+            /**
+             * Actor Is Bot
+             * @default false
+             */
+            actor_is_bot: boolean;
+        };
+        /**
+         * IssueOpsOutcome
+         * @description The 202 body describing what the engine did — the CI action turns it into a reaction.
+         *
+         *     ``action`` is the terminal verb; ``code`` qualifies a ``refused`` (``usage`` /
+         *     ``insufficient_permission`` / ``no_workspace`` / …) or an ``ignored``
+         *     (``duplicate`` / ``bot`` / ``signature_marker`` / ``not_triggered`` /
+         *     ``unknown_repo``). ``workspace_id`` is set whenever the action touched a
+         *     concrete workspace, so the action can deep-link it.
+         */
+        IssueOpsOutcome: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "created" | "steered" | "paused" | "resumed" | "stopped" | "status" | "refused" | "ignored";
+            /** Code */
+            code?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /**
          * LiveCountersView
-         * @description Wire mirror of ``grove.core.activity.LiveCounters`` (#181).
+         * @description Wire mirror of ``grove.core.activity.LiveCounters``.
          *
          *     A *block*, not loose fields: either a live tier is actively reporting (all
          *     three populated) or the whole block is absent on
@@ -1387,7 +1888,7 @@ export interface components {
          *     transcript-derived, per-turn-settled cumulative totals): a client renders
          *     ``live`` WHILE generating and falls back to the cumulative fields the
          *     instant ``live`` goes absent again (a turn flushed, or no fast side-channel
-         *     is wired yet — #177 is the primary source).
+         *     is wired yet).
          */
         LiveCountersView: {
             /** Tokens In */
@@ -1474,6 +1975,36 @@ export interface components {
             state: components["schemas"]["ChallengeState"];
         };
         /**
+         * PhaseView
+         * @description Wire mirror of ``grove.core.phase.PhaseReport`` — one agent's phase claim.
+         *
+         *     A workspace whose agent has reported nothing carries ``phase=None`` on its
+         *     parent view; there is no "unreported" member here, because absence of a
+         *     claim is not a claim. Clients must render those two differently — an agent
+         *     that has never reported is a fleet-health signal, not a task at step zero.
+         */
+        PhaseView: {
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "scoping" | "planning" | "implementing" | "verifying" | "delivering" | "done";
+            /** Note */
+            note?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Index */
+            index: number;
+            /**
+             * Total
+             * @default 6
+             */
+            total: number;
+        };
+        /**
          * Placement
          * @description Where a workspace's tmux session is rooted, and what Grove manages for it.
          *
@@ -1498,10 +2029,78 @@ export interface components {
             cwd: string;
             /** Workspaces */
             workspaces: components["schemas"]["WorkspaceActivityView"][];
+            /** Error */
+            error?: string | null;
         };
         /**
+         * ProjectView
+         * @description Wire mirror of ``grove.core.registry.Project`` — one listable project.
+         *
+         *     The answer to "which repos can I work in", which a remote client cannot
+         *     derive on its own: the engine unions store-derived roots with the
+         *     config-declared ``projects`` list, so a freshly added or fully drained
+         *     repo still appears.
+         *
+         *     ``repo_root`` is the value every repo-scoped call wants (``/agents``,
+         *     ``/branches``, ``create``). ``cwd`` differs from it only for a nested
+         *     project, where several projects share one repo root and differ only in
+         *     where the agent session starts. Field names match ``ProjectGroupView``
+         *     so the two read as the same concept on the wire.
+         */
+        ProjectView: {
+            /** Repo Root */
+            repo_root: string;
+            /** Repo Name */
+            repo_name: string;
+            /** Cwd */
+            cwd: string;
+        };
+        /**
+         * ProvisionProgressView
+         * @description Wire mirror of ``grove.core.workspace.ProvisionProgress``.
+         *
+         *     The fetch-on-demand half of the provisioning axis. ``WorkspaceStateView``
+         *     already streams *whether* a workspace is provisioning and since when; this
+         *     answers *is it still moving*, which only the provisioner's own log can say.
+         *     It is a separate route rather than a field on the state view because
+         *     reading it costs a file read per workspace, and the activity poll walks
+         *     every workspace on the host ~every 2 s.
+         *
+         *     ``provision_log_path`` is deliberately absent: it is a host path, the
+         *     ``init_log_path`` precedent. A client that wants the log reads ``lines``.
+         */
+        ProvisionProgressView: {
+            /** Elapsed Ms */
+            elapsed_ms: number | null;
+            /** Headline */
+            headline: string;
+            /** Lines */
+            lines: string[];
+        };
+        /**
+         * ProvisionStatus
+         * @description Outcome of the container provisioning for one workspace.
+         *
+         *     Field-for-field the :class:`InitStatus` trio (`provision_status` /
+         *     `provision_duration_ms` / `provision_log_path`), deliberately reusing that
+         *     seam rather than inventing a second vocabulary: both answer "did the
+         *     preparation step this workspace needed succeed, and where is its log".
+         *     ``SKIPPED`` is a host-runtime workspace — nothing to provision, not a
+         *     failure.
+         *
+         *     ``PROVISIONING`` is the one member with no :class:`InitStatus` twin, and
+         *     the asymmetry is real rather than an oversight: an init script runs for
+         *     seconds inside a verb nobody is watching, while a container provision runs
+         *     for minutes with the record already visible on every surface. It is the
+         *     IN-FLIGHT state, written before the CLI is invoked and overwritten by the
+         *     outcome — so a record carrying it after the daemon died is a provision
+         *     whose process is gone, and `respawn` is what restarts it.
+         * @enum {string}
+         */
+        ProvisionStatus: "ok" | "failed" | "skipped" | "provisioning";
+        /**
          * QuestionAnswerItem
-         * @description One question's answer: chosen option indexes XOR free text — exactly one (#109).
+         * @description One question's answer: chosen option indexes XOR free text — exactly one.
          *
          *     ``selected_indexes`` picks predefined options (0-based, in option order);
          *     ``text`` is a free-text ("Type something.") answer. No ``kind`` discriminator:
@@ -1512,7 +2111,7 @@ export interface components {
          *     payload.
          *
          *     ``text`` is rejected outright if it carries any control byte (ord < 0x20 or
-         *     0x7f, including tab/newline/ESC) — #110. The Claude adapter types ``text``
+         *     0x7f, including tab/newline/ESC). The Claude adapter types ``text``
          *     verbatim into the pane via ``send-keys -l``; the whole design rests on a
          *     closed key vocabulary (digits, Tab, Enter) driving the picker deterministically,
          *     and a raw control byte reopens that surface (ESC cancels the question outright,
@@ -1526,7 +2125,7 @@ export interface components {
         };
         /**
          * QuestionAnswerRequest
-         * @description POST body for driving a pending ``AskUserQuestion`` to resolution (#109).
+         * @description POST body for driving a pending ``AskUserQuestion`` to resolution.
          *
          *     ``tool_use_id`` is the group answer-back address captured at ask-time; the
          *     daemon requires it to still match the standing capture (409 on a stale id).
@@ -1545,7 +2144,7 @@ export interface components {
         /**
          * RemapSessionRequest
          * @description Body for ``POST /workspaces/{id}/session`` — pin an existing agent session
-         *     as a workspace's tracked primary (#120).
+         *     as a workspace's tracked primary.
          *
          *     ``session_ref`` is a session id or a unique id-prefix, resolved through the
          *     workspace's project scope (the same resolution ``grove sessions show``
@@ -1582,6 +2181,24 @@ export interface components {
             kind: "root";
         };
         /**
+         * Runtime
+         * @description Where a workspace's agent process actually runs — the third
+         *     orthogonal dimension, after status and :class:`Placement`.
+         *
+         *     Persisted rather than re-derived from config, for the same reason
+         *     ``placement`` is: every lifecycle verb needs the answer, and re-resolving it
+         *     from the cascade would silently move an existing workspace into a container
+         *     the moment the default flipped. It selects the ``LaunchBackend``, so it is a
+         *     narrow literal type driving a branch, never a bool.
+         *
+         *     Chosen ONCE at create (from ``CreateWorkspaceRequest.runtime``, else the
+         *     ``container.enabled`` cascade default) and thereafter only ever promoted
+         *     HOST → CONTAINER by a ``respawn`` that clears a
+         *     :attr:`WorkspaceState.runtime_fallback_reason`.
+         * @enum {string}
+         */
+        Runtime: "host" | "container";
+        /**
          * SessionActivityView
          * @description Wire mirror of ``grove.core.activity.SessionActivity``.
          */
@@ -1592,7 +2209,7 @@ export interface components {
         /**
          * SessionControlView
          * @description Wire mirror of ``grove.core.agents.SessionControl`` — one invokable session
-         *     control (a slash command, a skill, or a configured MCP server, #178).
+         *     control (a slash command, a skill, or a configured MCP server).
          *
          *     ``name`` is exactly what a trigger delivers (``POST .../controls/invoke``);
          *     ``scope`` is a display-only origin hint; ``detail`` an optional one-line
@@ -1611,7 +2228,7 @@ export interface components {
         };
         /**
          * SessionControlsView
-         * @description Wire mirror of ``grove.core.agents.SessionControls`` (#178) — the input
+         * @description Wire mirror of ``grove.core.agents.SessionControls`` — the input
          *     controls a session exposes, fetch-on-demand (``GET /workspaces/{id}/controls``)
          *     and never on the SSE stream, exactly like the session-history reads above.
          *
@@ -1646,14 +2263,45 @@ export interface components {
             turns: components["schemas"]["SessionTurnView"][];
         };
         /**
-         * SessionSummaryView
-         * @description Wire mirror of ``grove.core.sessions.SessionListing`` — one session row.
+         * SessionProjectView
+         * @description Wire mirror of ``grove.core.sessions.ProjectContext`` — the repo a
+         *     catalog row's ``cwd`` resolves to.
          *
-         *     Flattens the listing's ``SessionSummary`` plus its project annotation.
-         *     ``activity`` reuses the dashboard's ``AgentActivityView`` — the explorer's
-         *     one parse per transcript yields both metadata and metrics, so the wire
-         *     carries them together too. The ``workspace_*`` trio is ``None`` for a
-         *     hand-staged session (a directory Grove doesn't manage).
+         *     Carries no branch on purpose: the branch that belongs on a session row is
+         *     the one the SESSION recorded (``SessionSummaryView.git_branch``), not
+         *     whatever the worktree happens to be checked out to now. Reaches the wire
+         *     only through ``SessionSummaryView.project``, so it is not re-exported from
+         *     the package — the ``FileEditView``/``TodoListView`` precedent.
+         */
+        SessionProjectView: {
+            /** Repo Root */
+            repo_root: string;
+            /** Repo Name */
+            repo_name: string;
+            /** Is Worktree */
+            is_worktree: boolean;
+            /** Is Grove Managed */
+            is_grove_managed: boolean;
+        };
+        /**
+         * SessionSummaryView
+         * @description One session row — wire mirror of ``SessionListing`` (project scope) and
+         *     of ``CatalogEntry`` (host scope, the Session Catalog).
+         *
+         *     ONE view for both scopes rather than a parallel catalog shape: the two
+         *     engine rows answer the same question at different widths, and a second view
+         *     would force every client to branch on which listing it fetched. What the
+         *     wider scope cannot honestly know is ``None`` rather than fabricated —
+         *     ``size_bytes`` and ``activity`` come from a full transcript parse the
+         *     host-wide scan deliberately never pays (it is metadata-only, one bounded
+         *     head read per session), so a catalog row leaves both null. Read them as
+         *     "not parsed at this scope", never as "zero".
+         *
+         *     The ``workspace_*`` trio is ``None`` for a hand-staged session (a directory
+         *     Grove doesn't manage); ``workspace_branch`` is additionally ``None`` on
+         *     every catalog row (the host scan annotates a workspace, not its branch).
+         *     ``project``/``live`` are the fields the catalog adds and the project-scoped
+         *     listing leaves at their defaults.
          */
         SessionSummaryView: {
             /** Session Id */
@@ -1662,6 +2310,11 @@ export interface components {
             adapter_kind: string;
             /** Provenance */
             provenance: string;
+            /**
+             * Primary
+             * @default false
+             */
+            primary: boolean;
             /** Workspace Id */
             workspace_id: string | null;
             /** Workspace Title */
@@ -1675,14 +2328,22 @@ export interface components {
             /** Modified At */
             modified_at: string | null;
             /** Size Bytes */
-            size_bytes: number;
+            size_bytes: number | null;
             /** Title */
             title: string | null;
             /** First Prompt */
             first_prompt: string | null;
             /** Last Prompt */
             last_prompt: string | null;
-            activity: components["schemas"]["AgentActivityView"];
+            activity: components["schemas"]["AgentActivityView"] | null;
+            /** Cwd */
+            cwd?: string | null;
+            project?: components["schemas"]["SessionProjectView"] | null;
+            /**
+             * Live
+             * @default false
+             */
+            live: boolean;
         };
         /**
          * SessionTurnView
@@ -1733,6 +2394,30 @@ export interface components {
             revoked: boolean;
         };
         /**
+         * SetPhaseRequest
+         * @description Body for ``POST /workspaces/{id}/phase`` — set or correct a workspace's
+         *     task-phase claim from outside the agent.
+         *
+         *     The in-workspace agent never sends this (it writes the per-agent file Grove
+         *     names in its launch env, per ``grove.core.phase``'s file-channel design);
+         *     this is for a
+         *     human or an orchestrator to set/correct the claim over HTTP/MCP — the
+         *     phase analogue of ``RemapSessionRequest`` (``sessions.py``), which
+         *     likewise lives beside the views for its own concern rather than in
+         *     ``requests.py``. ``extra="forbid"``, unlike the tolerant-inward
+         *     ``PhaseDocument``: a caller here is Grove's own client code, so an unknown
+         *     field is a bug worth surfacing loudly, not a stray key to shrug off.
+         */
+        SetPhaseRequest: {
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "scoping" | "planning" | "implementing" | "verifying" | "delivering" | "done";
+            /** Note */
+            note?: string | null;
+        };
+        /**
          * TicketProviderView
          * @description One row of ``GET /tickets/providers`` — what a client may offer the user.
          *
@@ -1774,6 +2459,12 @@ export interface components {
             provider: "linear" | "github" | "gitea";
             /** Id */
             id: string;
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pull_request";
             /** Title */
             title?: string | null;
             /** Url */
@@ -1794,7 +2485,9 @@ export interface components {
          *
          *     One shape names a ticket everywhere: ``CreateWorkspaceRequest.ticket`` and
          *     the ``POST /workspaces/{id}/tickets`` body both carry exactly this, so a
-         *     client never has to learn two ways to point at a ticket.
+         *     client never has to learn two ways to point at a ticket. ``kind`` rides
+         *     along (defaulted, so nothing existing changes) rather than a second
+         *     "attach a pull request" body: a parsed link resolves to exactly this.
          */
         TicketSelector: {
             /**
@@ -1804,6 +2497,12 @@ export interface components {
             provider: "linear" | "github" | "gitea";
             /** Id */
             id: string;
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pull_request";
         };
         /**
          * TodoItemView
@@ -1830,7 +2529,7 @@ export interface components {
          *     normalized so the webapp/TUI draw one checklist card instead of a bare tool
          *     name. The todo sibling of ``FileEditView``/``AgentQuestionView`` — a third
          *     structured ``DigestEntryView`` payload proving the "new role + optional
-         *     payload" recipe generalizes with zero daemon-route changes (#184).
+         *     payload" recipe generalizes with zero daemon-route changes.
          */
         TodoListView: {
             /**
@@ -1838,6 +2537,30 @@ export interface components {
              * @default []
              */
             items: components["schemas"]["TodoItemView"][];
+        };
+        /**
+         * TodoProgressView
+         * @description Wire mirror of ``grove.core.activity.TodoProgress`` — counts, never items.
+         *
+         *     The deliberate counterpart to the full ``TodoListView``, which stays
+         *     fetch-on-demand behind ``GET /workspaces/{id}/todo``. This module's rule is
+         *     that the SSE stream carries only bounded payloads (the same reason session
+         *     turns never ride it), and a checklist is unbounded in both length and text;
+         *     four integers render "4/10 done" on every card for a fixed cost.
+         *
+         *     Absent (``None`` on the parent view) means the agent has called no todo tool
+         *     — a client hides the indicator rather than rendering 0/0, exactly as it does
+         *     for ``live`` and ``phase``.
+         */
+        TodoProgressView: {
+            /** Total */
+            total: number;
+            /** Completed */
+            completed: number;
+            /** In Progress */
+            in_progress: number;
+            /** Pending */
+            pending: number;
         };
         /**
          * TrackRemoteBranch
@@ -1908,7 +2631,7 @@ export interface components {
          *     the view itself is pure data with no engine coupling.
          *
          *     ``latest_version`` / ``update_available`` carry the daemon-side release-skew
-         *     check (#80): the latest GitHub release tag (bare, e.g. ``0.2.0``) and whether
+         *     check: the latest GitHub release tag (bare, e.g. ``0.2.0``) and whether
          *     it exceeds the installed ``version``. ``latest_version`` is ``None`` and
          *     ``update_available`` ``False`` until a successful check (offline / first
          *     call / error). Exposing it here lets the webapp render a "newer release"
@@ -1949,6 +2672,12 @@ export interface components {
          *     ``recent_commits[0]`` is the card's "what was done, when committed" line).
          *     ``observed_at`` is the per-card "updated Xs ago"; the dashboard-wide refresh
          *     time stays on ``DashboardSnapshotView.generated_at``.
+         *
+         *     ``phase`` and ``todo`` are the task axis: what the agent says it is doing
+         *     about the task, and how far through its own checklist it is. Both default to
+         *     ``None`` so a pre-existing client deserializes unchanged (additive wire
+         *     evolution), and both mean "the agent has not said" when absent — never a
+         *     zero value.
          */
         WorkspaceActivityView: {
             state: components["schemas"]["WorkspaceStateView"];
@@ -1975,10 +2704,12 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+            phase?: components["schemas"]["PhaseView"] | null;
+            todo?: components["schemas"]["TodoProgressView"] | null;
         };
         /**
          * WorkspacePaneView
-         * @description One-shot ANSI snapshot of a workspace's agent tmux pane (#19).
+         * @description One-shot ANSI snapshot of a workspace's agent tmux pane.
          *
          *     The focused-pane source for the dashboard's "one live focus": a client polls
          *     this for the single expanded card (status-gated to WORKING) rather than
@@ -2067,6 +2798,26 @@ export interface components {
              * @default []
              */
             ticket_refs: components["schemas"]["TicketRef"][];
+            /** @default host */
+            runtime: components["schemas"]["Runtime"];
+            /** Runtime Fallback Reason */
+            runtime_fallback_reason?: string | null;
+            provision_status?: components["schemas"]["ProvisionStatus"] | null;
+            /** Provision Duration Ms */
+            provision_duration_ms?: number | null;
+            /** Provision Started At */
+            provision_started_at?: string | null;
+            container?: components["schemas"]["ContainerRuntimeState"] | null;
+            /**
+             * Runtime Default Config
+             * @default false
+             */
+            runtime_default_config: boolean;
+            /**
+             * Runtime No Tmux
+             * @default false
+             */
+            runtime_no_tmux: boolean;
         };
         /**
          * WorkspaceStatus
@@ -2078,14 +2829,26 @@ export interface components {
          *     `WorkspaceManager._reconcile_status` from the persistent intent + tmux
          *     session presence + worktree presence + tmux pane activity. `list()` and
          *     `peek()` always promote intents to displayed values, so callers reading
-         *     through the manager see ACTIVE/IDLE/OFFLINE/PAUSED/ORPHANED/ERROR — never
-         *     the raw RUNNING intent.
+         *     through the manager see ACTIVE/IDLE/OFFLINE/PAUSED/ORPHANED/PROVISIONING/
+         *     ERROR — never the raw RUNNING intent.
+         *
+         *     **PROVISIONING earns its place by CHANGING THE REMEDY, which is the bar
+         *     this enum is held to.** A container workspace is persisted the moment
+         *     `create` starts, minutes before `devcontainer up` returns, and for that
+         *     whole window the container legitimately does not exist yet — so the
+         *     container dimension folded it onto OFFLINE, whose meaning is *the runtime
+         *     is gone, respawn is the remedy*. Every word of that is wrong here: nothing
+         *     is gone, and respawn is the one action that destroys the build in flight.
+         *     The user is shown a dead-looking workspace and offered the button that
+         *     kills it. The remedy for PROVISIONING is to WAIT, which no other status
+         *     says, and it is the only status whose whole point is that it will end on
+         *     its own.
          * @enum {string}
          */
-        WorkspaceStatus: "running" | "paused" | "error" | "active" | "idle" | "offline" | "orphaned";
+        WorkspaceStatus: "running" | "paused" | "error" | "active" | "idle" | "offline" | "orphaned" | "provisioning";
         /**
          * _HookIngestBody
-         * @description Native Claude Code http-hook payload (#171) — permissive by design.
+         * @description Native Claude Code http-hook payload — permissive by design.
          *
          *     The payload shape varies per event (``session_id``/``cwd``/``tool_name``/
          *     ``tool_use_id``/...); this route only needs enough to confirm a real hook
@@ -2103,7 +2866,7 @@ export interface components {
         };
         /**
          * _InvokeControlBody
-         * @description Trigger a named session control — a slash command or a skill (#178).
+         * @description Trigger a named session control — a slash command or a skill.
          *
          *     ``name`` is a control name from ``GET .../controls`` (a command/skill is
          *     invoked as ``/name``); the leading slash is optional (the engine strips it).
@@ -2156,13 +2919,30 @@ export interface components {
         };
         /**
          * _SwitchModelBody
-         * @description Switch the running session's model (#178) — ``model`` is any id, forwarded
+         * @description Switch the running session's model — ``model`` is any id, forwarded
          *     verbatim (the provider boundary; the engine never validates it against the
          *     offered catalog). Module-scope for the same forward-ref reason above.
          */
         _SwitchModelBody: {
             /** Model */
             model: string;
+        };
+        /**
+         * _TicketLinkBody
+         * @description Attach-by-reference body — a human-typed ref instead of a resolved selector.
+         *
+         *     The sibling ``POST .../tickets`` accepts alongside ``TicketSelector``:
+         *     resolution runs SERVER-SIDE, through
+         *     ``TicketProviderRegistry.resolve_link`` (``WorkspaceManager.attach_link``,
+         *     the same engine seam ``grove tickets attach`` already uses) — never
+         *     re-parsed here. This is what lets a wire-only client (MCP) attach a
+         *     ticket from a URL / ``#42`` / ``42`` / ``owner/repo#42`` without
+         *     importing or reimplementing ``grove.core.tickets.link``. Module-scope
+         *     for the same forward-ref reason as ``_PauseBody`` above.
+         */
+        _TicketLinkBody: {
+            /** Ref */
+            ref: string;
         };
     };
     responses: never;
@@ -2455,7 +3235,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description text/event-stream of DashboardEvent JSON objects. The first frame is a `snapshot` (or a `Last-Event-ID` replay); subsequent frames are `session_activity` / `workspace_changed` deltas. */
+            /** @description text/event-stream of DashboardEvent JSON objects. The first frame is a `snapshot` (or a `Last-Event-ID` replay); subsequent frames are `session_activity` / `workspace_changed` deltas. A quiet stream beats every 15s with a `heartbeat` frame, which carries no `id:` so it never moves the client's resume point. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2468,7 +3248,10 @@ export interface operations {
     };
     list_workspaces_workspaces_get: {
         parameters: {
-            query?: never;
+            query?: {
+                repo?: string | null;
+                ticket?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2482,6 +3265,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceStateView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2506,6 +3298,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_issue_ops_event_issue_ops_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueOpsEvent"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueOpsOutcome"];
                 };
             };
             /** @description Validation Error */
@@ -3046,7 +3871,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description text/event-stream of `pane_snapshot` DashboardEvent frames for this one workspace's agent pane (#19). A push upgrade of `GET .../pane`: the daemon captures ~1 Hz and emits a frame only when the pane changed (else a keepalive comment). The client opens this for the single focused WORKING card and closes it on blur, so off-screen/idle panes cost nothing. */
+            /** @description text/event-stream of `pane_snapshot` DashboardEvent frames for this one workspace's agent pane. A push upgrade of `GET .../pane`: the daemon captures ~1 Hz and emits a frame only when the pane changed (else a keepalive comment). The client opens this for the single focused WORKING card and closes it on blur, so off-screen/idle panes cost nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3165,10 +3990,138 @@ export interface operations {
             };
         };
     };
-    project_sessions_sessions_get: {
+    workspace_todo_workspaces__ws_id__todo_get: {
         parameters: {
-            query: {
-                repo: string;
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TodoListView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_provision_workspaces__ws_id__provision_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvisionProgressView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_phase_workspaces__ws_id__phase_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhaseView"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_workspace_phase_workspaces__ws_id__phase_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPhaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhaseView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sessions_sessions_get: {
+        parameters: {
+            query?: {
+                repo?: string | null;
                 limit?: number;
             };
             header?: never;
@@ -3193,6 +4146,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_turns_sessions__session_id__turns_get: {
+        parameters: {
+            query: {
+                kind: string;
+                cwd: string;
+                last?: number | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDetailView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_projects_projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectView"][];
                 };
             };
         };
@@ -3369,9 +4377,42 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TicketSelector"];
+                "application/json": components["schemas"]["TicketSelector"] | components["schemas"]["_TicketLinkBody"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detach_ticket_by_ref_workspaces__ws_id__tickets_delete: {
+        parameters: {
+            query: {
+                ref: string;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

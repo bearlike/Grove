@@ -25,6 +25,7 @@ from grove.core.agents.onboarding import (
     OnboardOutcome,
     OnboardTarget,
 )
+from grove.core.devcontainer import DefaultDevcontainerConfig
 from grove.core.errors import GroveError
 from grove.core.git import detect_root
 from grove.tui.cli_workspace import clean_exit
@@ -56,6 +57,11 @@ skills_app = typer.Typer(
 mcp_app = typer.Typer(
     name="mcp",
     help="Register Grove itself as an MCP server with Claude Code / Codex.",
+    no_args_is_help=True,
+)
+init_app = typer.Typer(
+    name="init",
+    help="Scaffold project-owned Grove config files.",
     no_args_is_help=True,
 )
 
@@ -129,12 +135,12 @@ def skills_install(
     target: TargetChoice | None = _TARGET_OPTION,
     agent: AgentChoice = _AGENT_OPTION,
 ) -> None:
-    """Copy the bundled using-grove skill into Claude/Codex skill directories."""
+    """Copy Grove's bundled skills into Claude/Codex skill directories."""
     repo_root = detect_root(Path.cwd())
     with clean_exit():
         if target == TargetChoice.project and repo_root is None:
             raise GroveError("not in a git repository (needed for --target project)")
-        targets = resolve_targets(target, repo_root=repo_root, question="using-grove skill")
+        targets = resolve_targets(target, repo_root=repo_root, question="Grove skills")
         outcomes = run_onboarding(
             actions=["skill"], targets=targets, agents=resolve_agents(agent), repo_root=repo_root
         )
@@ -158,6 +164,34 @@ def mcp_install(
     render_outcomes(outcomes)
 
 
+@init_app.command("devcontainer")
+def init_devcontainer(
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing .devcontainer/devcontainer.json."
+    ),
+) -> None:
+    """Scaffold `.devcontainer/devcontainer.json` from Grove's packaged default config.
+
+    The remedy every "default container" notice names: a repo with no
+    `.devcontainer/` still runs containerized (Grove's packaged default
+    config) — this graduates that to a committed, project-owned config
+    the team can see and edit. No template gallery, no flags beyond
+    `--force`: it writes exactly what Grove would already use.
+    """
+    with clean_exit():
+        repo_root = detect_root(Path.cwd())
+        if repo_root is None:
+            raise GroveError("not in a git repository")
+        target = repo_root / ".devcontainer" / "devcontainer.json"
+        if target.exists() and not force:
+            raise GroveError(f"{target} already exists — pass --force to overwrite")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        config = DefaultDevcontainerConfig.load()
+        target.write_text(config.to_json(), encoding="utf-8")
+    typer.secho(f"wrote {target}", fg=typer.colors.GREEN)
+
+
 def register(app: typer.Typer) -> None:
     app.add_typer(skills_app, name="skills")
     app.add_typer(mcp_app, name="mcp")
+    app.add_typer(init_app, name="init")

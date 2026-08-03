@@ -3,7 +3,7 @@
  * code and git identifiers. next/font self-hosts every face at build time —
  * no CDN request, no layout shift (the `geist` package ships the woff2s).
  *
- * The terminal Nerd Font (JetBrains Mono Nerd Font, #92) is appended HERE as
+ * The terminal Nerd Font (JetBrains Mono Nerd Font) is appended HERE as
  * a `next/font/local` face exposing `--font-jetbrains-nerd`, which the
  * `@theme` `--font-terminal` token (globals.css) picks up — so it stays
  * scoped to terminal/transcript-code surfaces and never leaks into the app
@@ -14,7 +14,7 @@ import { GeistMono } from "geist/font/mono";
 import localFont from "next/font/local";
 
 /*
- * JetBrains Mono Nerd Font, self-hosted (#92). Full glyph coverage — the
+ * JetBrains Mono Nerd Font, self-hosted. Full glyph coverage — the
  * Nerd Font's private-use icon + powerline ranges are the whole point (agent
  * TUIs print them), so we do NOT subset. Exposed as `--font-jetbrains-nerd`;
  * the `@theme` `--font-terminal` token (globals.css) already resolves to it,

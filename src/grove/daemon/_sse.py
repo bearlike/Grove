@@ -31,6 +31,7 @@ from collections.abc import Callable
 
 from grove.core.activity import ActivityService, DashboardDelta
 from grove.core.contracts.activity import DashboardEvent
+from grove.daemon._audience import _PollAudience
 
 # Per-connection queue depth. Generous — one event per workspace per tick is tiny;
 # the bound only matters for a wedged client, where drop-oldest kicks in.
@@ -49,8 +50,14 @@ class _SseHub:
         *,
         queue_size: int = _QUEUE_SIZE,
         ring_size: int = _RING_SIZE,
+        audience: _PollAudience | None = None,
     ) -> None:
         self._service = service
+        # Each live connection is one activity-poll consumer. Injected so the
+        # daemon's always-on consumers (notification broker, status publisher)
+        # share the same room; a hub built without one still counts, it just
+        # gates nothing else.
+        self._audience = audience if audience is not None else _PollAudience()
         self._queue_size = queue_size
         self._ring: deque[DashboardEvent] = deque(maxlen=ring_size)
         self._queues: set[asyncio.Queue[DashboardEvent]] = set()
@@ -69,7 +76,8 @@ class _SseHub:
         if self._unsub is not None:
             self._unsub()
         self._unsub = None
-        self._queues.clear()
+        for queue in list(self._queues):
+            self.unregister(queue)
         self._ring.clear()
 
     # ─── per-connection registration ───────────────────────────────────────
@@ -77,10 +85,16 @@ class _SseHub:
     def register(self) -> asyncio.Queue[DashboardEvent]:
         queue: asyncio.Queue[DashboardEvent] = asyncio.Queue(maxsize=self._queue_size)
         self._queues.add(queue)
+        self._audience.join()
         return queue
 
     def unregister(self, queue: asyncio.Queue[DashboardEvent]) -> None:
-        self._queues.discard(queue)
+        # `discard` is idempotent but `leave()` is not, so the count only moves
+        # when a queue was actually removed — otherwise a double-unregister on a
+        # torn-down connection would evict a consumer that is still connected.
+        if queue in self._queues:
+            self._queues.discard(queue)
+            self._audience.leave()
 
     # ─── replay ────────────────────────────────────────────────────────────
 

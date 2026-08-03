@@ -1,4 +1,4 @@
-"""CommandParser — the pure issue-comment grammar (#196).
+"""CommandParser — the pure issue-comment grammar.
 
 Turns a raw comment body into a :class:`ParsedCommand`, or ``None`` when the
 comment doesn't open with the trigger token. No I/O, no config object — the

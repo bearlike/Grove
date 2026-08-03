@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 /**
  * Which GET paths are SSE event-streams that must be piped, not buffered:
  * the cross-project activity stream (`/events`) and the focused live-pane
- * stream (`/workspaces/{id}/pane/stream`, #19). Both push `text/event-stream`,
+ * stream (`/workspaces/{id}/pane/stream`). Both push `text/event-stream`,
  * so both ride `proxyStream`; everything else buffers through `proxy`.
  */
 function isEventStreamPath(path: string[]): boolean {

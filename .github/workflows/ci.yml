@@ -4,6 +4,12 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Daily, for `unlocked-install` only: a new major of a runtime dependency
+  # breaks the published install path on the day it is PUBLISHED, not on the
+  # day someone pushes. Without a clock nothing would look until the next
+  # commit — which is how mcp 2.0.0 reached users first.
+  schedule:
+    - cron: "17 6 * * *"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -13,6 +19,7 @@ jobs:
   lint:
     name: Lint + Types + Contracts
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -30,6 +37,7 @@ jobs:
     # There is no macOS/Windows matrix — tmux is the runtime dependency and
     # native packaging was retired, so cross-OS legs added cost without signal.
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -44,3 +52,44 @@ jobs:
         run: uv run pytest -m "not integration"
       - name: Integration tests (real tmux + git)
         run: uv run pytest -m integration
+
+  unlocked-install:
+    name: Unlocked install (what users actually get)
+    # `uv sync` above is a LOCKED resolution against uv.lock, so the test jobs
+    # can never see a newly-published incompatible major of a dependency. Users
+    # install with `uv tool install`, which resolves fresh from PyPI and ignores
+    # the lockfile — this job is the only one standing in that environment, and
+    # it exists because an unbounded pin (`mcp>=1.2`) let SDK 2.0.0 through.
+    runs-on: ubuntu-latest
+    # Advisory on push/PR, blocking on the daily schedule. An unlocked resolve
+    # can go red for reasons no PR author caused (an upstream major, a PyPI
+    # blip); a required check that red-lights unrelated work gets routed around
+    # within a week. On the schedule there is nothing else in the run, so red
+    # means exactly one thing — the published install path is broken today.
+    continue-on-error: ${{ github.event_name != 'schedule' }}
+    steps:
+      - uses: actions/checkout@v4
+      # Deliberately no uv cache: a warm cache can serve the resolution this
+      # job exists to redo.
+      - uses: astral-sh/setup-uv@v3
+      - name: Install the published extras, unlocked
+        run: uv tool install --force --no-cache '.[all]'
+      - name: Probe every console script
+        run: |
+          set -euo pipefail
+          grove version
+          # The hook hand-parses argv and reads stdin (no --help), so an empty
+          # payload is its liveness probe: import, no-op, exit 0.
+          grove-agent-hook </dev/null
+          grove-mcp --help >/dev/null
+          # `grove-mcp --help` returns BEFORE the SDK is touched (the FastMCP
+          # import is deferred so a [daemon]-only host gets an install hint
+          # instead of a traceback) — it stayed green throughout the 2.0.0
+          # break. Constructing the server is the line that actually loads
+          # FastMCP, and it needs no daemon: the client is lifespan-owned.
+          "$(uv tool dir)/grove/bin/python" - <<'PY'
+          from grove.mcp.server import GroveMcpServer, McpServerConfig
+
+          GroveMcpServer(McpServerConfig.from_env({}))
+          print("ok: grove-mcp builds its FastMCP server")
+          PY

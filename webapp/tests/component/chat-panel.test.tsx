@@ -11,7 +11,7 @@ import type {
   SessionSummaryView,
 } from "@/lib/grove/types";
 
-// Session selection + the activity snapshot are page-owned since #130, so the
+// Session selection + the activity snapshot are page-owned, so the
 // panel is a pure renderer: it takes the resolved `sessionId`, the activity
 // `snapshot` (source of live pending questions), and the selected session's
 // `agentState`. These tests exercise that prop contract — transcript,
@@ -24,6 +24,7 @@ const SESSION: SessionSummaryView = {
   session_id: "s1",
   adapter_kind: "claude_code",
   provenance: "grove_launched",
+  primary: true,
   workspace_id: "w1",
   workspace_title: "feat depth",
   workspace_branch: "feat/depth",
@@ -31,6 +32,7 @@ const SESSION: SessionSummaryView = {
   created_at: "2026-06-10T10:00:00Z",
   modified_at: "2026-06-10T11:00:00Z",
   size_bytes: 4096,
+  live: false,
   title: "wire the panel",
   first_prompt: "build the panel",
   last_prompt: "ship it",
@@ -251,7 +253,7 @@ describe("ChatPanel", () => {
   });
 
   it("clamps the user bubble by default, keeps the full text in the DOM, and hides the toggle without layout (jsdom)", async () => {
-    // #128's SmartCollapse contract, ported to the #130 prop-driven panel.
+    // The SmartCollapse contract, ported to the prop-driven panel.
     stubTurns();
     renderPanel();
 
@@ -404,7 +406,7 @@ describe("ChatPanel", () => {
     );
   });
 
-  // The empty-state seam (#132): with no tracked session the panel shows an
+  // The empty-state seam: with no tracked session the panel shows an
   // empty state — generic by default, but a "track a session" CTA when the page
   // hands down a picker (its presence IS the "candidates exist" signal).
   it("keeps the generic empty state when nothing is tracked and no candidates exist", () => {

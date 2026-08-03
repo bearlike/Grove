@@ -8,6 +8,7 @@ Side effects (clock, RNG, file path) are injected so the tests run hermetic.
 from __future__ import annotations
 
 import secrets
+import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +23,7 @@ from grove.core.auth import (
 from grove.core.errors import (
     AuthInvalidToken,
     AuthRateLimited,
+    AuthStoreUnreadable,
     GroveError,
     PairingAlreadyResolved,
     PairingNotFound,
@@ -77,9 +79,9 @@ def _fresh_store(
 
 def test_pair_init_creates_pending_challenge_with_uppercase_dashed_code(store_path: Path) -> None:
     store, _ = _fresh_store(store_path)
-    challenge = store.pair_init(label="Krishna's iPhone")
+    challenge = store.pair_init(label="Alice's iPhone")
     assert challenge.state == ChallengeState.PENDING
-    assert challenge.label == "Krishna's iPhone"
+    assert challenge.label == "Alice's iPhone"
     # Code is XXXX-XXXX from the safe alphabet.
     raw = challenge.code.replace("-", "")
     assert len(raw) == 8
@@ -354,3 +356,58 @@ def test_disk_file_does_not_contain_plaintext_token(store_path: Path) -> None:
     contents = store_path.read_text()
     assert token not in contents
     assert TOKEN_PREFIX not in contents
+
+
+def test_gc_drops_an_expired_session_that_was_never_revoked(store_path: Path) -> None:
+    """The prune must keep exactly the sessions it is written to drop.
+
+    ``expires_at > now or revoked_at is None`` would keep every expired session
+    that nobody explicitly revoked — i.e. all of them, since expiry is how a
+    session normally ends — so the file would only grow and ``validate``'s
+    O(N) scan pays for it on every authenticated request (measured at 52% dead
+    weight on a live host). A revoked session still lives out its TTL, so the
+    audit listing keeps working.
+    """
+    store, clock = _fresh_store(store_path, session_ttl=timedelta(hours=1))
+    for label in ("phone", "laptop"):
+        c = store.pair_init(label=label)
+        store.pair_approve(c.challenge_id)
+        _, token = store.pair_poll(c.challenge_id)
+        assert token is not None
+    revoked = store.list_sessions()[0]
+    store.revoke(revoked.session_id)
+    # Still inside the TTL: the revoked record is retained for the audit view.
+    assert len(store.list_sessions(include_revoked=True)) == 2
+
+    clock.advance(timedelta(hours=2))
+    assert store.list_sessions(include_revoked=True) == []
+
+
+def test_a_damaged_auth_file_is_a_typed_storage_fault_carrying_no_path(
+    store_path: Path,
+) -> None:
+    """A storage fault must not be reported as the CALLER's label being invalid.
+
+    ``pair_init``'s bare-``GroveError`` arm is the label rules only; a storage
+    fault needs its own type or the two are indistinguishable at the route. The
+    path stays out of the message because the endpoint that surfaces it
+    (``POST /auth/pair``) is unauthenticated by design — it goes to the log.
+    """
+    store, _ = _fresh_store(store_path)
+    store.pair_init(label="phone")
+    store_path.write_text('{"version": 1, "challenges": [', encoding="utf-8")
+
+    with pytest.raises(AuthStoreUnreadable) as caught:
+        store.list_sessions()
+    assert str(store_path) not in str(caught.value)
+    # Still a GroveError, so nothing that catches the base type stops working.
+    assert isinstance(caught.value, GroveError)
+
+
+def test_auth_file_is_written_0600_with_no_readable_window(store_path: Path) -> None:
+    """The explicit mode IS the protection — the config dir is 0755."""
+    store, _ = _fresh_store(store_path)
+    store.pair_init(label="phone")
+    assert stat.S_IMODE(store_path.stat().st_mode) == 0o600
+    # No stage file survives, and none was ever visible at the final path.
+    assert {p.name for p in store_path.parent.iterdir()} == {store_path.name}

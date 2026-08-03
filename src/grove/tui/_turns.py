@@ -41,7 +41,7 @@ AGENT_GLYPH: Final = "⏺"
 # Notification rows (subagent results, AskUserQuestion) — a diamond keeps
 # them visually distinct from speech (⏺) and machinery (⚒) at a glance.
 NOTIFICATION_GLYPH: Final = "◆"
-# Question rows (issue #74) — the agent asked the human a structured question.
+# Question rows — the agent asked the human a structured question.
 # A double question mark (General Punctuation, terminal-safe) reads as "your
 # input is needed" and stays distinct from the prompt chevron, tool ⚒, agent
 # ⏺, and notification ◆ glyphs already in use.
@@ -172,7 +172,7 @@ class TranscriptBuilder:
             # not speech — no speaker label, quieter than a reply.
             self.line(Text(f"  {truncate(entry.text, ENTRY_TEXT_CAP)}", style=f"italic {muted}"))
         elif entry.role == "question":
-            # Structured ask-the-human (issue #74): render the typed payload
+            # Structured ask-the-human: render the typed payload
             # (header · prompt · options · answered/pending). Defensive fallback
             # to the plain text body when the wire data omits `question`.
             self._question(entry, accent=accent, muted=muted)
@@ -181,7 +181,7 @@ class TranscriptBuilder:
             self._body(entry.text)
 
     def _question(self, entry: DigestEntry, *, accent: str, muted: str) -> None:
-        """Render one ``role=="question"`` row (issue #74) as one multi-line Text.
+        """Render one ``role=="question"`` row as one multi-line Text.
 
         Layout: a ``⁇ header  prompt`` line, one indented option line per choice
         (radio for single-select, checkbox for multi-select; ``label — desc`` when

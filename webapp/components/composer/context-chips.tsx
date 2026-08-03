@@ -257,7 +257,7 @@ export function ContextChips({
 
 /**
  * The repo chip — a DropdownMenu of known projects (from the `/activity`
- * snapshot, so empty/config-declared repos are creatable, #95). Renders a plain
+ * snapshot, so empty/config-declared repos are creatable). Renders a plain
  * non-interactive chip when only one project exists (nothing to choose).
  */
 function RepoChip({

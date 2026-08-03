@@ -1,12 +1,12 @@
 /**
  * Parse a git commit subject into a muted conventional-commit tag + clean text.
  *
- * The redesign rations color and bans decorative emoji (issue #96 deliverable C):
  * Grove's own commits lead with a gitmoji (`✨ feat(scope): …`, `🐛 fix: …`),
- * which renders inconsistently and clashes with the restrained palette. We strip
- * the leading gitmoji (unicode glyph or `:shortcode:`) and surface the
- * conventional-commit *type* as a small muted text tag (`feat` / `fix` / `perf`)
- * instead — defined once here so the card footer and the commit list can't drift.
+ * which renders inconsistently and clashes with the restrained, color-rationed
+ * palette. Strip the leading gitmoji (unicode glyph or `:shortcode:`) and
+ * surface the conventional-commit *type* as a small muted text tag (`feat` /
+ * `fix` / `perf`) instead — defined once here so the card footer and the
+ * commit list can't drift.
  */
 
 export interface CommitParts {

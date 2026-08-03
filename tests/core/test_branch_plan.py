@@ -188,3 +188,54 @@ def test_request_round_trips_through_json() -> None:
     restored = CreateWorkspaceRequest.model_validate_json(payload)
     assert isinstance(restored.branch_plan, NewNamedBranch)
     assert restored.branch_plan.name == "feature/x"
+
+
+# ─── argument injection: a branch name git would read as a flag ─────────────
+
+
+@pytest.mark.parametrize(
+    ("plan", "label"),
+    [
+        (lambda: NewNamedBranch(name="-m"), "new_named"),
+        (lambda: ExistingLocalBranch(name="-D"), "existing_local"),
+        (lambda: TrackRemoteBranch(remote_ref="origin/main", local_name="-m"), "explicit local"),
+        (lambda: TrackRemoteBranch(remote_ref="feature/x", local_name="-D"), "explicit local"),
+        # No `local_name` AT ALL: the default derivation is its own vector, and
+        # `remote_ref`'s own pattern (`^[^/]+/.+$`) happily accepts `x/-D`.
+        (lambda: TrackRemoteBranch(remote_ref="x/-D"), "derived default"),
+    ],
+)
+def test_a_branch_name_git_would_read_as_a_flag_is_rejected(plan, label: str) -> None:
+    """`shell=False` and list-form argv do NOT help here: the value *is* the
+    flag rather than being embedded in one, so quoting is irrelevant and only
+    validation stops it.
+
+    Measured against real git 2.43 in a throwaway repo:
+    `git worktree add -b -m <path> origin/main` renames the checked-out branch
+    and moves HEAD; `-b -D <path> feature/x` prints
+    `Deleted branch feature/x`. Both then exit `fatal:`, so the caller sees a
+    failure while the damage is already done.
+    """
+    with pytest.raises(ValidationError):
+        plan()
+
+
+def test_legitimate_branch_names_are_untouched(cfg: GroveConfig) -> None:
+    """The guard must not narrow the namespace users actually work in — dashes
+    are fine everywhere except as the first character."""
+    assert NewNamedBranch(name="feat/my-branch_v2.1").resolve(cfg, "t", "ts").name == (
+        "feat/my-branch_v2.1"
+    )
+    assert TrackRemoteBranch(remote_ref="origin/feature/x").effective_local_name == "feature/x"
+    assert TrackRemoteBranch(remote_ref="origin/main", local_name="my-b").effective_local_name == (
+        "my-b"
+    )
+
+
+def test_the_derived_name_has_one_definition() -> None:
+    """`resolve()` must use the value the validator checked. Two derivations of
+    one string is how a validator comes to guard something other than what
+    reaches git."""
+    plan = TrackRemoteBranch(remote_ref="origin/feature/x")
+
+    assert plan.resolve(GroveConfig(), "t", "ts").name == plan.effective_local_name

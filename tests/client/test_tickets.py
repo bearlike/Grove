@@ -1,7 +1,7 @@
 """GroveClient ticket methods — pin the request contract + View deserialization.
 
-The daemon ``/tickets`` routes are built in parallel (issue #7 foundation), so
-these tests do not stand up a real daemon. Instead they inject an
+The daemon ``/tickets`` routes may not exist yet, so these tests do not stand
+up a real daemon. Instead they inject an
 ``httpx.MockTransport`` into the connected client's own ``httpx.AsyncClient`` —
 the exact seam every ticket method rides — and assert two things per method:
 the request it issues (verb + path + query/body) and that it deserializes the
@@ -183,7 +183,9 @@ async def test_attach_ticket_posts_selector_body_and_returns_state() -> None:
 
     assert captured[0].method == "POST"
     assert captured[0].url.path == "/workspaces/ws-1/tickets"
-    assert captured[0].read() == b'{"provider":"gitea","id":"99"}'
+    # `kind` rides the selector, defaulted — an attach that names no kind still
+    # sends the issue default rather than omitting the field.
+    assert captured[0].read() == b'{"provider":"gitea","id":"99","kind":"issue"}'
     assert isinstance(state, WorkspaceStateView)
     assert state.id == "ws-1"
 
@@ -205,6 +207,65 @@ async def test_detach_ticket_issues_delete_on_nested_path_returns_state() -> Non
     assert captured[0].url.path == "/workspaces/ws-1/tickets/linear/ENG-123"
     assert isinstance(state, WorkspaceStateView)
     assert state.id == "ws-1"
+
+
+async def test_attach_ticket_by_ref_posts_ref_body_and_returns_state() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_state_view_payload())
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        state = await client.attach_ticket_by_ref("ws-1", "#42")
+    finally:
+        await client.close()
+
+    assert captured[0].method == "POST"
+    assert captured[0].url.path == "/workspaces/ws-1/tickets"
+    assert captured[0].read() == b'{"ref":"#42"}'
+    assert isinstance(state, WorkspaceStateView)
+    assert state.id == "ws-1"
+
+
+async def test_detach_ticket_by_ref_issues_delete_with_ref_query_param() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_state_view_payload())
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        state = await client.detach_ticket_by_ref("ws-1", "#42")
+    finally:
+        await client.close()
+
+    assert captured[0].method == "DELETE"
+    assert captured[0].url.path == "/workspaces/ws-1/tickets"
+    assert dict(captured[0].url.params) == {"ref": "#42"}
+    assert isinstance(state, WorkspaceStateView)
+    assert state.id == "ws-1"
+
+
+async def test_attach_ticket_by_ref_surfaces_ticket_link_ambiguous_envelope() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            409,
+            json={"detail": {"error": "ticket_link_ambiguous", "message": "'42' could be..."}},
+        )
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        with pytest.raises(ProtocolError) as excinfo:
+            await client.attach_ticket_by_ref("ws-1", "42")
+    finally:
+        await client.close()
+
+    assert excinfo.value.code == "ticket_link_ambiguous"
+    assert excinfo.value.status == 409
 
 
 async def test_attach_ticket_surfaces_protocol_error_envelope() -> None:

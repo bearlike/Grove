@@ -1,11 +1,55 @@
 # Issue ops
 
 Comment `@grove fix the flaky test` on an issue, and your own self-hosted Grove agent picks it up. One
-sticky status comment appears on the issue: a live todo checklist plus a link to the workspace, and it
-keeps rewriting itself in place for the whole life of the session. Leave a follow-up comment and Grove
-steers the same running agent instead of starting over. Think of the status comment the way a pinned chat
-message works: one place that always shows the current state, edited in place, never a growing feed of
-separate posts.
+sticky status comment appears on the issue: a diagram of the agent's reported [task
+phase](features-status.md#the-third-axis-task-phase), a live todo checklist, every issue and pull request
+the workspace touches, and a link to the workspace itself. It keeps rewriting itself in place for the
+whole life of the session. Once the agent opens a pull request and links it back with
+`grove tickets attach`, the same status comment appears there too, each copy keeping its own comment
+identity so a failure on one target never disturbs the other. You read the same live report wherever you
+happen to be looking, the issue or the PR. Leave a follow-up comment and Grove steers the same running
+agent instead of starting over. Think of the status comment the way a pinned chat message works: one place
+that always shows the current state, edited in place, never a growing feed of separate posts.
+
+The phase diagram is the part you read at a glance. Six blocks, left to right, in the order the work
+converges. Finished phases go muted gray, the phase the agent is in right now takes its own colour from
+Grove's phase palette and wears a heavy outline, and everything still ahead stays pale.
+
+```mermaid
+flowchart LR
+  classDef done fill:#96938c,stroke:#96938c,color:#111111
+  classDef now fill:#84cc16,stroke:#111111,stroke-width:3px,color:#111111
+  classDef todo fill:#e4f7c0,stroke:#e4f7c0,color:#111111
+  p0["Scoping"]:::done
+  p1["Planning"]:::done
+  p2["Implementing"]:::done
+  p3["Verifying<br>running make lint"]:::now
+  p4["Delivering"]:::todo
+  p5["Done"]:::todo
+  p0 --> p1 --> p2 --> p3 --> p4 --> p5
+```
+
+Underneath it the same progress reads as one line of text, so nothing is lost on a surface that does not
+draw diagrams, and the checklist and the linked tickets follow.
+
+```
+**Phase** ●●●●○○ Verifying (4/6) — running make lint
+
+**Checklist**
+- [x] Reproduce the flaky test
+- [x] Add a retry-free fix
+- [ ] Run the suite 20x to confirm
+
+**Tracking**
+- Issue #42 — open
+- Pull request #43 — merged
+- Open workspace
+```
+
+Both GitHub and Gitea draw the diagram natively in issue and pull request comments, with no extension and
+no setup on your side. A workspace whose agent has never reported a phase shows no diagram at all, rather
+than an empty one: not reporting is different from being at the start, and Grove will not guess which one
+you are looking at.
 
 That last part is the differentiator. Every CI-bound coding bot re-runs fresh per comment, because its
 executor is a job that dies the moment the workflow ends. Grove's executor is a long-lived daemon-owned
@@ -22,8 +66,9 @@ scratch. A comment is a command, not a fresh run.
    a normalized event to your daemon.
 4. The daemon's issue-ops engine resolves the repo, parses the command, and creates a workspace or steers
    the one already running for this ticket.
-5. A status publisher keeps one sticky comment on the issue rewritten with the current todo checklist and
-   a link to the workspace, for as long as the session runs.
+5. A status publisher keeps a sticky comment rewritten with the task phase diagram, the todo checklist,
+   the linked issues and pull requests, and a link to the workspace, for as long as the session runs. It
+   writes to the issue and to any pull request linked to the same workspace, each as its own comment.
 
 ```mermaid
 flowchart TD
@@ -32,7 +77,8 @@ flowchart TD
     Action -->|POST /issue-ops/events| Engine[daemon: issue-ops engine]
     Engine -->|create or steer| Workspace[workspace: worktree + tmux + agent]
     Workspace --> Publisher[status publisher]
-    Publisher -->|sticky comment: todo + link| Comment
+    Publisher -->|sticky comment: phase diagram + todo + links| Comment
+    Publisher -->|same comment, own identity| PR(["linked pull request"])
 ```
 
 Only steps 2 and 3 run in CI. Everything from step 4 on runs inside your own daemon, on your own host,
@@ -248,6 +294,8 @@ See [ticket providers](configure-ticket-providers.md).
 
 - [Ticket providers](features-ticket-providers.md) and [their setup](configure-ticket-providers.md):
   issue-ops resolves through the same `tickets.<provider>` config.
+- [Task phase](features-status.md#the-third-axis-task-phase): the six phases the sticky comment renders
+  as dot progress, and how an agent reports one.
 - [Authentication & pairing](use-auth.md): the handshake the CI token comes from.
 - [Configuration cascade](features-cascade.md): where `issueops` sits among the other layers.
 - [Workspace lifecycle](features-workspace-lifecycle.md): what create, pause, resume, and kill do underneath the verbs above.

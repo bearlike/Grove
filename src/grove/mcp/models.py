@@ -5,7 +5,7 @@ Most tool outputs reuse ``grove.core.contracts`` Views directly
 two operations whose daemon response carries no body (kill → 204) or
 whose availability is itself the answer (message → capability probe).
 Every field is explicit status data, never prose an MCP client would
-have to parse — the issue #1 addendum's "structured status fields" rule.
+have to parse.
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ class SendMessageResult(BaseModel):
     """Outcome of ``grove_send_workspace_message``.
 
     ``status="unavailable"`` means the connected daemon predates the
-    message endpoint (daemon issue #37) — the capability is discoverable,
-    per the issue #1 addendum, instead of surfacing a raw HTTP error the
-    caller would have to interpret.
+    message endpoint — the capability is discoverable as structured status
+    data instead of surfacing a raw HTTP error the caller would have to
+    interpret.
     """
 
     model_config = _FROZEN
@@ -52,15 +52,22 @@ class SendMessageResult(BaseModel):
 class AttachInstructionResult(BaseModel):
     """Human-handoff payload for ``grove_attach_instruction``.
 
-    ``command`` is ready to paste into a shell on the daemon's host;
-    ``inside_outer_tmux`` warns that the user is already in a tmux client
-    and should switch (``tmux switch-client``) rather than nest.
+    ``command`` is ready to paste into a shell on the daemon's host, whatever
+    the workspace's runtime: ``tmux attach`` for a host workspace, and the
+    ``devcontainer exec … tmux`` that enters the container's own tmux for a
+    containerized one. ``inside_outer_tmux`` warns that the user is
+    already in a tmux client and should switch (``tmux switch-client``) rather
+    than nest.
+
+    ``tmux_session`` is null for a containerized workspace and that is the
+    honest answer rather than a gap: the session it would name lives on the
+    container's tmux server, so a name pasted at a host shell addresses nothing.
     """
 
     model_config = _FROZEN
 
     workspace_id: str
-    tmux_session: str
+    tmux_session: str | None
     command: str
     inside_outer_tmux: bool
 

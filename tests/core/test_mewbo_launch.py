@@ -1,4 +1,4 @@
-"""Manager launch fork for ``kind="mewbo"`` (#36).
+"""Manager launch fork for ``kind="mewbo"``.
 
 A mewbo create mints its session SERVER-side: the manager calls
 ``MewboClient.create_session(cwd=worktree, title=...)`` and persists the
@@ -28,10 +28,10 @@ class FakeMewboClient:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str | None, str | None]] = []
-        self.models: list[str | None] = []  # #98: per-create model forwarded to create
+        self.models: list[str | None] = []  # per-create model forwarded to create
         self.messages: list[tuple[str, str]] = []
         self.fail = False
-        self.fail_message = False  # #48: initial-prompt delivery fails, create must not
+        self.fail_message = False  # initial-prompt delivery fails, create must not
 
     def create_session(
         self, *, cwd: str | None = None, title: str | None = None, model: str | None = None
@@ -111,7 +111,7 @@ def test_create_persists_server_minted_id_anchored_to_worktree(
 def test_create_forwards_per_create_model_to_remote_session(
     manager: WorkspaceManager, fake_mewbo: FakeMewboClient
 ) -> None:
-    # #98: a per-create model selection reaches mewbo through session-create —
+    # A per-create model selection reaches mewbo through session-create —
     # mewbo has no launch `--model` flag (the model is server-side), so this is
     # the one place the choice can be forwarded. Provider boundary: verbatim.
     manager.create(
@@ -167,8 +167,8 @@ def test_resume_keeps_the_persisted_remote_id(
 
     resumed = manager.resume(state.id)
 
-    # Continue = same session; re-engagement happens via /message (#37),
-    # which resume deliberately does not call.
+    # Continue = same session; re-engagement happens via /message, which
+    # resume deliberately does not call.
     assert resumed.agent_session_id == "mewbo-session-1"
     assert len(fake_mewbo.calls) == 1
 
@@ -176,7 +176,7 @@ def test_resume_keeps_the_persisted_remote_id(
 def test_create_delivers_initial_prompt_via_remote_dispatch(
     manager: WorkspaceManager, fake_mewbo: FakeMewboClient, fake_tmux: FakeTmux
 ) -> None:
-    """#48: a mewbo create with initial_prompt re-engages the freshly-minted
+    """A mewbo create with initial_prompt re-engages the freshly-minted
     session through send_message (the /message path), not a launch argv — the
     decoration stays empty."""
     state = manager.create(
@@ -190,7 +190,7 @@ def test_create_delivers_initial_prompt_via_remote_dispatch(
 def test_create_survives_initial_prompt_delivery_failure(
     manager: WorkspaceManager, fake_mewbo: FakeMewboClient
 ) -> None:
-    """#48: a failed initial-prompt delivery must NOT roll back a successfully
+    """A failed initial-prompt delivery must NOT roll back a successfully
     created workspace — the session exists, the user can steer manually."""
     fake_mewbo.fail_message = True
 

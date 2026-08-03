@@ -2,17 +2,39 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionPicker, SessionPickerList } from "@/components/chat/session-picker";
-import type { SessionSummaryView } from "@/lib/grove/types";
+import type { AgentActivityView, SessionSummaryView } from "@/lib/grove/types";
 
 // Pure presentational component — no hooks, no fetch, so these tests exercise
 // the public prop contract directly (render, select, make-primary, pending,
 // error) without a QueryClientProvider.
+
+// Named separately because `SessionSummaryView.activity` is nullable on the
+// wire — spreading a row's own `.activity` would widen every field to
+// `| undefined`.
+const ACTIVITY: AgentActivityView = {
+  state: "working",
+  title: null,
+  current_task: null,
+  human_turns: 1,
+  assistant_replies: 1,
+  replies_per_turn: [1],
+  tool_calls: 0,
+  active_subagents: 0,
+  model: "claude-opus-4-8",
+  tokens_in: 100,
+  tokens_out: 10,
+  last_event_at: null,
+  needs_attention: false,
+  error_detail: null,
+  questions: [],
+};
 
 function session(overrides: Partial<SessionSummaryView>): SessionSummaryView {
   return {
     session_id: "s1111112222233333",
     adapter_kind: "claude_code",
     provenance: "grove_launched",
+    primary: true,
     workspace_id: "w1",
     workspace_title: "feat depth",
     workspace_branch: "feat/depth",
@@ -20,26 +42,11 @@ function session(overrides: Partial<SessionSummaryView>): SessionSummaryView {
     created_at: "2026-06-10T09:00:00Z",
     modified_at: "2026-06-10T11:00:00Z",
     size_bytes: 4096,
+    live: false,
     title: "wire the panel",
     first_prompt: "build the panel",
     last_prompt: "ship it",
-    activity: {
-      state: "working",
-      title: null,
-      current_task: null,
-      human_turns: 1,
-      assistant_replies: 1,
-      replies_per_turn: [1],
-      tool_calls: 0,
-      active_subagents: 0,
-      model: "claude-opus-4-8",
-      tokens_in: 100,
-      tokens_out: 10,
-      last_event_at: null,
-      needs_attention: false,
-      error_detail: null,
-      questions: [],
-    },
+    activity: ACTIVITY,
     ...overrides,
   };
 }
@@ -50,15 +57,15 @@ const OTHER = session({
   title: null,
   first_prompt: "explore the codebase",
   modified_at: "2026-06-09T08:00:00Z",
-  activity: { ...PRIMARY.activity, state: "idle" },
+  activity: { ...ACTIVITY, state: "idle" },
 });
-// The ungated remap-picker candidate (#132): the dead-pointer's live successor
-// the adoption gate drops, offered so the human can pin it.
+// The ungated remap-picker candidate: the dead-pointer's live successor the
+// adoption gate drops, offered so the human can pin it.
 const CANDIDATE = session({
   session_id: "s-candidate-cccc",
   title: null,
   first_prompt: "the live successor conversation",
-  activity: { ...PRIMARY.activity, state: "idle" },
+  activity: { ...ACTIVITY, state: "idle" },
 });
 
 describe("SessionPicker", () => {
@@ -196,7 +203,7 @@ describe("SessionPicker", () => {
     );
   });
 
-  // ── Track mode (#132): the escape hatch when the workspace tracks a dead
+  // ── Track mode: the escape hatch when the workspace tracks a dead
   //    pointer and the switcher would otherwise self-hide with nothing to offer.
   it("offers a track affordance when none is tracked but a candidate exists", async () => {
     const user = userEvent.setup();

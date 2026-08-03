@@ -2,8 +2,8 @@ import type { SessionActivityView } from "./types";
 
 /**
  * One session in the fleet hierarchy plus its itemized children — the pure
- * grouping layer over `WorkspaceActivityView.sessions` (#173's flat wire
- * list: every entry, primary or sub-agent, carries its own
+ * grouping layer over `WorkspaceActivityView.sessions` (a flat wire list:
+ * every entry, primary or sub-agent, carries its own
  * `AgentSessionView.parent_session_id`, `null` for a top-level session).
  *
  * Built generically (a session's `children` can themselves carry children)
@@ -23,7 +23,7 @@ export interface FleetNode {
  * a parent id not present in this same list — defensive against a partial
  * snapshot) each carrying their own nested fleet members. Order is
  * preserved from the input at every level (the engine already emits
- * primary-first, extras next, each followed by its own fleet, #173).
+ * primary-first, extras next, each followed by its own fleet).
  */
 export function buildFleetTree(sessions: SessionActivityView[]): FleetNode[] {
   const bySessionId = new Map(sessions.map((s) => [s.session.session_id, s]));

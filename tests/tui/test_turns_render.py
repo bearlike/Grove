@@ -222,7 +222,7 @@ def test_add_turn_status_and_summary_are_muted_italic_notes(role: str) -> None:
     assert "italic" in style and muted in style
 
 
-# ─── question rows (issue #74) ───────────────────────────────────────────────
+# ─── question rows ───────────────────────────────────────────────────────────
 
 
 def _question_entry(question: AgentQuestion) -> DigestEntry:

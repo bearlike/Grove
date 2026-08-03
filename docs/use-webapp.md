@@ -32,7 +32,9 @@ Your choice sticks across reloads. The toggle is a quiet segmented control, neve
 
 Each Overview card, in [`card.tsx`](repo:webapp/components/workspace/card.tsx), shows the agent-state
 glyph, the title, and a relative time on its top line, a one-line "happening now" summary below, then two
-aligned stat rows: provenance (branch, ahead, behind, dirty) and activity (turns, tool calls, tokens).
+aligned stat rows: provenance (branch, ahead, behind, dirty) and activity (turns, tool calls, tokens). A
+card also carries the agent's reported [task phase](features-status.md#the-third-axis-task-phase) when it
+has reported one, and its todo progress as a bounded count.
 A working card carries a **Live** toggle. Flip it and a single focused pane mirrors that agent's real
 terminal inline, streamed over SSE, colors and box-drawing intact. Only one pane is live at a time, so
 the surface stays cheap on a phone.
@@ -74,6 +76,29 @@ identity row with a link to the project on GitHub. This is where the fleet's sys
 
 Collapse the rail with the header toggle or `[` and it hides entirely to give content the full width.
 There is no half-collapsed icon strip. On a phone the rail opens as a left drawer from the hamburger.
+
+---
+
+## The Session Catalog
+
+The rail shows sessions from the projects Grove already knows about. Click **Sessions** in the header
+and you get every agent session on the machine instead, whether or not Grove ever heard of the repo it
+ran in.
+
+Rows group by project, newest session first within each group. Each carries the agent kind, its git
+branch, how long ago it last changed, whether Grove launched it or you started it by hand, and a live
+dot when a matching agent process is still running in that directory. A session whose repository Grove
+never manages shows up here exactly the same as one it does; the point of this screen is that "Grove
+does not know about it" is not the same thing as "it does not exist."
+
+Open any row and its full conversation renders read-only: the same transcript view the session detail
+page uses, minus the composer and every other control. There is nothing to steer here, only history to
+read. A session whose transcript never recorded where it ran still lists, dimmed, with a note explaining
+why it will not open.
+
+This screen reads a metadata scan, not a full transcript parse, so it stays fast even with hundreds of
+sessions on disk. See [Session history](features-activity.md#session-history) for how the same catalog
+reaches the TUI and the CLI.
 
 ---
 

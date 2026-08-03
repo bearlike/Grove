@@ -10,25 +10,24 @@ import { useUiStore } from "@/lib/grove/ui-store";
 import { cn } from "@/lib/utils";
 
 /**
- * The ONE app shell (ADE reframe, #138). Every non-login route lives in this
- * group now — the list surface (`/`, the `/activity` redirect) AND the session
- * page (`/w/[id]`) — so they share ONE header + ONE persistent left rail. The
- * session page's old standalone shell (its own `<Header>`, no rail) is gone; it
- * is now the three-zone layout `rail | transcript | work-panel`, where the rail
- * is this shared container.
+ * The ONE app shell. Every non-login route lives in this group — the list
+ * surface (`/`, the `/activity` redirect) AND the session page (`/w/[id]`) —
+ * so they share ONE header + ONE persistent left rail. The session page is
+ * the three-zone layout `rail | transcript | work-panel`, where the rail is
+ * this shared container.
  *
- * VIEWPORT MATH (single source of truth): the status bar was deleted, so the
- * only fixed chrome is the h-13 header = 52px = `3.25rem`. A fixed-height page
- * (the session page) fills `calc(100dvh - 3.25rem)`; the sticky rail is the same
- * height and pins below the `top-13` header. Change `3.25rem`/`top-13` together
- * if the header height ever moves — they are the ONLY two references.
+ * VIEWPORT MATH (single source of truth): the only fixed chrome is the h-13
+ * header = 52px = `3.25rem`. A fixed-height page (the session page) fills
+ * `calc(100dvh - 3.25rem)`; the sticky rail is the same height and pins below
+ * the `top-13` header. Change `3.25rem`/`top-13` together if the header
+ * height ever moves — they are the ONLY two references.
  *
  * The header lives here (not in the pages), so a page fills the header's middle
  * by portaling into the slot the header exposes via `contextSlotRef`; this layout
  * captures that node and publishes it through `HeaderSlotContext`. `back` is
  * route-derived (only the session page needs it) — no page has to pass it.
  *
- * Sidebar collapse is owned by the ONE client-state store (#96): `sidebarCollapsed`
+ * Sidebar collapse is owned by the ONE client-state store: `sidebarCollapsed`
  * is persisted, `toggleSidebar` flips it, and `hydrated` gates the persisted value
  * so SSR + first paint render expanded (markup matches) and the width transition
  * disguises the flip on mount. The `[` shortcut (ignored while a field is focused)
@@ -75,7 +74,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           session page is a fixed-height three-zone that scrolls inside its panes). */}
       <div className="flex w-full">
         {/* The rail's width animates on a wrapper; collapsing narrows it to
-            `w-0` so the rail hides ENTIRELY (modern-chat behavior, #152) — the
+            `w-0` so the rail hides ENTIRELY (modern-chat behavior) — the
             header toggle + `[` reopen it. The inner aside keeps a stable `w-70`
             (never re-flowing to match the wrapper) so its content doesn't
             re-wrap mid-animation; `overflow-hidden` clips it as the wrapper

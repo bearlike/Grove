@@ -7,22 +7,28 @@ site); the rest goes through the real snapshot/poll paths with in-memory fakes.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from grove.core import paths as core_paths
+from grove.core import tmux
 from grove.core.activity import ActivityService, DashboardDelta, SessionActivity, WorkspaceActivity
 from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
 from grove.core.agents.hook import ClaudeHook
-from grove.core.config import GroveConfig
+from grove.core.config import GroveConfig, load_config
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
@@ -58,10 +64,10 @@ def _init_repo(path: Path) -> Path:
 
 @pytest.fixture
 def env(fake_tmux: FakeTmux, tmp_path: Path) -> tuple[ActivityService, RepoRegistry]:
-    # hooks explicitly OFF: this fixture predates #171's default-True flip and
-    # several tests below (e.g. test_extras_discovered_without_hooks_enabled)
-    # exist specifically to pin the hooks-DISABLED behavior — pin it here so
-    # the flip in config.py can't silently change what this file exercises.
+    # hooks explicitly OFF: several tests below (e.g.
+    # test_extras_discovered_without_hooks_enabled) exist specifically to pin
+    # the hooks-DISABLED behavior — pin it here so a default flip in
+    # config.py can't silently change what this file exercises.
     cfg = GroveConfig.model_validate(
         {"tmux": {"session_prefix": "test-"}, "hooks": {"enabled": False}}
     )
@@ -224,6 +230,62 @@ def test_blend_fresh_transcript_outranks_quiet_pane() -> None:
     assert blend(None) is AgentActivityState.IDLE
 
 
+def test_sessions_for_promotes_orchestrator_waiting_to_working_via_fleet(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Integration proof at the seam every consumer of ``sessions_for`` shares
+    (daemon poll, TUI list tick): an orchestrator whose tail assistant reply
+    closed its OWN turn (``end_turn``) while a BACKGROUNDED sub-agent it just
+    spawned is still running reads WORKING, not the stale WAITING a bare
+    ``end_turn`` tail otherwise produces (``test_snapshot_parses_real_transcript``
+    pins that exact WAITING result for the same create()+tmux conditions minus
+    the active fleet). ``_blend`` itself never consults ``active_subagents`` —
+    the promotion happens upstream inside the adapter's own ``activity()``, so
+    this is provable only by going through the real ``sessions_for`` seam."""
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    created = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="orchestrator"))
+    worktree = Path(created.worktree_path)
+    sid = created.agent_session_id
+    assert sid is not None
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(worktree)
+    folder.mkdir(parents=True)
+    (folder / f"{sid}.jsonl").write_text(
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"find the flaky test"}}\n'
+        '{"type":"assistant","uuid":"a1","requestId":"r1","timestamp":"2026-06-01T10:00:01.000Z",'
+        '"isSidechain":false,"message":{"id":"m1","role":"assistant","stop_reason":"tool_use",'
+        '"content":[{"type":"tool_use","id":"tu1","name":"Agent",'
+        '"input":{"description":"Explore","subagent_type":"Explore","prompt":"go",'
+        '"run_in_background":true}}]}}\n'
+        '{"type":"user","uuid":"t1","timestamp":"2026-06-01T10:00:02.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"tu1","content":"Async agent launched"}]}}\n'
+        '{"type":"assistant","uuid":"a2","requestId":"r2","timestamp":"2026-06-01T10:00:03.000Z",'
+        '"isSidechain":false,"message":{"id":"m2","role":"assistant","stop_reason":"end_turn",'
+        '"content":[{"type":"text","text":"Kicked off a background exploration."}]}}\n',
+        encoding="utf-8",
+    )
+
+    # `sessions_for` takes an already-RECONCILED state (`WorkspaceStatus.ACTIVE`/
+    # `IDLE`, computed at read time) — the same object every real caller
+    # (daemon poll, TUI list tick) holds via `mgr.list()`. The bare `create()`
+    # return value still carries the PERSISTED `RUNNING` status.
+    state = next(s for s in mgr.list() if s.id == created.id)
+    sessions = service.sessions_for(mgr, state)
+    primary = sessions[0]
+    assert primary.session.session_id == sid
+    assert primary.activity.active_subagents == 1
+    assert primary.activity.state is AgentActivityState.WORKING
+
+
 # ─── snapshot ───────────────────────────────────────────────────────────────
 
 
@@ -291,8 +353,8 @@ def test_snapshot_itemizes_fleet_and_excludes_it_from_attention(
     tmp_path: Path,
 ) -> None:
     """The dashboard card's ``sessions`` list itemizes a sub-agent fleet member
-    (#173) alongside the primary — not just a bare ``active_subagents`` int —
-    with the parent/child link set. A finished sub-agent settles to WAITING
+    alongside the primary — not just a bare ``active_subagents`` int — with
+    the parent/child link set. A finished sub-agent settles to WAITING
     (an ``ATTENTION_STATE`` for a real human-facing session) but must NOT bubble
     into the workspace's own ``needs_attention``: it is itemized detail, not a
     second conversation waiting on the human."""
@@ -366,6 +428,48 @@ def test_snapshot_never_calls_peek(
     row = service.snapshot().projects[0].workspaces[0]
     assert isinstance(row.diff_added, int)
     assert isinstance(row.diff_removed, int)
+
+
+def test_poll_once_does_not_redundantly_reconcile_pane_target(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """`_workspace_activity` must resolve the pane target from the `WorkspaceState`
+    `list()` already reconciled this tick, not re-fetch the raw state and run
+    `_reconcile_status` a second time through the id-only `pane_target()`.
+
+    The redundant pass alone doubles `has_session`/`pane_activity_seconds_ago`
+    and triples `list_windows` for every RUNNING workspace, every poll — at
+    fleet scale (24 workspaces) that's ~100 avoidable tmux forks per tick on
+    top of the ones reconciliation legitimately needs.
+    """
+    service, registry = env
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    mgr.create(CreateWorkspaceRequest(agent_name="claude", title="fork-count"))
+
+    calls = {"has_session": 0, "list_windows": 0, "pane_activity_seconds_ago": 0}
+
+    def _counted(name: str) -> Callable[..., Any]:
+        real = getattr(tmux, name)
+
+        def _wrapped(*args: Any, **kwargs: Any) -> Any:
+            calls[name] += 1
+            return real(*args, **kwargs)
+
+        return _wrapped
+
+    for name in calls:
+        monkeypatch.setattr(tmux, name, _counted(name))
+
+    service.poll_once()
+
+    # One reconcile's worth per workspace: `list()` reconciles status once
+    # (has_session + list_windows + pane_activity_seconds_ago), and resolving
+    # the pane target for the ActivityService row costs exactly one more
+    # `list_windows` call (the target itself, not a second reconciliation).
+    assert calls == {"has_session": 1, "list_windows": 2, "pane_activity_seconds_ago": 1}
 
 
 # ─── delta bus ──────────────────────────────────────────────────────────────
@@ -473,7 +577,7 @@ def test_event_from_delta_round_trips(
     assert event.workspace.state.id == state.id
 
 
-# ─── #18 push-status sidecar + out-of-band discovery ────────────────────────
+# ─── push-status sidecar + out-of-band discovery ────────────────────────────
 
 
 def test_sidecar_overrides_polled_state(
@@ -500,7 +604,7 @@ def test_sidecar_overrides_polled_state(
     assert primary.state is AgentActivityState.BLOCKED
 
 
-# ─── #109 live pending question ──────────────────────────────────────────────
+# ─── live pending question ───────────────────────────────────────────────────
 
 
 def _ask_capture(sidecar_dir: Path, session_id: str | None, *, now: datetime) -> None:
@@ -533,7 +637,7 @@ def test_live_question_surfaces_on_activity_view(
     tmp_path: Path,
 ) -> None:
     """A question captured at ask-time rides the activity view immediately —
-    before Claude Code flushes anything to the transcript (#109)."""
+    before Claude Code flushes anything to the transcript."""
     service, registry = env
     sidecar_dir = tmp_path / "sidecars"
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
@@ -556,7 +660,7 @@ def test_live_question_surfaces_whole_batch_in_order(
     tmp_path: Path,
 ) -> None:
     """One AskUserQuestion call carries up to four questions answered atomically,
-    so the whole group rides together, ordered as asked (#109 contract)."""
+    so the whole group rides together, ordered as asked."""
     service, registry = env
     sidecar_dir = tmp_path / "sidecars"
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
@@ -1060,7 +1164,7 @@ def test_root_workspace_never_promotes_stale_repo_root_session_to_primary(
     assert row.sessions[0].session.session_id != stale_sid
 
 
-# ─── #117 dead-pointer recovery + resumed-session sidecar adoption ───────────
+# ─── dead-pointer recovery + resumed-session sidecar adoption ───────────────
 
 
 def test_sessionend_dead_pointer_recovers_resumed_session(
@@ -1068,13 +1172,13 @@ def test_sessionend_dead_pointer_recovers_resumed_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The 2026-07-05 live incident, end to end. Grove minted M and launched
-    ``claude --session-id M``, but the user resumed a pre-existing session R in
-    the pane. M ends almost immediately — its OWN SessionEnd sidecar settles the
-    blend to IDLE (not STARTING/UNKNOWN), so the dead pointer read as live and
-    recovery never ran (defect A). R was born long before this workspace, so
-    birth alone can never adopt it (defect B) — but its post-create SessionStart
-    sidecar in this cwd does. R must become primary; the dead M rides behind."""
+    """End to end: Grove minted M and launched ``claude --session-id M``, but
+    the user resumed a pre-existing session R in the pane. M ends almost
+    immediately — its OWN SessionEnd sidecar settles the blend to IDLE (not
+    STARTING/UNKNOWN), so a dead pointer must not read as live and skip
+    recovery. R was born long before this workspace, so birth alone can never
+    adopt it — but its post-create SessionStart sidecar in this cwd does. R
+    must become primary; the dead M rides behind."""
     service, registry = env
     sidecar_dir = tmp_path / "sidecars"
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
@@ -1129,12 +1233,12 @@ def test_resumed_session_adopted_via_sidecar_evidence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The live incident (#F1): the minted --session-id went dead (user /resume'd
-    in the pane), and the resumed session — born BEFORE the workspace — is
-    adopted because its post-create sidecar shares the SAME pane the minted
-    session's sidecar recorded (the reference pane). Birth alone rejected it;
-    pane-verified live-here evidence carries it, and the dead minted entry yields
-    the primary slot."""
+    """A minted --session-id went dead (user /resume'd in the pane), and the
+    resumed session — born BEFORE the workspace — is adopted because its
+    post-create sidecar shares the SAME pane the minted session's sidecar
+    recorded (the reference pane). Birth alone rejected it; pane-verified
+    live-here evidence carries it, and the dead minted entry yields the
+    primary slot."""
     service, registry = env
     sidecar_dir = tmp_path / "sidecars"
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
@@ -1188,7 +1292,7 @@ def test_cross_tenant_live_session_rejected_on_pane_mismatch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """#F1: a workspace must NOT adopt another live workspace's session that
+    """A workspace must NOT adopt another live workspace's session that
     happens to share its cwd (the ROOT-placement hole). The other tenant's
     sidecar keeps refreshing ``ts >= created_at`` with the same cwd, but its pane
     differs from THIS workspace's reference pane (the minted session's), so the
@@ -1247,7 +1351,7 @@ def test_minted_card_excludes_historical_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """#F5: a discovered session predating the workspace (no live-here sidecar) is
+    """A discovered session predating the workspace (no live-here sidecar) is
     excluded from the card entirely — history is rejected on cheap birth metadata
     before any full parse, so per-tick cost stays O(new sessions)."""
     service, registry = env
@@ -1278,7 +1382,7 @@ def test_historical_sessions_never_full_parsed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """#F5: the O(new sessions) cost guarantee. A full ``parse_activity`` is paid
+    """The O(new sessions) cost guarantee: a full ``parse_activity`` is paid
     for the minted session and any ADOPTED candidate only; historical transcripts
     are rejected on the cheap birth head-read (``discover_births``) and never
     full-parsed, so per-tick cost is O(new), not O(history)."""
@@ -1327,7 +1431,7 @@ def test_materialized_sessionend_stays_primary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """#F6: a minted session that HAS a transcript is never a dead pointer, even
+    """A minted session that HAS a transcript is never a dead pointer, even
     when its last hook event is SessionEnd — a remapped/materialized ended session
     stays primary showing its honest idle/done state, not demoted below a
     discovered bystander."""
@@ -1376,7 +1480,7 @@ def test_stale_cwd_session_with_predating_sidecar_not_adopted(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The #107 stale-cwd protection survives the sidecar-evidence extension: a
+    """The stale-cwd protection survives the sidecar-evidence extension: a
     previous tenant of a reused cwd left both a transcript AND a sidecar, but
     both predate this workspace's creation, so the ``>= created_at`` guard still
     rejects it. (Pane evidence would also reject on mismatch; cwd+ts is the
@@ -1466,7 +1570,7 @@ def test_sessionend_before_transcript_keeps_minted_materialized(
     assert row.primary.current_task == "still going"
 
 
-# ─── #118 nested-project discovery (agent_cwd, not worktree root) ─────────────
+# ─── nested-project discovery (agent_cwd, not worktree root) ────────────────
 
 
 def test_nested_project_discovery_scans_agent_cwd(
@@ -1476,8 +1580,7 @@ def test_nested_project_discovery_scans_agent_cwd(
 ) -> None:
     """A nested project's agent runs in worktree/subpath and records its
     transcript's cwd there — discovery must scan agent_cwd, not the worktree
-    root, or the session is invisible (#118). Pre-fix scanned the worktree root
-    and found nothing."""
+    root, or the session is invisible."""
     service, registry = env
     cfg_home = tmp_path / "claude"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
@@ -1514,7 +1617,7 @@ def test_nested_project_discovery_scans_agent_cwd(
     assert by_id[handstarted].activity.current_task == "nested work"
 
 
-# ─── #119 extras discovery is not gated by cfg.hooks.enabled ─────────────────
+# ─── extras discovery is not gated by cfg.hooks.enabled ─────────────────────
 
 
 def test_extras_discovered_without_hooks_enabled(
@@ -1523,8 +1626,8 @@ def test_extras_discovered_without_hooks_enabled(
     tmp_path: Path,
 ) -> None:
     """Concurrent hand-started sessions in a workspace's cwd surface even with
-    hooks DISABLED — discovery is a read-only fs glob no longer gated on
-    cfg.hooks.enabled (#119). hooks.enabled gates only the sidecar push."""
+    hooks DISABLED — discovery is a read-only fs glob, not gated on
+    cfg.hooks.enabled. hooks.enabled gates only the sidecar push."""
     service, registry = env  # env's cfg leaves hooks disabled (the default)
     cfg_home = tmp_path / "claude"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
@@ -1605,7 +1708,7 @@ def test_snapshot_includes_config_declared_empty_project(
     fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
     """A config-declared repo with zero workspaces surfaces as a ProjectGroup, so
-    the webapp new-workspace dialog (which reads `/activity`) can target it (#95)."""
+    the webapp new-workspace dialog (which reads `/activity`) can target it."""
     empty_repo = _init_repo(tmp_path / "empty")
     cfg = GroveConfig.model_validate({"projects": [str(empty_repo)]})
     store = JsonWorkspaceStore(path=tmp_path / "state.json")
@@ -1619,7 +1722,7 @@ def test_snapshot_includes_config_declared_empty_project(
 
 def test_snapshot_groups_nested_projects_distinctly(fake_tmux: FakeTmux, tmp_path: Path) -> None:
     """Two declared subdirs of one repo each surface as a distinct ProjectGroup,
-    with each workspace attributed to its cwd group while sharing the repo (#101)."""
+    with each workspace attributed to its cwd group while sharing the repo."""
     repo = _init_repo(tmp_path / "mono")
     homelab = repo / "homelab"
     homelab.mkdir()
@@ -1647,3 +1750,369 @@ def test_snapshot_groups_nested_projects_distinctly(fake_tmux: FakeTmux, tmp_pat
     assert all(g.repo_root == str(repo.resolve()) for g in snap.projects)
     assert [w.state.title for w in by_cwd[str(repo.resolve())].workspaces] == ["root-task"]
     assert [w.state.title for w in by_cwd[str(homelab.resolve())].workspaces] == ["nested-task"]
+
+
+# ─── config-dir asymmetry (transcript_context) ──────────────────────────────
+#
+# The user-visible symptom, end to end, not just the writer or the read scope
+# in isolation: an agent pinned to a non-default CLAUDE_CONFIG_DIR (the
+# hermetic-profile mechanism) writes its transcript there, while the READING
+# process — the daemon, the TUI, this very test's own `sessions_for` call —
+# has a *different* ambient CLAUDE_CONFIG_DIR. An unscoped `sessions_for`
+# glob-scans the reader's own dir, finds nothing, and the workspace's card
+# pins at STARTING forever with a blank agent axis. `create` records where
+# the agent actually wrote (`TranscriptContext.for_launch`) and
+# `sessions_for` scopes its read to match (`_transcript_scope`).
+
+
+def _write_transcript(config_dir: Path, sid: str, cwd: str) -> Path:
+    """A real-shaped Claude transcript under ``config_dir/projects/<encoded
+    cwd>``, ending on an assistant ``end_turn`` so the parsed state is a real
+    one (WAITING) once the transcript is actually found — STARTING is what a
+    MISSING transcript parses to, so ending mid-turn would confound the two."""
+    folder = config_dir / "projects" / _ClaudeHome.encode_cwd(Path(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{sid}.jsonl"
+    path.write_text(
+        '{"type":"mode","mode":"normal"}\n'
+        f'{{"type":"user","uuid":"h1","timestamp":"2026-07-25T08:00:00.000Z",'
+        f'"isSidechain":false,"cwd":"{cwd}","gitBranch":"main",'
+        f'"message":{{"role":"user","content":"do the thing"}}}}\n'
+        f'{{"type":"assistant","uuid":"a1","requestId":"r1",'
+        f'"timestamp":"2026-07-25T08:00:05.000Z","isSidechain":false,"cwd":"{cwd}",'
+        f'"message":{{"id":"m1","role":"assistant","stop_reason":"end_turn",'
+        f'"content":[{{"type":"text","text":"done"}}]}}}}\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture
+def pinned_asymmetry(
+    fake_tmux: FakeTmux, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[ActivityService, WorkspaceManager, Path]:
+    """A workspace whose agent pins ``CLAUDE_CONFIG_DIR`` at a dir the READING
+    process's own ambient env does not name. `pinned_dir` is where the agent
+    (and this fixture, standing in for it) writes; `reader_dir`/``Path.home``
+    is what an unscoped adapter read would consult instead."""
+    del fake_tmux
+    pinned_dir = tmp_path / "profiles" / "work"
+    reader_dir = tmp_path / "reader-home" / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(reader_dir))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "reader-home")
+
+    cfg = GroveConfig.model_validate(
+        {
+            "tmux": {"session_prefix": "test-"},
+            "agents": [
+                {
+                    "name": "work",
+                    "command": "claude",
+                    "kind": "claude_code",
+                    "env": {"CLAUDE_CONFIG_DIR": str(pinned_dir)},
+                }
+            ],
+        }
+    )
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    registry = RepoRegistry(cfg=cfg, store=store)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    return ActivityService(registry=registry), mgr, pinned_dir
+
+
+def test_pinned_workspace_blends_to_a_real_state(
+    pinned_asymmetry: tuple[ActivityService, WorkspaceManager, Path],
+) -> None:
+    """The symptom, in user terms: a workspace whose agent writes its
+    transcript under a pinned config dir resolves its session instead of
+    showing STARTING forever with a blank agent axis."""
+    service, mgr, pinned_dir = pinned_asymmetry
+    state = mgr.create(CreateWorkspaceRequest(agent_name="work", title="pinned"))
+    sid = state.agent_session_id
+    assert sid is not None
+
+    # The agent, running under the PINNED env, writes its transcript there.
+    written = _write_transcript(pinned_dir, sid, str(state.agent_cwd))
+    # The reader's ambient dir holds nothing — this IS the whole asymmetry.
+    assert os.environ["CLAUDE_CONFIG_DIR"] != str(pinned_dir)
+
+    sessions = service.sessions_for(mgr, mgr.get(state.id))
+
+    assert len(sessions) == 1
+    primary = sessions[0]
+    assert primary.session.transcript_path == written
+    assert primary.activity.state is not AgentActivityState.STARTING
+    assert primary.activity.human_turns == 1
+
+
+def test_without_the_context_it_still_pins_at_starting(
+    pinned_asymmetry: tuple[ActivityService, WorkspaceManager, Path],
+) -> None:
+    """The BEFORE arm, reproduced on the SAME code and SAME on-disk transcript
+    by clearing the recorded context: clearing it collapses the scope to a
+    bare ``nullcontext``, ``transcript_scan_cwds`` to ``scan_cwds``, and
+    ``minted_cwd`` to ``agent_cwd`` — reproducing the exact unscoped-read
+    failure rather than standing in for it. Keep this arm: without it, a
+    future refactor could silently regress the override while every other
+    test in this file (and `test_transcript_context.py`) stays green, because
+    they all prove the writer records a context — none of them proves the
+    bug those records exist to close is actually gone."""
+    service, mgr, pinned_dir = pinned_asymmetry
+    state = mgr.create(CreateWorkspaceRequest(agent_name="work", title="pinned"))
+    sid = state.agent_session_id
+    assert sid is not None
+    _write_transcript(pinned_dir, sid, str(state.agent_cwd))
+
+    mgr.store.save(replace(state, transcript_context=None))
+    sessions = service.sessions_for(mgr, mgr.get(state.id))
+
+    assert len(sessions) == 1
+    assert sessions[0].session.transcript_path is None
+    assert sessions[0].activity.state is AgentActivityState.STARTING
+
+
+def test_unpinned_workspace_is_unaffected(
+    fake_tmux: FakeTmux, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control: the overwhelmingly common case (no pin, no override) still
+    resolves via the ambient env exactly as it always has — the override
+    path only ADDS a scoped read, it never changes the unpinned one."""
+    del fake_tmux
+    home = tmp_path / "home"
+    ambient = home / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ambient))
+    monkeypatch.setattr(Path, "home", lambda: home)
+    cfg = GroveConfig.model_validate({"tmux": {"session_prefix": "test-"}})
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    registry = RepoRegistry(cfg=cfg, store=store)
+    service = ActivityService(registry=registry)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="plain"))
+    assert state.transcript_context is None
+    sid = state.agent_session_id
+    assert sid is not None
+    written = _write_transcript(ambient, sid, str(state.agent_cwd))
+
+    sessions = service.sessions_for(mgr, mgr.get(state.id))
+
+    assert sessions[0].session.transcript_path == written
+    assert sessions[0].activity.state is not AgentActivityState.STARTING
+
+
+def test_scope_does_not_leak_into_the_readers_env(
+    pinned_asymmetry: tuple[ActivityService, WorkspaceManager, Path],
+) -> None:
+    """The control that guards a real hazard, not just a nicety: the scope
+    mutates PROCESS-GLOBAL env while held, and a leak would corrupt every
+    subsequent read the daemon makes, not just this one. Checked both
+    directions: the var is restored to its exact prior value, and that prior
+    value is never the pinned dir it was scoped to during the call."""
+    service, mgr, pinned_dir = pinned_asymmetry
+    state = mgr.create(CreateWorkspaceRequest(agent_name="work", title="pinned"))
+    assert state.agent_session_id is not None
+    _write_transcript(pinned_dir, state.agent_session_id, str(state.agent_cwd))
+    before = os.environ["CLAUDE_CONFIG_DIR"]
+
+    service.sessions_for(mgr, mgr.get(state.id))
+
+    assert os.environ["CLAUDE_CONFIG_DIR"] == before
+    assert before != str(pinned_dir)
+
+
+# ─── the dead-agent signal ──────────────────────────────────────────────────
+
+
+def _exit_record(workspace_id: str, code: int) -> None:
+    """Write what the agent pane's shell writes when the command exits."""
+    path = core_paths.agent_exit_path(workspace_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{code}\n", encoding="utf-8")
+
+
+def test_a_dead_agent_reads_as_error_with_a_reason(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    """The agent process is not the pane.
+
+    A dead agent leaves a live fallback shell and no transcript, which blends to
+    STARTING and settles to IDLE — indistinguishable from an agent that is
+    simply quiet, which can leave a container workspace sitting dead behind a
+    `grove create` that had already exited 0. The recorded exit is the one
+    signal that is a fact rather than an inference.
+    """
+    service, registry = env
+    mgr = registry.get(_init_repo(tmp_path / "repo"))
+    created = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="dead"))
+    _exit_record(created.id, 7)
+
+    state = next(s for s in mgr.list() if s.id == created.id)
+    primary = service.sessions_for(mgr, state)[0]
+
+    assert primary.activity.state is AgentActivityState.ERROR
+    # The reason, not just the state: acting on this must not require capturing
+    # a pane by hand, which was the only way to find the original incident.
+    assert primary.activity.current_task == "agent exited with status 7"
+
+
+def test_a_slow_starting_agent_is_never_reported_as_failed(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    """The anti-flake rule, and it holds by SHAPE rather than by a threshold.
+
+    No record means the command has not exited, so a slow start is
+    indistinguishable from a healthy run — there is no window in which this
+    signal can misfire, and `_settle`'s existing hysteresis is untouched.
+    """
+    service, registry = env
+    mgr = registry.get(_init_repo(tmp_path / "repo"))
+    created = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="slow"))
+
+    state = next(s for s in mgr.list() if s.id == created.id)
+    primary = service.sessions_for(mgr, state)[0]
+
+    assert primary.activity.state is AgentActivityState.STARTING
+    assert primary.activity.current_task is None
+
+
+def test_an_agent_the_user_quit_cleanly_is_not_an_error(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    """A zero exit is a person closing their agent, not a failure."""
+    service, registry = env
+    mgr = registry.get(_init_repo(tmp_path / "repo"))
+    created = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="quit"))
+    _exit_record(created.id, 0)
+
+    state = next(s for s in mgr.list() if s.id == created.id)
+    primary = service.sessions_for(mgr, state)[0]
+
+    assert primary.activity.state is not AgentActivityState.ERROR
+
+
+def test_the_recorded_exit_outranks_a_stale_sidecar_push(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ordering against the hook push, which is the subtle one.
+
+    An agent that pushed `SessionStart` and then died would read as working
+    forever off that stale push — the sidecar supersedes the poll by design. The
+    recorded exit is newer information than any push, so it is applied after the
+    override rather than before it.
+    """
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    sidecar_dir.mkdir()
+    monkeypatch.setattr(core_paths, "agent_sidecar_dir", lambda: sidecar_dir)
+    mgr = registry.get(_init_repo(tmp_path / "repo"))
+    created = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="pushed-then-died"))
+    assert created.agent_session_id is not None
+    (sidecar_dir / f"{created.agent_session_id}.json").write_text(
+        json.dumps(
+            {
+                "session_id": created.agent_session_id,
+                "state": AgentActivityState.WORKING.value,
+                "ts": datetime.now(UTC).isoformat(),
+                "event": "SessionStart",
+                "cwd": str(created.agent_cwd),
+            }
+        ),
+        encoding="utf-8",
+    )
+    _exit_record(created.id, 1)
+
+    state = next(s for s in mgr.list() if s.id == created.id)
+    primary = service.sessions_for(mgr, state)[0]
+
+    assert primary.activity.state is AgentActivityState.ERROR
+
+
+# ─── one bad repo must not black out the fleet ──────────────────────────────
+
+
+def test_a_repo_with_unparseable_config_degrades_alone(
+    fake_tmux: FakeTmux, tmp_state_dir: Path, tmp_path: Path
+) -> None:
+    """A stray comma in ONE repo's config used to blank the dashboard for every repo.
+
+    `snapshot`/`poll_once` resolve each repo's cascade through
+    `RepoRegistry.get`, which raises `ConfigError` on invalid JSON — and nothing
+    caught it, though three per-workspace reads in the same loop already carry
+    the opposite convention. The assertion that matters is NOT that no exception
+    escapes: it is that the healthy repo's WORKSPACE ROWS still arrive, since
+    collecting them and then discarding them is exactly what happened.
+    """
+    del fake_tmux, tmp_state_dir
+    healthy = _init_repo(tmp_path / "healthy")
+    broken = _init_repo(tmp_path / "broken")
+    (broken / ".grove").mkdir()
+    (broken / ".grove" / "config.json").write_text('{"worktree": {},}\n', encoding="utf-8")
+    cfg = GroveConfig.model_validate(
+        {
+            "tmux": {"session_prefix": "test-"},
+            "hooks": {"enabled": False},
+            "projects": [str(healthy), str(broken)],
+        }
+    )
+    registry = RepoRegistry(
+        cfg=cfg, store=JsonWorkspaceStore(path=tmp_path / "state.json"), config_loader=load_config
+    )
+    service = ActivityService(registry=registry)
+    registry.get(healthy).create(CreateWorkspaceRequest(agent_name="claude", title="alive"))
+
+    snap = service.snapshot()
+
+    by_name = {g.repo_name: g for g in snap.projects}
+    assert set(by_name) == {"healthy", "broken"}
+    # The whole point: real rows, not merely a non-empty group list.
+    assert [w.state.title for w in by_name["healthy"].workspaces] == ["alive"]
+    assert by_name["healthy"].error is None
+    assert snap.total_workspaces == 1
+    # And the broken repo is NAMED rather than silently missing — a vanished
+    # project reads as a healthy fleet, which is the same bug one size smaller.
+    degraded = by_name["broken"]
+    assert degraded.workspaces == ()
+    assert degraded.error is not None
+    assert "ConfigError" in degraded.error
+
+    # The poll path shares the failure and must survive it too; the healthy
+    # repo's workspace still produces a delta.
+    events: list[object] = []
+    service.subscribe(events.append)
+    service.poll_once()
+    assert events
+
+
+def test_a_repo_that_becomes_readable_is_picked_up_without_a_restart(
+    fake_tmux: FakeTmux, tmp_state_dir: Path, tmp_path: Path
+) -> None:
+    """The unreadable repo is never marked bridged, so recovery needs no restart.
+
+    `_ensure_bridged` runs FIRST in both entry points, so an unguarded raise
+    there is what actually took the dashboard down — the guards further in were
+    never reached. Skipping without recording the repo as bridged is what makes
+    fixing the config enough.
+    """
+    del fake_tmux, tmp_state_dir
+    broken = _init_repo(tmp_path / "broken")
+    (broken / ".grove").mkdir()
+    (broken / ".grove" / "config.json").write_text("{,}\n", encoding="utf-8")
+    cfg = GroveConfig.model_validate(
+        {
+            "tmux": {"session_prefix": "test-"},
+            "hooks": {"enabled": False},
+            "projects": [str(broken)],
+        }
+    )
+    registry = RepoRegistry(
+        cfg=cfg, store=JsonWorkspaceStore(path=tmp_path / "state.json"), config_loader=load_config
+    )
+    service = ActivityService(registry=registry)
+    assert service.snapshot().projects[0].error is not None
+
+    (broken / ".grove" / "config.json").write_text("{}\n", encoding="utf-8")
+
+    healed = service.snapshot()
+    assert healed.projects[0].error is None

@@ -1,9 +1,9 @@
-"""Trace instrumentor — replay a session's spine into OTel spans for LangFuse (#175).
+"""Trace instrumentor — replay a session's spine into OTel spans for LangFuse.
 
-The universal backfill tier of epic #170's observability stack: any session
+The universal backfill tier of Grove's observability stack: any session
 readable through :meth:`AgentMessage <grove.core.agents.model.AgentMessage>`'s
-agentic-loop spine (``read_messages``, #179) gets a full LangFuse trace with
-zero provider-specific tracing code — in contrast to #177's live wire-level
+agentic-loop spine (``read_messages``) gets a full LangFuse trace with
+zero provider-specific tracing code — in contrast to the live wire-level
 proxy (richer, TTFT-accurate, but gateway-only). One parse (already paid by
 the dashboard poll or a CLI read), one OTel export.
 
@@ -27,7 +27,7 @@ Design decisions worth re-deriving-avoiding:
   required because a live ``Tracer`` always generates fresh ids and stamps
   "now" as the start time; replay needs to assign both explicitly from
   :class:`AgentMessage.timestamp <grove.core.agents.model.AgentMessage>`.
-* **The emit sink is the seam #177's live proxy shares.** :func:`build_span_sink`
+* **The emit sink is the seam the live proxy shares.** :func:`build_span_sink`
   (cfg/env-driven, best-effort) and the lower-level :func:`sink_from_processor`
   (any ``SpanProcessor``, incl. an in-memory one for tests) both return a
   :class:`SpanSink` — a live proxy with real TTFT builds its own
@@ -120,9 +120,9 @@ _ATTR_TEXT_CAP = 4000  # a raw tool_input can be huge; cap like every other dige
 def _usage_details(usage: TokenUsage) -> dict[str, int]:
     """Map :class:`TokenUsage` fields onto LangFuse's ``usage_details`` JSON
     blob. Field NAMES mirror ``TokenUsage`` verbatim rather than guessing
-    LangFuse's own cache/reasoning vocabulary (unresolved per epic #170
-    research) — a follow-up if LangFuse's cost UI wants different keys. An
-    unreported (``None``) field is omitted, never fabricated as ``0``."""
+    LangFuse's own cache/reasoning vocabulary — a follow-up if LangFuse's cost
+    UI wants different keys. An unreported (``None``) field is omitted, never
+    fabricated as ``0``."""
     fields = {
         "input": usage.input,
         "output": usage.output,
@@ -138,7 +138,7 @@ class SpanRecord:
     """One fully-resolved span, provider- and timing-source-agnostic.
 
     The shared unit both this module's backfill :meth:`TraceInstrumentor.replay`
-    and #177's live proxy build and hand to the same :class:`SpanSink` — so a
+    and the live proxy build and hand to the same :class:`SpanSink` — so a
     replayed span and a live span are indistinguishable to LangFuse beyond
     timing accuracy. The three classmethods are the only constructors; they
     own the ``langfuse.observation.*`` attribute vocabulary so it is defined
@@ -165,8 +165,8 @@ class SpanRecord:
         start_time: datetime,
         end_time: datetime,
     ) -> SpanRecord:
-        """A root session span or a nested sub-agent span (#173's fleet, one
-        level of ``agent`` per in-session thread)."""
+        """A root session span or a nested sub-agent span (one level of
+        ``agent`` per in-session sub-agent thread)."""
         return cls(
             trace_id=trace_id,
             span_id=span_id,
@@ -195,8 +195,8 @@ class SpanRecord:
     ) -> SpanRecord:
         """One LLM turn. ``usage``/``cost_usd``/``completion_start_time`` are
         each omitted (never fabricated) when the caller doesn't have them —
-        a backfill replay has no TTFT (not in the transcript, per epic #170
-        research); a live proxy (#177) supplies it here."""
+        a backfill replay has no TTFT (it is not in the transcript); a live
+        proxy supplies it here."""
         attributes: dict[str, AttributeValue] = {"langfuse.observation.type": "generation"}
         if model:
             attributes["langfuse.observation.model.name"] = model
@@ -255,9 +255,9 @@ class SpanRecord:
 
 
 class SpanSink(Protocol):
-    """The seam #177's live proxy feeds spans through — same exporter/
+    """The seam the live proxy feeds spans through — same exporter/
     processor pipeline :func:`build_span_sink` wires up, so a replayed span
-    (this module) and a live span (#177) land identically in LangFuse."""
+    (this module) and a live span land identically in LangFuse."""
 
     def __call__(self, record: SpanRecord) -> None:
         """Emit one already-built, already-timed span."""
@@ -294,8 +294,8 @@ def sink_from_processor(processor: SpanProcessor, resource: Resource) -> SpanSin
     """Wrap an OTel ``SpanProcessor`` into a :class:`SpanSink`.
 
     The low-level composable seam: :func:`build_span_sink` calls this with a
-    real ``BatchSpanProcessor(OTLPSpanExporter(...))``; a test (or #177's
-    live proxy, if it wants a differently-configured processor) can call it
+    real ``BatchSpanProcessor(OTLPSpanExporter(...))``; a test (or the live
+    proxy, if it wants a differently-configured processor) can call it
     directly with any ``SpanProcessor`` — e.g. an in-memory one — and
     exercise the identical span-construction path production traffic takes.
     Requires ``opentelemetry-sdk`` to already be importable (the ``telemetry``
@@ -451,12 +451,12 @@ def _spawning_tool_use_id(transcript_path: Path | None) -> str | None:
 
 
 class TraceInstrumentor:
-    """Replay one session's spine into a full LangFuse trace (#175).
+    """Replay one session's spine into a full LangFuse trace.
 
     ``agent`` (root, session-wide) → ``generation`` per assistant message →
     ``tool`` per ``tool_use`` block → nested ``agent`` per sub-agent thread
-    (#173's fleet, parented at the exact tool span that spawned it) — the
-    fleet tree renders 1:1 as the LangFuse observation tree. Best-effort:
+    (the sub-agent fleet, parented at the exact tool span that spawned it) —
+    the fleet tree renders 1:1 as the LangFuse observation tree. Best-effort:
     :meth:`replay` never raises into a caller's poll/backfill loop.
     """
 
@@ -468,7 +468,7 @@ class TraceInstrumentor:
         env: Mapping[str, str] | None = None,
         cost_estimator: Callable[[TokenUsage, str | None], float | None] | None = None,
     ) -> None:
-        """``sink`` is the test/#177 injection seam (skips cfg/env entirely
+        """``sink`` is the test/live-proxy injection seam (skips cfg/env entirely
         when supplied); otherwise built from ``cfg`` via :func:`build_span_sink`.
         ``cost_estimator`` is the pluggable seam for ``cost_details`` — Grove
         carries no model-pricing catalog today, so it defaults to ``None``
@@ -537,7 +537,7 @@ class TraceInstrumentor:
         trace_id: int,
         root_span_id: int,
     ) -> None:
-        """Nested ``agent`` spans for #173's in-session fleet. Uses
+        """Nested ``agent`` spans for the in-session sub-agent fleet. Uses
         ``fleet_activity`` for identity (title, sidecar-backed) and re-groups
         the already-read spine by ``thread_id`` for per-message timing —
         ``fleet_activity`` itself only returns aggregated metrics, not the
@@ -636,8 +636,8 @@ class TraceInstrumentor:
                 )
 
     def _estimate_cost(self, usage: TokenUsage | None, model: str | None) -> float | None:
-        """``cost_details`` is only emitted "when known" (#175) — Grove has
-        no pricing catalog today, so this is ``None`` unless a caller injects
+        """``cost_details`` is only emitted "when known" — Grove has no pricing
+        catalog today, so this is ``None`` unless a caller injects
         ``cost_estimator``; a failing estimator degrades the same way every
         other best-effort hook here does."""
         if usage is None or self._cost_estimator is None:

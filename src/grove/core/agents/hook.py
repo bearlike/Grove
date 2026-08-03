@@ -1,11 +1,11 @@
-"""Grove-managed Claude Code status hook — the push side of agent status (#18).
+"""Grove-managed Claude Code status hook — the push side of agent status.
 
-Polling `stop_reason` + tmux activity (the MVP, #14) cannot cleanly separate
+Polling `stop_reason` + tmux activity cannot cleanly separate
 *waiting-for-you* from *done*, and cannot see a permission prompt at all. Claude
 Code **hooks** push exact lifecycle events; the Grove hook turns each into a tiny
 sidecar file the ``ActivityService`` reads to *override* the polled status.
 
-This is on by default (#171; opt-in through #18) and degrades gracefully: with
+This is on by default and degrades gracefully: with
 no hook installed there is no sidecar and the polled blend stands unchanged.
 Robust by design — unlike peer tools that string-match the CLI's prompt copy
 (which breaks when Anthropic rewords it), the hook event names are a stable
@@ -20,12 +20,24 @@ Four atomic pieces live here:
 - the rendered settings dict (``ClaudeHook.settings``) Grove passes to
   ``claude --settings`` so the hook installs *without* touching the user's own
   ``.claude/settings.json`` (uninstall = stop passing the flag).
-- the daemon **PUSH path** (#171): every registered event now ALSO carries a
-  native Claude Code ``{"type": "http"}`` handler that POSTs straight to the
-  daemon's ingest route (`grove.daemon.app`), so the dashboard refreshes the
-  instant the hook fires instead of waiting out the ~2s poll tick. It never
-  replaces the sidecar file — that stays the offline truth a restarted daemon
-  (or a client with no live connection) still reads correctly.
+- the daemon **PUSH path**: after writing the sidecar the entry point
+  POSTs the event to the daemon's ingest route (`grove.daemon.app`), so the
+  dashboard refreshes the instant the hook fires instead of waiting out the ~2s
+  poll tick. It never replaces the sidecar file — that stays the offline truth a
+  restarted daemon (or a client with no live connection) still reads correctly.
+
+The ``UserPromptSubmit`` hook also carries the ONE thing that travels the other
+way — Claude Code injects that event's stdout into the model's context — which
+is how the first-turn brief reaches the agent (:mod:`grove.core.agents.brief`).
+
+**A containerized agent has none of this by default.** ``grove-agent-hook`` is
+a console script of a package the project's own
+image never installed, and the daemon's loopback is another namespace's
+loopback — so both arms failed, loudly, in Claude's own UI, on every event. The
+rendered command therefore probes for the entry point and falls back to spooling
+the raw payload into a directory bind-mounted from the host, which
+:meth:`ClaudeHook.drain` folds through the very same ``record_event``; and the
+push moved INTO the entry point, so it is made exactly where it can work.
 """
 
 from __future__ import annotations
@@ -33,7 +45,11 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shlex
 import sys
+import urllib.request
+import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,6 +58,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 from loguru import logger
 
 from grove.core import paths
+from grove.core.agents.brief import AgentBrief
 from grove.core.agents.model import AgentActivityState, AgentQuestion
 
 if TYPE_CHECKING:
@@ -66,7 +83,7 @@ _STATE_BY_EVENT: Final[dict[str, AgentActivityState]] = {
     "SessionEnd": AgentActivityState.IDLE,
 }
 
-# Events that END a pending question's life (#109). A question tool's own
+# Events that END a pending question's life. A question tool's own
 # PostToolUse means it was answered; any other tool's PreToolUse, a new prompt,
 # a turn Stop (which also fires on Esc-cancel), or session end all mean the
 # question is gone. ``Notification`` / ``SessionStart`` are deliberately absent:
@@ -85,7 +102,7 @@ _QUESTION_CLEAR_EVENTS: Final[frozenset[str]] = frozenset(
 # "permission prompt shows as working" bug it exists to fix.
 DEFAULT_SIDECAR_MAX_AGE_SECONDS: Final = 300
 
-# Registered ALONGSIDE the state-mapped events (#171) purely so the daemon PUSH
+# Registered ALONGSIDE the state-mapped events purely so the daemon PUSH
 # path (below) fires on sub-agent lifecycle too — a finishing sub-agent still
 # changes the transcript (worth an immediate refresh) even though it never
 # flips the MAIN thread's state (`state_for` returns `None` for both; the
@@ -95,16 +112,16 @@ _SUBAGENT_EVENTS: Final[tuple[str, ...]] = ("SubagentStart", "SubagentStop")
 # The three sub-kinds Claude Code's ``Notification`` event covers: a tool
 # permission ask, the "still there?" idle nudge, and the general
 # needs-your-input case. `state_for` keys off the bare event name regardless
-# (all three collapse to BLOCKED — the one polling-invisible signal, #18);
+# (all three collapse to BLOCKED — the one polling-invisible signal);
 # this tuple only widens the *registration* in `settings()` so each is its own
-# matcher entry rather than one untyped catch-all (#171).
+# matcher entry rather than one untyped catch-all.
 _NOTIFICATION_MATCHERS: Final[tuple[str, ...]] = (
     "permission_prompt",
     "idle_prompt",
     "agent_needs_input",
 )
 
-# The daemon route this module's http hook entries POST to (#171). A module
+# The daemon route this module's http hook entries POST to. A module
 # constant, not a literal repeated in both `settings()` and `grove.daemon.app`
 # — the daemon imports it to register the exact same path so the two can't
 # drift.
@@ -125,13 +142,23 @@ DEFAULT_DAEMON_LOOPBACK_URL: Final = "http://127.0.0.1:7421"
 # same-host secret file instead.
 _INGEST_TOKEN_FILENAME: Final = "hook-ingest.token"
 
+# How the rendered hook command hands the daemon address to the entry point.
+# An argv, not a config read: this process runs on every hook event of every
+# session in the fleet.
+_DAEMON_URL_FLAG: Final = "--daemon-url"
+
+# The push is an optimization over a sidecar that is already on disk, so it
+# must never hold an agent's turn open waiting for a daemon that is busy or
+# gone. Short enough to be invisible, long enough for a loopback round trip.
+PUSH_TIMEOUT_SECONDS: Final = 2.0
+
 
 @dataclass(slots=True, frozen=True)
 class PendingQuestion:
     """A question captured live from a PreToolUse hook, before the transcript flushes it.
 
     Claude Code writes nothing to the JSONL while an ``AskUserQuestion`` is on
-    screen, so the ask-time hook is the *only* signal (#109). ``tool_name`` +
+    screen, so the ask-time hook is the *only* signal. ``tool_name`` +
     ``tool_input`` are the raw hook payload, kept verbatim and normalized to
     ``AgentQuestion``(s) at read time through the shared
     :meth:`AgentQuestion.from_tool_call` seam — no question shape is re-derived
@@ -192,8 +219,8 @@ class HookRecord:
     transcript_path: str | None
     tmux_pane: str | None
     ts: datetime
-    # A structured question the agent is asking right now, captured at ask-time
-    # (#109). ``None`` whenever no question stands. It rides the same sidecar as
+    # A structured question the agent is asking right now, captured at ask-time.
+    # ``None`` whenever no question stands. It rides the same sidecar as
     # the pushed state so the one file the ActivityService already reads carries
     # both the live status AND the live question.
     question: PendingQuestion | None = None
@@ -269,10 +296,200 @@ class HookRecord:
 class ClaudeHook:
     """Pure event→state mapping plus the sidecar read/write/install mechanism."""
 
-    # The CLI entry point Claude Code invokes (see `grove agent-hook`). The hook
-    # reads its JSON on stdin and writes a sidecar; the same command serves every
-    # session because the payload carries the session id.
-    COMMAND: ClassVar[str] = "grove agent-hook"
+    # The console script Claude Code invokes. The hook reads its JSON on stdin
+    # and writes a sidecar; the same command serves every session because the
+    # payload carries the session id.
+    #
+    # A DEDICATED entry point, not `grove agent-hook`, because this is the
+    # hottest process in the system: Claude spawns one per hook event, on nine
+    # event types, for every session in the fleet, with no debouncing. Routed
+    # through the `grove` script it paid for Typer + the daemon's FastAPI import
+    # — ~1s of CPU and 60MB RSS to write one small JSON file, which at fleet
+    # scale burned multiple cores. `grove-agent-hook` binds straight to
+    # `run_hook_from_stdin`, so the process imports only this module's own
+    # dependencies. The old subcommand stays registered for back-compat with
+    # settings files written before this change.
+    COMMAND: ClassVar[str] = "grove-agent-hook"
+
+    #: Spool entries the drain has claimed but not yet folded, and the partial
+    #: file the shell redirect is still writing, both stay OUT of ``*.json`` so a
+    #: concurrent drain cannot pick up a half-written or already-owned payload.
+    SPOOL_SUFFIX: ClassVar[str] = ".json"
+
+    @classmethod
+    def spool_script(cls, spool_dir: Path) -> str:
+        """Shell that drops one hook payload into *spool_dir*, verbatim.
+
+        **The whole point is that it carries no policy.** A containerized agent
+        has no ``grove-agent-hook``: it is a console script of a Python package
+        the project's own image never installed, so every hook fired
+        ``/bin/sh: 1: grove-agent-hook: not found`` and every hook-driven
+        feature — the sidecar, the status blend's push signal, the ask-time
+        question capture — was dead for the whole workspace while the user was
+        greeted by an error at each session start. The event→state map and the
+        pending-question state machine stay HERE, in Python, run once on the
+        host by :meth:`drain`; the container side only has to move bytes, which
+        POSIX ``sh`` can do without a JSON parser, a runtime, or a copy of any
+        rule that would then drift from this module.
+
+        Deliberately no ``mkdir -p``: *spool_dir* is a bind mount the create
+        path establishes, so a missing one means the mount is absent and the
+        redirect fails LOUDLY in the agent's own hook output. Creating it would
+        turn that into events written to a container-local directory that
+        nothing ever reads — a recorder that cannot record, reported as
+        healthy.
+
+        The temp-then-rename is why the drain never sees a partial payload, and
+        the filename only has to be unique: ordering comes from mtime, which is
+        the event's own clock rather than the drain's.
+        """
+        target = shlex.quote(str(spool_dir))
+        return (
+            f'{{ __grove_f="{target}/$$-$(date +%s)"; '
+            f'cat > "$__grove_f.tmp" && mv "$__grove_f.tmp" "$__grove_f{cls.SPOOL_SUFFIX}"; }}'
+        )
+
+    @classmethod
+    def hook_command(cls, spool_dir: Path, *, daemon_url: str | None = None) -> str:
+        """The ``command`` handler that works in EITHER namespace.
+
+        ``grove-agent-hook`` when it is on ``PATH`` (every host launch — the
+        dedicated entry point, unchanged and still the fast path), else
+        the spool fallback. A capability probe, not a runtime branch: nothing
+        here knows or asks whether it is in a container, which is what lets ONE
+        settings file serve both and keeps the launch composition free of a
+        second hook shape to keep in step.
+
+        ``exec`` is load-bearing — it replaces the shell, so a non-zero exit
+        from the real hook can never fall through to the ``||`` arm and spool a
+        duplicate.
+
+        ``daemon_url`` rides as an ARGV rather than being read from config,
+        because this process is the hottest in the system and resolving
+        the cascade would put a config load on every hook event. It is also
+        what makes the daemon push **structurally host-only**: the flag reaches
+        the entry point, and the entry point is precisely the thing that does
+        not exist where the push could not work anyway.
+        """
+        flag = f" {_DAEMON_URL_FLAG} {shlex.quote(daemon_url)}" if daemon_url else ""
+        return (
+            f"command -v {cls.COMMAND} >/dev/null 2>&1 && exec {cls.COMMAND}{flag} "
+            f"|| {cls.spool_script(spool_dir)}"
+        )
+
+    @staticmethod
+    def push(payload: dict[str, Any], *, daemon_url: str) -> None:
+        """POST one hook event to the daemon's ingest route. Never raises.
+
+        The live half of the push: the sidecar is the offline truth, this only
+        collapses the ~2s poll-tick lag into an immediate recompute.
+
+        **It runs HERE, in the entry point, rather than as a second ``http``
+        handler in the settings file, and that placement is the fix for two
+        things at once.** A container has no route to the daemon's
+        loopback, so a registered http handler failed on EVERY event — Claude
+        Code reports that in its own UI as ``<Event> hook error: connect
+        ECONNREFUSED 127.0.0.1:7421``, once per event, which is the same
+        user-facing damage the missing binary caused and is not fixed by
+        fixing the binary. A host with no daemon running showed the identical
+        banner for the identical reason. Moving the call into the one process
+        that only exists on the host makes both disappear structurally: no
+        reachable daemon, no push, no error, and no runtime branch anywhere
+        deciding that. The second gain is that the settings file — which is
+        bind-mounted into every container — no longer carries a live daemon
+        bearer token at all.
+
+        The trade weighed against this was serializing the POST behind the
+        sidecar write instead of letting Claude dispatch both handlers in
+        parallel. It is a loopback call the agent's turn already waited on
+        (Claude awaits every handler), so what is actually added is the
+        sidecar write, measured in milliseconds.
+
+        ``urllib`` rather than ``httpx``: the import cost of an HTTP client
+        would land on every hook event, which is exactly the tax giving this
+        its own entry point removed.
+        """
+        request = urllib.request.Request(
+            f"{daemon_url}{HOOK_INGEST_ROUTE}",
+            data=json.dumps({"session_id": payload.get("session_id", "")}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {ClaudeHook.ensure_ingest_token()}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=PUSH_TIMEOUT_SECONDS):
+                pass
+        except (OSError, ValueError) as exc:
+            # A daemon that is down, slow, or not listening is the ordinary
+            # case, not an error: the sidecar this process just wrote is the
+            # signal, and the next poll picks it up.
+            logger.debug("could not push hook event to {}: {}", daemon_url, exc)
+
+    @classmethod
+    def drain(cls, *, sidecar_dir: Path, spool_dir: Path | None = None) -> int:
+        """Fold every spooled payload into a sidecar; return how many were folded.
+
+        The host half of :meth:`spool_script`, and it runs through
+        :meth:`record_event` — the SAME fold a host hook performs — so a
+        containerized session's status, its ask-time question capture and its
+        clear rules are the ones this module already defines, not a second
+        approximation of them.
+
+        **Ordering and time both come from the spool file's mtime.** The
+        pending-question machine is a state machine over the prior sidecar, so
+        folding out of order would leave a question standing that a later event
+        cleared; and stamping the record with the *drain's* clock would age
+        every event by however long the reader took to notice it, which
+        `HookRecord.supersedes_poll` reads as staleness. The file's mtime is the
+        moment the agent actually fired.
+
+        Claim-by-rename because a daemon drains from its poll thread and its
+        request executors at once: ``rename`` is atomic, so exactly one drainer
+        owns each payload and a loser simply moves on. Best-effort throughout —
+        an unreadable or malformed entry is dropped rather than blocking the
+        queue behind it, and no failure here may break a read.
+        """
+        spool = paths.agent_hook_spool_dir(sidecar_dir) if spool_dir is None else spool_dir
+        try:
+            entries = sorted(
+                ((path.stat().st_mtime, path) for path in spool.glob(f"*{cls.SPOOL_SUFFIX}")),
+                key=lambda item: (item[0], item[1].name),
+            )
+        except OSError:
+            return 0
+        folded = 0
+        for mtime, path in entries:
+            claimed = path.with_name(f"{path.name}.{uuid.uuid4().hex}.claimed")
+            try:
+                path.rename(claimed)
+            except OSError:
+                continue  # another drainer got there first
+            try:
+                payload = json.loads(claimed.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    cls.record_event(
+                        payload,
+                        sidecar_dir=sidecar_dir,
+                        # A spooled payload carries no `$TMUX_PANE`: the pane it
+                        # would name is the CONTAINER's own tmux, which no host
+                        # reader can resolve, and `live_here_at` treats a `None`
+                        # pane as "no live-here evidence" — so adoption falls
+                        # back to transcript birth rather than matching against
+                        # a pane from a foreign namespace.
+                        tmux_pane=None,
+                        now=datetime.fromtimestamp(mtime, tz=UTC),
+                    )
+                    folded += 1
+            except (OSError, ValueError) as exc:
+                logger.debug("could not fold spooled hook payload {}: {}", path, exc)
+            finally:
+                try:
+                    claimed.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.debug("could not remove spooled hook payload {}: {}", claimed, exc)
+        return folded
 
     @staticmethod
     def state_for(event_name: str, payload: dict[str, Any]) -> AgentActivityState | None:
@@ -329,7 +546,7 @@ class ClaudeHook:
         sidecar_dir: Path,
         now: datetime,
     ) -> PendingQuestion | None:
-        """The pending question this event leaves standing (#109).
+        """The pending question this event leaves standing.
 
         The lifecycle is a small state machine over the single per-session
         sidecar:
@@ -364,7 +581,9 @@ class ClaudeHook:
             )
         if event in _QUESTION_CLEAR_EVENTS:
             return None
-        prior = cls.read(session_id, sidecar_dir=sidecar_dir)
+        # `_read`, never `read`: this runs INSIDE a fold, and the public read
+        # drains the spool first — which would re-enter the fold it is part of.
+        prior = cls._read(session_id, sidecar_dir=sidecar_dir)
         return prior.question if prior is not None else None
 
     @staticmethod
@@ -393,7 +612,7 @@ class ClaudeHook:
 
         Composes the two axes `WorkspaceState.adopts_session` weighs, so the
         composition can't drift between the two discovery sites
-        (`ActivityService.sessions_for`, `SessionExplorer.for_workspace`, #F10a):
+        (`ActivityService.sessions_for`, `SessionExplorer.for_workspace`):
 
         - transcript BIRTH (``born_at``, immutable) — the pure predicate's job;
         - a hook sidecar proving the session was live *in this workspace* — the
@@ -402,7 +621,7 @@ class ClaudeHook:
 
         Takes the already-read ``candidate`` record and the workspace's
         ``reference_pane`` (both resolved once per session per tick by the
-        caller) so no sidecar is re-read (#F9). ``reference_pane`` is the
+        caller) so no sidecar is re-read. ``reference_pane`` is the
         ``tmux_pane`` recorded on the *minted* session's sidecar — the pane this
         workspace owns; passing ``None`` (no minted id, no sidecar yet, or a
         sidecar with no pane) drops the live-here arm entirely, leaving
@@ -419,11 +638,11 @@ class ClaudeHook:
         """The sidecar ts proving ``record``'s session was live *here*, or ``None``.
 
         Adoption evidence for a session the user RESUMED inside a workspace's
-        pane (#117): its transcript is born before the workspace, so birth can't
+        pane: its transcript is born before the workspace, so birth can't
         adopt it (`WorkspaceState.adopts_session`), but a hook sidecar recorded
         from the workspace's own pane *after* creation can.
 
-        Attribution is **pane-verified** (#F1): the candidate sidecar's
+        Attribution is **pane-verified**: the candidate sidecar's
         ``tmux_pane`` must equal the workspace's ``reference_pane`` (the pane the
         minted session's sidecar recorded). cwd-match alone was a cross-tenant
         hole — a fresh workspace at a shared cwd (ROOT placement, whose cwd is
@@ -438,7 +657,7 @@ class ClaudeHook:
         `adopts_session`'s single gate, so this stays mechanism (attribute) and
         leaves policy (adopt) to the one predicate. Takes a pre-read record
         (never reads a sidecar) so the caller controls the one-read-per-tick
-        discipline (#F9).
+        discipline.
         """
         if record is None or record.cwd is None or reference_pane is None:
             return None
@@ -446,14 +665,31 @@ class ClaudeHook:
             return None
         return record.ts if Path(record.cwd).resolve() == cwd.resolve() else None
 
-    @staticmethod
-    def read(session_id: str, *, sidecar_dir: Path) -> HookRecord | None:
+    @classmethod
+    def read(cls, session_id: str, *, sidecar_dir: Path) -> HookRecord | None:
         """Read a session's sidecar, or ``None`` if missing or malformed.
 
         Pure mechanism — whether the push still outranks the polled blend is the
         record's own call (:meth:`HookRecord.supersedes_poll`), because that
         judgment needs the transcript's clock, which only the blend site has.
+
+        **Folding the spool happens HERE, at the one seam every consumer already
+        calls.** A containerized hook can only drop raw payloads
+        (:meth:`spool_script`), so something has to turn them into sidecars, and
+        the four independent readers — the activity blend, its question
+        cross-check, session adoption and `answer_question` — are exactly the
+        shape this tree has watched a two-line convention get missed at, one
+        site at a time, until a pinned workspace lit up only partially. Owning
+        it in `read` means a reader has nothing left to get wrong, and a new one
+        inherits it. Cost on the host, where nothing ever spools: one
+        directory-listing syscall.
         """
+        cls.drain(sidecar_dir=sidecar_dir)
+        return cls._read(session_id, sidecar_dir=sidecar_dir)
+
+    @staticmethod
+    def _read(session_id: str, *, sidecar_dir: Path) -> HookRecord | None:
+        """The bare sidecar read, without draining. See :meth:`read`."""
         path = sidecar_dir / f"{session_id}.json"
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -469,7 +705,7 @@ class ClaudeHook:
     @staticmethod
     def ensure_ingest_token() -> str:
         """Get-or-create the same-host secret the http hook and the daemon's
-        ingest route both trust (#171).
+        ingest route both trust.
 
         Deliberately NOT the multi-device `SessionStore` pairing bearer every
         other daemon route uses — pairing needs a human to approve a
@@ -498,9 +734,12 @@ class ClaudeHook:
             logger.debug("could not persist hook ingest token: {}", exc)
         return token
 
-    @staticmethod
+    @classmethod
     def settings(
-        command: str = COMMAND, *, daemon_url: str | None = DEFAULT_DAEMON_LOOPBACK_URL
+        cls,
+        command: str | None = None,
+        *,
+        daemon_url: str | None = DEFAULT_DAEMON_LOOPBACK_URL,
     ) -> dict[str, Any]:
         """The Claude Code settings dict that installs the Grove hook on every event.
 
@@ -508,16 +747,20 @@ class ClaudeHook:
         ``claude --settings``, so the user's ``.claude/settings.json`` is never
         touched.
 
-        Two independent handlers per event (#171): the ``command`` handler is
-        unchanged since #18 (writes the offline-truth sidecar); ``daemon_url``
-        (a mechanism default, not None) adds an ``http`` handler that POSTs the
-        SAME event straight to the daemon's ingest route so the dashboard can
-        refresh immediately instead of waiting out the poll tick. Claude Code
-        dispatches every registered handler independently, so the http POST
-        can never add latency to the command handler or the agent's own turn
-        — the alternative (``grove agent-hook`` making the HTTP call itself,
-        synchronously, before it exits) would. Pass ``daemon_url=None`` to get
-        the pre-#171 command-only shape (the test seam).
+        ``command`` defaults to :meth:`hook_command` — the entry point where it
+        exists, the spool fallback where it does not — so ONE rendered file
+        installs working hooks on a host and inside a container alike.
+        Pass an explicit string to pin it (the test seam).
+
+        **ONE handler per event.** The daemon push is made from the
+        entry point (:meth:`push`), with ``daemon_url`` reaching it as
+        an argv on the rendered command — never as a second, registered ``http``
+        handler, because a containerized session has no route to the daemon's
+        loopback from another network namespace, and a handler registered in a
+        file cannot ask whether the address it names is reachable. See
+        :meth:`push` for the full trade. ``daemon_url=None`` renders a command
+        that pushes nothing (the test seam, and the shape an operator gets by
+        pointing `hooks.daemon_url` nowhere).
 
         Registers a WIDER event set than the state map: `_SUBAGENT_EVENTS`
         never move the sidecar's state (`state_for` returns ``None`` for
@@ -528,15 +771,12 @@ class ClaudeHook:
         `state_for` still keys off the bare event name (all three collapse to
         BLOCKED); the split is registration-only.
         """
-        handlers: list[dict[str, Any]] = [{"type": "command", "command": command}]
-        if daemon_url:
-            handlers.append(
-                {
-                    "type": "http",
-                    "url": f"{daemon_url}{HOOK_INGEST_ROUTE}",
-                    "headers": {"Authorization": f"Bearer {ClaudeHook.ensure_ingest_token()}"},
-                }
-            )
+        resolved = (
+            cls.hook_command(paths.agent_hook_spool_dir(), daemon_url=daemon_url)
+            if command is None
+            else command
+        )
+        handlers: list[dict[str, Any]] = [{"type": "command", "command": resolved}]
         catch_all = [{"hooks": handlers}]
         hooks: dict[str, Any] = dict.fromkeys((*_STATE_BY_EVENT, *_SUBAGENT_EVENTS), catch_all)
         hooks["Notification"] = [
@@ -545,14 +785,26 @@ class ClaudeHook:
         return {"hooks": hooks}
 
 
-def run_hook_from_stdin() -> int:
-    """CLI edge for ``grove agent-hook``: read one hook payload, write the sidecar.
+def run_hook_from_stdin(argv: Sequence[str] | None = None) -> int:
+    """CLI edge for ``grove-agent-hook``: one payload → the sidecar, then the push.
 
     Always returns 0 — a hook must never fail the agent it instruments, so a
     malformed payload or an ignored event is a silent no-op. ``$TMUX_PANE`` is
     read here (the edge) and threaded into the record so a future pane-targeting
     consumer can map a session to its window without a second tmux call.
+
+    The optional ``--daemon-url <url>`` (rendered onto the command by
+    :meth:`ClaudeHook.hook_command`) turns on the immediate daemon refresh.
+    Deliberately hand-parsed rather than given an arg parser: this is the
+    hottest process in the system and the whole reason it is a dedicated entry
+    point instead of a ``grove`` subcommand was to import nothing it does not
+    need.
     """
+    args = list(sys.argv[1:] if argv is None else argv)
+    daemon_url = ""
+    if _DAEMON_URL_FLAG in args:
+        index = args.index(_DAEMON_URL_FLAG) + 1
+        daemon_url = args[index] if index < len(args) else ""
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw) if raw.strip() else {}
@@ -566,7 +818,49 @@ def run_hook_from_stdin() -> int:
         tmux_pane=_opt_str(os.environ.get("TMUX_PANE")),
         now=datetime.now(tz=UTC),
     )
+    # After the sidecar, never before: the file is the offline truth and the
+    # push only asks the daemon to look at it sooner.
+    if daemon_url:
+        ClaudeHook.push(payload, daemon_url=daemon_url)
+    _emit_brief(payload)
     return 0
+
+
+def _emit_brief(payload: dict[str, Any]) -> None:
+    """Print the first-turn brief, at most once per session. See `brief.py`.
+
+    ``UserPromptSubmit`` is the ONE event whose stdout Claude Code injects into
+    the model's context, which is why this is the only event that emits
+    anything — and why the emit sits at the very end, after the two side effects
+    that must not be able to put a byte on stdout ahead of it.
+
+    Everything here is best-effort in the strongest sense: no env var, no
+    readable brief, or a session already briefed all print nothing, and the
+    caller still returns 0. **Exit 2 BLOCKS the user's prompt outright**, so a
+    raise from a decorative feature would cost the user their turn.
+
+    Deliberately no config load and no cwd→workspace resolution — this process
+    runs on every hook event of every session in the fleet, so the whole
+    decision is one env read plus at most two file operations.
+    """
+    if payload.get("hook_event_name") != "UserPromptSubmit":
+        return
+    brief_path = os.environ.get(AgentBrief.PATH_ENV)
+    session_id = payload.get("session_id")
+    if not brief_path or not isinstance(session_id, str):
+        return
+    text = AgentBrief.consume(
+        session_id, brief_path=Path(brief_path), sidecar_dir=paths.agent_sidecar_dir()
+    )
+    if not text:
+        return
+    try:
+        print(text)
+    except OSError as exc:
+        # A closed or broken stdout is the reader's business, never this
+        # process's: the brief is already marked delivered, and raising here
+        # would exit non-zero and block the prompt.
+        logger.debug("could not emit the first-turn brief: {}", exc)
 
 
 def _opt_str(value: Any) -> str | None:

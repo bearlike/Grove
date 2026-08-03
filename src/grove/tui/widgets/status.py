@@ -63,6 +63,11 @@ _GLYPH_UPDATE: Final = "⇡"  # newer release available — "there's something t
 # in the list — RUNNING is rare post-reconciliation but mapped so a
 # debug renderer stays coherent (status_color handles it).
 _COUNT_ORDER: Final[tuple[WorkspaceStatus, ...]] = (
+    # Provisioning leads: the chips read as a descent from most to least
+    # alive, and a workspace being built is on its way INTO that ladder — a
+    # chip that only appears while something is coming up belongs where the
+    # eye starts, not buried between paused and offline.
+    WorkspaceStatus.PROVISIONING,
     WorkspaceStatus.ACTIVE,
     WorkspaceStatus.IDLE,
     WorkspaceStatus.PAUSED,
@@ -125,7 +130,7 @@ class StatusBar(Widget):
     # by the count chips (counts read as steady reference data — pulsing
     # `● 3` would suggest the count itself is changing). 0 = resting frame.
     pulse_frame: reactive[int] = reactive(0)
-    # Newer-release nudge (#80), fed by the list screen's release-check worker.
+    # Newer-release nudge, fed by the list screen's release-check worker.
     # An empty `latest_version` renders the chip as a bare "⇡ update"; the
     # version is shown when known. Both default to "no nudge".
     update_available: reactive[bool] = reactive(False)

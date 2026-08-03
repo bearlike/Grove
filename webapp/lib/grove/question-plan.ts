@@ -1,8 +1,8 @@
 import type { AgentQuestionView } from "./types";
 
 /**
- * Pure answer-plan logic for a live pending `AskUserQuestion` (Gitea #111) —
- * the client-side twin of the daemon's answer-plan validation
+ * Pure answer-plan logic for a live pending `AskUserQuestion` — the
+ * client-side twin of the daemon's answer-plan validation
  * (`core/contracts/`), kept apart from `question-card.tsx` the same way
  * `chat-turns.ts` is kept apart from the chat panel. A "group" is every
  * question sharing one `group_id` (the tool's `tool_use_id`) — the daemon's
@@ -22,9 +22,9 @@ export type QuestionSelection =
 
 /**
  * The controls a `ChatItem` of kind "question" needs to render its LIVE
- * pending variant instead of the read-only epic #74 card — stamped onto the
- * item by the chat panel / turns view (never by the pure `chatItemsFromTurns`
- * mapper, which only ever produces historical, non-interactive items).
+ * pending variant instead of the read-only card — stamped onto the item by
+ * the chat panel / turns view (never by the pure `chatItemsFromTurns` mapper,
+ * which only ever produces historical, non-interactive items).
  */
 export interface QuestionInteraction {
   onSubmit: (answers: QuestionAnswerItem[]) => void;

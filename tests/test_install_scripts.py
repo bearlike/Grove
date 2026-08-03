@@ -1,4 +1,4 @@
-"""Installer-script contract: never resolve the bare PyPI name ``grove`` (#105).
+"""Installer-script contract: never resolve the bare PyPI name ``grove``.
 
 The name ``grove`` on PyPI belongs to an unrelated log-collection framework,
 so an installer that defaults to ``uv tool install grove`` installs the wrong
@@ -47,7 +47,7 @@ def test_install_sh_is_valid_bash() -> None:
 
 def test_install_sh_defaults_to_git_source() -> None:
     assert "git+https://github.com/${REPO}@${REF}" in _INSTALL_SH
-    # The exact #105 regression: a bare-name default that resolves from PyPI.
+    # A bare-name default would resolve from PyPI to the unrelated package.
     assert 'SOURCE="grove"' not in _INSTALL_SH
     assert "--stable" not in _INSTALL_SH
 

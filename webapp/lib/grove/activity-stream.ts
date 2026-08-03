@@ -38,7 +38,7 @@ export function applyDashboardEvent(
  * Is `id` present in the snapshot? The hook uses this to detect a
  * `session_activity` delta for a workspace it doesn't have yet.
  *
- * Why it matters (#49): the daemon's `poll_once` re-enumerates the store and
+ * Why it matters: the daemon's `poll_once` re-enumerates the store and
  * emits `session_activity` — *not* `workspace_changed` — for a workspace
  * created by a separate process (a second TUI, the MCP server, the CLI). The
  * bus-bridged `workspace_changed` lifecycle event only fires for ops that go
@@ -75,7 +75,7 @@ function isStaleDelta(
  * A cheap fingerprint of one session's transcript-progress signals, read
  * straight off the SSE-fed snapshot the session page already holds — no
  * second EventSource, no fetch, just a string the page diffs to know when to
- * invalidate the `["turns", …]` query (#166).
+ * invalidate the `["turns", …]` query.
  *
  * Deliberately narrower than the session-rail's fingerprint (`state` alone,
  * `SessionRail`): a transcript can grow — a new tool call, a new assistant

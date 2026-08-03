@@ -4,8 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { SidebarFilter } from "@/components/layout/sidebar-filter";
 import { useUiStore } from "@/lib/grove/ui-store";
 
-// The rail's compact filter — the SINGLE organizing instrument now the rail is a
-// flat list (#158). Drives the real ui-store (a singleton, reset per test) and
+// The rail's compact filter — the SINGLE organizing instrument for the rail's
+// flat list. Drives the real ui-store (a singleton, reset per test) and
 // pins the seams the rail application + e2e depend on: `sidebar-filter-trigger`,
 // `filter-state-<s>`, `filter-attention-only`, `filter-project-<root>`,
 // `filter-show-unmapped`, `filter-clear`, and the active-filter dot.

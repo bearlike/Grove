@@ -25,8 +25,8 @@ import {
 } from "@/lib/grove/chat-turns";
 
 /**
- * The single message renderer wired to `ThreadPrimitive.Messages` (Phase D,
- * #141). One `ChatItem` is one assistant-ui message, so this reads the item's
+ * The single message renderer wired to `ThreadPrimitive.Messages`.
+ * One `ChatItem` is one assistant-ui message, so this reads the item's
  * `kind` (stashed in `metadata.custom` by the mapper) and routes:
  *   - the two text kinds (`message` user/assistant) → a bubble carrying the
  *     `chat-message` seam, a native `text` part, the IRC role label, and a
@@ -167,7 +167,7 @@ const NotificationPart: DataMessagePartComponent = ({ data }) => {
   return <NotificationRow summary={summary} detail={detail} />;
 };
 
-/** A historical structured question — the read-only choice card (epic #74). */
+/** A historical structured question — the read-only choice card. */
 const QuestionPart: DataMessagePartComponent = ({ data }) => (
   <div data-testid="chat-question" className="w-full min-w-0">
     <QuestionCard question={(data as QuestionPartData).question} />
@@ -285,7 +285,7 @@ function NotificationRow({ summary, detail }: { summary: string; detail: string 
   );
 }
 
-// ─── collapsed user prompt (SmartCollapse, ported verbatim from #127) ─────────
+// ─── collapsed user prompt (the SmartCollapse pattern) ────────────────────────
 
 /** Lines of a user bubble shown collapsed before the SmartCollapse fade. */
 const USER_MESSAGE_CLAMP_LINES = 6;
@@ -300,7 +300,7 @@ const USER_MESSAGE_FADE = "linear-gradient(to bottom, black 60%, transparent 100
 /**
  * A user prompt clamped to `USER_MESSAGE_CLAMP_LINES` behind a gradient fade
  * (the Mewbo SmartCollapse pattern) — collapsed by default for EVERY bubble,
- * newest included (product decision, #127). The FULL text is always in the DOM;
+ * newest included (product decision). The FULL text is always in the DOM;
  * collapse is purely visual (maxHeight + overflow-hidden + a mask fade), so a
  * long paste can't dominate the transcript yet nothing is ever truncated.
  *

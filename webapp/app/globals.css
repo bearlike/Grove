@@ -14,10 +14,10 @@
 @source "../node_modules/streamdown/dist/**/*.js";
 
 /*
- * assistant-ui (the chat transcript's headless substrate, Phase D #141) ships
- * its own Tailwind utility classes — `tw-shimmer` streaming caret, composer
- * chrome, the `aui-*` layout hooks — from inside its dist bundles, never from
- * our TSX, so v4's import-graph scan can't see them (the same node_modules trap
+ * assistant-ui (the chat transcript's headless substrate) ships its own
+ * Tailwind utility classes — `tw-shimmer` streaming caret, composer chrome,
+ * the `aui-*` layout hooks — from inside its dist bundles, never from our
+ * TSX, so v4's import-graph scan can't see them (the same node_modules trap
  * as streamdown above). Glob both the primitives package and its streamdown
  * text renderer so those classes land in the global sheet.
  */
@@ -104,7 +104,7 @@
   /*
    * Typography. Geist Sans/Mono are wired via next/font in app/fonts.ts and
    * exposed as --font-geist-sans / --font-geist-mono on <html>. --font-terminal
-   * resolves to the JetBrains Mono Nerd Font (--font-jetbrains-nerd, #92) when
+   * resolves to the JetBrains Mono Nerd Font (--font-jetbrains-nerd) when
    * present, else falls back to Geist Mono — so terminal surfaces opt in via
    * the `font-terminal` utility without dragging the Nerd Font into UI chrome.
    */
@@ -120,9 +120,9 @@
   }
 
   /*
-   * Phase F motion (issue #143, design-direction.md §5 + brand.md §4-5). Two
-   * TEMPORAL uses of terracotta the redesign sanctions — both decay to nothing
-   * within ~1s so neither becomes a steady-state fill (terracotta scarcity holds).
+   * design-direction.md §5 + brand.md §4-5. Two TEMPORAL uses of terracotta
+   * the system sanctions — both decay to nothing within ~1s so neither
+   * becomes a steady-state fill (terracotta scarcity holds).
    *
    * grove-shimmer — the loading-skeleton sweep: a ~5%-opacity terracotta band
    * translated across the muted base, the ONLY place terracotta *moves* across a
@@ -202,11 +202,10 @@
 
 @layer base {
   :root {
-    /* Light theme — warm-neutral off-white (design-direction.md §4.4,
-       ADE overhaul #139). Replaces the cool-slate (hue 220) system: hue ~40-48
-       (barely-warm, low chroma) holds across the whole neutral ramp so there's
-       no muddy warmth, matching the detuned dark theme's temperature and
-       harmonizing with the terracotta accent instead of fighting it.
+    /* Light theme — warm-neutral off-white (design-direction.md §4.4). Hue
+       ~40-48 (barely-warm, low chroma) holds across the whole neutral ramp so
+       there's no muddy warmth, matching the detuned dark theme's temperature
+       and harmonizing with the terracotta accent instead of fighting it.
        Lightness steps stay wide for legible elevation. Every text pair here
        is WCAG-computed, not eyeballed — see tests/unit/contrast.test.ts (the
        enforcement seam) and design-direction.md §4.4 for the full matrix.
@@ -252,7 +251,7 @@
        by flipping CSS vars in :root/.dark, not by the OS media query). On dark
        it is `none` (the no-shadow-on-dark rule holds; the surface ladder carries
        depth); on light a subtle lift reads the steer composer as a floating
-       input plane (assistant-ui's template floating-plane exception, #154). */
+       input plane (assistant-ui's template floating-plane exception). */
     --composer-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.06), 0 1px 3px 0 rgb(0 0 0 / 0.08);
 
     /* Chrome (header · rail · status bar) — slightly off the canvas so the
@@ -266,6 +265,10 @@
     --status-active-tint: #84cc16;
     --status-running: #4d7c0f;
     --status-idle: #1d4ed8;
+    /* PROVISIONING aliases IDLE on both themes (see status_palette.py): a
+       container being built is alive, not yet ready — never the muted gray
+       OFFLINE wears, whose advertised remedy would destroy the build. */
+    --status-provisioning: #1d4ed8;
     --status-offline: #52525b;
     --status-paused: #52525b;
     --status-orphaned: #92400e;
@@ -286,14 +289,29 @@
     --ref-add: #15803d;
     --ref-remove: #b91c1c;
     --ref-info: #1d4ed8;
+
+    /* Runtime — light (mirrors RUNTIME_HEX_LIGHT; the isolation axis, marked
+       in BOTH states unlike placement — see runtime-tokens.ts). Reuses the
+       muted/info atoms rather than minting a hue. */
+    --runtime-host: #71717a;
+    --runtime-container: #1d4ed8;
+
+    /* Task phase — light (client-tuned SEQUENTIAL ramp, see PHASE_HEX_LIGHT
+       in lib/grove/status-tokens.ts for the derivation). `verifying` matches
+       --status-active exactly — both are the brand-lime peak. */
+    --phase-scoping: #a3e635;
+    --phase-planning: #84cc16;
+    --phase-implementing: #65a30d;
+    --phase-verifying: #4d7c0f;
+    --phase-delivering: #3f6212;
+    --phase-done: #52525b;
   }
 
   .dark {
-    /* Dark theme — "space black", DETUNED (design-direction.md §4.4, ADE
-       overhaul #139, ruling 1.3). Keeps the deep, dark-first space-black
-       identity but moves the neutral hue from cool-blue (~224) to
-       near-neutral/barely-warm (~45-60, chroma unchanged) — the blue cast was
-       the one thing fighting the warm terracotta accent. The lightness ladder
+    /* Dark theme — "space black", DETUNED (design-direction.md §4.4, ruling
+       1.3). Keeps the deep, dark-first space-black identity but holds the
+       neutral hue near-neutral/barely-warm (~45-60, chroma unchanged) — a
+       cool-blue hue would fight the warm terracotta accent. The lightness ladder
        still climbs the same way: canvas → chrome → card → elevated → muted →
        border, legible without borrowing chroma. `--primary` terracotta is
        unchanged (#d97757, brand mark). Every text pair is WCAG-computed — see
@@ -348,6 +366,7 @@
     --status-active-tint: #bef264;
     --status-running: #84cc16;
     --status-idle: #c2dcf7;
+    --status-provisioning: #c2dcf7;
     --status-offline: #96938c;
     --status-paused: #96938c;
     --status-orphaned: #b8860b;
@@ -367,6 +386,21 @@
     --ref-add: #99d199;
     --ref-remove: #e66666;
     --ref-info: #c2dcf7;
+
+    /* Runtime — dark (canonical from grove/core/contracts/runtime_palette.py). */
+    --runtime-host: #96938c;
+    --runtime-container: #c2dcf7;
+
+    /* Task phase — dark (canonical from grove/core/contracts/phase_palette.py).
+       A single-hue SEQUENTIAL ramp, not six categorical hues — see that
+       module's docstring. `done` deliberately leaves the ramp for the shared
+       neutral gray. */
+    --phase-scoping: #e4f7c0;
+    --phase-planning: #cbeb8a;
+    --phase-implementing: #a8dd47;
+    --phase-verifying: #84cc16;
+    --phase-delivering: #5f9c0f;
+    --phase-done: #96938c;
   }
 
   html {

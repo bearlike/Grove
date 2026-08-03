@@ -1,4 +1,4 @@
-"""RemapSessionScreen — manually pin a session as the workspace's primary (#132).
+"""RemapSessionScreen — manually pin a session as the workspace's primary.
 
 The TUI counterpart to ``WorkspaceManager.remap_session``: a picker over
 ``SessionExplorer.candidates_for(workspace_id)`` — the UNGATED cwd-scoped

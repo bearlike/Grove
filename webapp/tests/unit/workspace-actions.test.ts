@@ -28,6 +28,13 @@ describe("availableActions", () => {
     expect(availableActions("error", "worktree")).toEqual(["kill"]);
   });
 
+  it("offers only kill while provisioning — never respawn, which kills the build", () => {
+    // The whole defect: the build window used to read OFFLINE, whose advertised
+    // remedy is `respawn` — the one verb that destroys a provision in flight.
+    // Kill stays, so a 6-minute image build can still be abandoned.
+    expect(availableActions("provisioning", "worktree")).toEqual(["kill"]);
+  });
+
   it("strips pause/resume for root placement (engine refuses them)", () => {
     // A root workspace reconciles to active/idle/offline like any other, but the
     // engine refuses pause/resume — so they must not be offered.

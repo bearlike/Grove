@@ -1,4 +1,4 @@
-"""Ticket-provider HTTP routes (#7): provider listing, attach/detach, error mapping.
+"""Ticket-provider HTTP routes: provider listing, attach/detach, error mapping.
 
 The deterministic surface (no network) is covered directly: ``GET
 /tickets/providers`` is pure config, and attach/detach mutate only
@@ -144,6 +144,108 @@ def test_attach_unknown_workspace_404s(
     resp = client.post("/workspaces/nope/tickets", json={"provider": "gitea", "id": "1"})
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "workspace_not_found"
+
+
+# ─── attach/detach by raw ref (workspace-links story) ────────────────────────
+#
+# The MCP tools pass a human-typed ref straight through with no parsing of
+# their own — resolution runs server-side through
+# TicketProviderRegistry.resolve_link. These pin the wire shape + error
+# mapping; the parse/ambiguity RULES themselves are pinned engine-side in
+# tests/core/tickets/test_links.py.
+
+
+def test_attach_by_ref_resolves_against_the_sole_enabled_provider(
+    daemon: tuple[TestClient, JsonWorkspaceStore, Path],
+) -> None:
+    client, _, _ = daemon
+    resp = client.post("/workspaces/ws1/tickets", json={"ref": "#42"})
+    assert resp.status_code == 200
+    refs = resp.json()["ticket_refs"]
+    assert len(refs) == 1
+    assert refs[0]["provider"] == "gitea"
+    assert refs[0]["id"] == "42"
+
+
+def test_attach_by_ref_infers_pull_request_kind_from_a_url(
+    daemon: tuple[TestClient, JsonWorkspaceStore, Path],
+) -> None:
+    client, _, _ = daemon
+    resp = client.post(
+        "/workspaces/ws1/tickets", json={"ref": "https://gitea.com/acme/widgets/pulls/7"}
+    )
+    assert resp.status_code == 200
+    refs = resp.json()["ticket_refs"]
+    assert refs[0]["kind"] == "pull_request"
+    assert refs[0]["id"] == "7"
+
+
+def test_attach_by_ref_unparseable_text_is_422(
+    daemon: tuple[TestClient, JsonWorkspaceStore, Path],
+) -> None:
+    client, _, _ = daemon
+    resp = client.post("/workspaces/ws1/tickets", json={"ref": "   "})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "ticket_link_invalid"
+
+
+def test_detach_by_ref_resolves_and_detaches(
+    daemon: tuple[TestClient, JsonWorkspaceStore, Path],
+) -> None:
+    client, _, _ = daemon
+    client.post("/workspaces/ws1/tickets", json={"ref": "#42"})
+    resp = client.request("DELETE", "/workspaces/ws1/tickets", params={"ref": "#42"})
+    assert resp.status_code == 200
+    assert resp.json()["ticket_refs"] == []
+
+
+def test_detach_by_ref_missing_query_param_422s(
+    daemon: tuple[TestClient, JsonWorkspaceStore, Path],
+) -> None:
+    client, _, _ = daemon
+    resp = client.request("DELETE", "/workspaces/ws1/tickets")
+    assert resp.status_code == 422  # missing required `ref` query param
+
+
+@pytest.fixture
+def daemon_two_numeric_providers(
+    tmp_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[TestClient, Path]]:
+    """Both numeric trackers enabled — the shape a bare, unqualified id can't
+    resolve without a caller-supplied qualifier (owner/repo or a full URL)."""
+    monkeypatch.delenv("GROVE_GITEA_TOKEN", raising=False)
+    monkeypatch.delenv("GROVE_GITHUB_TOKEN", raising=False)
+    repo_root = tmp_state_dir / "repo-b"
+    project_cfg = paths.project_config_path(repo_root)
+    project_cfg.parent.mkdir(parents=True, exist_ok=True)
+    project_cfg.write_text(
+        json.dumps({"tickets": {"gitea": {"enabled": True}, "github": {"enabled": True}}}),
+        encoding="utf-8",
+    )
+    store = JsonWorkspaceStore()
+    store.save(_state("ws2", str(repo_root)))
+    app = build_app(cfg=daemon_test_config(), store=store)
+    with TestClient(app) as client:
+        yield client, repo_root
+
+
+def test_attach_by_ref_ambiguous_bare_id_is_409(
+    daemon_two_numeric_providers: tuple[TestClient, Path],
+) -> None:
+    client, _ = daemon_two_numeric_providers
+    resp = client.post("/workspaces/ws2/tickets", json={"ref": "42"})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "ticket_link_ambiguous"
+
+
+def test_detach_by_ref_ambiguous_bare_id_is_409(
+    daemon_two_numeric_providers: tuple[TestClient, Path],
+) -> None:
+    client, _ = daemon_two_numeric_providers
+    resp = client.request("DELETE", "/workspaces/ws2/tickets", params={"ref": "42"})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "ticket_link_ambiguous"
 
 
 # ─── error mapping for the network routes (wiring only, no live API) ─────────

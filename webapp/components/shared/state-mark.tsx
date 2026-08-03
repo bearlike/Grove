@@ -3,7 +3,7 @@ import { agentStateGlyph, agentStateLabel } from "@/lib/grove/agent-state-tokens
 import type { AgentActivityState } from "@/lib/grove/types";
 
 /**
- * The canonical agent-state mark (issue #96 deliverable C) — THE one glyph/color
+ * The canonical agent-state mark — THE one glyph/color
  * system for agent state, reused on every surface (card, status pill, detail
  * context bar) so a state never reads two different ways. The hue lights only
  * the glyph (`--agent-*`, mirrored from Python); `working` pulses like a

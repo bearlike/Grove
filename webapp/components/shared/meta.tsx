@@ -2,7 +2,7 @@ import { Children, Fragment, isValidElement } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * The middot-separated meta row (issue #96 deliverable C: "pipes → middots").
+ * The middot-separated meta row ("pipes → middots").
  * THE one home for the quiet, inline `a · b · c` metadata texture used on cards,
  * the sidebar, the stat row, and the detail chrome — defined once so the
  * separator, spacing, and muted tone can never drift across surfaces.

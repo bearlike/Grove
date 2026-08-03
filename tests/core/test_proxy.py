@@ -1,4 +1,4 @@
-"""LLM-gateway passthrough proxy (#177) — verbatim forward + wire-truth capture.
+"""LLM-gateway passthrough proxy — verbatim forward + wire-truth capture.
 
 Everything runs in memory: the proxy's INBOUND side is driven with
 ``httpx.ASGITransport`` (no socket), and its OUTBOUND client is backed by a

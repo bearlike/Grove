@@ -8,8 +8,7 @@ import type {
   WorkspaceActivityView,
 } from "@/lib/grove/types";
 
-// The ONE card, rebuilt in the ADE language (#155), metadata torn down to one
-// `Stat` grammar (#161): a header (the canonical state glyph · title · time), a
+// The ONE card: a header (the canonical state glyph · title · time), a
 // one-line happening-now context, then a META zone of TWO aligned `Stat` rows —
 // provenance (branch · ahead · behind · dirty · placement) over activity (turns ·
 // tool calls · tokens in/out + Live toggle) — and the prose last-commit line.
@@ -45,6 +44,7 @@ function activity(
       created_at: "2026-06-01T00:00:00Z",
       updated_at: "2026-06-01T00:00:00Z",
       placement: "worktree",
+      runtime: "host",
     } as WorkspaceActivityView["state"],
     sessions: [
       {
@@ -178,6 +178,23 @@ describe("WorkspaceCard (calm ADE card, repo-grouped)", () => {
     expect(screen.queryByTestId("placement-badge")).toBeNull();
   });
 
+  it("meta: EVERY card carries a runtime mark — host included", () => {
+    // The isolation axis deliberately reverses placement's silence: a host
+    // card must not be indistinguishable from one whose mark failed to render.
+    const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
+    expect(screen.getByTestId("runtime-mark").dataset.runtime).toBe("host");
+
+    rerenderWrapped(
+      rerender,
+      <WorkspaceCard
+        activity={activity("working", {
+          state: { ...activity("working").state, runtime: "container" },
+        })}
+      />,
+    );
+    expect(screen.getByTestId("runtime-mark").dataset.runtime).toBe("container");
+  });
+
   it("context: happening-now prefers current_task on every tier", () => {
     const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
     expect(screen.getByTestId("happening-now")).toHaveTextContent("editing card.tsx");
@@ -245,8 +262,8 @@ describe("WorkspaceCard (calm ADE card, repo-grouped)", () => {
     expect(stat("tokens in")).toHaveAttribute("title", "1.5k tokens in");
   });
 
-  it("meta: the live token block (#181) replaces the cumulative stats while generating, hidden until then", () => {
-    // No `live` block on the wire yet (pre-#177 daemon / no fast side-channel):
+  it("meta: the live token block replaces the cumulative stats while generating, hidden until then", () => {
+    // No `live` block on the wire (no fast side-channel reporting):
     // the cumulative tokens-in/out stats render exactly as before.
     const { rerender } = r(<WorkspaceCard activity={activity("working")} />);
     expect(screen.queryByTestId("live-token-flow")).toBeNull();

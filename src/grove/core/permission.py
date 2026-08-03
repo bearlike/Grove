@@ -1,4 +1,4 @@
-"""Grove permission-prompt tool — answer Claude Code permission prompts natively (#172).
+"""Grove permission-prompt tool — answer Claude Code permission prompts natively.
 
 A *permission prompt* is Claude Code's "allow this tool call?" gate. In an
 interactive terminal a human answers it; a headless / paneless session has no TTY
@@ -8,8 +8,8 @@ decision as JSON — this module *is* that tool, hosted by Grove.
 
 This is the native replacement for typing a permission answer into the tmux pane
 (``tmux.send_keys``), which only works with a human attached. It is the third
-launch-composed native channel alongside the status **hook** (#171) and the
-**channel** server (#182): all three are opt-in, ``claude_code``-only, composed
+launch-composed native channel alongside the status **hook** and the
+**channel** server: all three are opt-in, ``claude_code``-only, composed
 at launch in ``WorkspaceManager._compose_launch``, and never touch the user's own
 ``.claude`` config.
 
@@ -36,8 +36,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Final
 
+from grove._mcp_sdk import McpSdk
 from grove.core import paths
 from grove.core.config import PermissionConfig, load_config
+
+# Every SDK import here is deferred (see the module docstring). `McpSdk` is what
+# keeps the resulting message honest: an installed-but-incompatible SDK reports
+# its version and the supported range rather than an install hint for a package
+# that is already installed.
+_SDK = McpSdk("grove permission server")
 
 # The MCP-server name Grove registers this tool under and the tool's own name.
 # The ``--permission-prompt-tool`` value is the MCP-qualified reference
@@ -128,7 +135,7 @@ class PermissionPolicy:
     permission surface". A ``default: "allow"`` is the deliberate permissive
     opt-in for a bounded sandbox (a container workspace).
 
-    TODO(#172 daemon plumbing): route a prompt to the human/daemon (the same
+    TODO(daemon plumbing): route a prompt to the human/daemon (the same
     same-host-secret loopback the hook ingest + channel receiver use) so an
     operator answers a live permission prompt, and only fall back to ``default``
     when nobody answers in time. Until that resolver exists, the config default is
@@ -244,13 +251,8 @@ class PermissionServer:
 
     def _build_server(self) -> Any:  # pragma: no cover - needs the SDK
         """Build the low-level MCP ``Server`` exposing the permission tool."""
-        try:
-            from mcp.server.lowlevel import Server  # noqa: PLC0415
-            from mcp.types import TextContent, Tool  # noqa: PLC0415
-        except ImportError as exc:  # pragma: no cover - missing extra
-            raise ImportError(
-                "grove permission server requires the MCP SDK — install 'grove[mcp]'"
-            ) from exc
+        (Server,) = _SDK.load("mcp.server.lowlevel", "Server")
+        TextContent, Tool = _SDK.load("mcp.types", "TextContent", "Tool")
 
         server: Any = Server("grove-permission")
         answer = self.answer

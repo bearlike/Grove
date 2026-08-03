@@ -1,4 +1,4 @@
-"""Grove channel (#182): the pure envelope/policy layer + the launch composition.
+"""Grove channel: the pure envelope/policy layer + the launch composition.
 
 The live stdio transport (``ChannelServer.run`` and the SDK wiring) is not unit
 tested — a real MCP handshake, same as ``GroveMcpServer.run``. Everything it
@@ -200,6 +200,10 @@ def _manager(tmp_repo: Path, tmp_path: Path, *, channels: bool) -> WorkspaceMana
             "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
             "tmux": {"session_prefix": "test-"},
             "hooks": {"enabled": False},
+            # Same reason, one feature over: with no hook to inject it, the
+            # first-turn brief rides the initial prompt and would prefix the
+            # exact positionals asserted here (see `test_agent_brief.py`).
+            "brief": {"enabled": False},
             "channels": {"enabled": channels},
         }
     )

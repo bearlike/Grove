@@ -5,7 +5,7 @@ opencode / codex tomorrow) and the rest of Grove. An :class:`AgentAdapter`
 turns that tool's on-disk transcript into these dataclasses; the
 ``ActivityService`` and both clients consume *only* these, never the tool's
 native JSONL. That is what makes the dashboard extensible without touching
-clients (epic #11 §3).
+clients.
 
 Plain frozen dataclasses, not Pydantic: this is internal in-process IR that
 never crosses a wire by itself — the ``contracts/`` Views do the serializing.
@@ -24,19 +24,19 @@ from pathlib import Path
 from typing import Any, Literal
 
 # How Grove came to know about a session. ``grove_launched`` is the deterministic
-# path (Grove minted the ``--session-id``); the other two are out-of-band adoption
-# layered in by #18. Kept as a Literal — a closed set that drives branching.
+# path (Grove minted the ``--session-id``); the other two are out-of-band adoption.
+# Kept as a Literal — a closed set that drives branching.
 SessionProvenance = Literal["grove_launched", "hook_discovered", "fs_discovered"]
 
 
 class AgentActivityState(StrEnum):
-    """What one agent session is doing right now (epic #11 §6).
+    """What one agent session is doing right now.
 
     Computed live from the transcript blended with tmux activity; never
     persisted. The transcript-only adapter emits a subset (WORKING / WAITING /
     ERROR / UNKNOWN); the ``ActivityService`` is the single policy site that
     layers in STARTING (session id known, no file yet), IDLE (alive but tmux
-    quiet), and — once #18 lands — BLOCKED (permission prompt from a hook).
+    quiet), and BLOCKED (permission prompt from a hook).
     """
 
     STARTING = "starting"  # session id known, transcript not yet on disk
@@ -63,7 +63,7 @@ class AgentSession:
     creates it lazily on the first turn), which is exactly the STARTING window.
 
     ``parent_session_id`` is ``None`` for a normal top-level session (Grove-launched
-    or discovered); for an itemized sub-agent fleet member (#173) it is the
+    or discovered); for an itemized sub-agent fleet member it is the
     *primary* session's own ``session_id`` — the wire's parent/child link, so a
     client can group a workspace's flat ``sessions`` list back into a tree
     without a second lookup.
@@ -77,7 +77,7 @@ class AgentSession:
     parent_session_id: str | None = None
 
 
-# A structured question an agent asked the user (epic #74). One closed set of
+# A structured question an agent asked the user. One closed set of
 # kinds drives the client's rendering affordance; it is provider-neutral — the
 # adapters map a native tool call onto it, never the reverse.
 AgentQuestionKind = Literal["single_select", "multi_select", "free_text", "confirm"]
@@ -100,13 +100,13 @@ class AgentQuestionOption:
 
 @dataclass(slots=True, frozen=True)
 class AgentQuestion:
-    """A provider-neutral question an agent asked the user (epic #74).
+    """A provider-neutral question an agent asked the user.
 
     The normalized target every adapter maps its native ask-the-human tool onto
     (Claude Code's ``AskUserQuestion`` / ``ExitPlanMode``; a Codex MCP-bridged
     equivalent). ``id`` is the stable per-question answer-back address and
     ``group_id`` the native tool-call id a *batch* shares — the two together are
-    what a future "answer back" write-path (and the #70 notifier) address, so
+    what the "answer back" write-path (and the notifier) address, so
     they are part of the contract even though the MVP only renders. ``answered``
     /``answer`` model resolution (a matching ``tool_result`` / ``function_call_
     output``) at the group level — no semantic per-question split of the result.
@@ -415,8 +415,8 @@ class TodoList:
     ``TodoWrite``, Codex ``update_plan``) — the todo sibling of :class:`FileEdit`
     and :class:`AgentQuestion`. It rides the transcript as
     ``DigestEntry(role="todo", todo=…)`` so every renderer draws one checklist
-    card instead of the bare ``TodoWrite``/``update_plan`` tool name (which
-    discarded the whole list — the gap #184 closes).
+    card instead of the bare ``TodoWrite``/``update_plan`` tool name, which
+    would otherwise discard the whole list.
 
     One tool call is ONE list, so :meth:`from_tool_call` returns a 0-or-1-tuple
     (unlike the batch-returns-N contract of the file-edit/question siblings),
@@ -486,9 +486,9 @@ class TodoList:
         return f"{head} · {active}" if active else head
 
 
-# The native tool names Claude Code's Jan-2026 "Tasks" system uses to MUTATE
+# The native tool names Claude Code's "Tasks" system uses to MUTATE
 # its task list — Anthropic's split-call successor to ``TodoWrite`` on builds
-# that ship it (verified on-host, 2026-07-08: ``TaskCreate``/``TaskUpdate``
+# that ship it (verified on-host: ``TaskCreate``/``TaskUpdate``
 # carry ``subject``/``description``/``activeForm``/``status``/``taskId`` —
 # near-identical fields to ``TodoItem``). ``TaskList``/``TaskGet`` are
 # read-only queries of the same board and surface no NEW state, so they stay
@@ -500,7 +500,7 @@ TASK_TOOL_NAMES: frozenset[str] = frozenset({"TaskCreate", "TaskUpdate"})
 
 # A ``TaskCreate`` call never carries the id the server assigns it — the id
 # rides back only in the call's own ``tool_result`` text, e.g. "Task #3
-# created successfully: <subject>" (verified on-host, 2026-07-08).
+# created successfully: <subject>" (verified on-host).
 _TASK_CREATED_RE = re.compile(r"Task #(\S+) created successfully")
 
 
@@ -612,7 +612,7 @@ class TaskBoard:
         return isinstance(task_id, str) and bool(task_id) and self.update(task_id, raw_input)
 
 
-# ── The agentic-loop spine (#179) ────────────────────────────────────────────
+# ── The agentic-loop spine ───────────────────────────────────────────────────
 # ONE parse of a tool's transcript yields a tuple of these; :class:`SessionTurn`
 # / :class:`OrderedDigest` below — and the downstream fleet / trace / final-result
 # consumers — are all PROJECTIONS of this tuple, never a second parse of the raw
@@ -639,7 +639,7 @@ ContentBlockType = Literal["text", "thinking", "tool_use", "tool_result"]
 @dataclass(slots=True, frozen=True)
 class TokenUsage:
     """Per-message token accounting, each field ``None`` when the provider did
-    not report it — an absent count is NOT zero and is never fabricated (#179).
+    not report it — an absent count is NOT zero and is never fabricated.
 
     Claude reports ``input``/``output``/``cache_creation``/``cache_read`` per
     assistant message (no reasoning-token count → ``reasoning`` stays ``None``).
@@ -678,7 +678,7 @@ class ContentBlock:
 
 @dataclass(slots=True, frozen=True)
 class AgentMessage:
-    """One message/event in the agentic loop — the lineage-preserving spine (#179).
+    """One message/event in the agentic loop — the lineage-preserving spine.
 
     Stable ids survive normalization so a downstream consumer reconstructs the
     invocation tree without re-parsing the transcript:
@@ -724,7 +724,7 @@ class AgentMessage:
 @dataclass(slots=True, frozen=True)
 class FinalResult:
     """A session's terminal outcome — the last assistant turn plus whether it
-    is truly final (#149), best-effort like every read here.
+    is truly final, best-effort like every read here.
 
     ``text`` is the tail assistant message's joined text (may be empty when
     that message is a bare tool call with no prose); ``is_complete`` says
@@ -781,7 +781,7 @@ def final_result_from_messages(messages: tuple[AgentMessage, ...]) -> FinalResul
 
 def latest_todo_from_messages(messages: tuple[AgentMessage, ...]) -> TodoList | None:
     """Project the agentic-loop spine onto the agent's CURRENT todo/checklist
-    state, or ``None`` when no todo/Task tool has been called yet (#194).
+    state, or ``None`` when no todo/Task tool has been called yet.
 
     The ``latest_todo`` sibling of :func:`final_result_from_messages` — same
     recipe (one pass over the already-normalized spine, zero re-parsing),
@@ -864,7 +864,7 @@ class DigestEntry:
 
 @dataclass(slots=True, frozen=True)
 class OrderedDigest:
-    """Compact, ordered slice of a transcript for the future LLM interpreter (#20).
+    """Compact, ordered slice of a transcript for the future LLM interpreter.
 
     The ``USER → ASSISTANT → TOOL(name) → summary`` skeleton with bulky
     ``tool_result`` payloads stripped — small enough to feed an external model
@@ -933,7 +933,7 @@ class AgentActivity:
     # (mewbo) and generic adapters leave it ``None`` (never discovery-adopted).
     started_at: datetime | None = None
     error_detail: str | None = None
-    # Reserved seam for the future external-LLM task interpreter (#20). The
+    # Reserved seam for the future external-LLM task interpreter. The
     # adapter's `transcript_digest()` produces the compact, tool_result-stripped
     # slice an external model would read; a user-configured `InterpreterService`
     # would populate this with a one-line human summary. Off by default and not
@@ -941,7 +941,7 @@ class AgentActivity:
     # interpreter later needs no contract change (YAGNI: seam now, call later).
     interpreted_status: str | None = None
     # The questions the agent is asking RIGHT NOW, captured live from the hook
-    # sidecar before Claude Code flushes them to the transcript (#109). A single
+    # sidecar before Claude Code flushes them to the transcript. A single
     # ``AskUserQuestion`` call carries up to four questions answered atomically,
     # so the whole group rides together, ordered as asked; empty when nothing is
     # pending. Populated ONLY by the ``ActivityService`` sidecar seam (the
@@ -959,6 +959,29 @@ class AgentActivity:
     def empty(cls, state: AgentActivityState = AgentActivityState.UNKNOWN) -> AgentActivity:
         """An activity with no metrics — for an unreadable or not-yet-written transcript."""
         return cls(state=state)
+
+
+@dataclass(slots=True, frozen=True)
+class SessionRef:
+    """A minimal pointer to one session anywhere in an adapter's store — the
+    unit :meth:`~grove.core.agents.base.AgentAdapter.discover_all` returns.
+
+    Built from exactly one bounded head read per session (never a full parse
+    — see the adapter's ``discover_all`` docstring for why). Deliberately
+    thinner than :class:`SessionSummary`: a host-wide scan has no cwd to bind
+    to yet, so ``cwd``/``git_branch`` are honestly ``None`` for the ~2 % of
+    Claude transcripts whose head read never reveals a cwd, rather than the
+    row being dropped. ``transcript_path`` is ``None`` for a remote-backed
+    session (mewbo — no local file, mirroring ``SessionSummary``).
+    """
+
+    session_id: str
+    adapter_kind: str
+    cwd: str | None
+    transcript_path: Path | None
+    birth: datetime | None
+    mtime: float
+    git_branch: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -1002,7 +1025,7 @@ ControlScope = Literal["project", "user", "builtin", "dynamic"]
 @dataclass(slots=True, frozen=True)
 class SessionControl:
     """One invokable session input-affordance — a slash command, a skill, or a
-    configured MCP server (epic #170 P2, #178).
+    configured MCP server.
 
     ``name`` is what a trigger delivers (a command/skill is invoked as ``/name``);
     ``scope`` is a display-only origin hint; ``detail`` is an optional one-line
@@ -1018,8 +1041,8 @@ class SessionControl:
 
 @dataclass(slots=True, frozen=True)
 class SessionControls:
-    """The input-control surface a session exposes — TIER 1 filesystem enumeration
-    (#178), cheap enough to answer with NO running session.
+    """The input-control surface a session exposes — a TIER 1 filesystem
+    enumeration, cheap enough to answer with NO running session.
 
     Two ownership halves, composed at the manager seam so neither is re-derived
     elsewhere: an adapter's :meth:`AgentAdapter.session_controls` fills only the

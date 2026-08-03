@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import type { RepoSection } from "@/lib/grove/dashboard-filter";
 
 /**
- * One repo band of the grid (issue #96 deliverable: repo-grouped sections).
+ * One repo band of the grid — repo-grouped sections.
  * A LIGHT section header (repo name + count) labels the band; its cards pack
  * attention-first into the responsive track. Repo identity lives HERE now, so
  * the cards inside drop their old project chip.

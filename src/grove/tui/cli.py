@@ -17,6 +17,9 @@ from grove.core import GroveError, build, load_config, paths
 from grove.core.agents.hook import run_hook_from_stdin
 from grove.core.config import add_known_project, dump_config_json, dump_schema_json, write_schema
 from grove.core.git import detect_root
+from grove.tui.cli_agent import register as register_agent_commands
+from grove.tui.cli_code import register as register_code_commands
+from grove.tui.cli_doctor import doctor_app
 from grove.tui.cli_onboarding import (
     AgentChoice,
     render_outcomes,
@@ -25,6 +28,7 @@ from grove.tui.cli_onboarding import (
 )
 from grove.tui.cli_onboarding import register as register_onboarding_commands
 from grove.tui.cli_sessions import sessions_app
+from grove.tui.cli_shell import register as register_shell_commands
 from grove.tui.cli_workspace import register as register_workspace_commands
 
 app = typer.Typer(
@@ -47,13 +51,28 @@ auth_app = typer.Typer(
 )
 app.add_typer(auth_app, name="auth")
 app.add_typer(sessions_app, name="sessions")
+app.add_typer(doctor_app, name="doctor")
 
 # Flat workspace verbs (`grove create` / `grove message`) — grafted on like
-# `ls`/`version` rather than nested under a `workspace` subgroup (issue #45).
+# `ls`/`version` rather than nested under a `workspace` subgroup.
 register_workspace_commands(app)
 
-# `grove skills install` / `grove mcp install` — onboard Claude/Codex (#190).
+# `grove skills install` / `grove mcp install` — onboard Claude/Codex.
 register_onboarding_commands(app)
+
+
+# `grove code` — open a containerized workspace's container in VS Code.
+register_code_commands(app)
+
+
+# `grove shell` — an interactive, persistent shell inside that container.
+register_shell_commands(app)
+
+
+# `grove agent …` — several agents in one container. Its own noun
+# rather than an `--agent` flag on every existing verb: a single-agent workspace
+# is the overwhelming case and keeps every verb's signature untouched.
+register_agent_commands(app)
 
 
 # ─── default command (TUI) ──────────────────────────────────────────────────
@@ -97,6 +116,10 @@ def list_workspaces() -> None:
             "status": s.status.value,
             "worktree_path": s.worktree_path,
             "tmux_session": s.tmux_session,
+            "runtime": s.runtime.value,
+            "runtime_fallback_reason": s.runtime_fallback_reason,
+            "runtime_default_config": s.runtime_default_config,
+            "runtime_no_tmux": s.runtime_no_tmux,
         }
         for s in states
     ]
@@ -129,8 +152,8 @@ def config_add_project(
     """Register a git repo in the user config's known-projects list.
 
     Adds ``path`` (default: cwd) to ``GroveConfig.projects`` so it shows up in
-    every cross-project surface (dashboard, project picker, ``known_roots()``,
-    #95) even with zero workspaces — without needing its own committed
+    every cross-project surface (dashboard, project picker, ``known_roots()``)
+    even with zero workspaces — without needing its own committed
     ``.grove/config.json``.
     """
     repo_root = detect_root(path or Path.cwd())
@@ -159,7 +182,7 @@ def config_init(
         False,
         "--with-onboarding",
         help=(
-            "Also install the using-grove skill and register Grove as an MCP "
+            "Also install Grove's skills and register Grove as an MCP "
             "server for this project, non-interactively (see `grove skills "
             "install` / `grove mcp install` to run either on demand)."
         ),
@@ -247,7 +270,7 @@ def show_version() -> None:
 
 @app.command("agent-hook", hidden=True)
 def agent_hook() -> None:
-    """Internal: Claude Code status hook (#18).
+    """Internal: Claude Code status hook.
 
     Reads one hook event as JSON on stdin and writes a per-session status sidecar
     the Activity Dashboard reads for push status (precise BLOCKED). Installed via

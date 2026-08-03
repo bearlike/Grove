@@ -1,4 +1,4 @@
-"""The provider-neutral ``TodoList`` contract + its one normalizer (#184).
+"""The provider-neutral ``TodoList`` contract + its one normalizer.
 
 These pin the *shape* every adapter normalizes to and the single classmethod that
 maps a native ``TodoWrite`` / ``update_plan`` tool call onto it — never the

@@ -1,4 +1,4 @@
-"""ProjectPickerScreen — switch repos from within the TUI (issue #59).
+"""ProjectPickerScreen — switch repos from within the TUI.
 
 Pure tests over ``RepoChoice.group`` (grouping / counts / current presence /
 sort) plus Pilot tests over a real in-memory store + the FakeTmux seam: ``P``
@@ -100,7 +100,7 @@ def test_group_includes_current_even_with_zero_workspaces(tmp_path: Path) -> Non
 
 def test_group_includes_declared_known_root_with_zero_workspaces(tmp_path: Path) -> None:
     """A `known` root (registry union, e.g. config-declared) with no workspaces
-    still lists — empty projects stay visible in the switcher (#95)."""
+    still lists — empty projects stay visible in the switcher."""
     repo_a = tmp_path / "alpha"
     declared = (tmp_path / "delta").resolve()
     choices = RepoChoice.group([_state(repo_a, "a1")], current=repo_a, known=[declared])

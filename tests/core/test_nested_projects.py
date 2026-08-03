@@ -1,4 +1,4 @@
-"""Nested-subdirectory projects (issue #101).
+"""Nested-subdirectory projects.
 
 A configured project may be a *subdirectory* of a git repo, not a repo root of
 its own. Two concerns are separated here:

@@ -5,8 +5,8 @@ test("detail shell: identity popover, work panel, agent surface", async ({ page 
   await expect(page.getByTestId("context-bar")).toBeVisible();
   await expect(page.getByTestId("agent-panel")).toBeVisible();
 
-  // The state + branch detail folds behind ONE state-led identity trigger again
-  // (#153) — w-grove-1 is ahead 1 / dirty 2, so the amber delta dot rides the
+  // The state + branch detail folds behind ONE state-led identity trigger —
+  // w-grove-1 is ahead 1 / dirty 2, so the amber delta dot rides the
   // trigger as the glanceable "something to pull" cue, no click needed.
   await expect(page.getByTestId("branch-delta-dot")).toBeVisible();
 
@@ -25,9 +25,9 @@ test("detail shell: identity popover, work panel, agent surface", async ({ page 
   // for it to actually leave before querying testids it shares with the panel.
   await expect(summary).toBeHidden();
 
-  // Transcript, single pane, is the default at every breakpoint now (#159) —
-  // the work panel needs an explicit tab switch before its own Diff tab is
-  // reachable, desktop and mobile alike.
+  // Transcript, single pane, is the default at every breakpoint — the work
+  // panel needs an explicit tab switch before its own Diff tab is reachable,
+  // desktop and mobile alike.
   await page.getByTestId("tab-terminal").click();
 
   // The stat trio + full commit list live in the work panel's Diff tab. Scope
@@ -40,6 +40,42 @@ test("detail shell: identity popover, work panel, agent surface", async ({ page 
   await expect(diff.getByTestId("commit-list")).toBeVisible();
 });
 
+test("all three status axes + the linked refs survive opening a workspace (#330)", async ({
+  page,
+}) => {
+  // Pins: every axis (agent activity, task phase, linked refs) must render
+  // when a workspace is opened, not only on the overview grid card, and an
+  // issue-only workspace (w-grove-1 has an issue, no PR) must show linkage.
+  await page.goto("/w/w-grove-1");
+  const bar = page.getByTestId("context-bar");
+
+  // Axis 2 (agent activity) leads the cluster; axis 3 (task phase) rides beside
+  // the title as the same compact badge the grid card wears.
+  await expect(bar.getByTestId("state-mark")).toBeVisible();
+  await expect(bar.getByTestId("phase-badge")).toHaveAttribute("data-phase", "implementing");
+  await expect(bar.getByTestId("phase-badge")).toContainText("3/6");
+
+  // The popover opens onto Task (the meter, named + noted) then Links.
+  await page.getByTestId("identity-trigger").click();
+  const summary = page.getByTestId("branch-summary");
+  await expect(summary.getByTestId("phase-meter")).toContainText("implementing");
+  await expect(summary.getByTestId("phase-note")).toContainText("wiring the third axis");
+  await expect(summary.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "3");
+  await expect(summary.getByTestId("ticket-linkage").getByRole("link", { name: /issue #330/ })).toHaveAttribute(
+    "href",
+    "https://git.example/bearlike/Grove/issues/330",
+  );
+  await page.keyboard.press("Escape");
+  await expect(summary).toBeHidden();
+
+  // …and the same two reads have a permanent home on the work panel's Info tab.
+  await page.getByTestId("tab-terminal").click();
+  await page.getByTestId("work-panel-tab-info").click();
+  const info = page.getByTestId("work-panel-info-content");
+  await expect(info.getByTestId("phase-meter")).toContainText("implementing");
+  await expect(info.getByTestId("ticket-linkage")).toContainText("#330");
+});
+
 test("the identity cluster rides the app header at every width, never doubling", async ({
   page,
 }) => {
@@ -49,10 +85,9 @@ test("the identity cluster rides the app header at every width, never doubling",
   await page.goto("/w/w-grove-1");
   await expect(page.getByTestId("context-bar")).toHaveCount(1);
   // Portaled into the shared header's middle slot — still a DOM descendant of
-  // <header>, still exactly one mount (ADE reframe, #138).
+  // <header>, still exactly one mount.
   await expect(page.locator('header [data-testid="context-bar"]')).toBeVisible();
-  // The live agent state now rides an sr-only aria-live region on the cluster
-  // (#153) — the separate context-task subheader is gone.
+  // The live agent state rides an sr-only aria-live region on the cluster.
   await expect(page.getByTestId("session-state-live")).toBeAttached();
 });
 
@@ -84,9 +119,9 @@ test("missing workspace shows error message", async ({ page }) => {
 test("transcript, single pane, is the default tab at every breakpoint when sessions exist; terminal stays reachable", async ({
   page,
 }) => {
-  // Single-pane transcript is the default everywhere now (#159) — desktop no
-  // longer auto-opens split, so this contract holds on desktop and mobile
-  // alike. w-grove-1 has recorded sessions in the fake daemon → Transcript wins.
+  // Single-pane transcript is the default everywhere — desktop does not
+  // auto-open split, so this contract holds on desktop and mobile alike.
+  // w-grove-1 has recorded sessions in the fake daemon → Transcript wins.
   await page.goto("/w/w-grove-1");
   await expect(page.getByTestId("tab-transcript")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("chat-panel")).toBeVisible();
@@ -115,8 +150,8 @@ test("the page never scrolls horizontally — wide content scrolls inside its pa
   await expect(page.getByTestId("chat-message").first()).toBeVisible();
   expect(await pageOverflow()).toBeLessThanOrEqual(0);
 
-  // Single pane is the default everywhere now (#159), so desktop opts into
-  // split explicitly to exercise the harder overflow case (both panes mounted
+  // Single pane is the default everywhere, so desktop opts into split
+  // explicitly to exercise the harder overflow case (both panes mounted
   // side by side); mobile just tabs over to the terminal.
   if (testInfo.project.name === "mobile-chrome") {
     await page.getByTestId("tab-terminal").click();
@@ -139,8 +174,8 @@ test("the page never scrolls horizontally — wide content scrolls inside its pa
 test("a long transcript opens at the tail and re-sticks after a tab round-trip", async ({
   page,
 }) => {
-  // Single-pane tabs mode is the default everywhere now (#159) — no view
-  // switch needed to reach it, on desktop or mobile.
+  // Single-pane tabs mode is the default everywhere — no view switch
+  // needed to reach it, on desktop or mobile.
   await page.goto("/w/w-grove-1");
   await expect(page.getByTestId("chat-message").first()).toBeVisible();
 
@@ -207,8 +242,7 @@ test("transcript, single pane, is the default even on lg+ desktop; split is opt-
   await page.goto("/w/w-grove-1");
 
   // Default: Transcript, single pane — split does NOT auto-mount even though
-  // a session resolves and the viewport is lg+ (#159 supersedes the #124/#130
-  // split-by-default rule).
+  // a session resolves and the viewport is lg+.
   await expect(page.getByTestId("tab-transcript")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("chat-panel")).toBeVisible();
   await expect(page.getByTestId("terminal-pane")).toHaveCount(0);
@@ -248,9 +282,9 @@ test("the split toggle is unreachable below lg", async ({ page }, testInfo) => {
 test("the composer stays fully within the fixed-height page, above the viewport bottom (#138)", async ({
   page,
 }) => {
-  // The status bar is gone, so the page column now ends at the viewport bottom.
-  // The invariant that survives: the fixed-height layout keeps the composer fully
-  // on screen (its bottom never pushed below the fold) with pb-2 breathing room.
+  // There is no status bar; the page column ends at the viewport bottom.
+  // Invariant: the fixed-height layout keeps the composer fully on screen
+  // (its bottom never pushed below the fold) with pb-2 breathing room.
   await page.goto("/w/w-grove-1");
   const composer = page.getByTestId("chat-composer");
   // The composer is the last node of a heavy transcript (dynamic streamdown

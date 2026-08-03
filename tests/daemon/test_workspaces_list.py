@@ -1,5 +1,5 @@
 """GET /workspaces aggregates across all known repos in the store, or dispatches
-to one repo / one ticket via the ``repo`` / ``ticket`` query params (#195)."""
+to one repo / one ticket via the ``repo`` / ``ticket`` query params."""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def test_list_returns_workspace_state_view_shape(
     assert "init_env" not in one
 
 
-# ─── repo dispatch (#195) ────────────────────────────────────────────────────
+# ─── repo dispatch ──────────────────────────────────────────────────────────
 
 
 def test_list_scoped_to_one_repo_via_query_param(
@@ -108,7 +108,7 @@ def test_list_unknown_repo_root_404(
     assert resp.json()["detail"]["error"] == "unknown_repo_root"
 
 
-# ─── ticket filter (#195) ────────────────────────────────────────────────────
+# ─── ticket filter ──────────────────────────────────────────────────────────
 
 
 @pytest.fixture

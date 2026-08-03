@@ -3,7 +3,7 @@ description: >-
   Forward a triggered issue/PR comment to a Grove daemon's issue-ops ingest
   endpoint, then reflect the result back onto the comment as a reaction.
   Stateless: this action asserts the commenter's forge permission and bot-ness
-  and forwards them; the daemon's engine makes every routing decision (#196).
+  and forwards them; the daemon's engine makes every routing decision.
 
 inputs:
   daemon-url:
@@ -87,7 +87,7 @@ runs:
         fi
 
     # (b) commenter permission gate: a CI-side floor in front of the daemon's
-    # own actor_permission/allowed_actors gate (#196) — defense in depth, not
+    # own actor_permission/allowed_actors gate — defense in depth, not
     # a replacement for it. No fork-PR skip here: this action only runs on
     # `issue_comment`, which both forges always deliver to the BASE repo with
     # normal token permissions and secrets (unlike a fork's `pull_request` run,
@@ -230,8 +230,8 @@ runs:
 
     # (e) reflect the result: rocket on an actioned outcome, thumbsdown on a
     # refusal or a transport failure. The daemon already replies for its own
-    # refusals (#196's _reply) — only a transport failure gets our own reply,
-    # since then the daemon never saw the comment at all.
+    # refusals — only a transport failure gets our own reply, since then the
+    # daemon never saw the comment at all.
     - name: React outcome
       if: steps.permission.outputs.proceed == 'true'
       shell: bash

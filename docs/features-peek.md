@@ -21,7 +21,9 @@ ahead, behind, dirty count, age. Counts are colour-coded by polarity.
 Green when there is work to push, amber when there is work to pull or
 clean, muted when zero. When Grove can read the agent's session, an
 agent metrics line joins the card: the model, turn and reply and
-tool-call counts, token usage, and the agent's state. The card closes
+tool-call counts, token usage, and the agent's state. If the agent has
+reported a [task phase](features-status.md#the-third-axis-task-phase),
+that shows too, alongside its bounded todo progress. The card closes
 with recent commits. Git facts and session facts read as one status
 block.
 
@@ -75,6 +77,13 @@ have arbitrary window layouts. The rail must show something live
 whenever the session has any output. Hard-coding `f"{session}:{agent}"`
 was the original peek-empty bug.
 
+That whole list is the host answer. A [container
+workspace](features-containers.md) resolves elsewhere, because its agent's
+pane lives on the tmux inside the container. Grove captures there, so the
+rail keeps updating with nothing attached on the host, and the target
+renders as `container:<id>:<session>` to say where the pane is rather than
+pass it off as one your own tmux can attach to.
+
 ## Best-effort by contract
 
 `peek()` never raises. It calls into `git`, `tmux`, the state store, and
@@ -111,5 +120,5 @@ has the pane tick painting behind it.
 
 - [Agent activity and sessions](features-activity.md): the fleet-wide view. The peek
   rail watches one workspace; the Activity Dashboard watches them all.
-- [Status semantics](features-status.md): how the activity age feeds ACTIVE and IDLE.
+- [Status semantics](features-status.md): how the activity age feeds ACTIVE and IDLE, and the task-phase axis.
 - [Workspace lifecycle](features-workspace-lifecycle.md): what RUNNING, PAUSED, and ERROR mean.

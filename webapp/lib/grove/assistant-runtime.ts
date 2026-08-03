@@ -17,13 +17,21 @@ import { livePendingQuestions } from "./live-question";
 import { refusalNotice } from "./steering-notice";
 import { useAnswerQuestion, useInterrupt, useSendMessage, useSessionTurns } from "./hooks";
 import type { QuestionAnswerItem, QuestionInteraction } from "./question-plan";
-import type { AgentActivityState, DashboardSnapshotView, TodoListView } from "./types";
+import type {
+  AgentActivityState,
+  DashboardSnapshotView,
+  SessionTurnView,
+  TodoListView,
+} from "./types";
 
 /** Chat-tier transcript cadence — a conversation surface someone is watching. */
 const CHAT_TURNS_REFETCH_MS = 5_000;
 
 /** Stable no-op for the `setMessages` seam (branching is out of scope, v1). */
 const NOOP = () => {};
+
+/** A composer that can never fire — the read-only transcript renders none. */
+const NO_SEND = async () => {};
 
 /** Everything `ChatPanel` renders around the assistant-ui transcript, resolved
  * from Grove's existing SSE + TanStack pipeline. `runtime` drives the thread;
@@ -39,7 +47,7 @@ export interface GroveChatState {
   pending: PendingQuestionGroup | null;
   /** The agent's CURRENT todo/plan list (the latest `role="todo"` across the
    * loaded turns), pinned as a card above the composer; null degrades to
-   * nothing (#184). Sourced from `/turns`, parallel to `pending`. */
+   * nothing. Sourced from `/turns`, parallel to `pending`. */
   todo: TodoListView | null;
   /** A steering refusal (send / interrupt), rendered as a quiet inline notice. */
   notice: string | null;
@@ -56,6 +64,69 @@ function appendText(message: AppendMessage): string {
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("")
     .trim();
+}
+
+/**
+ * The transcript half of the runtime, on its own so BOTH surfaces that render
+ * Grove turns share one mapping: the steer-capable session panel below, and the
+ * read-only catalog transcript, which has no workspace to steer and so
+ * passes neither `onNew` nor `onCancel`.
+ *
+ * Turn heads carry the timestamp; `chatItemsFromTurns` flattens and drops it, so
+ * it re-runs PER TURN (a tool run never spans turns, so per-turn == whole) and
+ * tags each turn's FIRST item with that turn's `started_at`. The parallel
+ * `startedAts` array aligns to `items` by index; `convertMessage` reads it.
+ *
+ * `isRunning` is deliberately never set here — see `useGroveChatRuntime`.
+ */
+export function useTranscriptRuntime({
+  turns,
+  onNew = NO_SEND,
+  onCancel,
+}: {
+  turns: SessionTurnView[] | undefined;
+  onNew?: (message: AppendMessage) => Promise<void>;
+  onCancel?: () => Promise<void>;
+}): { runtime: AssistantRuntime; itemCount: number } {
+  const base = useMemo(() => {
+    const items: ChatItem[] = [];
+    const startedAts: (string | null)[] = [];
+    for (const turn of turns ?? []) {
+      chatItemsFromTurns([turn]).forEach((item, i) => {
+        items.push(item);
+        startedAts.push(i === 0 ? turn.started_at : null);
+      });
+    }
+    return { items, startedAts };
+  }, [turns]);
+
+  const convertMessage = useCallback(
+    (item: ChatItem, index: number) => {
+      const message = chatItemToThreadMessage(item, index);
+      const startedAt = base.startedAts[index];
+      if (!startedAt) return message;
+      // The turn head's real timestamp. assistant-ui defaults `createdAt` to
+      // now() when unset, so it can't be told from a real one — the panel reads
+      // `custom.startedAt` (present ONLY on heads) to render it exactly there.
+      return {
+        ...message,
+        createdAt: new Date(startedAt),
+        metadata: { custom: { ...(message.metadata?.custom ?? {}), startedAt } },
+      };
+    },
+    [base.startedAts],
+  );
+
+  const runtime = useExternalStoreRuntime<ChatItem>({
+    messages: base.items,
+    convertMessage,
+    onNew,
+    onCancel,
+    // Branch switching is out of scope (v1) — the store still requires the seam.
+    setMessages: NOOP,
+  });
+
+  return { runtime, itemCount: base.items.length };
 }
 
 /**
@@ -116,22 +187,7 @@ export function useGroveChatRuntime({
 
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Turn heads carry the timestamp; `chatItemsFromTurns` flattens and drops it,
-  // so re-run it PER TURN (a tool run never spans turns, so per-turn == whole)
-  // and tag each turn's FIRST item with that turn's `started_at`. The parallel
-  // `startedAts` array aligns to `items` by index; `convertMessage` reads it.
   const turns = detail?.turns;
-  const base = useMemo(() => {
-    const items: ChatItem[] = [];
-    const startedAts: (string | null)[] = [];
-    for (const turn of turns ?? []) {
-      chatItemsFromTurns([turn]).forEach((item, i) => {
-        items.push(item);
-        startedAts.push(i === 0 ? turn.started_at : null);
-      });
-    }
-    return { items, startedAts };
-  }, [turns]);
 
   // The agent's current plan — the newest todo write in the loaded turns. Pinned
   // above the composer (not a message), the same sibling treatment `pending`
@@ -166,23 +222,6 @@ export function useGroveChatRuntime({
   const pending: PendingQuestionGroup | null =
     liveQuestions.length > 0 ? { questions: liveQuestions, interactive } : null;
 
-  const convertMessage = useCallback(
-    (item: ChatItem, index: number) => {
-      const message = chatItemToThreadMessage(item, index);
-      const startedAt = base.startedAts[index];
-      if (!startedAt) return message;
-      // The turn head's real timestamp. assistant-ui defaults `createdAt` to
-      // now() when unset, so it can't be told from a real one — the panel reads
-      // `custom.startedAt` (present ONLY on heads) to render it exactly there.
-      return {
-        ...message,
-        createdAt: new Date(startedAt),
-        metadata: { custom: { ...(message.metadata?.custom ?? {}), startedAt } },
-      };
-    },
-    [base.startedAts],
-  );
-
   const { mutate: sendMutate } = send;
   const onNew = useCallback(
     async (message: AppendMessage) => {
@@ -202,21 +241,14 @@ export function useGroveChatRuntime({
     });
   }, [interruptMutate]);
 
-  const runtime = useExternalStoreRuntime<ChatItem>({
-    messages: base.items,
-    convertMessage,
-    onNew,
-    onCancel,
-    // Branch switching is out of scope (v1) — the store still requires the seam.
-    setMessages: NOOP,
-  });
+  const { runtime, itemCount } = useTranscriptRuntime({ turns, onNew, onCancel });
 
   const onInterrupt = useCallback(() => void onCancel(), [onCancel]);
 
   return {
     runtime,
     // Empty state only when there is no transcript AND no live question.
-    isEmpty: base.items.length === 0 && pending === null,
+    isEmpty: itemCount === 0 && pending === null,
     pending,
     todo,
     notice,

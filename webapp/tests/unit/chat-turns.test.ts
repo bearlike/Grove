@@ -424,4 +424,24 @@ describe("todo entries (#184)", () => {
     // A malformed todo entry (role but no payload) is ignored, never crashes.
     expect(latestTodoFromTurns([turn("a", [{ role: "todo", text: "x" }])])).toBeNull();
   });
+
+  it("degrades a CLEARED plan to null rather than a dead 0/0 card", () => {
+    // `items: []` is representable on the wire (the engine defaults it), and an
+    // empty-items object is still truthy — so without an explicit check the card
+    // renders "Plan 0/0" with a chevron that opens on nothing.
+    const cleared: TodoListView = { items: [] };
+    const turns = [turn("a", [{ role: "todo", text: "…", todo: cleared }])];
+    expect(latestTodoFromTurns(turns)).toBeNull();
+  });
+
+  it("a cleared plan does not resurrect the previous plan (emptiness is checked on the WINNER)", () => {
+    // The ordering trap: filtering empty entries out DURING the scan would let
+    // the stale earlier plan win, showing a list the agent has since cleared.
+    // Newest-write-wins first, THEN degrade.
+    const latest = latestTodoFromTurns([
+      turn("a", [{ role: "todo", text: "…", todo: list("old plan") }]),
+      turn("b", [{ role: "todo", text: "…", todo: { items: [] } }]),
+    ]);
+    expect(latest).toBeNull();
+  });
 });

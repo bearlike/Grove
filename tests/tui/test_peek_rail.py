@@ -33,7 +33,15 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import TicketRef
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
-from grove.tui._status import agent_state_color, chrome_color, ref_color, status_color
+from grove.core.workspace import ProvisionProgress
+from grove.tui._status import (
+    PR_GLYPH,
+    agent_state_color,
+    chrome_color,
+    pr_status_color,
+    ref_color,
+    status_color,
+)
 from grove.tui.app import GroveApp
 from grove.tui.widgets.card import WorkspaceCard
 from grove.tui.widgets.list import WorkspaceList
@@ -42,6 +50,7 @@ from grove.tui.widgets.peek_rail import (
     _agent_line,
     _render_pane_body,
     _render_peek,
+    _render_provision_body,
     _render_workspace,
     _ticket_block,
 )
@@ -111,7 +120,7 @@ def test_ticket_block_renders_pill_title_status_assignee_and_url() -> None:
                 id="ENG-123",
                 title="Wire the provider layer",
                 status="In Progress",
-                assignee="krishna",
+                assignee="alice",
                 url="https://linear.app/x/ENG-123",
             ),
             TicketRef(provider="github", id="42", title="Bug: crash on boot"),
@@ -122,7 +131,7 @@ def test_ticket_block_renders_pill_title_status_assignee_and_url() -> None:
     assert "ENG-123" in body
     assert "Wire the provider layer" in body
     assert "status" in body and "In Progress" in body
-    assert "assignee" in body and "krishna" in body
+    assert "assignee" in body and "alice" in body
     assert "https://linear.app/x/ENG-123" in body
     # Second ref renders its pill + title even with no status/assignee/url.
     assert "GH#42" in body
@@ -136,6 +145,40 @@ def test_ticket_block_ambiguous_pill_is_suffixed() -> None:
     """An ambiguous branch-inferred ref reads as tentative via a trailing `?`."""
     block = _ticket_block([TicketRef(provider="github", id="42", ambiguous=True)], dark=True)
     assert "GH#42?" in block.plain
+
+
+def test_ticket_block_issue_only_refs_render_unchanged() -> None:
+    """A `kind == "issue"` ref (the default) renders exactly as before this
+    story — no `PR_GLYPH`, pill stays the plain agent-info cyan."""
+    block = _ticket_block([TicketRef(provider="linear", id="ENG-7")], dark=True)
+    assert PR_GLYPH not in block.plain
+    info_hex = ref_color("info", dark=True).lower()
+    found = False
+    for start, end, style in block.spans:
+        if block.plain[start:end] == "ENG-7":
+            style_str = str(style).lower()
+            if "bold" in style_str and info_hex in style_str:
+                found = True
+    assert found
+
+
+def test_ticket_block_pull_request_leads_with_pr_glyph_and_status_color() -> None:
+    """A PR ref (`kind == "pull_request"`) leads with `PR_GLYPH`, and both
+    the pill and the `status` value take `pr_status_color` — never the
+    plain issue cyan or the unstyled bold `status` uses for issues."""
+    ref = TicketRef(
+        provider="github", id="50", kind="pull_request", status="merged", title="Ship it"
+    )
+    block = _ticket_block([ref], dark=True)
+    body = block.plain
+    assert f"{PR_GLYPH} GH#50" in body
+    assert "status" in body and "merged" in body
+    merged_hex = pr_status_color("merged", dark=True).lower()
+    seen = {}
+    for start, end, style in block.spans:
+        seen[block.plain[start:end]] = str(style).lower()
+    assert "bold" in seen.get("GH#50", "") and merged_hex in seen.get("GH#50", "")
+    assert "bold" in seen.get("merged", "") and merged_hex in seen.get("merged", "")
 
 
 def test_render_workspace_includes_ticket_block() -> None:
@@ -289,9 +332,6 @@ def test_render_peek_stats_promote_to_semantic_color_when_nonzero() -> None:
     promote to amber (ORPHANED warn). Polarity is what the eye actually
     needs at a glance: 'is there work to push? to pull? to clean?' The
     label *and* value share the polarity hue so they read as one chunk.
-
-    `_ref` / `_status` aliasing kept the imports tidy when this test was
-    drafted; the canonical accessors are imported at module top.
     """
     peek = WorkspacePeek(
         state=_stub_state(),
@@ -719,9 +759,9 @@ def test_render_pane_body_disables_wrap_so_long_lines_clip() -> None:
 
 
 def test_render_peek_keeps_last_30_pane_lines() -> None:
-    """The rail caps the displayed pane at 30 lines (was 12 — too small to
-    feel like a live mirror). Capture upstream caps at 60; this is the
-    second filter so the rail stays bounded regardless of caller."""
+    """The rail caps the displayed pane at 30 lines. Capture upstream caps
+    at 60; this is the second filter so the rail stays bounded regardless
+    of caller."""
     snapshot = "\n".join(f"line{n}" for n in range(50))
     peek = WorkspacePeek(
         state=_stub_state(),
@@ -1049,10 +1089,10 @@ async def test_rail_has_workspace_card_and_tabbed_preview(
 async def test_panel_titles_are_unique(tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path) -> None:
     """The three panels visible on the list screen — the WorkspaceList on
     the left, and PeekRail's summary card + tabbed preview on the right —
-    carry distinct border titles. An earlier revision shipped 'workspace'
-    next to 'workspaces' which the eye reads as a typo; pin against that
-    regression. The trio is `workspaces · summary · preview` (the preview
-    container's tabs name its two content shapes: transcript / terminal)."""
+    carry distinct border titles: `workspaces · summary · preview` (the
+    preview container's tabs name its two content shapes: transcript /
+    terminal). Two titles differing only by a trailing 's' reads as a typo
+    at a glance, so pin them as exact, distinct strings."""
     del fake_tmux
     manager = _manager(tmp_repo, tmp_path)
     manager.create(CreateWorkspaceRequest(agent_name="claude", title="x"))
@@ -1382,7 +1422,7 @@ async def test_cursor_move_updates_rail(
         await pilot.pause()
 
 
-# ─── transcript scroll anchoring (cloud-session flicker fix, 2026-07-11) ─────
+# ─── transcript scroll anchoring (cloud-session flicker fix) ────────────────
 
 
 def _many_turns(count: int) -> tuple[SessionTurn, ...]:
@@ -1450,5 +1490,132 @@ async def test_transcript_update_sticks_to_tail_when_at_end(
         await pilot.pause()
         await pilot.pause()
         assert scroll.is_vertical_scroll_end
+        await pilot.press("q")
+        await pilot.pause()
+
+
+# ─── provisioning (the build the user is waiting on) ─────────────────────────
+
+
+def _provisioning_peek(**overrides: object) -> WorkspacePeek:
+    base: dict[str, object] = {
+        "status": WorkspaceStatus.PROVISIONING,
+        "provision_log_path": "/tmp/wt/.grove/provision.log",
+    }
+    base.update(overrides)
+    return WorkspacePeek(
+        state=_stub_state(**base),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+
+
+def test_render_workspace_provisioning_names_the_wait_the_headline_and_the_log() -> None:
+    """Three facts, each answering what the others cannot: elapsed time answers
+    "should I worry", the headline answers "is it moving" (no timer can), the
+    log path is for the user who wants the build itself. Plus the explicit
+    "nothing to press" — the affordance here is the absence of one."""
+    progress = ProvisionProgress(
+        elapsed_ms=134_000,
+        headline="#8 [4/9] RUN apt-get install -y tmux",
+        lines=("#7 done", "#8 [4/9] RUN apt-get install -y tmux"),
+    )
+    body = _render_workspace(_provisioning_peek(), dark=True, provision=progress).plain
+    assert "building the container" in body
+    assert "2m14s" in body
+    assert "#8 [4/9] RUN apt-get install -y tmux" in body
+    assert "nothing to press" in body
+    assert "/tmp/wt/.grove/provision.log" in body
+
+
+def test_render_workspace_provisioning_takes_the_status_hue_not_the_warning_amber() -> None:
+    """A normal build is not a warning. Painting it amber alongside the genuine
+    ⚠ badges is how a user learns to read that colour as noise."""
+    progress = ProvisionProgress(elapsed_ms=1000, headline="", lines=())
+    text = _render_workspace(_provisioning_peek(), dark=True, provision=progress)
+    prov_hex = status_color(WorkspaceStatus.PROVISIONING, dark=True).lower()
+    warn_hex = status_color(WorkspaceStatus.ORPHANED, dark=True).lower()
+    for start, end, style in text.spans:
+        if "building the container" in text.plain[start:end]:
+            assert prov_hex in str(style).lower()
+            assert warn_hex not in str(style).lower()
+            return
+    raise AssertionError(f"expected a provisioning affordance span: {text.plain!r}")
+
+
+def test_render_workspace_provisioning_without_progress_still_reads_as_working() -> None:
+    """The progress read is best-effort (a log can be absent or unreadable). A
+    degraded read must still leave the row explaining itself — losing the tail
+    is acceptable, losing "this is building" is the original defect."""
+    body = _render_workspace(_provisioning_peek(), dark=True, provision=None).plain
+    assert "building the container" in body
+    assert "nothing to press" in body
+
+
+def test_render_workspace_is_byte_identical_when_not_provisioning() -> None:
+    """Absence renders as nothing — the same byte-identical rule every other
+    optional segment follows."""
+    peek = _provisioning_peek(status=WorkspaceStatus.ACTIVE)
+    progress = ProvisionProgress(elapsed_ms=9_000, headline="noise", lines=("noise",))
+    plain = _render_workspace(peek, dark=True)
+    with_progress = _render_workspace(peek, dark=True, provision=progress)
+    assert plain.plain == with_progress.plain
+    assert plain.spans == with_progress.spans
+
+
+def test_render_provision_body_appends_build_output_verbatim() -> None:
+    """Build logs are full of brackets; a markup path would crash the rail at
+    paint time. The lines are also never parsed into steps or a percentage —
+    that format belongs to the devcontainer CLI and has no contract."""
+    progress = ProvisionProgress(
+        elapsed_ms=1000,
+        headline="#5 [stage-1 2/6] COPY [a] [b]",
+        lines=("#4 resolving", "#5 [stage-1 2/6] COPY [a] [b]"),
+    )
+    text = _render_provision_body(progress)
+    assert text.plain == "#4 resolving\n#5 [stage-1 2/6] COPY [a] [b]"
+    assert text.no_wrap is True
+
+
+def test_render_provision_body_empty_tail_says_the_build_is_starting() -> None:
+    """A log that exists but is still empty is the first second of every build;
+    an empty pane there reads as broken."""
+    body = _render_provision_body(ProvisionProgress(elapsed_ms=0, headline="", lines=()))
+    assert "starting" in body.plain
+
+
+@pytest.mark.asyncio
+async def test_rail_shows_the_build_log_in_the_terminal_tab(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A provisioning workspace has no tmux pane to mirror, so the tab that
+    normally shows the agent's terminal shows the provisioner's output — the
+    container stays visible (never `-hidden`, which is what "nothing to
+    preview" means) and keeps the live border, because a build in flight IS
+    the live thing on the screen."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        rail = app.screen.query_one(PeekRail)
+        progress = ProvisionProgress(
+            elapsed_ms=61_000,
+            headline="#9 exporting layers",
+            lines=("#8 building", "#9 exporting layers"),
+        )
+        rail.set_peek(_provisioning_peek(), provision=progress)
+        await pilot.pause()
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+        assert not tabs.has_class("-hidden")
+        assert tabs.has_class("-live")
+        assert tabs.active == "tab-terminal"
+        assert "#9 exporting layers" in rail.body_text
         await pilot.press("q")
         await pilot.pause()

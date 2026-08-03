@@ -7,6 +7,7 @@ import {
   ArrowUpFromLine,
   FileDiff,
   GitBranch,
+  ListChecks,
   MessagesSquare,
   Radio,
   Wrench,
@@ -14,9 +15,13 @@ import {
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "./status-badge";
 import { PlacementBadge } from "./placement-badge";
+import { PhaseBadge } from "./phase-badge";
+import { ProvisionLine } from "./provision-progress";
+import { TicketLinkage } from "./ticket-refs";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { Stat } from "@/components/shared/stat";
 import { AgentStateMark } from "@/components/shared/state-mark";
+import { RuntimeMark } from "@/components/shared/runtime-mark";
 import { LandingRing } from "@/components/shared/landing-ring";
 import { AgentLiveStatus } from "@/lib/grove/agent-activity";
 import { tierForActivity } from "@/lib/grove/activity-tier";
@@ -26,20 +31,23 @@ import { cn } from "@/lib/utils";
 import type { WorkspaceActivityView } from "@/lib/grove/types";
 
 /**
- * The ONE workspace card — rebuilt in the ADE language (issue #155), its metadata
- * torn down to a single `Stat` grammar (#161). The pre-ADE card stacked THREE
- * boxed regions and was the loudest tile on the wall; the #155 rebuild collapsed
- * that to calm tiers, but its META still wore TWO rival dialects on adjacent rows
- * (`main 0 ahead 0 behind 12 dirty` above `13t · 108⚒ · 18.9M↑ 160.3k↓`) — no
- * icons, zeros as noise, per-row font drift. This card speaks the same calm
- * `state mark · title · time` vocabulary as the v2 session rail row across three
- * zones separated by space, not lines or a tinted well:
+ * The ONE workspace card. Its metadata reads through a single `Stat`
+ * grammar — no icons-vs-no-icons drift, zeros suppressed rather than shown
+ * as noise. This card speaks the same calm `state mark · title · time`
+ * vocabulary as the session rail row across three zones separated by space,
+ * not lines or a tinted well:
  *
  *   HEADER   — the canonical `AgentStateMark` glyph (the rail's own state atom,
  *     not a second badge) · title link (ONE line, truncate) · a right-aligned
  *     relative time. The lifecycle `StatusBadge` returns to this line ONLY when
  *     it is itself the signal (no agent session, or a broken orphaned/error
  *     lifecycle) — every healthy card wears zero pills.
+ *   TICKETS  — `TicketLinkage`: issue(s) → PR, mounted once ANY ref exists
+ *     (an issue-only workspace is most of a workspace's life, and still gets
+ *     linkage here). Placed right under the header, next to the `PhaseBadge`
+ *     it usually correlates with — a phase reaching delivering/done is what a
+ *     PR existing already implies, so this row names the OUTCOME once instead
+ *     of repeating it.
  *   CONTEXT  — "happening now" (`AgentLiveStatus.taskLine`), `line-clamp-1`;
  *     error detail wins the slot while erroring, keeping the `· N bg` suffix.
  *   META     — TWO aligned `Stat` rows on one 11px baseline grid (`h-5` line
@@ -51,12 +59,12 @@ import type { WorkspaceActivityView } from "@/lib/grove/types";
  *     renders NOTHING (no "0 ahead" noise). No footer well: tone breaks belong to
  *     the page, not every card.
  *
- *     The tokens-in/out slot is itself live (#181): while `AgentLiveStatus
+ *     The tokens-in/out slot is itself live: while `AgentLiveStatus
  *     .isGenerating` is true (a fast side-channel is actively reporting —
- *     `live` on the wire, `None`/absent until #177's proxy lands) it swaps to
- *     a pulsing `live-token-flow` readout of the IN-FLIGHT counts, settling
- *     back to the cumulative `Stat`s the moment generation stops. Never both
- *     at once, so the row never grows or jitters.
+ *     `live` on the wire, otherwise `None`/absent) it swaps to a pulsing
+ *     `live-token-flow` readout of the IN-FLIGHT counts, settling back to the
+ *     cumulative `Stat`s the moment generation stops. Never both at once, so
+ *     the row never grows or jitters.
  *
  * Quiet-chrome discipline (design-system.md): the surface is `rounded-xl bg-card`
  * on a `border-border/60` hairline; hover is a tonal shift + border-strengthen —
@@ -64,8 +72,8 @@ import type { WorkspaceActivityView } from "@/lib/grove/types";
  * (waiting/blocked/error) keeps a single thin LEFT `border-l-2` accent bar in the
  * tier accent var — the only on-card hue. Live focus is a quiet terracotta ring.
  *
- * Zero-loss: every datum the old card carried keeps a visible home here (a zero
- * is suppressed, not lost — its stat reappears the instant it goes nonzero).
+ * Zero-loss: every datum the card carries keeps a visible home (a zero is
+ * suppressed, not lost — its stat reappears the instant it goes nonzero).
  *
  * Test seams kept stable: `data-testid="workspace-card"` + `data-status` +
  * `data-agent-state` + `data-tier`; the `state-mark` glyph, `happening-now`,
@@ -82,6 +90,9 @@ export function WorkspaceCard({
   onToggleLive?: (id: string) => void;
 }) {
   const s = activity.state;
+  const phase = activity.phase ?? null;
+  const todoProgress = activity.todo ?? null;
+  const ticketRefs = s.ticket_refs ?? [];
   const primarySession = activity.sessions[0] ?? null;
   const primary = primarySession?.activity ?? null;
   // One read-model: "happening now" precedence, the metrics line, the subagent
@@ -94,6 +105,11 @@ export function WorkspaceCard({
   const subagents = live.subagents;
   const lastCommit = activity.recent_commits[0] ?? null;
   const canGoLive = agentState === "working" && onToggleLive != null;
+  // A container being built has no agent session and nothing to say on the
+  // agent axis — the lifecycle status IS the whole story for the length of the
+  // build, so the card swaps its "happening now" line for the live provision
+  // readout rather than reporting "no agent session" for six minutes.
+  const provisioning = s.status === "provisioning";
   // Lifecycle badge only where it is itself the signal: no agent session to badge
   // on the agent axis, or a broken lifecycle state worth surfacing over it.
   const showStatus = primary == null || s.status === "orphaned" || s.status === "error";
@@ -125,14 +141,20 @@ export function WorkspaceCard({
         >
           {s.title}
         </Link>
+        <PhaseBadge phase={phase} />
         {showStatus && <StatusBadge status={s.status} size="sm" className="shrink-0" />}
         <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
           <RelativeTime iso={s.updated_at} />
         </span>
       </div>
 
+      {/* ── TICKETS: issue(s) → PR, only when a PR exists (see class doc) ───── */}
+      <TicketLinkage refs={ticketRefs} />
+
       {/* ── CONTEXT: what the agent is doing now (one line) ─────────────────── */}
-      {live.errorDetail ? (
+      {provisioning ? (
+        <ProvisionLine workspaceId={s.id} startedAt={s.provision_started_at} />
+      ) : live.errorDetail ? (
         <p
           data-testid="happening-now"
           className="line-clamp-1 text-[13px] leading-snug"
@@ -175,18 +197,33 @@ export function WorkspaceCard({
           <Stat icon={ArrowUp} value={activity.base_ahead} label="ahead" tone="add" />
           <Stat icon={ArrowDown} value={activity.base_behind} label="behind" tone="remove" />
           <Stat icon={FileDiff} value={activity.dirty_files} label="dirty" />
-          <PlacementBadge placement={s.placement} size="sm" className="ml-auto shrink-0" />
+          {/* The two "where does this run" qualifiers, pinned right and read as
+              one group. The runtime mark is ALWAYS here (both host and
+              container carry one — the isolation boundary has no silent
+              state); the placement badge stays silent for the worktree
+              default, so the group is one mark or two, never zero. */}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            <RuntimeMark runtime={s.runtime} />
+            <PlacementBadge placement={s.placement} size="sm" />
+          </span>
         </div>
         {/* Row 2 — activity: turns, tool calls, tokens; Live toggle pinned right.
             Tokens in/out are the settled cumulative totals UNLESS a live tier
-            (#181) is actively reporting, in which case the live in-flight
-            counts take that same slot — never both at once, so the row never
-            grows. `live.isGenerating` is `false` whenever no fast side-channel
-            is wired (the #177 proxy is the primary source), so this reads
-            exactly like the pre-#181 card until one lands. */}
+            is actively reporting, in which case the live in-flight counts take
+            that same slot — never both at once, so the row never grows.
+            `live.isGenerating` is `false` whenever no fast side-channel is
+            wired, so this reads exactly like the cumulative-only card until
+            one lands. */}
         <div className="flex h-5 items-center gap-3">
           <Stat icon={MessagesSquare} value={live.turns} label="turns" />
           <Stat icon={Wrench} value={live.toolCalls} label="tool calls" />
+          {todoProgress && todoProgress.total > 0 && (
+            <Stat
+              icon={ListChecks}
+              value={`${todoProgress.completed}/${todoProgress.total}`}
+              label="todos done"
+            />
+          )}
           {live.isGenerating ? (
             <span
               data-testid="live-token-flow"

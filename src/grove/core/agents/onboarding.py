@@ -1,7 +1,7 @@
 """Onboards external coding-agent CLIs (Claude Code, Codex) onto Grove.
 
 Two side effects, mirroring `grove/core/git.py` / `grove/core/tmux.py`: drop
-the bundled `using-grove` skill into a tool's skills directory, and register
+Grove's bundled skills into a tool's skills directory, and register
 Grove's own MCP server via that tool's *native* `mcp add` command — never a
 hand-rolled `.mcp.json` / `config.toml` write. `ClaudeTool` / `CodexTool` are
 the two real implementations of `AgentTool`; path resolution reuses the
@@ -16,7 +16,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Literal, Protocol
+from typing import ClassVar, Final, Literal, Protocol
 
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.agents.codex import _CodexHome
@@ -27,7 +27,6 @@ AgentToolName = Literal["claude", "codex"]
 OnboardAction = Literal["skill", "mcp"]
 OnboardStatus = Literal["ok", "skipped", "unsupported"]
 
-SKILL_NAME = "using-grove"
 MCP_SERVER_NAME = "grove"
 MCP_SERVER_COMMAND = "grove-mcp"
 
@@ -150,15 +149,61 @@ class OnboardOutcome:
     detail: str
 
 
-def _bundled_skill_dir() -> Path:
-    """The packaged `using-grove` skill source, shipped as package data."""
-    return Path(str(importlib.resources.files("grove") / "skills" / SKILL_NAME))
+class BundledSkills:
+    """The skills Grove ships as package data, and how they reach a tool.
+
+    Which skills exist is read off the packaged directory rather than listed in
+    code, so adding one is a new directory and no edit here. A hard-coded roster
+    would be policy in code with nothing to gain, since the packaged tree already
+    IS the roster. Do not restate the roster in prose either, here or in a
+    docstring the site publishes: a count written down is a count that goes stale
+    the next time a skill lands, and nothing fails when it does.
+
+    All-classmethod: the state is the wheel's own layout, not anything per
+    instance.
+    """
+
+    PACKAGE_DIR: Final = "skills"
+
+    @classmethod
+    def root(cls) -> Path:
+        """The packaged skills directory inside the installed `grove` package."""
+        return Path(str(importlib.resources.files("grove") / cls.PACKAGE_DIR))
+
+    @classmethod
+    def dirs(cls) -> tuple[Path, ...]:
+        """Every packaged skill source directory, name-sorted for stable output."""
+        return tuple(sorted((d for d in cls.root().iterdir() if d.is_dir()), key=lambda d: d.name))
+
+    @classmethod
+    def install_into(cls, base: Path) -> tuple[str, ...]:
+        """Copy every bundled skill into ``base``, returning the names installed.
+
+        Copies files only, never nested directories: a skill is a `SKILL.md` plus
+        flat siblings, and a recursive copy would also carry `__pycache__` and
+        friends into somebody else's config directory.
+        """
+        installed: list[str] = []
+        for source in cls.dirs():
+            dest = base / source.name
+            dest.mkdir(parents=True, exist_ok=True)
+            for item in source.iterdir():
+                if item.is_file():
+                    shutil.copy2(item, dest / item.name)
+            installed.append(source.name)
+        return tuple(installed)
 
 
 def install_skill(
     tool: type[AgentTool], target: OnboardTarget, *, repo_root: Path | None = None
 ) -> OnboardOutcome:
-    """Copy the bundled skill into ``tool``'s skills dir for ``target``."""
+    """Copy every bundled skill into ``tool``'s skills dir for ``target``.
+
+    Stays ONE outcome across N skills. The outcome is what a caller renders per
+    (tool, target, action), and splitting it per skill would turn one line of
+    `grove skills install` output into a row per skill per tool per target for a
+    result the user never acts on separately.
+    """
     if target == "user":
         base = tool.user_skills_dir()
         if base is None:
@@ -169,12 +214,8 @@ def install_skill(
             raise ValueError("repo_root is required for target='project'")
         base = tool.project_skills_dir(repo_root)
 
-    dest = base / SKILL_NAME
-    dest.mkdir(parents=True, exist_ok=True)
-    for item in _bundled_skill_dir().iterdir():
-        if item.is_file():
-            shutil.copy2(item, dest / item.name)
-    return OnboardOutcome(tool.name, target, "skill", "ok", str(dest))
+    installed = BundledSkills.install_into(base)
+    return OnboardOutcome(tool.name, target, "skill", "ok", f"{base} ({', '.join(installed)})")
 
 
 def register_mcp(
@@ -204,10 +245,10 @@ def register_mcp(
 __all__ = [
     "MCP_SERVER_COMMAND",
     "MCP_SERVER_NAME",
-    "SKILL_NAME",
     "TOOLS",
     "AgentTool",
     "AgentToolName",
+    "BundledSkills",
     "ClaudeTool",
     "CodexTool",
     "OnboardOutcome",

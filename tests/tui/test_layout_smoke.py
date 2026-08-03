@@ -82,6 +82,9 @@ async def test_full_user_flow_create_filter_jump_kill(
             for ch in title:
                 await pilot.press(ch)
             await pilot.press("ctrl+s")
+            # Lifecycle verbs run on a worker thread; `pause` drains the
+            # message queue, not the worker.
+            await app.workers.wait_for_complete()
             await pilot.pause()
         assert len(manager.list()) == 2
 
@@ -101,12 +104,14 @@ async def test_full_user_flow_create_filter_jump_kill(
         await pilot.press("k")
         await pilot.pause()
         await pilot.press("y")
+        await app.workers.wait_for_complete()
         await pilot.pause()
         assert len(manager.list()) == 1
 
         await pilot.press("k")
         await pilot.pause()
         await pilot.press("y")
+        await app.workers.wait_for_complete()
         await pilot.pause()
         assert len(manager.list()) == 0
         # Empty banner returns.

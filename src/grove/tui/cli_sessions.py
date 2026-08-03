@@ -19,6 +19,10 @@ import typer
 
 from grove.core import GroveError, SessionExplorer, SessionListing, build
 from grove.core.agents import SessionTurn
+from grove.core.config import load_config
+from grove.core.registry import RepoRegistry
+from grove.core.sessions import CatalogEntry, SessionCatalog
+from grove.core.store import JsonWorkspaceStore
 from grove.tui.cli_workspace import clean_exit, resolve_workspace
 
 sessions_app = typer.Typer(
@@ -30,9 +34,14 @@ sessions_app = typer.Typer(
 _SINCE_PATTERN = re.compile(r"^(\d+)\s*([mhdw])$")
 _SINCE_UNITS = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 _TABLE_TEXT_CAP = 60
+_HOST_PROJECT_CAP = 19
+_HOST_BRANCH_CAP = 15
 _SHOW_TEXT_CAP = 4000
 # Same prompt glyph the TUI uses; deliberate, not a mistyped ">".
 _PROMPT_GLYPH = "❯"  # noqa: RUF001
+# Same live-signal glyph the TUI's ACTIVE status uses (design-system.md) — no
+# new vocabulary for "a runtime is actually attached to this cwd right now".
+_LIVE_GLYPH = "●"
 
 
 def _explorer() -> SessionExplorer:
@@ -41,6 +50,18 @@ def _explorer() -> SessionExplorer:
     except GroveError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
+
+
+def _catalog() -> SessionCatalog:
+    """A host-wide catalog, independent of the current cwd's project.
+
+    Mirrors the daemon's own host-wide construction (``_asgi.py``):
+    ``load_config(repo_root=None)`` (user + built-in layers only, no project
+    overlay — there is no single project here) plus the shared global store.
+    """
+    cfg = load_config(repo_root=None)
+    registry = RepoRegistry(cfg=cfg, store=JsonWorkspaceStore(), config_loader=load_config)
+    return SessionCatalog(registry)
 
 
 def _parse_since(text: str) -> datetime:
@@ -97,6 +118,80 @@ def _listing_payload(ls: SessionListing) -> dict[str, Any]:
     }
 
 
+def _catalog_payload(entry: CatalogEntry) -> dict[str, Any]:
+    ref = entry.ref
+    project = entry.project
+    return {
+        "session_id": ref.session_id,
+        "agent": ref.adapter_kind,
+        "provenance": entry.provenance,
+        "workspace_id": entry.workspace_id,
+        "workspace_title": entry.workspace_title,
+        "cwd": ref.cwd,
+        "git_branch": ref.git_branch,
+        "project": project.repo_name if project is not None else None,
+        "project_root": str(project.repo_root) if project is not None else None,
+        "is_grove_managed": project.is_grove_managed if project is not None else None,
+        "transcript_path": str(ref.transcript_path) if ref.transcript_path is not None else None,
+        "created_at": ref.birth.isoformat() if ref.birth else None,
+        "modified_at": datetime.fromtimestamp(ref.mtime, tz=UTC).isoformat(),
+        "live": entry.live,
+    }
+
+
+def _filter_catalog(
+    entries: tuple[CatalogEntry, ...],
+    *,
+    agent: str | None,
+    workspace: str | None,
+    since: datetime | None,
+    limit: int | None,
+) -> list[CatalogEntry]:
+    """Apply the same agent/workspace/since/limit filters `SessionExplorer.list`
+    does, over catalog rows — filter-then-slice, so `--limit` still caps the
+    filtered result rather than the pre-filter scan."""
+    rows = list(entries)
+    if agent is not None:
+        rows = [e for e in rows if e.ref.adapter_kind == agent]
+    if workspace is not None:
+        needle = workspace.lower()
+        rows = [
+            e
+            for e in rows
+            if (e.workspace_id or "").startswith(workspace)
+            or needle in (e.workspace_title or "").lower()
+        ]
+    if since is not None:
+        since_ts = since.timestamp()
+        rows = [e for e in rows if e.ref.mtime >= since_ts]
+    return rows[:limit] if limit is not None else rows
+
+
+def _print_host_table(entries: list[CatalogEntry]) -> None:
+    header = (
+        f"{'SESSION':<10} {'AGENT':<12} {'PROJECT':<20} {'BRANCH':<16} "
+        f"{'WORKSPACE':<20} {'LIVE':<5} MODIFIED"
+    )
+    typer.echo(header)
+    for entry in entries:
+        ref = entry.ref
+        # Honest fallback chain: a resolved project's name, else the bare
+        # scanned directory, else "-" for the ~2% of sessions with no cwd at
+        # all — never blank, never dropped.
+        project_label = entry.project.repo_name if entry.project is not None else (ref.cwd or "-")
+        workspace_label = entry.workspace_title or "-"
+        modified = datetime.fromtimestamp(ref.mtime, tz=UTC)
+        typer.echo(
+            f"{ref.session_id[:8]:<10} "
+            f"{ref.adapter_kind:<12} "
+            f"{_truncate(project_label, _HOST_PROJECT_CAP):<20} "
+            f"{_truncate(ref.git_branch or '-', _HOST_BRANCH_CAP):<16} "
+            f"{_truncate(workspace_label, 19):<20} "
+            f"{(_LIVE_GLYPH if entry.live else '-'):<5} "
+            f"{_ago(modified)}"
+        )
+
+
 def _turn_payload(turn: SessionTurn) -> dict[str, Any]:
     return {
         "user_text": turn.user_text,
@@ -108,6 +203,14 @@ def _turn_payload(turn: SessionTurn) -> dict[str, Any]:
 @sessions_app.command("list")
 def list_sessions(
     *,
+    host: bool = typer.Option(
+        False,
+        "--host",
+        help=(
+            "List across every repo this host has ever run an agent in — "
+            "including ones not in cfg.projects — instead of just this project."
+        ),
+    ),
     agent: str | None = typer.Option(
         None, "--agent", help="Only sessions from this adapter kind (e.g. claude_code)."
     ),
@@ -120,14 +223,30 @@ def list_sessions(
     limit: int | None = typer.Option(None, "--limit", "-n", help="Keep the newest N rows."),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
-    """List every agent session across this project's worktrees, newest first."""
+    """List every agent session across this project's worktrees, newest first.
+
+    ``--host`` widens the scope to the whole host (the Session Catalog): a
+    cheap, metadata-only scan across every repo an adapter has ever recorded
+    a session for, so it renders PROJECT/BRANCH/LIVE columns instead of the
+    project-scoped STATE/TURNS/TITLE ones — those need a full transcript
+    parse, which the host-wide scan deliberately never pays per session.
+    """
+    since_dt = _parse_since(since) if since else None
+    if host:
+        entries = _filter_catalog(
+            _catalog().scan(), agent=agent, workspace=workspace, since=since_dt, limit=limit
+        )
+        if as_json:
+            typer.echo(json.dumps([_catalog_payload(e) for e in entries], indent=2))
+            return
+        if not entries:
+            typer.echo("no sessions found")
+            return
+        _print_host_table(entries)
+        return
+
     explorer = _explorer()
-    listings = explorer.list(
-        agent=agent,
-        workspace=workspace,
-        since=_parse_since(since) if since else None,
-        limit=limit,
-    )
+    listings = explorer.list(agent=agent, workspace=workspace, since=since_dt, limit=limit)
     if as_json:
         typer.echo(json.dumps([_listing_payload(ls) for ls in listings], indent=2))
         return

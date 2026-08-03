@@ -6,10 +6,9 @@ import { siAnthropic, siClaude, type SimpleIcon } from "simple-icons";
  * `AgentAdapter` registry: a card asks "which glyph represents this agent?" and
  * gets back either a brand mark (simple-icons path) or a lucide fallback.
  *
- * The fallback exists because OpenAI / Codex / OpenCode / Gemini have NO
- * off-the-shelf brand glyph in either simple-icons or lucide-react (verified
- * 2026-06-08 — `siOpenai` does not exist). lucide `Bot` / `Terminal` stand in
- * until a real brand glyph ships; adding one is a one-line edit to AGENT_ICON.
+ * The fallback exists for agents with no off-the-shelf brand glyph wired in
+ * yet (lucide `Bot` / `Terminal` stand in); adding a real one is a one-line
+ * edit to AGENT_ICON.
  */
 
 export type SimpleIconData = SimpleIcon;
@@ -61,8 +60,8 @@ export const AGENT_ICON = {
   claude: { kind: "brand", icon: siClaude, label: "Claude Code" },
   claude_code: { kind: "brand", icon: siClaude, label: "Claude Code" },
   anthropic: { kind: "brand", icon: siAnthropic, label: "Anthropic" },
-  // No brand glyph in simple-icons/lucide for these (verified 2026-06-08) —
-  // lucide fallback is the intended extensibility point, not a placeholder bug.
+  // No brand glyph wired in for these yet — lucide fallback is the intended
+  // extensibility point, not a placeholder bug.
   codex: { kind: "lucide", Icon: Bot, label: "Codex" },
   opencode: { kind: "lucide", Icon: Terminal, label: "OpenCode" },
   openai: { kind: "lucide", Icon: Bot, label: "OpenAI" },

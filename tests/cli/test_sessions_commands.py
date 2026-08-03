@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,39 @@ from grove.core.agents.claude_code import _ClaudeHome
 from grove.tui.cli import app
 
 SID = "11111111-1111-4111-8111-111111111111"
+
+
+def _init_repo(path: Path) -> Path:
+    """A second, unrelated real git repo — the `tmp_repo` fixture only ever
+    gives one, and the host-scope test needs two independent projects."""
+    path.mkdir(parents=True)
+    for args in (
+        ["git", "init", "-b", "main"],
+        ["git", "config", "user.email", "test@grove.local"],
+        ["git", "config", "user.name", "Grove Test"],
+    ):
+        subprocess.run(args, cwd=path, check=True, capture_output=True)
+    (path / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init", "--no-verify"], cwd=path, check=True, capture_output=True
+    )
+    return path.resolve()
+
+
+def _write_transcript(
+    claude: Path, repo: Path, session_id: str, prompt: str, *, branch: str = "main"
+) -> None:
+    folder = claude / "projects" / _ClaudeHome.encode_cwd(repo)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{session_id}.jsonl"
+    path.write_text(
+        f'{{"type":"user","uuid":"h-{session_id[:4]}","timestamp":"2026-06-09T08:00:00.000Z",'
+        f'"isSidechain":false,"cwd":"{repo}","gitBranch":"{branch}",'
+        f'"message":{{"role":"user","content":"{prompt}"}}}}\n',
+        encoding="utf-8",
+    )
+    os.utime(path, (2_000, 2_000))
 
 
 @pytest.fixture
@@ -135,3 +169,54 @@ def test_outside_a_repo_fails_loudly(
     result = runner.invoke(app, ["sessions", "list"])
     assert result.exit_code == 1
     assert "not inside a git repository" in result.output
+
+
+def test_list_host_scope_includes_repos_outside_cfg_projects(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_state_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """``--host`` widens `grove sessions list` to the whole host: a second,
+    completely unrelated repo — never declared in `cfg.projects`, no Grove
+    workspace, not an ancestor/descendant of the cwd — still surfaces, with
+    the host-only PROJECT/BRANCH/LIVE columns. Project scope stays exactly
+    as narrow as before."""
+    del tmp_state_dir
+    claude = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    repo_a = _init_repo(tmp_path / "repo-a")
+    repo_b = _init_repo(tmp_path / "repo-b")
+
+    sid_a = "22222222-2222-4222-8222-222222222222"
+    sid_b = "33333333-3333-4333-8333-333333333333"
+    _write_transcript(claude, repo_a, sid_a, "work in repo a", branch="main")
+    _write_transcript(claude, repo_b, sid_b, "work in repo b", branch="feature/b")
+    monkeypatch.chdir(repo_a)
+
+    project_result = runner.invoke(app, ["sessions", "list", "--json"])
+    assert project_result.exit_code == 0, project_result.output
+    project_ids = {row["session_id"] for row in json.loads(project_result.output)}
+    assert project_ids == {sid_a}
+
+    host_result = runner.invoke(app, ["sessions", "list", "--host", "--json"])
+    assert host_result.exit_code == 0, host_result.output
+    payload = json.loads(host_result.output)
+    ids = {row["session_id"] for row in payload}
+    assert {sid_a, sid_b} <= ids
+    row_b = next(row for row in payload if row["session_id"] == sid_b)
+    assert row_b["project"] == "repo-b"
+    assert row_b["git_branch"] == "feature/b"
+    assert row_b["workspace_id"] is None
+    assert row_b["is_grove_managed"] is False
+    assert row_b["live"] is False
+
+    table_result = runner.invoke(app, ["sessions", "list", "--host"])
+    assert table_result.exit_code == 0, table_result.output
+    assert "PROJECT" in table_result.output
+    assert "BRANCH" in table_result.output
+    assert "LIVE" in table_result.output
+    assert "repo-b" in table_result.output
+    assert "feature/b" in table_result.output

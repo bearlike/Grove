@@ -35,12 +35,12 @@ export function PeekSnapshot({ snapshot, takenAt, className }: Props) {
   // remaining viewport.
   return (
     // `JetBrainsMonoNerd.variable` scopes the Nerd Font to this terminal
-    // subtree (#92) so the `<pre>`'s `font-terminal` resolves the powerline/
-    // icon glyphs. PeekSnapshot's ONLY consumer is TerminalPane (the detail
-    // terminal pane, verified 2026-07-05); the Nerd Font variable rides here
-    // rather than being assumed from a parent, so the glyphs resolve wherever
-    // the pane mounts. (The dashboard's FocusedPane composes TerminalView
-    // directly — it does NOT render PeekSnapshot.)
+    // subtree so the `<pre>`'s `font-terminal` resolves the powerline/icon
+    // glyphs. PeekSnapshot's ONLY consumer is TerminalPane (the detail
+    // terminal pane); the Nerd Font variable rides here rather than being
+    // assumed from a parent, so the glyphs resolve wherever the pane mounts.
+    // (The dashboard's FocusedPane composes TerminalView directly — it does
+    // NOT render PeekSnapshot.)
     <TerminalView
       ansi={snapshot}
       takenAt={takenAt}

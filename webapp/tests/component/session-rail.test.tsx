@@ -12,7 +12,7 @@ import type {
   WorkspaceStateView,
 } from "@/lib/grove/types";
 
-// The rail (v3, #158) reads `useProjectSessionsAll` (seeded here) and renders a
+// The rail reads `useProjectSessionsAll` (seeded here) and renders a
 // FLAT, cross-project list ordered `modified_at` DESC — no project sections, no
 // date groups, no attention pin. Each row carries a provenance meta line
 // (project · branch · ±change). Rows are "mapped" when their workspace is present
@@ -54,13 +54,15 @@ function session(over: Partial<SessionSummaryView> & { session_id: string }): Se
   return {
     adapter_kind: "claude_code",
     provenance: "grove_launched",
+    primary: true,
     workspace_id: "w1",
     workspace_title: "feat",
-    workspace_branch: "kk/feat",
-    git_branch: "kk/feat",
+    workspace_branch: "dev/feat",
+    git_branch: "dev/feat",
     created_at: "2026-05-01T10:00:00Z",
     modified_at: "2026-05-01T10:00:00Z",
     size_bytes: 100,
+    live: false,
     title: "a session",
     first_prompt: "do a thing",
     last_prompt: "wrap up",
@@ -86,7 +88,7 @@ function wsActivity(
     id,
     title: id,
     repo_root: "/repos/Grove",
-    branch: "kk/feat",
+    branch: "dev/feat",
     base_branch: "main",
     worktree_path: `/repos/Grove/.worktrees/${id}`,
     tmux_session: `grove-${id}`,
@@ -95,6 +97,7 @@ function wsActivity(
     created_at: "2026-05-01T10:00:00Z",
     updated_at: "2026-05-01T10:00:00Z",
     paused_at: null,
+    runtime: id === "w2" ? "container" : "host",
   } as unknown as WorkspaceStateView;
   return {
     state,
@@ -138,7 +141,7 @@ const ROWS: SessionSummaryView[] = [
     session_id: "s-live",
     workspace_id: "w1",
     title: "fix auth",
-    git_branch: "kk/fix-auth",
+    git_branch: "dev/fix-auth",
     modified_at: "2026-05-02T10:00:00Z", // newest → sorts first
     activity: activity({ state: "working" }),
   }),
@@ -146,7 +149,7 @@ const ROWS: SessionSummaryView[] = [
     session_id: "s-att",
     workspace_id: "w2",
     title: "add cache",
-    git_branch: "kk/add-cache",
+    git_branch: "dev/add-cache",
     modified_at: "2026-05-01T10:00:00Z",
     activity: activity({ state: "waiting", needs_attention: true }),
   }),
@@ -193,7 +196,7 @@ describe("SessionRail", () => {
     renderRail();
     const live = screen.getByText("fix auth").closest('[data-testid="session-rail-row"]')!;
     expect(live).toHaveTextContent("Grove");
-    expect(live).toHaveTextContent("kk/fix-auth");
+    expect(live).toHaveTextContent("dev/fix-auth");
     // Real ±line counts from w1's diff_added/diff_removed (30 / 4).
     const changes = within(live as HTMLElement).getByTestId("session-rail-changes");
     expect(changes).toHaveTextContent("+30");
@@ -208,11 +211,48 @@ describe("SessionRail", () => {
     // middot (the ⋯ menu contributes no text, so the row's last text IS the
     // meta line's tail). Regression pin: MetaRow drops falsy children, but an
     // element whose component returns null is truthy, so the ChangeStat mount
-    // must be gated at JSX level (the review finding on #158).
+    // must be gated at JSX level.
     expect((att.textContent ?? "").trim()).not.toMatch(/·$/);
   });
 
-  it("shows a visible created-ago on every row and a dotted-underline project cue (#163)", () => {
+  it("carries the task phase as a quiet meta sigil, absent when unreported", () => {
+    const snap = mappedSnapshot();
+    snap.projects[0].workspaces[0].phase = {
+      phase: "verifying",
+      note: null,
+      updated_at: "2026-05-02T10:00:00Z",
+      index: 3,
+      total: 6,
+    };
+    renderRail({ snapshot: snap });
+    const live = screen.getByText("fix auth").closest('[data-testid="session-rail-row"]')!;
+    const badge = within(live as HTMLElement).getByTestId("phase-badge");
+    expect(badge).toHaveAttribute("data-phase", "verifying");
+    expect(badge).toHaveTextContent("4/6");
+
+    // w2 reports no phase → no slot, and (the MetaRow gate) no dangling middot.
+    const att = screen.getByText("add cache").closest('[data-testid="session-rail-row"]')!;
+    expect(within(att as HTMLElement).queryByTestId("phase-badge")).toBeNull();
+    expect((att.textContent ?? "").trim()).not.toMatch(/·$/);
+  });
+
+  it("marks the runtime on every MAPPED row, and stays honest on an unmapped one", () => {
+    // Both runtimes are marked — the isolation axis has no silent state. An
+    // unmapped (history-only) row has no live workspace, so its runtime is
+    // genuinely unknown and the slot is absent rather than defaulted to host.
+    renderRail({ snapshot: mappedSnapshot(), showUnmapped: true });
+    const live = screen.getByText("fix auth").closest('[data-testid="session-rail-row"]')!;
+    const att = screen.getByText("add cache").closest('[data-testid="session-rail-row"]')!;
+    expect(within(live as HTMLElement).getByTestId("runtime-mark").dataset.runtime).toBe("host");
+    expect(within(att as HTMLElement).getByTestId("runtime-mark").dataset.runtime).toBe(
+      "container",
+    );
+
+    const hand = screen.getByText("poke around").closest('[data-testid="session-rail-row"]')!;
+    expect(within(hand as HTMLElement).queryByTestId("runtime-mark")).toBeNull();
+  });
+
+  it("shows a visible created-ago on every row and a dotted-underline project cue", () => {
     renderRail();
     const live = screen.getByText("fix auth").closest('[data-testid="session-rail-row"]')!;
     // Created-ago is visible (not tooltip-only) — every row carries one.

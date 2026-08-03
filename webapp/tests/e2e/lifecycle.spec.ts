@@ -1,13 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// Workspace lifecycle parity (#56). The create flow rides the full cookie → BFF
+// Workspace lifecycle parity. The create flow rides the full cookie → BFF
 // → fake-daemon chain (the create POST is non-destructive to the shared read
 // fixtures). The stateful pause/resume/kill transitions are isolated per-test
 // via page.route, so they never mutate the one shared fake daemon other specs
 // read from.
 
 test.describe("create workspace (composer-first)", () => {
-  // The composer at the top of `/` IS the create surface (#96): type → Enter.
+  // The composer at the top of `/` IS the create surface: type → Enter.
   // Title auto-derives from the first prompt line; the full prompt rides as the
   // initial_prompt. Agent + repo default from the first known project.
 
@@ -139,7 +139,7 @@ async function mockWorkspace(
     id: "w-grove-1",
     title: "feat dashboard",
     repo_root: "/repos/Grove",
-    branch: "kk/feat-dashboard",
+    branch: "dev/feat-dashboard",
     base_branch: "main",
     worktree_path: "/repos/Grove/.worktrees/dash",
     tmux_session: "grove-dash",
@@ -202,8 +202,8 @@ async function mockWorkspace(
 }
 
 test.describe("lifecycle controls", () => {
-  // Every lifecycle verb lives in the identity popover again (#153) — the
-  // separate "Actions" dropdown is gone. Open the popover via `identity-trigger`;
+  // Every lifecycle verb lives in the identity popover — there is no separate
+  // "Actions" dropdown. Open the popover via `identity-trigger`;
   // a plain popover button click does NOT dismiss the surface, so the reversible
   // verb swaps IN PLACE (pause → resume) without the popover closing.
 
@@ -227,7 +227,7 @@ test.describe("lifecycle controls", () => {
     await mockWorkspace(page, { status: "active", provenance: "grove" });
     await page.goto("/w/w-grove-1");
 
-    // Kill lives in the identity popover's danger zone now (#153).
+    // Kill lives in the identity popover's danger zone.
     await page.getByTestId("identity-trigger").click();
     await page.getByTestId("action-kill").click();
     const confirm = page.getByTestId("kill-confirm-dialog");

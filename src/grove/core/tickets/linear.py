@@ -47,17 +47,18 @@ class LinearProvider(HttpTicketProvider):
         env: Mapping[str, str],
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        token = env.get(cfg.token_env, "")
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = token
         super().__init__(
             base_url=cfg.base_url,
-            headers=headers,
-            configured=bool(token),
+            headers={"Content-Type": "application/json"},
+            token_env=cfg.token_env,
+            env=env,
             transport=transport,
         )
         self._team_key = cfg.team_key
+
+    def auth_headers(self, token: str) -> dict[str, str]:
+        """Linear takes the API key BARE — no ``Bearer`` prefix. Per request."""
+        return {"Authorization": token}
 
     @property
     def context(self) -> str | None:

@@ -6,6 +6,15 @@
     "inline": "set -euo pipefail\nuv sync --frozen\n[ -f webapp/.env.local ] || cp webapp/.env.example webapp/.env.local\nmake webapp-install",
     "timeout_seconds": 600,
     "fail_fast": true,
-    "run_on_resume": true
+    "run_on_resume": true,
+    "applies_to": "host"
+  },
+  "container": {
+    "egress": {
+      "allow": [
+        "cdn.playwright.dev",
+        "playwright.download.prss.microsoft.com"
+      ]
+    }
   }
 }

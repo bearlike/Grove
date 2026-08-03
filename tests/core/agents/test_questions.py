@@ -1,4 +1,4 @@
-"""The provider-neutral ``AgentQuestion`` contract + its one normalizer (#74).
+"""The provider-neutral ``AgentQuestion`` contract + its one normalizer.
 
 These pin the *shape* both adapters normalize to and the single classmethod that
 maps a native tool call to it — never the semantics of any one provider. The

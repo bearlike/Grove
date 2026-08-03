@@ -39,7 +39,7 @@ export function CommitList({ commits, isLoading }: Props) {
         <ul className="space-y-3">
           {commits.map((c) => {
             // Strip the leading gitmoji + surface the conventional-commit type as
-            // a small muted tag (issue #96): rationed color, no decorative emoji.
+            // a small muted tag: rationed color, no decorative emoji.
             const { tag, subject } = parseCommitSubject(c.subject);
             return (
               <li

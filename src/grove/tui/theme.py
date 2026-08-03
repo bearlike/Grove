@@ -32,8 +32,12 @@ from textual.theme import Theme
 from grove.core import InitStatus, WorkspaceStatus
 from grove.core.agents import AgentActivityState
 from grove.core.contracts.agent_palette import DARK_AGENT_STATE_HEX
+from grove.core.contracts.phase_palette import DARK_PHASE_HEX
+from grove.core.contracts.runtime_palette import DARK_RUNTIME_HEX
 from grove.core.contracts.status_palette import DARK_STATUS_HEX
 from grove.core.errors import ConfigError
+from grove.core.phase import TaskPhase
+from grove.core.workspace import Runtime
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -122,6 +126,7 @@ _DARK_STATUS_OFFLINE: Final = DARK_STATUS_HEX[WorkspaceStatus.OFFLINE]
 _DARK_STATUS_PAUSED: Final = DARK_STATUS_HEX[WorkspaceStatus.PAUSED]
 _DARK_STATUS_ORPHANED: Final = DARK_STATUS_HEX[WorkspaceStatus.ORPHANED]
 _DARK_STATUS_ERROR: Final = DARK_STATUS_HEX[WorkspaceStatus.ERROR]
+_DARK_STATUS_PROVISIONING: Final = DARK_STATUS_HEX[WorkspaceStatus.PROVISIONING]
 
 _LIGHT_STATUS_ACTIVE: Final = "#65a30d"  # lime-600 — readable on cream
 _LIGHT_STATUS_RUNNING: Final = _LIGHT_STATUS_ACTIVE
@@ -130,6 +135,11 @@ _LIGHT_STATUS_OFFLINE: Final = _LIGHT_FG_MUTED
 _LIGHT_STATUS_PAUSED: Final = _LIGHT_FG_MUTED
 _LIGHT_STATUS_ORPHANED: Final = _LIGHT_WARNING
 _LIGHT_STATUS_ERROR: Final = "#a83232"
+# Provisioning borrows IDLE's info hue on this side too, mirroring the dark
+# wire contract (`contracts.status_palette`): alive but not yet ready. What
+# matters is what it must NOT be — the muted gray OFFLINE and PAUSED share,
+# which is the exact misread ("dead, respawn it") this status exists to fix.
+_LIGHT_STATUS_PROVISIONING: Final = _LIGHT_STATUS_IDLE
 
 # Lighter-lime ACTIVE — the "swelled" frame of the live-signal pulse. A
 # brighter shade of the rest hue so the eye reads a beat without losing
@@ -158,6 +168,30 @@ _LIGHT_AGENT_UNKNOWN: Final = _LIGHT_FG_MUTED
 # better in a deeper, less vivid green than the new "alive" lime.
 _LIGHT_REF_ADD: Final = "#3d7a00"
 
+# Task-phase palette (light side). The dark side is the canonical cross-client
+# contract in ``grove.core.contracts.phase_palette`` (a pale→deep lime ramp
+# anchored on near-black `$surface`); the light side is TUI-only, same as the
+# agent-state light palette above. A pale-lime *dark*-mode `scoping` hex would
+# nearly vanish against light `$background`/`$surface` (cream/tan), so the
+# light ramp stays in the readable lime-500..lime-900 range throughout — the
+# same "readable on cream" adjustment `_LIGHT_STATUS_ACTIVE` makes — and
+# darkens monotonically as the task advances instead of paling. `done` reuses
+# the muted-gray atom, mirroring the dark ramp leaving lime for gray.
+_LIGHT_PHASE_SCOPING: Final = "#84cc16"  # lime-500
+_LIGHT_PHASE_PLANNING: Final = "#65a30d"  # lime-600 (= _LIGHT_STATUS_ACTIVE)
+_LIGHT_PHASE_IMPLEMENTING: Final = "#4d7c0f"  # lime-700
+_LIGHT_PHASE_VERIFYING: Final = "#3f6212"  # lime-800
+_LIGHT_PHASE_DELIVERING: Final = "#365314"  # lime-900
+_LIGHT_PHASE_DONE: Final = _LIGHT_FG_MUTED  # settled; same atom as _LIGHT_STATUS_OFFLINE
+
+# Runtime palette (light side). The dark side is the canonical cross-client
+# contract in ``grove.core.contracts.runtime_palette``; the light side is
+# TUI-only, same as the agent-state and phase light palettes above, and reuses
+# the same two atoms the dark side does — the muted foreground for the ambient
+# host case, the info blue for the container's "worth noticing, not a warning".
+_LIGHT_RUNTIME_HOST: Final = _LIGHT_FG_MUTED
+_LIGHT_RUNTIME_CONTAINER: Final = _LIGHT_INFO
+
 
 # ─── variables dicts (consumed by Theme.variables → $varname in TCSS) ──────
 
@@ -169,6 +203,7 @@ _DARK_VARS: Final[dict[str, str]] = {
     "status-paused": _DARK_STATUS_PAUSED,
     "status-orphaned": _DARK_STATUS_ORPHANED,
     "status-error": _DARK_STATUS_ERROR,
+    "status-provisioning": _DARK_STATUS_PROVISIONING,
     "ref": _DARK_REF,
     "ref-add": _DARK_REF_ADD,
     "ref-remove": _DARK_REF_REMOVE,
@@ -183,6 +218,7 @@ _LIGHT_VARS: Final[dict[str, str]] = {
     "status-paused": _LIGHT_STATUS_PAUSED,
     "status-orphaned": _LIGHT_STATUS_ORPHANED,
     "status-error": _LIGHT_STATUS_ERROR,
+    "status-provisioning": _LIGHT_STATUS_PROVISIONING,
     "ref": _LIGHT_REF,
     "ref-add": _LIGHT_REF_ADD,
     "ref-remove": _LIGHT_REF_REMOVE,
@@ -244,6 +280,7 @@ STATUS_HEX: Final[dict[bool, dict[WorkspaceStatus, str]]] = {
         WorkspaceStatus.PAUSED: _LIGHT_STATUS_PAUSED,
         WorkspaceStatus.ORPHANED: _LIGHT_STATUS_ORPHANED,
         WorkspaceStatus.ERROR: _LIGHT_STATUS_ERROR,
+        WorkspaceStatus.PROVISIONING: _LIGHT_STATUS_PROVISIONING,
     },
 }
 
@@ -270,6 +307,32 @@ AGENT_STATE_HEX: Final[dict[bool, dict[AgentActivityState, str]]] = {
         AgentActivityState.IDLE: _LIGHT_AGENT_IDLE,
         AgentActivityState.ERROR: _LIGHT_AGENT_ERROR,
         AgentActivityState.UNKNOWN: _LIGHT_AGENT_UNKNOWN,
+    },
+}
+
+# Task-phase hex, keyed by the active theme's `dark` flag. Dark side comes from
+# the canonical wire contract (other clients read the same dict); the light
+# side is TUI-only and defined inline above. Consumed by `_status.phase_color`.
+PHASE_HEX: Final[dict[bool, dict[TaskPhase, str]]] = {
+    True: dict(DARK_PHASE_HEX),
+    False: {
+        "scoping": _LIGHT_PHASE_SCOPING,
+        "planning": _LIGHT_PHASE_PLANNING,
+        "implementing": _LIGHT_PHASE_IMPLEMENTING,
+        "verifying": _LIGHT_PHASE_VERIFYING,
+        "delivering": _LIGHT_PHASE_DELIVERING,
+        "done": _LIGHT_PHASE_DONE,
+    },
+}
+
+# Runtime hex, keyed by the active theme's `dark` flag. Dark side comes from the
+# canonical wire contract (the web client mirrors the same dict); the light side
+# is TUI-only and defined inline above. Consumed by `_status.runtime_color`.
+RUNTIME_HEX: Final[dict[bool, dict[Runtime, str]]] = {
+    True: dict(DARK_RUNTIME_HEX),
+    False: {
+        Runtime.HOST: _LIGHT_RUNTIME_HOST,
+        Runtime.CONTAINER: _LIGHT_RUNTIME_CONTAINER,
     },
 }
 

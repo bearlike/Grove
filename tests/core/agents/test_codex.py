@@ -1,8 +1,8 @@
 """Pure-unit coverage for the Codex CLI adapter.
 
 The ``codex_basic.jsonl`` fixture is a sanitized slice of a real on-host rollout
-(codex 0.125.0, 2026-04-28) — trimmed and scrubbed of host-private paths/urls,
-but its *shape* is verbatim: ``session_meta`` head, the AGENTS.md +
+(codex 0.125.0) — trimmed and scrubbed of host-private paths/urls, but its
+*shape* is verbatim: ``session_meta`` head, the AGENTS.md +
 ``<environment_context>`` preamble user message, a real human turn, an opaque
 encrypted ``reasoning`` record, a ``function_call``/``function_call_output``
 pair, an assistant ``message``, the ``event_msg`` mirrors that MUST be ignored,
@@ -135,7 +135,7 @@ def test_read_turns_groups_replies_under_the_prompt(
     ]
 
 
-# ─── agent questions (issue #74 — MCP-bridged question tool in the rollout) ───
+# ─── agent questions (MCP-bridged question tool in the rollout) ─────────────
 
 
 def test_question_function_call_becomes_resolved_question_entry(
@@ -209,10 +209,10 @@ def test_apply_patch_custom_tool_call_becomes_file_edit_entry(
 
 
 def test_apply_patch_is_counted_as_a_tool_call(adapter: CodexAdapter, codex_home: Path) -> None:
-    """The visibility gap this closes: a ``custom_tool_call`` is now in the
-    ``is_tool_call`` set, so an ``apply_patch`` edit is counted (before it was
-    silently skipped — uncounted, unrendered). The fixture has exactly one
-    ``apply_patch`` plus one other custom tool → two tool calls."""
+    """A ``custom_tool_call`` is in the ``is_tool_call`` set, so an
+    ``apply_patch`` edit is counted rather than silently skipped. The fixture
+    has exactly one ``apply_patch`` plus one other custom tool → two tool
+    calls."""
     _install(codex_home, FILE_EDIT_SID, FILE_EDIT)
     act = adapter.parse_activity(BASIC_CWD, FILE_EDIT_SID)
     assert act.tool_calls == 2
@@ -251,8 +251,8 @@ def test_update_plan_becomes_a_todo_entry(adapter: CodexAdapter, codex_home: Pat
     ``arguments`` is a JSON string carrying ``plan[]`` with ``step``/``status``
     (verified against a real on-host rollout — no ``content``, no ``activeForm``).
     It renders ONE ``role="todo"`` entry with ``step`` mapped to ``content`` and
-    ``active_form`` left ``None``; before #184 it was a bare ``role="tool"``
-    "update_plan" and the plan was discarded."""
+    ``active_form`` left ``None`` — rendering it as a bare ``role="tool"``
+    "update_plan" would discard the plan."""
     _install(codex_home, TODO_SID, TODO)
     (turn,) = adapter.read_turns(BASIC_CWD, TODO_SID)
     todos = [e for e in turn.entries if e.role == "todo"]
@@ -380,7 +380,7 @@ def test_parse_activity_matches_locate_then_parse(adapter: CodexAdapter, codex_h
     assert adapter.parse_activity(BASIC_CWD, BASIC_SID) == legacy
 
 
-# ─── digest (the #20 seam) ──────────────────────────────────────────────────
+# ─── digest ──────────────────────────────────────────────────────────────────
 
 
 def test_digest_skeleton_excludes_tool_output(adapter: CodexAdapter, codex_home: Path) -> None:
@@ -464,6 +464,80 @@ def test_discover_births_reads_birth_from_meta_head(
     assert by_id[older] == datetime(2026, 4, 28, 20, 0, tzinfo=UTC)
 
 
+# ─── discover_all (the host-wide catalog scan, epic: Session Catalog) ──────
+
+
+def test_discover_all_reads_git_branch_from_session_meta(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """The real fixture's ``session_meta.payload.git.branch`` rides out of the
+    SAME head read that already yields id/cwd — no extra I/O."""
+    _install(codex_home, BASIC_SID, BASIC)
+    refs = adapter.discover_all()
+    assert len(refs) == 1
+    ref = refs[0]
+    assert ref.session_id == BASIC_SID
+    assert ref.adapter_kind == "codex"
+    assert ref.cwd == str(BASIC_CWD)
+    assert ref.git_branch == "feature/widget"
+
+
+def test_discover_all_spans_every_cwd_newest_first(adapter: CodexAdapter, codex_home: Path) -> None:
+    """Unlike Claude, Codex's per-cwd ``discover_paths`` was ALREADY a full
+    store walk + filter (date-partitioned paths carry no cwd) — so
+    ``discover_all`` finding every cwd host-wide, and ``discover_paths``
+    reusing it, is the genuine DRY win this issue asks for."""
+    older = "0aaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"
+    newer = "0fffffff-ffff-7fff-8fff-ffffffffffff"
+    cwd_a = Path("/home/dev/work/alpha")
+    cwd_b = Path("/home/dev/work/beta")
+    for sid, cwd, branch, mtime in (
+        (older, cwd_a, "main", 1000),
+        (newer, cwd_b, "feature/y", 2000),
+    ):
+        path = _install_text(
+            codex_home,
+            sid,
+            '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+            '"payload":{"id":"' + sid + '","cwd":"' + str(cwd) + '",'
+            '"git":{"branch":"' + branch + '"}}}\n',
+        )
+        os.utime(path, (mtime, mtime))
+
+    refs = adapter.discover_all()
+    assert [ref.session_id for ref in refs] == [newer, older]  # newest-first by mtime
+    by_id = {ref.session_id: ref for ref in refs}
+    assert by_id[older].cwd == str(cwd_a)
+    assert by_id[older].git_branch == "main"
+    assert by_id[newer].cwd == str(cwd_b)
+    assert by_id[newer].git_branch == "feature/y"
+
+    # discover_paths, re-expressed over discover_all, must still answer
+    # per-cwd correctly — this is the DRY re-expression's whole point.
+    assert adapter.discover_sessions(cwd_a) == [older]
+    assert adapter.discover_sessions(cwd_b) == [newer]
+
+
+def test_discover_all_degrades_a_cwdless_rollout_instead_of_dropping_it(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A rollout whose ``session_meta`` carries no cwd still surfaces with
+    ``cwd=None`` — honest degradation, never a dropped row."""
+    sid = "0ccccccc-cccc-7ccc-8ccc-cccccccccccc"
+    _install_text(
+        codex_home,
+        sid,
+        '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+        '"payload":{"id":"' + sid + '","model_provider":"openai"}}\n',
+    )
+
+    refs = adapter.discover_all()
+    assert len(refs) == 1
+    assert refs[0].session_id == sid
+    assert refs[0].cwd is None
+    assert refs[0].git_branch is None
+
+
 # ─── list_sessions (summaries for the explorer) ─────────────────────────────
 
 
@@ -504,12 +578,12 @@ def test_codex_launch_decoration_is_empty() -> None:
 
 
 def test_codex_model_decoration_is_model_flag() -> None:
-    """Codex honors ``--model <id>`` at launch even though it mints no id (#96)."""
+    """Codex honors ``--model <id>`` at launch even though it mints no id."""
     assert get_adapter("codex").model_decoration("gpt-5.5") == ["--model", "gpt-5.5"]
 
 
 def test_codex_offline_decoration_disables_sandbox_network() -> None:
-    """#148: Codex has no standalone tool-disable flag — `tools_offline` pins
+    """Codex has no standalone tool-disable flag — `tools_offline` pins
     the sandbox to workspace-write with networking off instead."""
     assert get_adapter("codex").offline_decoration() == [
         "--sandbox",
@@ -527,7 +601,7 @@ def _install_text(codex_home: Path, sid: str, text: str) -> Path:
     return target
 
 
-# ─── the agentic-loop spine (#179) ──────────────────────────────────────────
+# ─── the agentic-loop spine ──────────────────────────────────────────────────
 
 
 def test_read_messages_maps_roles_and_drops_metadata(
@@ -601,7 +675,7 @@ def test_read_turns_is_a_projection_of_read_messages(
     assert turn_prompts == spine_prompts
 
 
-# ─── typed final-result extraction (#149) ───────────────────────────────────
+# ─── typed final-result extraction ──────────────────────────────────────────
 
 
 def test_final_result_incomplete_when_a_tool_result_trails_the_last_assistant(
@@ -610,8 +684,8 @@ def test_final_result_incomplete_when_a_tool_result_trails_the_last_assistant(
     """The BASIC fixture's spine tail is the ``tool`` result carrier, one past
     the last ``assistant``-role message (the ``function_call``) — so
     ``is_complete`` is ``False`` even though ``task_complete`` fired in the raw
-    rollout: that boundary lives only in ``event_msg`` records, which never
-    reach the spine (#179's dual-record rule), so the shape-only projection is
+    rollout: that boundary lives only in ``event_msg`` records, which the
+    dual-record rule drops from the spine, so the shape-only projection is
     the honest best-effort answer here, not the event-accurate one."""
     _install(codex_home, BASIC_SID, BASIC)
     result = adapter.final_result(BASIC_CWD, BASIC_SID)
@@ -658,7 +732,7 @@ def test_final_result_none_before_any_assistant_reply(
     assert adapter.final_result(Path("/home/dev/work/none"), sid) is None
 
 
-# ─── latest-todo projection (#194) ──────────────────────────────────────────
+# ─── latest-todo projection ──────────────────────────────────────────────────
 
 
 def test_latest_todo_from_an_update_plan_call(adapter: CodexAdapter, codex_home: Path) -> None:
@@ -682,7 +756,7 @@ def test_latest_todo_none_before_any_todo_call(adapter: CodexAdapter, codex_home
     assert adapter.latest_todo(BASIC_CWD, BASIC_SID) is None
 
 
-# ─── session controls (#178): codex analog (prompts + config.toml MCP) ──────
+# ─── session controls: codex analog (prompts + config.toml MCP) ────────────
 
 
 def test_session_controls_enumerates_prompts_and_mcp(

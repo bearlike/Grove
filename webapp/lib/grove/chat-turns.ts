@@ -32,7 +32,7 @@ export type ChatItem =
   | { kind: "tools"; calls: ToolCall[] }
   | { kind: "note"; tone: "summary" | "status"; text: string }
   | { kind: "notification"; summary: string; detail: string }
-  // One historical entry from `/turns` — always read-only (epic #74).
+  // One historical entry from `/turns` — always read-only.
   | { kind: "question"; question: AgentQuestionView }
   // One file mutation a tool performed — an ALWAYS-visible standalone diff,
   // never folded into the `tools` accordion (that's the whole point). `path` is
@@ -46,7 +46,7 @@ export type ChatItem =
     }
   | { kind: "continuation" };
 
-// The LIVE pending question GROUP (Gitea #111) is deliberately NOT a `ChatItem`:
+// The LIVE pending question GROUP is deliberately NOT a `ChatItem`:
 // `ThreadPrimitive.Messages` keys its children by INDEX, so a live interactive
 // card at the tail would remount (losing in-flight selections) every time the
 // transcript grows under it. The panel renders it as a stable sibling AFTER the
@@ -87,7 +87,7 @@ export function chatItemsFromTurns(turns: SessionTurnView[]): ChatItem[] {
 /**
  * The LATEST todo/plan list across the loaded turns, or null when none — the
  * agent's current plan (Claude `TodoWrite` / Codex `update_plan`), pinned as a
- * card above the composer (#184). Derived purely from the fetch-on-demand
+ * card above the composer. Derived purely from the fetch-on-demand
  * `/turns` payload (a `DigestEntryView` of role "todo"), the unit-test seam kept
  * apart from the React layer exactly like {@link chatItemsFromTurns}. Todo
  * entries are excluded from the message stream (see `itemFromEntry`), so this is
@@ -101,7 +101,13 @@ export function latestTodoFromTurns(turns: SessionTurnView[]): TodoListView | nu
       if (entry.role === "todo" && entry.todo) latest = entry.todo;
     }
   }
-  return latest;
+  // A CLEARED plan (`items: []` — representable on the wire, and what a
+  // TodoWrite that empties the list produces) degrades to nothing rather than a
+  // dead "0/0" card whose disclosure opens on an empty list. Note the emptiness
+  // check runs on the WINNER, never inside the loop: skipping empty entries as
+  // we scan would let a stale earlier plan win and resurrect a list the agent
+  // has since cleared — newest-write-wins first, then degrade.
+  return latest && latest.items.length > 0 ? latest : null;
 }
 
 function itemFromEntry(entry: DigestEntryView): ChatItem | null {
@@ -170,7 +176,7 @@ function itemFromEntry(entry: DigestEntryView): ChatItem | null {
   }
 }
 
-// ─── assistant-ui bridge (Phase D, #141) ─────────────────────────────────────
+// ─── assistant-ui bridge ──────────────────────────────────────────────────────
 
 /**
  * The `data-*` message-part NAMES Grove models its non-text transcript rows as.

@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useHeaderSlot } from "@/components/layout/header-slot";
 import { ContextBar } from "@/components/workspace/context-bar";
 import { AgentWorkspace } from "@/components/workspace/agent-workspace";
+import { ProvisionPanel } from "@/components/workspace/provision-progress";
 import { SessionPicker } from "@/components/chat/session-picker";
 import {
   ViewSwitcher,
@@ -16,7 +17,7 @@ import {
 } from "@/components/workspace/view-switcher";
 import { AgentLiveStatus } from "@/lib/grove/agent-activity";
 import { turnsProgressFingerprint } from "@/lib/grove/activity-stream";
-import { primarySessionId } from "@/lib/grove/live-question";
+import { findWorkspaceActivity, primarySessionId } from "@/lib/grove/live-question";
 import { GroveProtocolError } from "@/lib/grove/client";
 import {
   useActivityStream,
@@ -41,17 +42,15 @@ function useMinWidth(px: number): boolean {
 }
 
 /**
- * The ONE seam deciding what the agent surface shows (#159) — everything else
- * (ViewSwitcher, AgentWorkspace) just renders whatever this returns. Collapses
- * what used to be two scattered conditionals (`defaultTab`/`view` inline in the
- * component) into a single decision table:
+ * The ONE seam deciding what the agent surface shows — everything else
+ * (ViewSwitcher, AgentWorkspace) just renders whatever this returns, per a
+ * single decision table:
  *
  *   default tab  = sessionResolved ? "transcript" : "terminal" (null while loading, for the skeleton)
  *   default view = "tabs" (single pane) ALWAYS — split is opt-in via the ViewSwitcher, never a default
  *   explicit choice (chosenTab / chosenView) wins over both defaults, for the page's lifetime
  *
- * Split used to default open on lg+ once a session resolved (#124/#130); the
- * product ruling for #159 is transcript-first single-pane everywhere, split
+ * The product ruling is transcript-first single-pane everywhere; split is
  * reachable but never assumed.
  */
 function resolvePaneView(
@@ -72,41 +71,34 @@ function resolvePaneView(
 }
 
 /**
- * The workspace detail page — the three-zone session layout (ADE reframe, #138):
- * `rail | transcript column | work-panel`. The rail + header now come from the
- * shared shell layout (this route moved INTO the `(shell)` group), so this page
- * renders only zones 2+3 (the existing `AgentWorkspace` split, still fully
- * functional) plus the session's own chrome.
+ * The workspace detail page — the three-zone session layout: `rail |
+ * transcript column | work-panel`. The rail + header come from the shared
+ * shell layout, so this page renders only zones 2+3 (the `AgentWorkspace`
+ * split) plus the session's own chrome.
  *
  * Header cluster: the page owns the session data, so it builds the `ContextBar`
  * identity + view cluster and PORTALS it into the shared header's middle slot
  * (`useHeaderSlot` → `createPortal`). This keeps exactly one `context-bar` mount,
- * inside `<header>`, at every width — the old below-lg band is still gone. `back`
- * is route-derived by the shell, so the page no longer renders its own `<Header>`.
+ * inside `<header>`, at every width. `back` is route-derived by the shell, so
+ * the page never renders its own `<Header>`.
  *
- * Live agent state: it rides the `ContextBar` in the header now (#153) — the
- * state mark leads the identity trigger, and an sr-only `aria-live` region there
- * announces the state word on change. The separate in-page `context-task`
- * subheader is DELETED: it re-duplicated the state and, worse, showed a
- * `taskLine` (the "happening now" prompt text) that the #136 bound already ruled
- * off the announced surface — the header cluster is the single home now. No
- * ui-store `sessionStatus` mirror is involved (that slice died with the status
- * bar). Per the #136 bound, the header's live region carries ONLY the state
- * word, never the raw task/prompt text.
+ * Live agent state rides the `ContextBar` in the header — the state mark
+ * leads the identity trigger, and an sr-only `aria-live` region there
+ * announces the state word on change ONLY, never the raw task/prompt text.
  *
  * The page owns ALL cross-cutting session state so the header cluster can ride
- * the shell: the session-selection cascade + remap (#121, lifted from ChatPanel),
- * the single `useActivityStream` subscription (one EventSource per route) —
- * which also drives the transcript's SSE-invalidation (`turnsProgressFingerprint`,
- * #166), so the turns cache doesn't wait out its own poll to catch up — and ALL
- * view state (which tab, single vs. split — see `resolvePaneView` above, #159).
- * The AgentWorkspace below is panes-only; the ChatPanel gets the resolved
- * session as props.
+ * the shell: the session-selection cascade + remap, the single
+ * `useActivityStream` subscription (one EventSource per route) — which also
+ * drives the transcript's SSE-invalidation (`turnsProgressFingerprint`), so the
+ * turns cache doesn't wait out its own poll to catch up — and ALL view state
+ * (which tab, single vs. split — see `resolvePaneView` above). The
+ * AgentWorkspace below is panes-only; the ChatPanel gets the resolved session
+ * as props.
  *
- * At EVERY breakpoint the page is a fixed-height flex column — `100dvh` minus the
- * h-13 header (52px = 3.25rem; the status bar is gone, so this is the ONLY chrome
- * subtracted) — whose panes scroll internally. The `detail-panel` is a BARE
- * full-bleed column on the `bg-background` canvas.
+ * At EVERY breakpoint the page is a fixed-height flex column — `100dvh` minus
+ * the h-13 header (52px = 3.25rem, the only chrome subtracted) — whose panes
+ * scroll internally. The `detail-panel` is a BARE full-bleed column on the
+ * `bg-background` canvas.
  *
  * NEVER add `overflow-hidden` to the page column or `detail-panel`: a
  * fixed-height, overflow-clipped ancestor holding actionable buttons hangs
@@ -121,11 +113,11 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   const { data: sessions, isLoading: sessionsLoading } = useWorkspaceSessions(id);
   const { snapshot } = useActivityStream();
 
-  // Session selection cascade, lifted from the chat panel (#121 → #130) so the
-  // picker (and now the session rail, #140) can ride the header cluster: the
-  // `?s=` URL param wins when present (a rail row navigates to `/w/{id}?s={sid}`),
-  // then an explicit in-page pick, then the daemon's tracked primary (off the
-  // activity snapshot — durable across a reload), then the plain list's head.
+  // Session selection cascade, lifted up so the picker and the session rail
+  // can both ride the header cluster: the `?s=` URL param wins when present (a
+  // rail row navigates to `/w/{id}?s={sid}`), then an explicit in-page pick,
+  // then the daemon's tracked primary (off the activity snapshot — durable
+  // across a reload), then the plain list's head.
   const searchParams = useSearchParams();
   const urlSessionId = searchParams.get("s");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(urlSessionId);
@@ -139,7 +131,7 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
 
   // What the daemon's OWN tracked/attributed data resolves to (the gated list +
   // the snapshot primary) — the healthy path. When this is null the workspace
-  // has no usable session to show (the dead-pointer bug, #132), and ONLY then do
+  // has no usable session to show (a dead tracked pointer), and ONLY then do
   // we pay the extra ungated candidate scan so a remap out of the dead end exists.
   const gatedActive =
     (selectedSessionId && sessions?.find((s) => s.session_id === selectedSessionId)) ||
@@ -160,13 +152,16 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
     (backendPrimaryId && candidates?.find((s) => s.session_id === backendPrimaryId)) ||
     null;
   const sessionId = active?.session_id ?? null;
-  const agentState = active?.activity.state ?? "unknown";
+  // `activity` is null on a listing that never parsed the transcript (the host
+  // catalog's scope) — "not measured", which reads as `unknown` here, never as a
+  // fabricated idle. Workspace-scoped listings always carry it.
+  const agentState = active?.activity?.state ?? "unknown";
 
   // Live status describes the SELECTED session (coherence: the badge + task line
   // match the transcript you're looking at), not blindly the newest session.
   const live = AgentLiveStatus.of(active?.activity ?? null);
 
-  // SSE-invalidate the transcript the instant a turn actually advances (#166):
+  // SSE-invalidate the transcript the instant a turn actually advances:
   // `useSessionTurns`' refetch interval is a backstop, not the freshness
   // mechanism — the terminal pane streams at ~1s while turns only refetch on
   // that timer, so a user watching the pane work sees the transcript trail it.
@@ -186,8 +181,8 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
     void queryClient.invalidateQueries({ queryKey: ["turns", id, sessionId] });
   }, [turnsFingerprint, queryClient, id, sessionId]);
 
-  // Pin a picked session as the tracked primary (#121) — a durable remap,
-  // separate from just switching which session the panel shows.
+  // Pin a picked session as the tracked primary — a durable remap, separate
+  // from just switching which session the panel shows.
   const remapSession = useRemapSession(id);
   const remapErrorText =
     remapSession.error instanceof GroveProtocolError
@@ -200,9 +195,9 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   };
 
   // View state (page-owned): see `resolvePaneView` above for the one decision
-  // table this derives from (#159 — transcript-first single pane everywhere;
-  // split is opt-in, never a default). A user's explicit tab/view choice wins
-  // after, for the page's lifetime.
+  // table this derives from — transcript-first single pane everywhere; split
+  // is opt-in, never a default. A user's explicit tab/view choice wins after,
+  // for the page's lifetime.
   const [chosenTab, setChosenTab] = useState<AgentTab | null>(null);
   const [chosenView, setChosenView] = useState<AgentView | null>(null);
 
@@ -283,12 +278,17 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   // so the `context-bar` testid never doubles. `slotEl` is null for the first
   // tick (before the header commits its ref); the portal simply waits.
   const slotEl = useHeaderSlot();
+  // The task-phase axis rides the activity snapshot, not the peek — the page
+  // already holds that snapshot, so the header cluster gets the third axis for
+  // free instead of the workspace losing it the moment you open it.
+  const phase = findWorkspaceActivity(snapshot, id)?.phase ?? null;
   const identityCluster =
     data && slotEl
       ? createPortal(
           <ContextBar
             peek={data}
             live={live}
+            phase={phase}
             onKilled={() => router.push("/")}
             viewSwitcher={viewSwitcher}
           />,
@@ -310,14 +310,25 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
       )}
 
       {data && (
-        // The live agent state + identity now ride the header's ContextBar
-        // (#153) — the old `context-task` subheader is deleted, so the panes get
-        // the full column below the header. `detail-panel` is a BARE full-bleed
-        // column on the `bg-background` canvas.
+        // The live agent state + identity ride the header's ContextBar, so the
+        // panes get the full column below the header. `detail-panel` is a BARE
+        // full-bleed column on the `bg-background` canvas.
         <div
           data-testid="detail-panel"
           className="flex min-h-0 min-w-0 flex-1 flex-col"
         >
+          {/* While the container is being built there is no agent and no
+              transcript, so the panes below have nothing to show — this banner
+              is the page's real content for the length of the build. It sits
+              ABOVE them rather than replacing them: the terminal/Diff/Info tabs
+              stay reachable, and the banner retires on the SSE status flip. */}
+          {data.state.status === "provisioning" && (
+            <ProvisionPanel
+              workspaceId={id}
+              startedAt={data.state.provision_started_at}
+              className="mx-3 mt-3 shrink-0"
+            />
+          )}
           <AgentWorkspace
             workspaceId={id}
             peek={data}

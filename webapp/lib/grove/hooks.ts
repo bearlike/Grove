@@ -12,6 +12,7 @@ import type {
   CreateWorkspaceRequest,
   DashboardEvent,
   DashboardSnapshotView,
+  ProvisionProgressView,
   SessionControlsView,
   SessionDetailView,
   SessionSummaryView,
@@ -82,7 +83,28 @@ export function useWorkspaceCommits(id: string) {
 }
 
 /**
- * The session's available input controls (#178) — the work panel's Controls
+ * Live provisioning progress for ONE workspace, polled at 2 s — the same
+ * cadence as the agent pane, because during a build this IS the live surface
+ * and the headline is the only proof anything is moving.
+ *
+ * MOUNTING is the gate, and there is deliberately no `enabled` flag: the two
+ * consumers (`ProvisionLine`, `ProvisionPanel`) are themselves rendered only
+ * while `state.status === "provisioning"`, so the SSE-streamed status flip
+ * unmounts them and TanStack drops the interval with them. A fleet that is not
+ * building therefore costs exactly zero requests. The log tail deliberately
+ * does NOT ride the activity stream — see `GroveClient.getProvisionProgress`.
+ */
+export function useProvisionProgress(id: string) {
+  return useQuery<ProvisionProgressView>({
+    queryKey: ["provision-progress", id],
+    queryFn: () => client.getProvisionProgress(id),
+    refetchInterval: 2_000,
+    enabled: Boolean(id),
+  });
+}
+
+/**
+ * The session's available input controls — the work panel's Controls
  * tab reader. Slash commands / skills / MCP servers / model catalog change
  * rarely (a config edit, a model switch), so the poll is a slow backstop; the
  * tab mounts this only when opened (conditional render), so idle tabs cost
@@ -114,7 +136,7 @@ export function useWorkspaceSessions(id: string) {
 
 /**
  * The UNGATED, cwd-scoped candidate sessions for a workspace — `GET
- * /workspaces/{id}/sessions?candidates=true` (#132). Where `useWorkspaceSessions`
+ * /workspaces/{id}/sessions?candidates=true`. Where `useWorkspaceSessions`
  * returns the daemon's own ATTRIBUTED history (adoption-gated), this KEEPS the
  * sessions the gate drops — a dead-minted-pointer's live successor, a foreign
  * session sharing a ROOT cwd — so a remap picker can offer the session the
@@ -153,7 +175,7 @@ export function useProjectSessions(repo: string | null) {
 }
 
 /**
- * The ADE session rail's batched reader (#140): every project's sessions at
+ * The session rail's batched reader: every project's sessions at
  * once, keyed identically to `useProjectSessions` so the two share one cache
  * entry per repo (a rail refetch warms a later single-repo read and vice-versa).
  * `useQueries` is the one idiomatic way to fan a dynamic-length list of repos
@@ -180,10 +202,54 @@ export function useProjectSessionsAll(repos: string[]) {
 }
 
 /**
+ * The host-wide Session Catalog — ONE request, not a fan-out.
+ *
+ * Deliberately NOT `useProjectSessionsAll`, which fans N parallel per-repo
+ * `GET /sessions?repo=` full-transcript parses and can only ever iterate repos
+ * Grove already knows. The catalog reaches sessions in repos Grove has never
+ * managed via a single metadata-only `GET /sessions` (no `repo`). Rows are
+ * cheap by construction (one bounded head read each), so a 500-row list costs
+ * one request and zero transcript parses — turns load only when a row is opened.
+ *
+ * No SSE invalidation and a slow poll: the catalog is a browse-history surface
+ * whose rows change when a run starts or ends, and the daemon holds it behind a
+ * 5 s TTL memo precisely because it must never ride the 2 s activity tick.
+ */
+export function useSessionCatalog(limit = 200) {
+  return useQuery<SessionSummaryView[]>({
+    queryKey: ["session-catalog", limit],
+    queryFn: () => client.getSessionCatalog(limit),
+    refetchInterval: 30_000,
+  });
+}
+
+/**
+ * One catalog row's conversation, resolved WITHOUT a workspace by its
+ * `(kind, cwd, session_id)` coordinate. `cwd` null means the row's head read
+ * never recovered a directory — such a session is undrillable by contract, so
+ * the query stays disabled rather than firing a request that can only 404.
+ *
+ * Read-only and archival: no optimistic write, no SSE invalidation, no poll —
+ * a transcript you are reading from history does not grow under you, and the
+ * live-session surface (`useSessionTurns`) is the one that needs freshness.
+ */
+export function useCatalogTurns(
+  sessionId: string | null,
+  kind: string | null,
+  cwd: string | null,
+) {
+  return useQuery<SessionDetailView>({
+    queryKey: ["catalog-turns", sessionId, kind, cwd],
+    queryFn: () => client.getCatalogTurns(sessionId as string, kind as string, cwd as string, 100),
+    enabled: Boolean(sessionId) && Boolean(kind) && Boolean(cwd),
+  });
+}
+
+/**
  * One session's conversation digest, fetched on expand only (`sessionId` null →
  * disabled, zero requests). The digest is a transcript read, the heaviest
  * per-request endpoint here, so `refetchMs` is a BACKSTOP, not the freshness
- * mechanism (#166): the session page layers an SSE-driven invalidation on top,
+ * mechanism: the session page layers an SSE-driven invalidation on top,
  * firing `queryClient.invalidateQueries(["turns", …])` the instant
  * `turnsProgressFingerprint` (`activity-stream.ts`) shows the session's
  * `assistant_replies`/`tool_calls`/`last_event_at` actually advanced — so a
@@ -252,7 +318,7 @@ export function useInterrupt(workspaceId: string) {
 }
 
 /**
- * Invoke a named session control — a slash command or a skill (#178). Mirrors
+ * Invoke a named session control — a slash command or a skill. Mirrors
  * `useSendMessage`/`useInterrupt`: dispatch-only, no optimistic cache write (the
  * result rides the transcript stream, not a refetch here). A 501
  * `capability_unavailable` / 409 refusal surfaces as a quiet inline notice.
@@ -264,7 +330,7 @@ export function useInvokeControl(workspaceId: string) {
 }
 
 /**
- * Switch the running session's model (#178). On success, invalidate the
+ * Switch the running session's model. On success, invalidate the
  * controls key so `current_model` refreshes (its poll backstop is slow); the
  * actual switch takes effect on the agent's side and rides the transcript.
  */
@@ -302,7 +368,7 @@ export function useAnswerQuestion(workspaceId: string) {
 }
 
 /**
- * Pin an existing session as the workspace's tracked primary (#121) — POST
+ * Pin an existing session as the workspace's tracked primary — POST
  * `/workspaces/{id}/session`, `mutate(sessionId)`. `SessionSummaryView`
  * carries no "is primary" flag and `useWorkspaceSessions` sorts purely by
  * `modified_at`, so this mutation does NOT reorder or relabel that list — it
@@ -327,7 +393,7 @@ export function useRemapSession(workspaceId: string) {
   });
 }
 
-// ─── Lifecycle mutations (workspace parity, #56) ─────────────────────────────
+// ─── Lifecycle mutations (workspace parity) ──────────────────────────────────
 
 /**
  * Invalidate every cache a lifecycle mutation can stale. The SSE stream already
@@ -486,7 +552,7 @@ export function useActivityStream(): ActivityStream {
       setSnapshot((prev) => applyDashboardEvent(prev, JSON.parse(e.data) as DashboardEvent));
     };
     // Lifecycle wake-up (or an out-of-band create the poll surfaced as a
-    // `session_activity` for a workspace we don't have yet, #49) — re-fetch
+    // `session_activity` for a workspace we don't have yet) — re-fetch
     // the full snapshot so the new row appears and gone rows drop.
     const refetch = () => {
       stamp();

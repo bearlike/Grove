@@ -1,4 +1,4 @@
-"""Issue-ops wire shapes — what the CI forwarder POSTs, and what it gets back (#196).
+"""Issue-ops wire shapes — what the CI forwarder POSTs, and what it gets back.
 
 ``IssueOpsEvent`` IS the request body the ``.gitea/`` (or GitHub Actions)
 composite forwarder sends to ``POST /issue-ops/events``: a normalized, provider-
@@ -31,7 +31,7 @@ IssueOpsAction = Literal[
     "paused",  # the ticket's workspace was paused
     "resumed",  # the ticket's workspace was resumed
     "stopped",  # the ticket's workspace was killed
-    "status",  # a status re-render was triggered (the publisher seam, #197)
+    "status",  # a status re-render was triggered (the publisher seam)
     "refused",  # a well-formed command the engine declined — ``code`` says why
     "ignored",  # dropped before routing (duplicate / bot / marker / …) — ``code`` says why
 ]

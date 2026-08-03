@@ -14,11 +14,9 @@
 
 ## 🌳 Overview
 
-Grove runs several AI coding agents at once, each in its own isolated **workspace**: a dedicated git worktree on its own branch, paired with a tmux session and a window. The rule is one agent, one worktree, one window. Agents are productive in parallel but chaotic in the same folder, where they overwrite each other's files and collide on the same branch. Grove gives each one its own bench.
+Writing the code stopped being the slow part. Deciding what to build did. More agents would help, but two in one checkout overwrite each other's files and fight over the same branch. Grove gives each an isolated **workspace** and touches nothing about the agent itself. One worktree, one branch, one window. Add a [container](https://bearlike.github.io/Grove/latest/features-containers/) and it gets a whole stack of its own, so permissions off risks a sandbox and not your machine.
 
-Every workspace is reachable asynchronously, from the terminal TUI, the CLI, the web IDE on any device, or another agent over [MCP](https://bearlike.github.io/Grove/latest/use-mcp/). The same isolated-workspace primitive backs human and agent orchestration alike. Through all of it your git history stays yours: Grove never commits, never pushes, and never touches a remote branch.
-
-https://github.com/user-attachments/assets/21a67df2-8a27-412b-9c79-f86ce95c3212
+Then work arrives on its own. Assign an issue on Linear, GitHub or Gitea and a workspace starts against it, using that issue as its spec. It reports back on [the same ticket](https://bearlike.github.io/Grove/latest/issue-ops/), so nobody reads code to follow along. Shape the next one. Review what came back. Unblock what stalled. You stop writing the code. You do not stop owning it.
 
 ## ✨ Features
 
@@ -26,29 +24,29 @@ https://github.com/user-attachments/assets/21a67df2-8a27-412b-9c79-f86ce95c3212
 <tr>
 <td width="50%" valign="middle">
 
-### A web IDE for your agents
+### Terminal UI
 
-Reach the whole fleet over your network. A session rail lists every agent thread by recency; the landing is a composer, so a prompt spins up a workspace. Pair a device once and the daemon stays loopback. Space-black, dark-first.
+Grove is a terminal program first. Run `grove` in a repo and create, attach, pause or kill a workspace in one keypress each, while a peek rail mirrors the selected agent's pane live next to its git position.
 
-[Docs →](https://bearlike.github.io/Grove/latest/use-webapp/)
+[Docs →](https://bearlike.github.io/Grove/latest/use-tui/)
 
 </td>
 <td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-home.png" alt="Grove's web IDE: a session rail listing every agent thread on the left, a composer at the center to start a workspace, on a dark space-black canvas" width="100%" /></a>
+  <a href="https://bearlike.github.io/Grove/latest/use-tui/"><img src="docs/img/screenshots/tui-list.png" alt="The Grove TUI: a project-scoped workspace list with a live agent peek rail showing the summary, recent commits, and transcript" width="100%" /></a>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="middle">
 
-### Transcript, terminal, and diff in one shell
+### Containerized agents
 
-Open a session and land in a three-zone shell: the rail, the agent's live transcript, and a tabbed work panel with terminal, diff, and info. Steer the agent with a follow-up while it works, answer its structured questions inline, and watch the diff grow.
+Optionally, run agents inside devcontainers. This gives each agent a complete stack of its own, Docker in Docker, so it starts its own database and services without touching yours. It comes up out of your project's `.devcontainer/`, under resource ceilings it cannot spend past. `--runtime host` keeps any workspace on your machine.
 
-[Docs →](https://bearlike.github.io/Grove/latest/use-webapp/#the-workspace-ide-shell)
+[Docs →](https://bearlike.github.io/Grove/latest/features-containers/)
 
 </td>
 <td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/use-webapp/#the-workspace-ide-shell"><img src="docs/img/screenshots/webapp-workspace.png" alt="A Grove session page: the session rail, the agent's live transcript with an inline multiple-choice question, and a tabbed work panel showing the terminal and diff" width="100%" /></a>
+  <a href="https://bearlike.github.io/Grove/latest/features-containers/"><img src="docs/img/demos/grove-demo-devcontainer.gif" alt="Grove creating a containerized workspace: the create modal selects the Container runtime after finding the project's .devcontainer/devcontainer.json, then Claude Code runs inside the container behind a DEV CONTAINER statusline reporting the container user, the branch, and the container's own CPU and memory limits" width="100%" /></a>
 </td>
 </tr>
 <tr>
@@ -56,7 +54,7 @@ Open a session and land in a three-zone shell: the rail, the agent's live transc
 
 ### Drive Grove from any agent
 
-Grove ships an MCP server. Claude Code, Codex, OpenCode, and other orchestrators use its tools to create workspaces, dispatch tasks, send follow-ups, and steer the fleet. Your agents manage work at the scale of a whole project.
+Grove ships an MCP server. Claude Code, Codex, OpenCode and other orchestrators create workspaces, dispatch tasks, send follow-ups and steer the fleet — your agents managing work at the scale of a whole project.
 
 [Docs →](https://bearlike.github.io/Grove/latest/use-mcp/)
 
@@ -68,15 +66,29 @@ Grove ships an MCP server. Claude Code, Codex, OpenCode, and other orchestrators
 <tr>
 <td width="50%" valign="middle">
 
-### Terminal UI
+### A web IDE for your agents
 
-Grove is a terminal program first. Run `grove` in a repo to see only its workspaces. Create, attach, pause, and kill, each one keypress. A peek rail mirrors the selected agent's pane live, next to its git position.
+Reach the whole fleet over your network. A session rail lists every agent thread by recency, and the landing is a composer, so a prompt spins up a workspace. Pair a device once and the daemon stays loopback.
 
-[Docs →](https://bearlike.github.io/Grove/latest/use-tui/)
+[Docs →](https://bearlike.github.io/Grove/latest/use-webapp/)
 
 </td>
 <td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/use-tui/"><img src="docs/img/screenshots/tui-list.png" alt="The Grove TUI: a project-scoped workspace list with a live agent peek rail showing the summary, recent commits, and transcript" width="100%" /></a>
+  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-home.png" alt="Grove's web IDE: a session rail listing every agent thread on the left, a composer at the center to start a workspace, on a dark space-black canvas" width="100%" /></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Status lands on the ticket
+
+Every ticket a Grove workspace works gets one comment, rewritten in place as the work moves. The phase, the checklist and the latest commit stay current where your team already looks. Nobody has to ask, and there is no second dashboard to check.
+
+[Docs →](https://bearlike.github.io/Grove/latest/features-ticket-providers/)
+
+</td>
+<td width="50%">
+  <a href="https://bearlike.github.io/Grove/latest/features-ticket-providers/"><img src="docs/img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue, showing a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done" width="100%" /></a>
 </td>
 </tr>
 </table>
@@ -87,7 +99,7 @@ Grove is a terminal program first. Run `grove` in a repo to see only its workspa
 - **[Configuration cascade](https://bearlike.github.io/Grove/latest/features-cascade/).** A committed `.grove/config.json` sets the team baseline. Six layers let each developer override locally without touching it.
 - **[Per-agent model selection](https://bearlike.github.io/Grove/latest/use-webapp/).** Each agent exposes its own model catalog. Pick the model per workspace: a cheap one for scaffolding, a strong one for the hard refactor, side by side.
 - **[Session recovery](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/).** Grove pane-verifies each agent session and re-adopts it across daemon restarts and a different user attaching. A stale pointer remaps to the recovered session in a click.
-- **[Ticket providers](https://bearlike.github.io/Grove/latest/features-ticket-providers/).** Branch-aware Gitea, GitHub, and Linear context, surfaced next to the workspace.
+- **[Ticket providers](https://bearlike.github.io/Grove/latest/features-ticket-providers/).** Attach a GitHub, Gitea or Linear issue or pull request to a workspace, or let Grove read the link straight off the branch name so it follows the branch.
 - **[Push notifications](https://bearlike.github.io/Grove/latest/features-notifications/).** Get pinged when an agent finishes a turn or needs you.
 
 https://github.com/user-attachments/assets/256714c5-37e5-4c9d-8b2d-47422d5aae0f
@@ -107,19 +119,49 @@ uv tool upgrade grove    # update later
 
 No uv? Use `pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"` or plain `pip install --user`. See [Get Started](https://bearlike.github.io/Grove/latest/getting-started/) for prerequisites and every install path.
 
-> [!IMPORTANT]
-> Always install with the full `@ git+...` form above. The name `grove` on PyPI belongs to an unrelated package, so a bare `uv tool install grove` installs the wrong product.
-
 <details>
 <summary><b>🤖 Let an AI agent configure Grove for you</b></summary>
 
 <br>
 
-Configuration has a few layers and many knobs, so you do not have to write it by hand. Hand the prompt below to Claude Code, Codex, or any coding agent; it reads Grove's config skill and sets things up with you, verifying every field against your installed version.
+Configuration has a few layers and many knobs, so you do not have to write it by hand. Hand the prompt below to Claude Code, Codex or any coding agent. It reads Grove's config skill and sets things up with you, then verifies every field against the version you actually installed.
 
 ```text
-Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
+Read https://raw.githubusercontent.com/bearlike/Grove/current/src/grove/skills/configuring-grove/SKILL.md
+
+It is the skill for configuring Grove, a terminal workspace manager for AI
+coding agents. It covers the six-layer cascade, agents, init scripts,
+containers and ticket providers.
+
+Help me write my Grove user and project config, then verify every field
+against my installed version with `grove config schema --stdout`.
 ```
+
+---
+
+</details>
+
+## 🤖 Skills for Claude Code
+
+```bash
+claude plugin marketplace add https://github.com/bearlike/Grove.git
+```
+
+<details>
+<summary><b>Teach your agent to drive Grove and to configure it for a project</b></summary>
+
+<br>
+
+Four skills, shipped from the repository that implements them, so they never
+drift from the code. They are the same files `grove skills install` copies into
+a tool's skills directory.
+
+| Skill | For |
+|---|---|
+| `using-grove` | Driving a fleet from outside. CLI verbs, MCP tool ids, ticket and PR linking |
+| `working-in-grove` | The agent inside a workspace, reporting phase and keeping attached tickets current |
+| `configuring-grove` | The config cascade, agents, init scripts, containers, ticket providers |
+| `reinstalling-grove` | When an update did not take |
 
 </details>
 

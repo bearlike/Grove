@@ -16,17 +16,14 @@ import { cn } from "@/lib/utils";
 const REPO_URL = "https://github.com/bearlike/Grove";
 
 /**
- * The persistent left rail (ADE reframe, #140). Its scrollable BODY is now the
- * per-project session tree (`SessionRail`) — Grove's fleet moved out of the
- * center card grid into a "thread list" that is the fastest surface in the app.
- * The old scope/state/attention filter rail is gone (design §4.9 drops the
- * standalone filter rail); what survives folds in here: the search box (top,
- * filters the tree AND the Overview grid via the one `query` store field) and
- * the daemon/identity footer (bottom). The frozen shell contract is honored —
- * search stays at the top, `RailFooter` at the bottom, and only the body between
- * them changed.
+ * The persistent left rail. Its scrollable BODY is the per-project session
+ * tree (`SessionRail`) — Grove's fleet as a "thread list" that is the fastest
+ * surface in the app. The search box (top, filters the tree AND the Overview
+ * grid via the one `query` store field) and the daemon/identity footer
+ * (bottom) frame it — search stays at the top, `RailFooter` at the bottom,
+ * and only the body between them changes across redesigns.
  *
- * Collapse is fully outside this component now (#152, modern-chat behavior): the
+ * Collapse is fully outside this component (modern-chat behavior): the
  * shell layout animates the rail wrapper to `w-0` so the rail hides entirely —
  * there is no collapsed icon-strip variant. This component always renders its
  * full form; the header toggle + `[` shortcut own show/hide.
@@ -138,10 +135,10 @@ function SidebarSearch(): React.ReactElement {
 }
 
 // ─── Footer: daemon system status + user identity ────────────────────────────
-// The deleted status bar's system context (daemon health + uptime, version +
-// update nudge, workspace count, GitHub link — ADE reframe, #138) lives here,
-// above the user-identity row. Testids preserved verbatim (`daemon-status`,
-// `daemon-uptime`, `daemon-version`, `update-available`, `sidebar-footer`).
+// System context (daemon health + uptime, version + update nudge, workspace
+// count, GitHub link) lives here, above the user-identity row. Testids:
+// `daemon-status`, `daemon-uptime`, `daemon-version`, `update-available`,
+// `sidebar-footer`.
 
 /**
  * Compact uptime renderer: at most two units, largest non-zero first.

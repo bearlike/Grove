@@ -1,4 +1,4 @@
-"""SessionsScreen — browse one workspace's agent-session history (issue #33).
+"""SessionsScreen — browse one workspace's agent-session history.
 
 Pushed from the list screen on ``s`` for the selected workspace. Layout
 mirrors the list screen's "panels on canvas" split: a `SessionList` of
@@ -29,14 +29,16 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Header, ListItem, ListView, Static
 
-from grove.core import GroveError, SessionExplorer, SessionListing
-from grove.core.agents import SessionTurn
+from grove.core import GroveError, RepoRegistry, SessionExplorer, SessionListing, WorkspaceStatus
+from grove.core.agents import SessionSummary, SessionTurn
+from grove.core.sessions import CatalogEntry, SessionCatalog
 from grove.tui._status import (
     agent_state_color,
     agent_state_glyph,
     agent_state_label,
     chrome_color,
     ref_color,
+    status_color,
 )
 from grove.tui._turns import ENTRY_TEXT_CAP, TranscriptBuilder, truncate
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
@@ -44,13 +46,20 @@ from grove.tui.widgets.footer import ContextualFooter, FooterKey
 # Same trim the workspace card / `grove sessions` CLI use: row labels stay
 # one line. The per-entry cap lives in `_turns.py` with the shared renderer.
 _LABEL_TRIM: Final = 48
+# Same cap the CLI's PROJECT column uses (`cli_sessions.py`).
+_PROJECT_TRIM: Final = 24
 # Bound the rendered conversation — the panel shows the most recent turns;
 # `grove sessions show` / the webapp are the full-transcript surfaces.
 _MAX_TURNS: Final = 50
+# Bound the host-wide row count — a display cap, not a scan cap (the catalog
+# scan itself is metadata-only and cheap; this just keeps one wall-of-text
+# screen from rendering thousands of rows).
+_MAX_HOST_SESSIONS: Final = 200
 
 _FOOTER_KEYS: Final[tuple[tuple[str, str], ...]] = (
     ("s,escape", "Back"),
     ("t", "Tools"),
+    ("h", "Host"),
     ("r", "Refresh"),
 )
 
@@ -75,13 +84,38 @@ class SessionRow(ListItem):
     }
     """
 
-    def __init__(self, listing: SessionListing, *, dark: bool) -> None:
+    def __init__(
+        self,
+        listing: SessionListing,
+        *,
+        dark: bool,
+        host: bool = False,
+        project: str | None = None,
+        branch: str | None = None,
+        live: bool = False,
+    ) -> None:
         super().__init__()
         self.listing = listing
         self._dark = dark
+        # Host-scope-only display extras — absent by default so the
+        # project-scoped render stays byte-identical to the plain listing
+        # (the same convention `agent_state=None` follows).
+        self._host = host
+        self._project = project
+        self._branch = branch
+        self._live = live
 
     def compose(self) -> ComposeResult:
-        yield Static(_render_session_row(self.listing, dark=self._dark))
+        yield Static(
+            _render_session_row(
+                self.listing,
+                dark=self._dark,
+                host=self._host,
+                project=self._project,
+                branch=self._branch,
+                live=self._live,
+            )
+        )
 
     @property
     def body_text(self) -> str:
@@ -127,6 +161,33 @@ class SessionList(ListView):
         self.clear()
         for listing in self._listings:
             self.append(SessionRow(listing, dark=dark))
+        if self._listings:
+            self.index = 0
+
+    def populate_catalog(self, entries: tuple[CatalogEntry, ...], *, dark: bool) -> None:
+        """Rebuild one SessionRow per host-wide catalog entry; cursor lands
+        on the newest.
+
+        Each entry is synthesized into a `SessionListing` (`_catalog_listing`)
+        so `selected_listing` stays the same type either scope renders — the
+        turn-fetch/render pipeline downstream (`turns_for`, `TranscriptBuilder`)
+        needs no host-scope branch of its own.
+        """
+        listings = tuple(_catalog_listing(entry) for entry in entries)
+        self._listings = listings
+        self.clear()
+        for entry, listing in zip(entries, listings, strict=True):
+            project = entry.project.repo_name if entry.project is not None else entry.ref.cwd
+            self.append(
+                SessionRow(
+                    listing,
+                    dark=dark,
+                    host=True,
+                    project=project,
+                    branch=entry.ref.git_branch,
+                    live=entry.live,
+                )
+            )
         if self._listings:
             self.index = 0
 
@@ -180,6 +241,7 @@ class SessionsScreen(Screen[None]):
         Binding("escape", "back", "Back", show=False),
         Binding("q", "back", "Back", show=False),
         Binding("t", "toggle_tools", "Tools", show=False),
+        Binding("h", "toggle_scope", "Host", show=False),
         Binding("r", "refresh", "Refresh", show=False),
     ]
 
@@ -189,11 +251,27 @@ class SessionsScreen(Screen[None]):
         *,
         workspace_id: str,
         workspace_title: str,
+        registry: RepoRegistry | None = None,
+        catalog: SessionCatalog | None = None,
     ) -> None:
         super().__init__()
         self._explorer = explorer
         self._workspace_id = workspace_id
         self._workspace_title = workspace_title
+        # The host-scope seam — same injectable-registry pattern
+        # as DashboardScreen/WorkspaceListScreen. `registry=None` (a caller
+        # that hasn't wired it, e.g. an older test) just leaves the toggle a
+        # no-op; the default project scope is untouched either way. `catalog`
+        # is the direct-injection escape hatch (mirrors DashboardScreen's
+        # `service` param) so a test can hand in a duck-typed fake without
+        # building a real RepoRegistry.
+        self._registry = registry
+        self._catalog = (
+            catalog
+            if catalog is not None
+            else (SessionCatalog(registry) if registry is not None else None)
+        )
+        self._host_scope = False
         # Turns are recorded history — static once read — so one parse per
         # session per visit is enough. Keyed by (adapter, id), cleared on `r`.
         self._turns_cache: dict[tuple[str, str], tuple[SessionTurn, ...]] = {}
@@ -244,6 +322,19 @@ class SessionsScreen(Screen[None]):
         self._expand_tools = not self._expand_tools
         self._show_turns()
 
+    def action_toggle_scope(self) -> None:
+        """Flip between this workspace's own sessions and the host-wide catalog.
+
+        A no-op when no registry/catalog was injected (an older/duck-typed
+        test construction) — the same check-and-return shape every other
+        precondition-guarded action in this TUI uses, since a raise here would
+        surface as a crash rather than a flash.
+        """
+        if self._catalog is None:
+            return
+        self._host_scope = not self._host_scope
+        self._reload()
+
     # ─── selection → turns ────────────────────────────────────────────────
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
@@ -283,17 +374,49 @@ class SessionsScreen(Screen[None]):
 
     # ─── internal ─────────────────────────────────────────────────────────
 
-    def _reload(self) -> None:
+    def _catalog_entries(self) -> tuple[CatalogEntry, ...]:
+        """Every session the host-wide catalog can see, newest-first.
+
+        Best-effort like every other read this screen already does — a
+        scan failure degrades to an honestly empty list, never a crash.
+        Bounded to `_MAX_HOST_SESSIONS` for display only (the catalog scan
+        itself is a cheap, metadata-only walk — see `SessionCatalog.scan`).
+        """
+        if self._catalog is None:
+            return ()
         try:
-            listings = tuple(self._explorer.for_workspace(self._workspace_id))
-        except GroveError as exc:
-            logger.debug("session scan for workspace {} failed: {}", self._workspace_id, exc)
-            listings = ()
-        self.query_one(SessionList).populate(listings, dark=self.app.current_theme.dark)
-        self.set_class(not listings, "-empty")
-        if not listings:
+            return self._catalog.scan(limit=_MAX_HOST_SESSIONS)
+        except Exception as exc:  # best-effort, peek contract — never break the screen
+            logger.debug("host session catalog scan failed: {}", exc)
+            return ()
+
+    def _reload(self) -> None:
+        list_widget = self.query_one(SessionList)
+        dark = self.app.current_theme.dark
+        if self._host_scope:
+            entries = self._catalog_entries()
+            list_widget.populate_catalog(entries, dark=dark)
+            list_widget.border_title = "sessions · host"
+            is_empty = not entries
+        else:
+            try:
+                listings = tuple(self._explorer.for_workspace(self._workspace_id))
+            except GroveError as exc:
+                logger.debug("session scan for workspace {} failed: {}", self._workspace_id, exc)
+                listings = ()
+            list_widget.populate(listings, dark=dark)
+            list_widget.border_title = "sessions"
+            is_empty = not listings
+        self.set_class(is_empty, "-empty")
+        if is_empty:
             self._turns_plain = ""
             self.query_one("#turns-body", Static).update("")
+            empty_text = (
+                "no agent sessions found on this host — press [bold]h[/] to go back"
+                if self._host_scope
+                else "no agent sessions recorded for this workspace — press [bold]s[/] to go back"
+            )
+            self.query_one("#sessions-empty", Static).update(empty_text)
 
     @property
     def turns_text(self) -> str:
@@ -315,13 +438,29 @@ def _ago(when: datetime | None) -> str:
     return humanize.naturaldelta(datetime.now(UTC) - when) + " ago"
 
 
-def _render_session_row(listing: SessionListing, *, dark: bool) -> Text:
+def _render_session_row(
+    listing: SessionListing,
+    *,
+    dark: bool,
+    host: bool = False,
+    project: str | None = None,
+    branch: str | None = None,
+    live: bool = False,
+) -> Text:
     """Two-line session row: state glyph + id + label, then the fact line.
 
     Same typographic tiers as the workspace card: bold + semantic color for
     values (state glyph/label, adapter), bold default-fg counters (turn
     count), muted labels and connectives. ``grove`` is a quiet provenance
     qualifier (absence is the default), same convention as the root tag.
+
+    ``host``/``project``/``branch``/``live`` are host-scope-only;
+    ``host=False`` (the default) renders byte-identical to the plain
+    listing — project scope never clutters the row with a redundant
+    project/branch, per the design-system "reuse an existing token, invent
+    nothing" rule: ``branch`` reuses the existing branch teal, ``live``
+    reuses the existing ACTIVE live-signal glyph + color, and the project
+    name gets plain bold (no ref color owns "which repo" today).
     """
     summary = listing.summary
     state = summary.activity.state
@@ -346,7 +485,48 @@ def _render_session_row(listing: SessionListing, *, dark: bool) -> Text:
     text.append(_ago(summary.modified_at), style=muted)
     if listing.provenance == "grove_launched":
         text.append(" · grove", style=muted)
+    if host:
+        text.append(" · ", style=muted)
+        if project is not None:
+            text.append(truncate(project, _PROJECT_TRIM), style="bold")
+        else:
+            text.append("-", style=muted)
+        if branch:
+            text.append(" ", style=muted)
+            text.append(branch, style=f"bold {ref_color('branch', dark=dark)}")
+        if live:
+            text.append(" · ", style=muted)
+            text.append("●", style=f"bold {status_color(WorkspaceStatus.ACTIVE, dark=dark)}")
     return text
+
+
+def _catalog_listing(entry: CatalogEntry) -> SessionListing:
+    """Synthesize a `SessionListing` from a host-wide `CatalogEntry`.
+
+    The catalog is deliberately metadata-only (bounded head reads, never a
+    full parse — see `SessionCatalog.scan`), so `title`/`first_prompt`/
+    `last_prompt`/`activity` are left at their honest defaults rather than
+    guessed; the row renders exactly what it knows. This is what lets the
+    existing turn-fetch/render pipeline (`SessionExplorer.turns_for`,
+    `_render_turns`, `TranscriptBuilder`) stay untouched for a session Grove
+    may never have launched, in a repo this project's explorer never scans.
+    """
+    ref = entry.ref
+    return SessionListing(
+        summary=SessionSummary(
+            session_id=ref.session_id,
+            adapter_kind=ref.adapter_kind,
+            transcript_path=ref.transcript_path,
+            cwd=ref.cwd,
+            created_at=ref.birth,
+            modified_at=datetime.fromtimestamp(ref.mtime, tz=UTC),
+            size_bytes=0,
+            git_branch=ref.git_branch,
+        ),
+        provenance=entry.provenance,
+        workspace_id=entry.workspace_id,
+        workspace_title=entry.workspace_title,
+    )
 
 
 def _render_turns(

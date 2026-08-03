@@ -9,10 +9,10 @@ import {
 import { snapshot, workspace } from "@/tests/_helpers/activity-fixtures";
 import type { DashboardSnapshotView, WorkspaceActivityView } from "@/lib/grove/types";
 
-// The post-#96 presentation policy: `computeFacets` (FROZEN — the sidebar reads
+// The presentation policy: `computeFacets` (FROZEN — the sidebar reads
 // it) plus the one grid selector `selectSections`, which turns the store's view
-// intent into repo-grouped, attention-first sections. The old Set-based filter +
-// lens + flatten machinery is gone (intent lives in the Zustand ui-store now).
+// intent into repo-grouped, attention-first sections. Filter/lens/flatten
+// intent lives in the Zustand ui-store.
 
 /** Default (no-op) view intent — the "show everything" baseline. */
 function view(over: Partial<GridView> = {}): GridView {
@@ -52,8 +52,8 @@ describe("computeFacets (FROZEN — sidebar input)", () => {
   });
 
   it("collapses nested-project groups (shared repo_root, different cwd) to one facet entry (#151)", () => {
-    // The engine emits one ProjectGroup per (repo_root, cwd) for nested projects
-    // (#101) — two groups here share "/r1" but scope different subpaths.
+    // The engine emits one ProjectGroup per (repo_root, cwd) for nested
+    // projects — two groups here share "/r1" but scope different subpaths.
     const nested: DashboardSnapshotView = {
       projects: [
         { repo_root: "/r1", repo_name: "r1", cwd: "/r1", workspaces: [workspace("a", "working")] },

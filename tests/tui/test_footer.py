@@ -460,3 +460,21 @@ async def test_footer_dim_state_does_not_apply_clay(
             )
         await pilot.press("q")
         await pilot.pause()
+
+
+def test_key_available_provisioning_dims_attach_message_and_respawn() -> None:
+    """A provisioning workspace offers no key that pretends the container is
+    up, and — the whole point — no respawn: restarting a build already running
+    is the reflex the status exists to head off. Kill survives as the universal
+    escape hatch, edit/sessions/remap as the reads and annotations that are
+    honest at any moment.
+
+    A status missing from `_AVAILABLE_KEYS_BY_STATUS` is silently PERMISSIVE
+    (the unknown-status fallback), so this gate is invisible until pinned."""
+    from grove.core.workspace import WorkspaceStatus  # noqa: PLC0415
+    from grove.tui.screens.list import _key_available  # noqa: PLC0415
+
+    for offered in ("e", "s", "x", "k"):
+        assert _key_available(offered, WorkspaceStatus.PROVISIONING) is True
+    for dimmed in ("enter,a", "m", "o", "p", "R"):
+        assert _key_available(dimmed, WorkspaceStatus.PROVISIONING) is False

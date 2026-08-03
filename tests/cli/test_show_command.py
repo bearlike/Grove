@@ -1,4 +1,4 @@
-"""``grove show`` — the read-only single-workspace inspector (issue #51).
+"""``grove show`` — the read-only single-workspace inspector.
 
 In-process via CliRunner against a real tmp git repo and the FakeTmux seam —
 no daemon, no real tmux. ``show`` composes the engine's best-effort read seams
@@ -28,14 +28,21 @@ from grove.core.agents import (
     SessionSummary,
     SessionTurn,
 )
+from grove.core.container_runtime import ContainerRuntimeState
+from grove.core.contracts.views import WorkspaceStateView
 from grove.core.workspace import (
     BranchProvenance,
     CommitSummary,
     Placement,
+    Runtime,
     WorkspaceStatus,
 )
 from grove.tui.cli import app
-from grove.tui.cli_workspace import WorkspaceInspection, _resolve_or_infer_workspace
+from grove.tui.cli_workspace import (
+    WorkspaceInspection,
+    _emit_runtime_marks,
+    _resolve_or_infer_workspace,
+)
 from tests.conftest import FakeTmux
 
 
@@ -61,7 +68,12 @@ def _create(runner: CliRunner, title: str = "inspect me") -> str:
     """Create a workspace via the CLI and return its id."""
     created = runner.invoke(app, ["create", title, "--agent", "claude"])
     assert created.exit_code == 0, created.output
-    return created.output.splitlines()[0].split("created ", 1)[1].strip()
+    # Scanned, not indexed at line 0: the engine may log before the result (an
+    # unavailable container runtime falls back to the host loudly).
+    for line in created.output.splitlines():
+        if "created " in line:
+            return line.split("created ", 1)[1].strip()
+    raise AssertionError(f"no `created <id>` line in CLI output:\n{created.output}")
 
 
 def _worktree_of(runner: CliRunner, ws_id: str) -> Path:
@@ -174,6 +186,46 @@ def test_infer_outside_any_worktree_raises(tmp_path: Path, monkeypatch: pytest.M
         _resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
 
 
+def test_infer_refuses_an_equal_depth_tie_and_names_the_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two ROOT workspaces share the repo root, so the depths TIE — and a bare
+    `depth > best_depth` would silently resolve to whichever `list()` yielded
+    first, leaving `grove show`/`phase`/`tickets` each acting on a workspace
+    the caller never named. The assertion is deliberately on the CANDIDATES,
+    not just the raise: an error the user cannot act on would only move the
+    problem.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    manager = _FakeManager([_state("rootone", root), _state("roottwo", root)])
+    monkeypatch.chdir(root)
+
+    with pytest.raises(GroveError) as excinfo:
+        _resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+
+    message = str(excinfo.value)
+    assert "2 workspaces share this directory" in message
+    assert "rootone" in message
+    assert "roottwo" in message
+
+
+def test_infer_still_breaks_a_tie_by_specificity_before_refusing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Collecting ties must not turn the ordinary nesting case into a refusal:
+    a deeper worktree still wins outright over the root workspace above it."""
+    root = tmp_path / "repo"
+    nested = root / ".worktrees" / "feature"
+    nested.mkdir(parents=True)
+    manager = _FakeManager(
+        [_state("rootone", root), _state("roottwo", root), _state("nestedws", nested)]
+    )
+
+    monkeypatch.chdir(nested)
+    assert _resolve_or_infer_workspace(manager, None).id == "nestedws"  # type: ignore[arg-type]
+
+
 # ─── WorkspaceInspection renderer (pure, hand-built peek) ─────────────────────
 
 
@@ -275,3 +327,124 @@ def test_emit_renders_transcript_tail_and_strips_ansi(
     assert "red line" in out
     assert "plain line" in out
     assert "\x1b[" not in out
+
+
+# ─── the compose mark ────────────────────────────────────────────────────────
+
+
+def _compose_state(worktree: Path, *, owned: bool) -> WorkspaceState:
+    """A workspace whose container is a compose stack, owned or not."""
+    state = _state("stackws", worktree)
+    state.runtime = Runtime.CONTAINER
+    state.container = ContainerRuntimeState(
+        container_id="c" * 64,
+        compose_project="repo_devcontainer",
+        compose_owned=owned,
+    )
+    return state
+
+
+def test_an_owned_compose_stack_says_kill_takes_the_whole_thing(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Mode and ownership are separate facts: a stack and a single container
+    must not render identically everywhere a user could look."""
+    _emit_runtime_marks(_compose_state(tmp_path, owned=True))
+
+    out = capsys.readouterr().out
+    assert "compose stack repo_devcontainer" in out
+    assert "whole stack" in out
+    assert "declared volumes are kept" in out
+
+
+def test_an_unverified_compose_stack_warns_what_kill_will_leave_behind(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The consequence, before the user runs `kill` rather than after.
+
+    Teardown degrades to label-filtered removal, which reaches the primary
+    service only — so siblings keep running. That is worth a warning tone.
+    """
+    _emit_runtime_marks(_compose_state(tmp_path, owned=False))
+
+    out = capsys.readouterr().out
+    assert "unverified" in out
+    assert "sibling services" in out
+
+
+def test_a_single_container_workspace_carries_no_compose_mark(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Absence is the default — the mark names a mode, never the ordinary case."""
+    state = _state("plain", tmp_path)
+    state.runtime = Runtime.CONTAINER
+    state.container = ContainerRuntimeState(container_id="c" * 64)
+
+    _emit_runtime_marks(state)
+
+    assert "compose" not in capsys.readouterr().out
+
+
+# ─── the no-in-container-tmux mark ──────────────────────────────────────────
+
+
+def test_a_container_with_no_tmux_binary_surfaces_the_degradation(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """`tmux_command == ""` means Grove had no bundle for this image/arch.
+
+    That is the ONLY trace of the degradation short of this mark — the
+    workspace otherwise looks like a healthy container (no fallback reason,
+    `runtime` stays CONTAINER) — so the mark must fire off the empty string,
+    not off `runtime_fallback_reason`.
+    """
+    state = _state("bare-agent", tmp_path)
+    state.runtime = Runtime.CONTAINER
+    state.container = ContainerRuntimeState(container_id="c" * 64, tmux_command="")
+
+    assert state.runtime_no_tmux is True
+    _emit_runtime_marks(state)
+
+    out = capsys.readouterr().out
+    assert "no in-container tmux" in out
+    assert "dies with your terminal" in out
+
+
+def test_a_container_with_a_real_tmux_command_carries_no_degradation_mark(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The ordinary containerized case: a resolved tmux binary, no warning."""
+    state = _state("held-agent", tmp_path)
+    state.runtime = Runtime.CONTAINER
+    state.container = ContainerRuntimeState(container_id="c" * 64, tmux_command="tmux")
+
+    assert state.runtime_no_tmux is False
+    _emit_runtime_marks(state)
+
+    assert "no in-container tmux" not in capsys.readouterr().out
+
+
+def test_a_host_workspace_never_reads_no_tmux_even_with_a_stale_container_record() -> None:
+    """`runtime is HOST` (e.g. a fallback workspace) always reads False.
+
+    This is a CONTAINER-mode fact; a host workspace has no in-container tmux
+    to speak of, degraded or otherwise, and must never surface the mark.
+    """
+    state = _state("host-ws", Path("/tmp/host-ws"))
+    state.runtime = Runtime.HOST
+    state.container = ContainerRuntimeState(container_id="c" * 64, tmux_command="")
+
+    assert state.runtime_no_tmux is False
+
+
+def test_runtime_no_tmux_view_field_derives_from_the_container_record(
+    tmp_path: Path,
+) -> None:
+    """`WorkspaceStateView` mirrors the derived fact, not a persisted one."""
+    state = _state("view-ws", tmp_path)
+    state.runtime = Runtime.CONTAINER
+    state.container = ContainerRuntimeState(container_id="c" * 64, tmux_command="")
+
+    view = WorkspaceStateView.from_state(state)
+
+    assert view.runtime_no_tmux is True

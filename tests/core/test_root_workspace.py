@@ -302,7 +302,7 @@ def test_failed_root_init_rollback_preserves_repo_and_branch(
     assert mgr.store.load_all() == []  # the partial record is cleaned up
 
 
-# ─── persistence: placement round-trips; legacy records default to worktree ─
+# ─── persistence: placement round-trips; no field defaults to worktree ──────
 
 
 def test_placement_round_trips_through_store(
@@ -317,9 +317,8 @@ def test_placement_round_trips_through_store(
 def test_legacy_record_without_placement_loads_as_worktree(
     manager: WorkspaceManager, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """A state.json written before `placement` existed loads as WORKTREE — the
-    only shape Grove used to support, no migration needed (the branch_provenance
-    precedent)."""
+    """A record with no `placement` field loads as WORKTREE — no migration
+    needed (the branch_provenance precedent)."""
     del fake_tmux
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="legacy"))
     store_path = tmp_path / "state.json"

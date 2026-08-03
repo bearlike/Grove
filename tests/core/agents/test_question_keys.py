@@ -1,4 +1,4 @@
-"""ClaudeCodeAdapter.build_answer_keys — the AskUserQuestion keystroke grammar (#109).
+"""ClaudeCodeAdapter.build_answer_keys — the AskUserQuestion keystroke grammar.
 
 Table-driven over every verified variant (on-host, Claude Code 2.1.x). The op
 list is the deterministic contract the manager sends to ``tmux.send_keys``, so

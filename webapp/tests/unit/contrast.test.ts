@@ -4,7 +4,7 @@ import path from "node:path";
 
 /*
  * Contrast contract for the neutral + terracotta ramp (design-direction.md
- * §4.4, ADE overhaul #139). Mirrors the status-tokens.test.ts drift-test
+ * §4.4). Mirrors the status-tokens.test.ts drift-test
  * pattern: read the REAL tokens out of globals.css and assert a computed
  * WCAG guarantee, so a future token edit that quietly lightens a value below
  * floor fails the build instead of an eyeballed launch-day audit.

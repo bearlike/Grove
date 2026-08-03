@@ -4,21 +4,26 @@
 # then drives the whole first-run path with zero human input.
 #
 #   make install-smoke      # build the image + run this script on the checkout
-#   GROVE_INSTALL_SPEC='grove[daemon] @ git+https://github.com/bearlike/Grove@current' \
+#   GROVE_INSTALL_SPEC='grove[all] @ git+https://github.com/bearlike/Grove@current' \
 #     make install-smoke    # release mode: test the public install path instead
 #
 # Asserted, in order:
 #   1. uv tool install + `grove version` (proves the entry point is OUR grove,
-#      not the unrelated PyPI name-squat — issue #105)
-#   2. graceful typed error outside a git repo (no traceback)
-#   3. `grove debug` path map + `grove config init` scaffold
-#   4. zero-config workspace create → worktree + tmux session + state.json,
+#      not the unrelated PyPI name-squat)
+#   2. the other two console scripts are live: `grove-agent-hook` and
+#      `grove-mcp`, the latter down to its FastMCP wiring
+#   3. graceful typed error outside a git repo (no traceback)
+#   4. `grove debug` path map + `grove config init` scaffold
+#   5. zero-config workspace create → worktree + tmux session + state.json,
 #      including the first-run `initialized <dir>` log lines (GROVE_DEBUG=1)
-#   5. daemon: healthz, 401 unauthenticated, pair → approve → token → authed list
-#   6. kill → worktree, tmux session, and listing all cleaned up
+#   6. daemon: healthz, 401 unauthenticated, pair → approve → token → authed list
+#   7. kill → worktree, tmux session, and listing all cleaned up
+#
+# The spec installs `[all]`, not the lean `[daemon]`: the shipped console
+# scripts are only install-tested if their extras are actually resolved.
 set -euo pipefail
 
-SPEC="${GROVE_INSTALL_SPEC:-grove[daemon] @ file:///src}"
+SPEC="${GROVE_INSTALL_SPEC:-grove[all] @ file:///src}"
 BOLD=$'\033[1m'
 RESET=$'\033[0m'
 
@@ -49,6 +54,21 @@ case "$version_out" in
 grove\ *) pass "$version_out" ;;
 *) fail "unexpected 'grove version' output: ${version_out} (wrong 'grove' package?)" ;;
 esac
+
+step "verify: grove-agent-hook + grove-mcp entry points"
+# The hook hand-parses argv and reads stdin (it has no --help), so an empty
+# payload is its cheapest liveness probe: it must import and no-op, exit 0.
+grove-agent-hook </dev/null || fail "grove-agent-hook failed on an empty payload"
+grove-mcp --help >/dev/null || fail "grove-mcp --help failed"
+# --help returns BEFORE the SDK is touched (the FastMCP import is deferred so a
+# [daemon]-only host gets an install hint instead of a traceback), so construct
+# the server too — that is the line a new major of the MCP SDK breaks.
+"$(uv tool dir)/grove/bin/python" - <<'PY' || fail "grove-mcp cannot build its FastMCP server (incompatible mcp SDK?)"
+from grove.mcp.server import GroveMcpServer, McpServerConfig
+
+GroveMcpServer(McpServerConfig.from_env({}))
+PY
+pass "all three console scripts live, FastMCP wiring included"
 
 step "verify: graceful error outside a git repo"
 cd "$HOME"

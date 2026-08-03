@@ -12,6 +12,7 @@ side effects.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from grove.client import GroveClient, ProtocolError
@@ -20,10 +21,17 @@ from grove.core.contracts import (
     AutoBranch,
     BranchPlan,
     CreateWorkspaceRequest,
+    HostAttachView,
+    ProjectView,
+    SessionSummaryView,
     TicketProviderName,
     WorkspacePeekView,
     WorkspaceStateView,
 )
+from grove.core.contracts.activity import DashboardSnapshotView
+from grove.core.contracts.phase import PhaseView
+from grove.core.contracts.sessions import TodoListView
+from grove.core.phase import TaskPhase
 from grove.mcp.models import (
     AttachInstructionResult,
     KillWorkspaceResult,
@@ -36,7 +44,7 @@ _AUTO_BRANCH = AutoBranch()
 
 
 class GroveTools:
-    """The Phase 1 tool surface (issues #1/#6), bound to one ``GroveClient``."""
+    """The MCP tool surface, bound to one ``GroveClient``."""
 
     SNAPSHOT_CAP = 4096
     """Max chars of pane snapshot returned by peek — mirrors the contracts
@@ -76,6 +84,34 @@ class GroveTools:
         """Get the full state of one workspace by its id."""
         return await self._client.get_workspace(workspace_id)
 
+    async def list_projects(self) -> list[ProjectView]:
+        """List every project Grove is configured to work in. Start here when
+        you have no repo path yet: each row's `repo_root` is the value
+        grove_list_agents, grove_list_workspaces, and grove_create_workspace
+        take. `repo_name` is for display, and `cwd` differs from `repo_root`
+        only for a nested project inside a larger repo. Read-only."""
+        return await self._client.list_projects()
+
+    async def list_sessions(
+        self, repo_root: str | None = None, limit: int = 50
+    ) -> list[SessionSummaryView]:
+        """List coding-agent sessions newest-first — with no arguments, every
+        session on this host, including ones no Grove workspace ever launched
+        and repos Grove does not manage. Use it to answer "what has been running
+        on this machine, and where". `repo_root` narrows to one project.
+
+        Each row carries the session id, agent kind, the directory it ran in,
+        the repo that directory belongs to, its git branch, when it was created
+        and last written, whether a matching agent process is running in that
+        directory right now (`live`), and the Grove workspace that owns it (or
+        null). Host-scoped rows are metadata-only: `activity`, `size_bytes`, and
+        the prompt/title fields are null there — narrow with `repo_root` to get
+        them. Read-only.
+        """
+        return await self._client.list_sessions(
+            repo=Path(repo_root) if repo_root is not None else None, limit=limit
+        )
+
     async def list_agents(self, repo_root: str) -> list[AgentSummaryView]:
         """List the agents available for a repo — the valid `agent_name`
         values for grove_create_workspace — each with its offered `models`
@@ -93,15 +129,49 @@ class GroveTools:
             peek = peek.model_copy(update={"agent_snapshot": snap[: self.SNAPSHOT_CAP - 1] + "…"})
         return peek
 
+    async def get_fleet_status(self) -> DashboardSnapshotView:
+        """Get the live status of EVERY workspace in one call — the read to poll
+        when you are supervising more than one at a time. Per workspace it
+        carries the full state, the reported task-phase, todo counts, git
+        ahead/behind and diff counts, recent commits, and — per agent session —
+        what the agent is doing right now: working / waiting / idle / blocked,
+        `needs_attention`, the current task, any question it is asking you, and
+        token counts. Read-only.
+
+        Prefer this over calling grove_get_workspace_phase or grove_peek_workspace
+        once per workspace: those answer for one workspace, this answers for all
+        of them, and it is the only read that reports whether an agent is waiting
+        on you. It returns every project the daemon serves, so a large fleet
+        returns a large result — for a single workspace, keep using the
+        per-workspace tools."""
+        return await self._client.get_activity()
+
+    async def get_workspace_phase(self, workspace_id: str) -> PhaseView | None:
+        """Get a workspace's reported task-phase: how far through its task the
+        agent says it is (scoping, planning, implementing, verifying,
+        delivering, done), plus an optional one-line note and when it was
+        last updated. Returns null when the agent has not reported a phase
+        yet — a fleet-health signal distinct from "reported scoping"."""
+        return await self._client.get_phase(workspace_id)
+
+    async def get_workspace_todo(self, workspace_id: str) -> TodoListView:
+        """Get a workspace's current todo/checklist list, as driven by the
+        agent's own TodoWrite/update_plan tool calls. An empty list means no
+        todo tool has been called yet, not an error. Read-only."""
+        return await self._client.get_todo(workspace_id)
+
     async def attach_instruction(self, workspace_id: str) -> AttachInstructionResult:
-        """Get the tmux command a human runs to attach to a workspace's
-        session — for handing live control of an agent over to a person."""
+        """Get the command a human runs to attach to a workspace's agent
+        session — for handing live control of an agent over to a person.
+        Containerized workspaces return the command that enters the
+        container's own tmux, and no host session name."""
         instr = await self._client.get_attach(workspace_id)
+        host = instr if isinstance(instr, HostAttachView) else None
         return AttachInstructionResult(
             workspace_id=workspace_id,
-            tmux_session=instr.tmux_session,
-            command=f"tmux attach -t {instr.tmux_session}",
-            inside_outer_tmux=instr.inside_outer_tmux,
+            tmux_session=host.tmux_session if host is not None else None,
+            command=shlex.join(instr.attach_argv()),
+            inside_outer_tmux=host is not None and host.inside_outer_tmux,
         )
 
     # ─── lifecycle tools ─────────────────────────────────────────────────────
@@ -117,6 +187,8 @@ class GroveTools:
         initial_prompt: str | None = None,
         resume_session_id: str | None = None,
         model: str | None = None,
+        runtime: str | None = None,
+        brief: bool | None = None,
     ) -> WorkspaceStateView:
         """Create a Grove workspace: a git worktree plus a tmux session
         running the named agent. ``branch_plan`` defaults to ``auto`` (Grove
@@ -137,8 +209,16 @@ class GroveTools:
         interprets the id, so ANY value the tool understands is accepted, not
         just a fixed list. Omit it to use the tool's own default model. Call
         ``grove_list_agents`` to see each agent's offered models (up to 10) as
-        a hint before choosing one. Returns the created workspace's state
-        including its stable id.
+        a hint before choosing one. ``runtime`` is ``"host"`` or
+        ``"container"``; omit it to use the configured default
+        (``container.enabled``). Create-time only, never editable — a
+        workspace that falls back from container to host names the reason on
+        ``WorkspaceStateView.runtime_fallback_reason``; promote it later with
+        ``grove_respawn_workspace``. ``brief`` hands the new agent Grove's
+        first-turn brief, a short note pointing it at the ``working-in-grove``
+        skill so it reports its task phase and keeps its attached tickets
+        current; omit it to use the configured default (on). Returns the
+        created workspace's state including its stable id.
         """
         req = CreateWorkspaceRequest(
             agent_name=agent_name,
@@ -149,6 +229,8 @@ class GroveTools:
             initial_prompt=initial_prompt,
             resume_session_id=resume_session_id,
             model=model,
+            runtime=runtime,
+            brief=brief,
             repo_root=Path(repo_root),
         )
         return await self._client.create_workspace(req)
@@ -165,6 +247,46 @@ class GroveTools:
         workspace state.
         """
         return await self._client.remap_session(workspace_id, session_ref)
+
+    async def attach_ticket(self, workspace_id: str, ref: str) -> WorkspaceStateView:
+        """Attach an issue or pull request to a workspace — the one-call verb
+        for an agent that just opened a PR and wants to link it to the
+        workspace that made it. ``ref`` is whatever you already have: a pasted
+        URL (``.../owner/repo/pull/42`` or ``.../owner/repo/issues/42``), a
+        bare ``#42``/``42``, or ``owner/repo#42``. You never need to know or
+        guess which tracker (Gitea/GitHub/Linear) the repo uses — provider AND
+        issue-vs-PR are both inferred from ``ref``, server-side. If a bare,
+        unqualified id could belong to more than one enabled tracker, this
+        raises asking you to qualify with a full URL or ``owner/repo#id``
+        instead of guessing. Idempotent: attaching the same ticket again, or
+        re-attaching to correct a wrong issue/PR kind, is a no-op / in-place
+        fix, never a duplicate. Returns the workspace's updated state,
+        including ``ticket_refs`` (also visible via ``grove_get_workspace``).
+        """
+        return await self._client.attach_ticket_by_ref(workspace_id, ref)
+
+    async def detach_ticket(self, workspace_id: str, ref: str) -> WorkspaceStateView:
+        """Remove an issue/PR association from a workspace. ``ref`` accepts
+        the same shapes as ``grove_attach_ticket`` (URL / ``#42`` /
+        ``owner/repo#42``) and resolves the same way, so whatever reference
+        you attached with also detaches it. Idempotent — detaching a ticket
+        that was never attached is a no-op. Returns the workspace's updated
+        state."""
+        return await self._client.detach_ticket_by_ref(workspace_id, ref)
+
+    async def set_workspace_phase(
+        self, workspace_id: str, phase: TaskPhase, note: str | None = None
+    ) -> PhaseView:
+        """Set or correct a workspace's task-phase claim from outside the
+        agent — one of ``scoping``, ``planning``, ``implementing``,
+        ``verifying``, ``delivering``, ``done``. The agent working inside the
+        workspace normally reports its own phase by writing the file named
+        in its ``GROVE_PHASE_FILE`` environment variable (the one channel
+        that reaches it in every runtime, including a container, and keyed
+        per agent so co-resident agents never overwrite each other); use
+        this tool to set or fix the claim as an outside operator instead.
+        ``note`` is an optional one-line detail, capped at 200 characters."""
+        return await self._client.set_phase(workspace_id, phase, note)
 
     async def pause_workspace(self, workspace_id: str, force: bool = False) -> WorkspaceStateView:
         """Pause a workspace: remove its worktree and tmux session but keep
@@ -203,14 +325,17 @@ class GroveTools:
         (typed into its tmux pane). Returns ``status="sent"`` on success or
         ``status="unavailable"`` when the connected Grove daemon does not
         support messaging yet — treat that as a missing capability, not an
-        error."""
+        error. Any other failure raises with the reason in its message; a
+        **timeout means delivery is UNKNOWN, not failed** — the daemon may
+        still deliver it, so peek at the workspace before re-sending rather
+        than blind-retrying a message the agent may already have."""
         try:
             await self._client.send_message(workspace_id, text)
         except ProtocolError as exc:
             # 404 is ambiguous: an envelope code like "workspace_not_found"
             # is a real caller error and must propagate; a bare framework
             # 404/405 (code "http_error") means the route itself is absent —
-            # the daemon predates issue #37's endpoint.
+            # the daemon predates the message endpoint.
             if exc.code == "http_error" and exc.status in (404, 405):
                 return SendMessageResult(
                     status="unavailable",

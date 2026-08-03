@@ -16,7 +16,7 @@ describe("PeekSnapshot", () => {
   });
 
   it("uses the terminal (Nerd Font) face on the <pre>", () => {
-    // `font-terminal` maps to --font-terminal (→ JetBrains Mono Nerd Font, #92)
+    // `font-terminal` maps to --font-terminal (→ JetBrains Mono Nerd Font)
     // so the powerline/icon glyphs render; the Nerd Font `.variable` is scoped
     // to this terminal subtree, never <html>.
     render(<PeekSnapshot snapshot="x" takenAt={null} />);

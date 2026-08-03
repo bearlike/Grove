@@ -9,7 +9,7 @@ import type {
 /**
  * Wire-shaped `WorkspaceActivityView` builder shared by the unit tests that
  * exercise the stream reducer, the wall-presentation policy, and the live
- * pending-question lookup (Gitea #111). `questions` is additive on the
+ * pending-question lookup. `questions` is additive on the
  * per-session `AgentActivityView` (now in `types.gen.ts`). A list, ordered
  * as asked (empty = nothing pending); a real `AskUserQuestion` batch can hold
  * more than one. Attention is derived from the agent state the same way the

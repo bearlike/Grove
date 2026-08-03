@@ -26,6 +26,10 @@ const ACTIONS_BY_STATUS: Record<WorkspaceStatus, readonly LifecycleAction[]> = {
   offline: ["respawn", "kill"],
   orphaned: ["kill"],
   error: ["kill"],
+  // A provision in flight refuses every reversible verb engine-side, and
+  // `respawn` in particular would destroy the build the user is waiting on.
+  // Kill stays — abandoning a 6-minute image build has to remain possible.
+  provisioning: ["kill"],
 };
 
 // Placement strips keys AFTER the status gate: a root workspace has no worktree,

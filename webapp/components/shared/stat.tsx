@@ -2,13 +2,12 @@ import type { LucideIcon } from "lucide-react";
 import { humanTokens } from "@/lib/grove/format";
 
 /**
- * The ONE stat atom (issue #161) — a lucide glyph + a compacted, tabular-nums
+ * The ONE stat atom — a lucide glyph + a compacted, tabular-nums
  * value at whatever meta tier the parent sets. THE single way any countable
  * metric renders on the workspace card: git provenance (ahead/behind/dirty) and
  * agent activity (turns/tool calls/tokens) all flow through it, so they speak
- * one grammar — icon size, icon↔value gap, tone rule — instead of the two rival
- * dialects (`0 ahead 0 behind` above `13t · 108⚒ · 18.9M↑`) the pre-#161 card
- * stacked on adjacent rows.
+ * one grammar — icon size, icon↔value gap, tone rule — never two rival
+ * dialects stacked on adjacent rows.
  *
  * The human unit lives in the `title`/aria-label ("<value> <label>"), never as a
  * cryptic sigil in the row. Neutral `text-muted-foreground`; `tone` colors the

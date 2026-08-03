@@ -34,6 +34,13 @@ _DARK_OFFLINE: Final = "#96938c"  # Assistant --muted-foreground
 _DARK_PAUSED: Final = "#96938c"  # neutral gray — deliberate teardown
 _DARK_ORPHANED: Final = "#b8860b"  # warning amber — stranded record
 _DARK_ERROR: Final = "#e64c4c"  # Assistant --destructive
+# Deliberately NOT the muted gray OFFLINE and PAUSED share. A provisioning
+# workspace is the one state that is working hard and showing nothing, and the
+# entire defect it was added to fix was a user reading gray as dead and reaching
+# for a destructive verb. It borrows IDLE's info cyan — alive, not yet ready —
+# rather than taking a hue of its own, because it is a transient state and a
+# seventh colour on the fleet list buys nothing a shared one does not.
+_DARK_PROVISIONING: Final = _DARK_IDLE
 
 DARK_STATUS_HEX: Final[dict[WorkspaceStatus, str]] = {
     WorkspaceStatus.RUNNING: _DARK_RUNNING,
@@ -43,4 +50,5 @@ DARK_STATUS_HEX: Final[dict[WorkspaceStatus, str]] = {
     WorkspaceStatus.PAUSED: _DARK_PAUSED,
     WorkspaceStatus.ORPHANED: _DARK_ORPHANED,
     WorkspaceStatus.ERROR: _DARK_ERROR,
+    WorkspaceStatus.PROVISIONING: _DARK_PROVISIONING,
 }

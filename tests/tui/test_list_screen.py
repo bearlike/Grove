@@ -3,6 +3,9 @@ refreshes, and quits without raising."""
 
 from __future__ import annotations
 
+import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace as _dc_replace
 from pathlib import Path
 
@@ -22,7 +25,8 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.release import ReleaseChecker
 from grove.core.store import JsonWorkspaceStore
-from grove.core.workspace import WorkspaceStatus
+from grove.core.tmux import ContainerAttach
+from grove.core.workspace import ProvisionStatus, WorkspaceStatus
 from grove.tui.app import GroveApp
 from grove.tui.screens.list import WorkspaceListScreen
 from grove.tui.screens.remap_session import RemapSessionScreen
@@ -88,7 +92,7 @@ async def test_list_screen_renders_empty_and_quits(
 async def test_release_worker_pushes_update_to_status_bar(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """The mount-time release worker flows an injected checker's verdict to the bar (#80)."""
+    """The mount-time release worker flows an injected checker's verdict to the bar."""
     del fake_tmux
     app = GroveApp(_manager(tmp_repo, tmp_path))
     async with app.run_test(size=(140, 40)) as pilot:  # wide tier so the chip renders
@@ -162,11 +166,10 @@ async def test_stats_tick_picks_up_out_of_band_create_and_kill(
 ) -> None:
     """The slow stats tick re-enumerates the workspace set from the store.
 
-    Issue #49: a second TUI / the MCP server / the daemon can create or
-    kill a workspace out-of-band; the open TUI's row set was built once at
-    mount and never re-read, so the change only appeared on a full restart.
-    Now ``_tick_stats`` re-reads ``manager.list()`` and ``populate`` diffs
-    by id.
+    A second TUI / the MCP server / the daemon can create or kill a workspace
+    out-of-band; the open TUI's row set is built once at mount and never
+    re-read on its own, so such a change would only appear on a full restart.
+    ``_tick_stats`` re-reads ``manager.list()`` and ``populate`` diffs by id.
 
     The out-of-band actor is a *second* manager over the *same* store path
     (a separate process — a second TUI / the MCP server / the daemon). Its
@@ -434,6 +437,9 @@ async def test_create_modal_creates_workspace_via_keybindings(
         await pilot.pause()
         # Ctrl-S submits.
         await pilot.press("ctrl+s")
+        # Lifecycle verbs run on a worker thread — `pause` drains the
+        # message queue, not the worker, so wait for it explicitly.
+        await app.workers.wait_for_complete()
         await pilot.pause()
         # Workspace exists in the manager and shows up in the table.
         states = manager.list()
@@ -480,6 +486,61 @@ async def test_enter_and_a_both_trigger_attach(
         await pilot.pause()
 
 
+@contextmanager
+def _entered(log: list[bool]) -> Iterator[None]:
+    log.append(True)
+    yield
+
+
+@pytest.mark.asyncio
+async def test_attach_execs_the_container_argv_and_pre_sizes_nothing(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A container workspace is entered by exec, not by a host switch.
+
+    `fit_window_to_client` and `switch-client` both address THIS host's tmux
+    server; the session being entered lives on the container's. Calling either
+    would size and re-point something unrelated.
+    """
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="ctr"))
+    argv = ("devcontainer", "exec", "--workspace-folder", "/w", "--", "tmux", "new-session")
+    monkeypatch.setattr(manager, "attach", lambda _wid: ContainerAttach(argv=argv))
+    # `screens.list` holds the stdlib module itself, so this seam is shared with
+    # the peek rail's git reads — delegate anything that is not the hand-off.
+    real_run = subprocess.run
+    ran: list[list[str]] = []
+
+    def _run(cmd: object, **kw: object) -> object:
+        argv_ = list(cmd)  # type: ignore[call-overload]
+        if argv_[0] in {"devcontainer", "tmux"}:
+            ran.append(argv_)
+            return None
+        return real_run(cmd, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("grove.tui.screens.list.subprocess.run", _run)
+    sized: list[str] = []
+    monkeypatch.setattr("grove.tui.screens.list.fit_window_to_client", sized.append)
+
+    app = GroveApp(manager)
+    # The headless driver has no terminal to hand back, so the suspend itself
+    # is stubbed; that it is ENTERED at all is part of the assertion.
+    suspended: list[bool] = []
+    monkeypatch.setattr(GroveApp, "suspend", lambda _self: _entered(suspended))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.screen.action_attach_workspace()
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+
+    assert ran == [list(argv)]
+    assert sized == []
+    assert suspended == [True]
+
+
 @pytest.mark.asyncio
 async def test_o_key_respawns_offline_workspace(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
@@ -497,6 +558,7 @@ async def test_o_key_respawns_offline_workspace(
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
         await pilot.press("o")
+        await app.workers.wait_for_complete()
         await pilot.pause()
         # Session is back and the workspace is live again.
         assert state.tmux_session in fake_tmux.sessions
@@ -539,6 +601,43 @@ async def test_create_modal_cancel_does_nothing(
         await pilot.press("escape")
         await pilot.pause()
         assert manager.list() == []
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_n_with_empty_roster_flashes_and_never_opens_create_modal(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """An empty roster refuses with a flash instead of raising in the action.
+
+    ``builtin_agents: false`` with nothing declared is the one way to reach an
+    empty ``cfg.agents`` — the built-ins otherwise seed cascade layer 0.
+    ``load_config`` is what
+    empties the list; the config here is just its already-resolved result.
+    ``CreateWorkspaceScreen`` asserts a non-empty roster as its precondition, so
+    without the caller's guard ``n`` raises inside the Textual action.
+    """
+    from grove.tui.screens.create import CreateWorkspaceScreen  # noqa: PLC0415
+
+    del fake_tmux
+    cfg = GroveConfig.model_validate(
+        {
+            "builtin_agents": False,
+            "agents": [],
+            "worktree": {"root_template": str(tmp_path / "trees")},
+            "tmux": {"session_prefix": "test-"},
+        }
+    )
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    app = GroveApp(WorkspaceManager(repo_root=tmp_repo, cfg=cfg, store=store))
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        assert not isinstance(app.screen, CreateWorkspaceScreen)
+        bar = app.screen.query_one(StatusBar)
+        assert bar.flash_message == "no agents configured — declare one or set builtin_agents: true"
         await pilot.press("q")
         await pilot.pause()
 
@@ -742,6 +841,7 @@ async def test_e_then_submit_renames_workspace(
         for ch in "renamed":
             await pilot.press(ch)
         await pilot.press("ctrl+s")
+        await app.workers.wait_for_complete()
         await pilot.pause()
         # Workspace was renamed in the manager.
         assert manager.get(state.id).title == "renamed"
@@ -771,7 +871,7 @@ async def test_e_with_no_selection_flashes(
         await pilot.pause()
 
 
-# ─── message (steer the agent, issue #38) ────────────────────────────────────
+# ─── message (steer the agent) ───────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -792,6 +892,7 @@ async def test_m_then_submit_sends_message_to_agent_pane(
         for ch in "run the tests":
             await pilot.press(ch)
         await pilot.press("enter")
+        await app.workers.wait_for_complete()
         await pilot.pause()
         assert fake_tmux.sent_texts == [(f"{state.tmux_session}:agent", "run the tests")]
         bar = app.screen.query_one(StatusBar)
@@ -819,6 +920,7 @@ async def test_m_refusal_flashes_error_and_never_injects(
         for ch in "hello":
             await pilot.press(ch)
         await pilot.press("enter")
+        await app.workers.wait_for_complete()
         await pilot.pause()
         assert fake_tmux.sent_texts == []
         bar = app.screen.query_one(StatusBar)
@@ -849,7 +951,7 @@ async def test_m_modal_cancel_sends_nothing(
         await pilot.pause()
 
 
-# ─── remap session (manual session pin, issue #132) ─────────────────────────
+# ─── remap session (manual session pin) ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -882,6 +984,7 @@ async def test_x_opens_remap_picker_and_pinning_a_candidate_calls_manager(
         assert len(rows) == 1
         assert hand_started[:8] in rows[0].body_text
         await pilot.press("enter")
+        await app.workers.wait_for_complete()
         await pilot.pause()
         assert isinstance(app.screen, WorkspaceListScreen)
         assert manager.get(state.id).agent_session_id == hand_started
@@ -977,7 +1080,7 @@ def test_key_available_remap_shares_edit_gate() -> None:
     assert _key_available("x", WorkspaceStatus.ORPHANED) is False
 
 
-# ─── degraded turns reads keep the last-good rail transcript (2026-07-11) ────
+# ─── degraded turns reads keep the last-good rail transcript ────────────────
 
 
 @pytest.mark.asyncio
@@ -1035,5 +1138,60 @@ async def test_degraded_turns_read_keeps_last_good_transcript(
         # A DIFFERENT selection must not inherit the stale cache: the
         # keep-last-good memory is scoped to the workspace it was read for.
         assert screen._recent_turns("some-other-wid") == ()
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_provision_progress_is_read_only_for_a_provisioning_selection(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The build-log tail rides the slow path and only for a PROVISIONING row.
+
+    Two things are pinned. The gate: every other status returns ``None`` without
+    touching the manager, so a settled fleet pays no file read — a cold build's
+    log reaches ~1 MB and this must never leak onto the 4 Hz pane tick. And the
+    best-effort contract: a failing read degrades to ``None`` (the rail still
+    explains itself, just without the tail) instead of breaking the render loop.
+    """
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="alpha"))
+    log = tmp_path / "provision.log"
+    log.write_text("#8 building\n\n#9 exporting layers\n", encoding="utf-8")
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, WorkspaceListScreen)
+        peek = manager.peek(state.id)
+
+        assert screen._provision_progress(peek) is None  # settled status: no read
+
+        # PROVISIONING is a COMPUTED status the store refuses to persist, so
+        # the record carries the in-flight provision fields and the reconciler
+        # derives the status; the manager re-fetches by id, so the log path has
+        # to be on the stored record, not just on the peek handed in.
+        persisted = manager.store.get(state.id)
+        manager.store.save(
+            _dc_replace(
+                persisted,
+                provision_status=ProvisionStatus.PROVISIONING,
+                provision_log_path=str(log),
+            )
+        )
+        building = _dc_replace(
+            peek, state=_dc_replace(peek.state, status=WorkspaceStatus.PROVISIONING)
+        )
+        progress = screen._provision_progress(building)
+        assert progress is not None
+        assert progress.lines == ("#8 building", "#9 exporting layers")
+        assert progress.headline == "#9 exporting layers"
+
+        manager.store.save(
+            _dc_replace(manager.store.get(state.id), provision_log_path=str(tmp_path / "gone"))
+        )
+        degraded = screen._provision_progress(building)
+        assert degraded is not None and degraded.lines == ()
         await pilot.press("q")
         await pilot.pause()

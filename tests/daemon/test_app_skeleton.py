@@ -60,7 +60,7 @@ def test_whoami_returns_daemon_identity(daemon_client: TestClient) -> None:
 
 
 def test_whoami_surfaces_a_newer_release(tmp_state_dir: Path) -> None:
-    """An injected checker reporting a higher tag flows to the wire fields (#80)."""
+    """An injected checker reporting a higher tag flows to the wire fields."""
     app = build_app(
         cfg=daemon_test_config(),
         store=JsonWorkspaceStore(),

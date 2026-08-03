@@ -12,11 +12,13 @@ import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from grove.core.agents import all_adapters
 from grove.core.agents.claude_code import _ClaudeHome
+from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig, _merge_agents
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.errors import AgentSessionNotFound, ResumeNotSupported
@@ -34,11 +36,16 @@ def manager(tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path) -> WorkspaceMan
             "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
             "tmux": {"session_prefix": "test-"},
             # This file asserts exact launch decorations for session-id/resume
-            # composition — hooks (#171, on by default) would append an
-            # unrelated ``--settings`` flag to every claude_code decoration.
-            # The two dedicated hook-install tests build their own cfg with
-            # hooks explicitly on instead of using this fixture.
+            # composition — hooks (on by default) would append an unrelated
+            # ``--settings`` flag to every claude_code decoration. The two
+            # dedicated hook-install tests build their own cfg with hooks
+            # explicitly on instead of using this fixture.
             "hooks": {"enabled": False},
+            # Same reason, one feature over: with no hook to inject it, the
+            # first-turn brief rides the initial prompt, which would prefix
+            # every expected positional here. Its own coverage is
+            # `test_agent_brief.py`.
+            "brief": {"enabled": False},
         }
     )
     store = JsonWorkspaceStore(path=tmp_path / "state.json")
@@ -53,8 +60,8 @@ def _last_decoration(fake: FakeTmux, session: str) -> list[str]:
 
 
 def _materialize_claude(cfg_home: Path, cwd: Path, session_id: str) -> None:
-    """A claude transcript recorded at ``cwd`` so SessionExplorer.resolve finds it
-    (the #F8 create-time resume-ref resolution scans the repo root)."""
+    """A claude transcript recorded at ``cwd`` so SessionExplorer.resolve finds
+    it (create-time resume-ref resolution scans the repo root)."""
     folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(cwd)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{session_id}.jsonl").write_text(
@@ -113,7 +120,7 @@ def test_create_shell_tracks_no_session(manager: WorkspaceManager, fake_tmux: Fa
     assert _last_decoration(fake_tmux, state.tmux_session) == []
 
 
-# ─── #48 initial_prompt rides the launch argv (claude_code) ──────────────────
+# ─── initial_prompt rides the launch argv (claude_code) ─────────────────────
 
 
 def test_create_claude_appends_initial_prompt_as_trailing_positional(
@@ -137,7 +144,7 @@ def test_create_claude_appends_initial_prompt_as_trailing_positional(
 def test_create_claude_without_initial_prompt_is_byte_identical(
     manager: WorkspaceManager, fake_tmux: FakeTmux
 ) -> None:
-    """No initial_prompt → launch decoration is exactly what it was before #48."""
+    """No initial_prompt → launch decoration carries only the session-id pair."""
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="noprompt"))
 
     assert _last_decoration(fake_tmux, state.tmux_session) == [
@@ -159,7 +166,7 @@ def test_create_shell_ignores_initial_prompt(
     assert _last_decoration(fake_tmux, state.tmux_session) == []
 
 
-# ─── #96 model rides the launch argv (--model) ───────────────────────────────
+# ─── model rides the launch argv (--model) ───────────────────────────────────
 
 
 def test_create_claude_appends_model_flag(manager: WorkspaceManager, fake_tmux: FakeTmux) -> None:
@@ -202,13 +209,13 @@ def test_create_shell_ignores_model(manager: WorkspaceManager, fake_tmux: FakeTm
     assert _last_decoration(fake_tmux, state.tmux_session) == []
 
 
-# ─── #148 tools_offline rides the launch argv, per adapter ──────────────────
+# ─── tools_offline rides the launch argv, per adapter ────────────────────────
 
 
 @pytest.fixture
 def offline_manager(tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path) -> WorkspaceManager:
-    """A manager whose agents all opt into `tools_offline` (#148), with the
-    hook `--settings` decoration disabled so the asserted argv stays a fixed,
+    """A manager whose agents all opt into `tools_offline`, with the hook
+    `--settings` decoration disabled so the asserted argv stays a fixed,
     non-temp-path shape."""
     del fake_tmux  # applied via monkeypatch
     cfg = GroveConfig.model_validate(
@@ -216,6 +223,9 @@ def offline_manager(tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path) -> Work
             "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
             "tmux": {"session_prefix": "test-"},
             "hooks": {"enabled": False},
+            # And with no hook, the first-turn brief would ride the prompt
+            # positional this file asserts verbatim (see `test_agent_brief.py`).
+            "brief": {"enabled": False},
             "agents": [
                 {
                     "name": "claude",
@@ -356,7 +366,7 @@ def test_respawn_mints_fresh_session_id(manager: WorkspaceManager, fake_tmux: Fa
     ]
 
 
-# ─── #120 resume-into-workspace ──────────────────────────────────────────────
+# ─── resume-into-workspace ───────────────────────────────────────────────────
 
 
 def test_create_claude_resume_emits_resume_flag_and_pins_id(
@@ -372,7 +382,7 @@ def test_create_claude_resume_emits_resume_flag_and_pins_id(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     chosen = "11111111-2222-3333-4444-555555555555"
-    _materialize_claude(cfg_home, manager.repo_root, chosen)  # #F8: must resolve first
+    _materialize_claude(cfg_home, manager.repo_root, chosen)  # must resolve first
     state = manager.create(
         CreateWorkspaceRequest(agent_name="claude", title="resume me", resume_session_id=chosen)
     )
@@ -402,7 +412,7 @@ def test_create_claude_resume_keeps_settings_model_and_prompt(
     mgr = WorkspaceManager(repo_root=tmp_repo, cfg=cfg, store=store)
 
     chosen = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    _materialize_claude(cfg_home, tmp_repo, chosen)  # #F8: must resolve first
+    _materialize_claude(cfg_home, tmp_repo, chosen)  # must resolve first
     state = mgr.create(
         CreateWorkspaceRequest(
             agent_name="claude",
@@ -436,7 +446,7 @@ def test_create_codex_resume_emits_resume_subcommand_and_pins_id(
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     chosen = "99999999-8888-7777-6666-555555555555"
-    _materialize_codex(codex_home, manager.repo_root, chosen)  # #F8: must resolve first
+    _materialize_codex(codex_home, manager.repo_root, chosen)  # must resolve first
     state = manager.create(
         CreateWorkspaceRequest(agent_name="codex", title="codex resume", resume_session_id=chosen)
     )
@@ -461,7 +471,7 @@ def test_create_shell_resume_rejected_before_side_effects(
 def test_create_without_resume_is_byte_identical(
     manager: WorkspaceManager, fake_tmux: FakeTmux
 ) -> None:
-    """No resume_session_id → the launch is exactly the pre-#120 mint path."""
+    """No resume_session_id → the launch takes the ordinary mint path."""
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="fresh"))
     assert _last_decoration(fake_tmux, state.tmux_session) == [
         "--session-id",
@@ -475,9 +485,9 @@ def test_create_resume_unknown_ref_rejected_before_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#F8: an unresolvable resume ref fails (AgentSessionNotFound) BEFORE any
-    worktree/tmux side effect — never a fully-provisioned workspace pinned to a
-    bogus id (the old bug ran every side effect, then the agent exited)."""
+    """An unresolvable resume ref fails (AgentSessionNotFound) BEFORE any
+    worktree/tmux side effect — never a fully-provisioned workspace pinned to
+    a bogus id."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     before = set(fake_tmux.sessions)
@@ -498,7 +508,7 @@ def test_create_resume_wrong_kind_rejected_before_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#F8/#F4: resuming a codex session under a claude agent is rejected — its
+    """Resuming a codex session under a claude agent is rejected — its
     adapter could never read the transcript — and no side effect runs."""
     codex_home = tmp_path / "codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -522,7 +532,7 @@ def test_resume_materialized_session_uses_resume_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#F2: unpause CONTINUES a session that has already materialized — the launch
+    """Unpause CONTINUES a session that has already materialized — the launch
     carries the tool's ``--resume`` flag, not a fresh ``--session-id`` mint, so a
     paused-then-resumed workspace re-opens its real transcript."""
     cfg_home = tmp_path / "claude"
@@ -544,7 +554,7 @@ def test_resume_unmaterialized_session_keeps_mint_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#F2: a never-materialized minted id keeps ``--session-id`` on unpause, so
+    """A never-materialized minted id keeps ``--session-id`` on unpause, so
     it can still mint fresh — continue what exists, mint what doesn't."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -557,7 +567,7 @@ def test_resume_unmaterialized_session_keeps_mint_flag(
 
 
 def test_resumable_kinds_derived_from_adapter_layer() -> None:
-    """#F10d: the resumable-kinds set is DERIVED from each adapter's ``resumable``
+    """The resumable-kinds set is DERIVED from each adapter's ``resumable``
     flag, not hand-listed — so a future resumable adapter can't be missed."""
     derived = frozenset(a.kind for a in all_adapters() if a.resumable)
     expected = {"claude_code", "codex"}
@@ -592,7 +602,7 @@ def test_primary_transcript_empty_for_shell(manager: WorkspaceManager) -> None:
     assert manager.primary_transcript(state.id) == ()
 
 
-# ─── #18 hook install ───────────────────────────────────────────────────────
+# ─── hook install ────────────────────────────────────────────────────────────
 
 
 def test_hooks_enabled_appends_settings_flag_and_writes_file(
@@ -621,3 +631,59 @@ def test_hooks_enabled_appends_settings_flag_and_writes_file(
         str(settings),
     ]
     assert settings.exists()  # Grove's own hook-only settings file, never the user's
+
+
+def _hook_settings_written(
+    tmp_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hooks: dict[str, object]
+) -> dict[str, Any]:
+    """Drive a real `create()` and return the hook settings file it rendered."""
+    settings = tmp_path / "hooks-settings.json"
+    monkeypatch.setattr("grove.core.paths.agent_hooks_settings_path", lambda: settings)
+    cfg = GroveConfig.model_validate(
+        {
+            "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "t/"},
+            "tmux": {"session_prefix": "test-"},
+            "hooks": {"enabled": True, **hooks},
+        }
+    )
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    mgr = WorkspaceManager(repo_root=tmp_repo, cfg=cfg, store=store)
+    mgr.create(CreateWorkspaceRequest(agent_name="claude", title="h"))
+    loaded: dict[str, Any] = json.loads(settings.read_text(encoding="utf-8"))
+    return loaded
+
+
+def test_hook_settings_are_byte_identical_when_daemon_url_is_unset(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The daemon address is config, not a hardcoded module constant, but an
+    unset knob must not move the default: it renders exactly what the module
+    constant renders, so no existing install sees a changed settings file."""
+    del fake_tmux
+    written = _hook_settings_written(tmp_repo, tmp_path, monkeypatch, {})
+    assert written == ClaudeHook.settings()
+
+
+def test_hook_settings_honor_a_configured_daemon_url(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason the knob exists: an agent launched into its own network
+    namespace cannot reach the daemon at 127.0.0.1, and an address a runtime
+    can't resolve is policy that does not belong in code.
+
+    The address reaches the hook as an argv on the rendered command rather
+    than as a registered `http` handler — the push is made by the entry
+    point, which is exactly the thing that does not exist where it could not
+    work anyway."""
+    del fake_tmux
+    written = _hook_settings_written(
+        tmp_repo, tmp_path, monkeypatch, {"daemon_url": "http://gateway.example:7421"}
+    )
+    commands = {
+        handler["command"]
+        for matchers in written["hooks"].values()
+        for matcher in matchers
+        for handler in matcher["hooks"]
+    }
+    assert len(commands) == 1  # one rendered command, shared by every event
+    assert "--daemon-url http://gateway.example:7421" in commands.pop()

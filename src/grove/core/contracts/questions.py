@@ -1,14 +1,14 @@
 """Wire shapes for the agent-question surface — the read views and the answer request.
 
-``AgentQuestion(View)`` is the structured ask-the-human payload (epic #74). It
-rides the fetch-on-demand ``/turns`` pipeline AND, since #109, the live activity
+``AgentQuestion(View)`` is the structured ask-the-human payload. It
+rides the fetch-on-demand ``/turns`` pipeline AND the live activity
 stream — so it lives here, in a module that neither the ``activity`` nor the
 ``sessions`` contracts depend on through each other. That placement is what
 breaks the ``activity`` ↔ ``sessions`` import cycle a live question field would
 otherwise create (``sessions`` already imports ``activity``; ``activity`` needs
 the question view; the shared shape belongs below both).
 
-The answer request is the write side (#109): what a client POSTs to drive a
+The answer request is the write side: what a client POSTs to drive a
 pending question to resolution. Structural validation lives on the model
 (exactly one of indexes/text per item, non-blank text); the per-question kind
 rules are checked against the *captured* payload in the manager, since only it
@@ -50,11 +50,11 @@ class AgentQuestionOptionView(BaseModel):
 
 
 class AgentQuestionView(BaseModel):
-    """Wire mirror of ``grove.core.agents.AgentQuestion`` (epic #74).
+    """Wire mirror of ``grove.core.agents.AgentQuestion``.
 
     The structured payload a transcript renderer draws as a choice card. ``id``
     /``group_id`` are the stable answer-back addresses a client keys on — for the
-    live pending question (#109), ``group_id`` is the ``tool_use_id`` the answer
+    live pending question, ``group_id`` is the ``tool_use_id`` the answer
     POST must carry back.
     """
 
@@ -90,7 +90,7 @@ class AgentQuestionView(BaseModel):
 
 
 class QuestionAnswerItem(BaseModel):
-    """One question's answer: chosen option indexes XOR free text — exactly one (#109).
+    """One question's answer: chosen option indexes XOR free text — exactly one.
 
     ``selected_indexes`` picks predefined options (0-based, in option order);
     ``text`` is a free-text ("Type something.") answer. No ``kind`` discriminator:
@@ -101,7 +101,7 @@ class QuestionAnswerItem(BaseModel):
     payload.
 
     ``text`` is rejected outright if it carries any control byte (ord < 0x20 or
-    0x7f, including tab/newline/ESC) — #110. The Claude adapter types ``text``
+    0x7f, including tab/newline/ESC). The Claude adapter types ``text``
     verbatim into the pane via ``send-keys -l``; the whole design rests on a
     closed key vocabulary (digits, Tab, Enter) driving the picker deterministically,
     and a raw control byte reopens that surface (ESC cancels the question outright,
@@ -136,7 +136,7 @@ class QuestionAnswerItem(BaseModel):
 
 
 class QuestionAnswerRequest(BaseModel):
-    """POST body for driving a pending ``AskUserQuestion`` to resolution (#109).
+    """POST body for driving a pending ``AskUserQuestion`` to resolution.
 
     ``tool_use_id`` is the group answer-back address captured at ask-time; the
     daemon requires it to still match the standing capture (409 on a stale id).

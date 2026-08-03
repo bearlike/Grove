@@ -1,4 +1,4 @@
-"""Session-control surface (#178): GET /controls + POST /controls/{invoke,model}.
+"""Session-control surface: GET /controls + POST /controls/{invoke,model}.
 
 Pins the wire contract: the enumeration read returns the composed
 ``SessionControlsView`` shape (fs scan + the shared model catalog), and the two

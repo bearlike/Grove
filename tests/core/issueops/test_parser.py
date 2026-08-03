@@ -1,4 +1,4 @@
-"""CommandParser grammar — trigger match, verb set, free-text, usage (#196).
+"""CommandParser grammar — trigger match, verb set, free-text, usage.
 
 Table-driven: the parser is pure, so one parametrized case per grammar rule is
 the cheapest full-coverage shape. The trigger defaults to ``@grove`` but is

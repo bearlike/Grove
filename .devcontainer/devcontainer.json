@@ -1,0 +1,96 @@
+// Grove's own devcontainer config — for developing Grove itself in a
+// container workspace. See README.md for the tier model (what forces an
+// image rebuild vs. what doesn't) and how to add a dependency at each tier.
+{
+	"name": "grove-dev",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": "."
+	},
+
+	// Path identity is kept even though docker-in-docker no longer needs it for
+	// bind resolution. A Grove workspace is a LINKED git worktree: its .git is a
+	// file pointing at an absolute gitdir, and the common dir Grove binds in
+	// lands at its host path. Mounting the tree somewhere else would leave those
+	// two disagreeing, which breaks git inside the container. Do not hardcode a
+	// path here.
+	"workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
+	"workspaceFolder": "${localWorkspaceFolder}",
+
+	// --privileged: docker-in-docker needs this. It is inherent to running a
+	// nested daemon, and is why this is a dev-only configuration.
+	//
+	// --cpus / --memory / --memory-swap: a workspace is one of many running
+	// concurrently on a developer machine, so an unbounded container lets a
+	// single test run or image build starve every sibling and the host.
+	// `--memory-swap` is set EQUAL to `--memory` on purpose: with `--memory`
+	// alone docker still grants swap up to twice that, so the cap a reader
+	// expects is silently double what it says. Equal values mean 8g total and
+	// no swap. The trade is that a run which would have survived by swapping is
+	// OOM-killed instead — which is the honest outcome for a bound nobody can
+	// see being exceeded.
+	"runArgs": [
+		"--privileged",
+		"--cpus=1.5",
+		"--memory=8g",
+		"--memory-swap=8g"
+	],
+
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers/features/node:2": {
+			"version": "20"
+		},
+		// Docker-IN-Docker, not outside. Each workspace runs its OWN dockerd, so
+		// the containers it creates are children of this container and scoped to
+		// it. The host socket is never mounted, which matters more here than
+		// elsewhere: a Grove agent holding the host socket could reach every
+		// container on the machine, which is precisely the isolation Grove
+		// exists to provide. Requires --privileged, above.
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"moby": true,
+			"installDockerBuildx": true,
+			"dockerDashComposeVersion": "v2"
+		},
+		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+	},
+
+	// Only the uv and npm caches are shared volumes. The Playwright browser
+	// cache is baked into the image instead (see Dockerfile for why) — do NOT
+	// add a devc-grove-playwright volume mount, it would mask the baked copy.
+	"mounts": [
+		"source=devc-grove-uv,target=/caches/uv,type=volume",
+		"source=devc-grove-npm,target=/caches/npm,type=volume"
+	],
+	"containerEnv": {
+		"UV_CACHE_DIR": "/caches/uv",
+		"npm_config_cache": "/caches/npm",
+		"PLAYWRIGHT_BROWSERS_PATH": "/caches/playwright"
+	},
+
+	"postCreateCommand": "bash .devcontainer/bootstrap.sh create",
+	"postStartCommand": "bash .devcontainer/bootstrap.sh start",
+
+	"remoteUser": "vscode",
+
+	// 7421 = grove daemon (GROVE_DAEMON_URL default, webapp/.env.example).
+	// 3000 = webapp's Next.js dev/prod server (webapp/package.json).
+	"forwardPorts": [7421, 3000],
+	"portsAttributes": {
+		"7421": { "label": "grove-daemon" },
+		"3000": { "label": "webapp" }
+	},
+
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"charliermarsh.ruff",
+				"ms-python.python",
+				"ms-python.mypy-type-checker",
+				"dbaeumer.vscode-eslint",
+				"bradlc.vscode-tailwindcss"
+			]
+		}
+	}
+}

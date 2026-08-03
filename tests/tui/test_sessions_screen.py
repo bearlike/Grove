@@ -1,9 +1,9 @@
-"""SessionsScreen — per-workspace session-history browser (issue #33).
+"""SessionsScreen — per-workspace session-history browser.
 
 Pilot tests: opening from the list screen on `s` (real engine path — no
 transcripts → empty state), the no-selection guard, and row/turns rendering
 over a duck-typed explorer fake (the screen consumes only `for_workspace`
-and `turns_for`, the engine seams built in #28).
+and `turns_for`, the engine seams `SessionExplorer` exposes).
 """
 
 from __future__ import annotations
@@ -12,18 +12,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from textual.widgets import Static
 
 from grove.core import SessionListing
 from grove.core.agents import (
     AgentActivity,
     AgentActivityState,
     DigestEntry,
+    SessionRef,
     SessionSummary,
     SessionTurn,
 )
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
+from grove.core.sessions import CatalogEntry, ProjectContext
 from grove.core.store import JsonWorkspaceStore
 from grove.tui.app import GroveApp
 from grove.tui.screens.list import WorkspaceListScreen
@@ -87,6 +90,57 @@ def _turn(prompt: str, *, reply: str = "done", tool: str | None = None) -> Sessi
         started_at=datetime(2026, 6, 11, 8, 30, tzinfo=UTC),
         entries=tuple(entries),
     )
+
+
+def _catalog_entry(
+    session_id: str,
+    *,
+    cwd: str | None = "/tmp/other-repo",
+    project_name: str | None = "other-repo",
+    branch: str | None = "feature/x",
+    live: bool = False,
+    workspace_id: str | None = None,
+    workspace_title: str | None = None,
+) -> CatalogEntry:
+    ref = SessionRef(
+        session_id=session_id,
+        adapter_kind="claude_code",
+        cwd=cwd,
+        transcript_path=Path(f"/tmp/transcripts/{session_id}.jsonl"),
+        birth=datetime(2026, 6, 10, 12, 0, tzinfo=UTC),
+        mtime=datetime(2026, 6, 11, 9, 0, tzinfo=UTC).timestamp(),
+        git_branch=branch,
+    )
+    project = (
+        ProjectContext(
+            repo_root=Path(cwd or "/tmp/other-repo"),
+            repo_name=project_name,
+            is_worktree=False,
+            is_grove_managed=False,
+        )
+        if project_name is not None
+        else None
+    )
+    return CatalogEntry(
+        ref=ref,
+        provenance="fs_discovered",
+        project=project,
+        workspace_id=workspace_id,
+        workspace_title=workspace_title,
+        live=live,
+    )
+
+
+class _FakeCatalog:
+    """Duck-typed SessionCatalog: only the one read method the screen consumes."""
+
+    def __init__(self, entries: tuple[CatalogEntry, ...]) -> None:
+        self._entries = entries
+        self.scan_calls = 0
+
+    def scan(self, *, limit: int | None = None) -> tuple[CatalogEntry, ...]:
+        self.scan_calls += 1
+        return self._entries[:limit] if limit is not None else self._entries
 
 
 class _FakeExplorer:
@@ -296,3 +350,115 @@ async def test_panel_titles_are_role_nouns(
             str(screen.query_one("#history-panel").border_title),
         }
         assert titles == {"sessions", "history"}
+
+
+async def test_h_toggles_host_scope_and_back(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """`h` switches to the host-wide catalog: a foreign, non-Grove session
+    (no workspace_id, a different project+branch) renders honestly with
+    project/branch/live, and its transcript opens read-only through the SAME
+    turns-fetch/TranscriptBuilder pipeline the project scope already uses —
+    no second render path for a host-scoped row."""
+    del fake_tmux
+    explorer = _FakeExplorer(
+        [_listing("aaaa1111-0000")],
+        {
+            "aaaa1111-0000": (_turn("workspace-local prompt"),),
+            "cccc3333-0000": (_turn("host session prompt"),),
+        },
+    )
+    foreign = _catalog_entry("cccc3333-0000", live=True)
+    catalog = _FakeCatalog((foreign,))
+    app = GroveApp(_manager(tmp_repo, tmp_path))
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(
+            SessionsScreen(
+                explorer,  # type: ignore[arg-type]
+                workspace_id="w1",
+                workspace_title="alpha",
+                catalog=catalog,  # type: ignore[arg-type]
+            )
+        )
+        await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+        assert str(screen.query_one(SessionList).border_title) == "sessions"
+        assert "workspace-local prompt" in screen.turns_text
+
+        await pilot.press("h")
+        await pilot.pause()
+        assert catalog.scan_calls == 1
+        assert str(screen.query_one(SessionList).border_title) == "sessions · host"
+        rows = list(screen.query(SessionRow))
+        assert len(rows) == 1
+        assert "cccc3333" in rows[0].body_text
+        assert "other-repo" in rows[0].body_text
+        assert "feature/x" in rows[0].body_text
+        assert "●" in rows[0].body_text  # live marker
+        assert "host session prompt" in screen.turns_text
+
+        # Back to project scope — same widget, same footer key.
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(screen.query_one(SessionList).border_title) == "sessions"
+        assert "workspace-local prompt" in screen.turns_text
+        footer_rendered = str(screen.query_one(ContextualFooter).render())
+        assert "h" in footer_rendered and "Host" in footer_rendered
+
+
+async def test_host_scope_empty_state_is_honest(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """An empty host catalog renders the host-specific empty message, not the
+    project-scoped one and not a blank panel."""
+    del fake_tmux
+    explorer = _FakeExplorer([_listing("aaaa1111-0000")], {})
+    catalog = _FakeCatalog(())
+    app = GroveApp(_manager(tmp_repo, tmp_path))
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(
+            SessionsScreen(
+                explorer,  # type: ignore[arg-type]
+                workspace_id="w1",
+                workspace_title="alpha",
+                catalog=catalog,  # type: ignore[arg-type]
+            )
+        )
+        await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+        assert not screen.has_class("-empty")
+
+        await pilot.press("h")
+        await pilot.pause()
+        assert screen.has_class("-empty")
+        assert "on this host" in screen.query_one("#sessions-empty", Static).content
+
+
+async def test_h_is_a_no_op_without_a_registry_or_catalog(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Pressing `h` on an older/duck-typed construction with no registry or
+    catalog injected must not crash — it's a guarded no-op, project scope
+    stays exactly as it was."""
+    del fake_tmux
+    explorer = _FakeExplorer([_listing("aaaa1111-0000")], {"aaaa1111-0000": (_turn("p"),)})
+    app = GroveApp(_manager(tmp_repo, tmp_path))
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(
+            SessionsScreen(explorer, workspace_id="w1", workspace_title="alpha")  # type: ignore[arg-type]
+        )
+        await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(screen.query_one(SessionList).border_title) == "sessions"
+        assert "p" in screen.turns_text

@@ -22,7 +22,7 @@ class TmuxError(GroveError):
 
 
 class ProcessError(GroveError):
-    """A detached local process could not be spawned (#146 headless runtime).
+    """A detached local process could not be spawned (the headless runtime).
 
     The one exception ``grove.core.process`` raises — the ``OSError`` from a
     failed ``Popen`` (missing binary, OS refusal) is narrowed here so the launch
@@ -31,13 +31,55 @@ class ProcessError(GroveError):
     """
 
 
+class EnvSourceError(GroveError):
+    """A configured ``env_file`` / ``env_command`` could not be resolved.
+
+    The one exception ``grove.core.env_source`` raises, for a missing file, an
+    unreadable one, or a command that fails, times out, or cannot be parsed as an
+    argv. Deliberately its OWN type rather than a container one: the seam serves
+    several config sections, and each consumer narrows it into its own family at
+    its own boundary (the container arm re-raises :class:`ContainerError` so the
+    create rollback keeps one except arm; the tickets arm re-raises
+    :class:`TicketProviderError`). A message never carries a resolved VALUE.
+    """
+
+
 class ContainerError(GroveError):
     """A container-runtime lifecycle op failed (build / up / stop / down / exec).
 
-    The one exception type ``grove.core.container`` raises — a failed ``docker``
+    The one exception type the container side-effect modules
+    (``container_runtime``, ``container_infra``) raise — a failed ``docker``
     subprocess is narrowed to this so callers (the launch fork's transactional
     rollback) handle exactly one type, mirroring :class:`TmuxError`. Best-effort
-    reads (``inspect``) never raise; only mutating lifecycle ops do.
+    reads (``DockerCli.read``, ``status``) never raise; only mutating lifecycle
+    ops do.
+    """
+
+
+class DevcontainerError(ContainerError):
+    """A ``@devcontainers/cli`` invocation failed (read-configuration/build/up/exec).
+
+    Subclasses :class:`ContainerError` so a caller that already handles "the
+    container runtime failed" needs no new except arm; the subtype exists for
+    ``container_id``. **A failed ``up`` can still have created a container** —
+    the CLI reports ``outcome:"error"`` alongside a ``containerId`` — and losing
+    that id leaks a container teardown can never find, so it is carried on the
+    error rather than logged and dropped.
+    """
+
+    def __init__(self, message: str, *, container_id: str | None = None) -> None:
+        super().__init__(message)
+        self.container_id = container_id
+
+
+class ContainerRequired(GroveError):
+    """A host runtime was asked for in a project whose config forbids it.
+
+    The refusal arm of the runtime decision tree: a committed
+    ``customizations.grove.requires_container`` may RAISE the isolation floor
+    (a capability *request*, always allowed), so honoring ``--runtime host``
+    there would silently hand back the runtime the project declared unsafe.
+    Raised before any side effect, like every other create-time validation.
     """
 
 
@@ -87,7 +129,7 @@ class TicketProviderNotConfigured(GroveError):
 
 
 class TicketCommentsUnsupported(GroveError):
-    """A provider was asked for comment-thread I/O it has no implementation for (#193).
+    """A provider was asked for comment-thread I/O it has no implementation for.
 
     Capability-based like :class:`SteeringUnsupported` below, not state-based —
     retrying cannot succeed regardless of auth or upstream state. Only Gitea and
@@ -98,6 +140,49 @@ class TicketCommentsUnsupported(GroveError):
     (right provider, no credential) and :class:`TicketProviderError` (right
     provider, wire failure) — this one means the tracker itself has no such
     capability in Grove.
+    """
+
+
+class TicketPullRequestsUnsupported(GroveError):
+    """A provider was asked for pull-request metadata it has no concept of.
+
+    The capability sibling of :class:`TicketCommentsUnsupported`, separate
+    because the capabilities are separate: a tracker can back the comment loop
+    and still have no pull requests. Gitea and GitHub answer from their ``pulls``
+    namespace; Linear inherits ``HttpTicketProvider``'s base-default raise.
+    """
+
+
+class TicketAssigneesUnsupported(GroveError):
+    """A provider was asked to change assignees it has no concept of.
+
+    The third capability sibling of :class:`TicketCommentsUnsupported`, and
+    separate for the same reason the pull-request one is: a tracker can back the
+    comment loop and still expose no assignee write. Deliberately NOT folded into
+    the comment capability even though the same two forges back both — assigning
+    needs repo *write*, a strictly stronger grant than commenting, so a
+    deployment can honestly have one and not the other and must be able to tell
+    them apart.
+    """
+
+
+class TicketLinkError(GroveError):
+    """Human-supplied text could not be turned into a ticket reference.
+
+    Raised by the link parser (a browser URL, ``#42``, ``42``, ``owner/repo#42``)
+    when the text matches no recognized form, or when no *enabled* provider can
+    own the reference it named. The input is the thing at fault, so a caller
+    renders the message verbatim rather than retrying.
+    """
+
+
+class TicketLinkAmbiguous(TicketLinkError):
+    """A parsed link could belong to more than one enabled provider.
+
+    A bare ``#42`` with both numeric trackers enabled names two different
+    tickets. Ambiguity is an explicit typed outcome — never a silent pick of the
+    first provider — so the caller re-asks with a qualified form (a full URL or
+    ``owner/repo#42``). The message names every candidate provider.
     """
 
 
@@ -145,7 +230,7 @@ class SteeringUnsupported(GroveError):
 
 
 class CapabilityUnavailable(GroveError):
-    """The workspace's runtime cannot perform this operation at all (#146).
+    """The workspace's runtime cannot perform this operation at all.
 
     Capability-based like :class:`SteeringUnsupported`, but keyed on the launch
     backend rather than the agent kind: a headless workspace (``provides_pane``
@@ -154,7 +239,7 @@ class CapabilityUnavailable(GroveError):
     (a live session that momentarily reports no window): here there is
     deliberately no pane and no lifecycle change can produce one. A headless
     runtime gains real steering only through the native input channel
-    (stream-json, #182/#172).
+    (stream-json).
     """
 
 
@@ -162,7 +247,7 @@ class CapabilityUnavailable(GroveError):
 
 
 class QuestionNotPending(GroveError):
-    """No pending question matches the answer request (#109).
+    """No pending question matches the answer request.
 
     Either the session's sidecar carries no captured question, or its
     ``tool_use_id`` no longer matches the one being answered — the human
@@ -173,7 +258,7 @@ class QuestionNotPending(GroveError):
 
 
 class QuestionAnswerInvalid(GroveError):
-    """The answer plan doesn't fit the captured question payload (#109).
+    """The answer plan doesn't fit the captured question payload.
 
     Raised when the per-question kind rules fail against the *captured*
     questions (wrong number of answers, an out-of-range option index, a
@@ -189,7 +274,7 @@ class QuestionAnswerInvalid(GroveError):
 
 class ResumeNotSupported(GroveError):
     """A create named ``resume_session_id`` for an agent kind that can't resume
-    an existing session by explicit id (#120).
+    an existing session by explicit id.
 
     Only filesystem CLI kinds carry a resume handle — ``claude_code``
     (``claude --resume <id>``) and ``codex`` (``codex resume <id>``). A remote
@@ -268,6 +353,18 @@ class AuthRateLimited(AuthError):
 
 class SessionNotFound(AuthError):
     """No session with that id — already revoked or never existed."""
+
+
+class AuthStoreUnreadable(AuthError):
+    """`auth.json` exists but cannot be used: corrupt, unreadable, or a newer version.
+
+    A SERVER-side fault, not a caller's input, and it needs its own type
+    because the two are otherwise indistinguishable: mapping every bare
+    `GroveError` to `422 invalid_label` at `POST /auth/pair` tells a user with
+    a perfectly good label that their label was invalid when the real cause is
+    an interrupted write. Carries no path — that goes to the log, because this
+    endpoint is unauthenticated by design.
+    """
 
 
 class BranchAlreadyCheckedOut(BranchError):

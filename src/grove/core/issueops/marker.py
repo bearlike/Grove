@@ -4,7 +4,7 @@ Two invisible signatures, two jobs — split across two constants so the general
 anti-loop guard and the sticky-comment recovery scan can't collide:
 
 - :data:`SIGNATURE_MARKER` rides EVERY Grove issue-ops comment — the engine's
-  usage/refusal replies (#196) AND the publisher's sticky status comment (#197).
+  usage/refusal replies AND the publisher's sticky status comment.
   The engine drops any inbound comment whose body carries it, closing the
   feedback loop a comment-driven bot would otherwise create: the bot's own
   comment must never re-trigger the bot.

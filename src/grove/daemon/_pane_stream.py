@@ -1,4 +1,4 @@
-"""Self-paced live-pane SSE producer for one workspace (#19).
+"""Self-paced live-pane SSE producer for one workspace.
 
 This is the *streaming* half of the live pane-preview wall: the dashboard's
 focused card upgrades from a 1 s ``GET .../pane`` poll to a server push. It is
@@ -9,7 +9,7 @@ into one queue would let pane frames (10x the cadence) dominate the bounded
 queue and starve the activity deltas the bound was sized for. So each focused
 pane gets its own self-paced producer instead.
 
-The visibility/activity gate the issue calls for lives on the *client*: it
+The visibility/activity gate lives on the *client*: it
 opens this stream only for the single focused, WORKING card (it already holds
 each session's ``AgentActivityState`` from the activity stream — recomputing the
 blend per pane-tick here would duplicate that policy). Off-screen and idle panes
@@ -27,8 +27,8 @@ from datetime import datetime
 from grove.core.contracts.activity import DashboardEvent
 from grove.core.contracts.views import WorkspacePaneView
 
-# One capture per second — matches the cadence the focused-pane poll shipped at
-# (the issue's "~1-2 Hz") and the captured depth the manager already bounds via
+# One capture per second — matches the focused-pane poll's ~1-2 Hz cadence
+# and the captured depth the manager already bounds via
 # ``cfg.tmux.peek_history_lines``. Not config: there is no daemon-side pane knob,
 # and the one tunable that matters (capture depth) lives on the manager.
 _PANE_STREAM_INTERVAL_SECONDS = 1.0

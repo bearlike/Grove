@@ -66,14 +66,21 @@ from grove.core.contracts.tickets import (
     TicketSelector,
 )
 from grove.core.contracts.views import (
+    ATTACH_INSTRUCTION_ADAPTER,
     AttachInstructionView,
     CommitSummaryView,
+    ContainerAttachView,
+    HostAttachView,
+    ProjectView,
+    ProvisionProgressView,
     WorkspacePaneView,
     WorkspacePeekView,
     WorkspaceStateView,
+    attach_instruction_view,
 )
 
 __all__ = [
+    "ATTACH_INSTRUCTION_ADAPTER",
     "AgentActivityView",
     "AgentQuestionOptionView",
     "AgentQuestionView",
@@ -85,11 +92,13 @@ __all__ = [
     "BranchInfo",
     "BranchPlan",
     "CommitSummaryView",
+    "ContainerAttachView",
     "CreateWorkspaceRequest",
     "DashboardEvent",
     "DashboardSnapshotView",
     "DigestEntryView",
     "ExistingLocalBranch",
+    "HostAttachView",
     "IssueOpsAction",
     "IssueOpsEvent",
     "IssueOpsOutcome",
@@ -98,6 +107,8 @@ __all__ = [
     "PairResultView",
     "PairingChallengeView",
     "ProjectGroupView",
+    "ProjectView",
+    "ProvisionProgressView",
     "QuestionAnswerItem",
     "QuestionAnswerRequest",
     "RemapSessionRequest",
@@ -117,4 +128,5 @@ __all__ = [
     "WorkspacePaneView",
     "WorkspacePeekView",
     "WorkspaceStateView",
+    "attach_instruction_view",
 ]

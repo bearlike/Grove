@@ -14,6 +14,7 @@ classes are internal (the registry constructs them from config). Wire shapes
 
 from __future__ import annotations
 
+from grove.core.tickets.link import TicketLink
 from grove.core.tickets.provider import (
     HttpTicketProvider,
     NumberTicketProvider,
@@ -24,6 +25,7 @@ from grove.core.tickets.registry import TicketProviderRegistry
 __all__ = [
     "HttpTicketProvider",
     "NumberTicketProvider",
+    "TicketLink",
     "TicketProvider",
     "TicketProviderRegistry",
 ]

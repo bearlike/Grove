@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from grove.mcp.server import McpServerConfig
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = REPO_ROOT / "packaging" / "systemd"
 
@@ -25,13 +27,21 @@ def _require_make() -> None:
         pytest.skip("make not on PATH")
 
 
-def _run_print(*, with_webapp: bool, env_overrides: dict[str, str] | None = None) -> str:
+def _run_print(
+    *,
+    with_webapp: bool,
+    with_mcp: bool = False,
+    env_overrides: dict[str, str] | None = None,
+) -> str:
     env = os.environ.copy()
     if with_webapp:
         env["WITH_WEBAPP"] = "1"
+    if with_mcp:
+        env["WITH_MCP"] = "1"
     # Pin deterministic values regardless of host PATH so tests don't
-    # depend on whether a real grove / npm is installed in CI.
+    # depend on whether a real grove / grove-mcp / npm is installed in CI.
     env.setdefault("GROVE_BIN", "/usr/local/bin/grove")
+    env.setdefault("MCP_BIN", "/usr/local/bin/grove-mcp")
     env.setdefault("NPM_BIN", "/usr/local/bin/npm")
     if env_overrides:
         env.update(env_overrides)
@@ -48,16 +58,18 @@ def _run_print(*, with_webapp: bool, env_overrides: dict[str, str] | None = None
 
 
 def test_templates_exist() -> None:
-    """The two *.service.in templates ship with the repo."""
+    """Every *.service.in template ships with the repo."""
     assert (TEMPLATE_DIR / "grove-daemon.service.in").is_file()
     assert (TEMPLATE_DIR / "grove-webapp.service.in").is_file()
+    assert (TEMPLATE_DIR / "grove-mcp.service.in").is_file()
 
 
 def test_default_renders_daemon_only() -> None:
-    """Without WITH_WEBAPP the print target emits only the daemon unit."""
+    """Without a companion gate the print target emits only the daemon unit."""
     out = _run_print(with_webapp=False)
     assert "─── grove-daemon.service ───" in out
     assert "─── grove-webapp.service ───" not in out
+    assert "─── grove-mcp.service ───" not in out
 
 
 def test_daemon_unit_substitutes_grove_bin_and_port() -> None:
@@ -103,9 +115,9 @@ def test_webapp_unit_default_host_is_lan_reachable() -> None:
 
 def test_daemon_unit_bakes_install_time_path() -> None:
     """The daemon runs user-authored init scripts; under systemd --user a bare
-    PATH made pyenv/nvm/asdf toolchains invisible and rolled creates back
-    (issue #9). The unit must bake DAEMON_PATH (default: the installing
-    shell's PATH) into Environment=PATH=.
+    PATH makes pyenv/nvm/asdf toolchains invisible and rolls creates back. The
+    unit must bake DAEMON_PATH (default: the installing shell's PATH) into
+    Environment=PATH=.
     """
     out = _run_print(
         with_webapp=False,
@@ -119,7 +131,7 @@ def test_daemon_unit_uses_killmode_process() -> None:
     """The daemon forks the shared tmux server into its cgroup, so the unit must
     set KillMode=process — the systemd default (control-group) tears the server
     and every session down on each `systemctl restart` (= every update). Not
-    `mixed`: its final SIGKILL still hits the cgroup (issue #135).
+    `mixed`: its final SIGKILL still hits the cgroup.
     """
     out = _run_print(with_webapp=False)
     # Assert on active directive lines only — the WHY comment names the
@@ -129,7 +141,78 @@ def test_daemon_unit_uses_killmode_process() -> None:
     assert directives == ["KillMode=process"]
 
 
+def test_with_mcp_renders_mcp_unit_and_wires_dependency() -> None:
+    """WITH_MCP=1 adds the MCP unit, gated the same way the webapp is."""
+    out = _run_print(with_webapp=False, with_mcp=True)
+    assert "─── grove-daemon.service ───" in out
+    assert "─── grove-mcp.service ───" in out
+    assert "─── grove-webapp.service ───" not in out
+    # Same `Wants=` (not `Requires=`) rule as the webapp: the MCP server is a
+    # daemon client, and a daemon blip must not tear the service down.
+    assert "Wants=grove-daemon.service" in out
+    assert "Requires=grove-daemon.service" not in out
+
+
+def test_mcp_unit_execs_the_grove_mcp_script_over_streamable_http() -> None:
+    """`grove-mcp` is its own console script, not a `grove` subcommand, so it
+    renders from MCP_BIN rather than GROVE_BIN — and the network transport is
+    baked in (stdio needs no unit; the client spawns it per connection).
+    """
+    out = _run_print(
+        with_webapp=False,
+        with_mcp=True,
+        env_overrides={"MCP_BIN": "/opt/grove/bin/grove-mcp", "MCP_PORT": "7500"},
+    )
+    assert (
+        "ExecStart=/opt/grove/bin/grove-mcp --transport streamable-http "
+        "--host 127.0.0.1 --port 7500" in out
+    )
+
+
+def test_mcp_unit_default_host_is_loopback() -> None:
+    """Default MCP_HOST is 127.0.0.1 — deliberately unlike WEBAPP_HOST=0.0.0.0.
+    The webapp is read-only; the MCP surface can create/kill/message workspaces,
+    so widening the bind must stay an explicit operator decision.
+    """
+    out = _run_print(with_webapp=False, with_mcp=True)
+    assert "--host 127.0.0.1 --port 7431" in out
+    assert "--host 0.0.0.0" not in out
+
+
+def test_mcp_unit_sources_the_token_environment_file() -> None:
+    """The inbound bearer (GROVE_MCP_TOKEN) arrives via an optional
+    EnvironmentFile. The leading `-` is load-bearing: a missing file must not be
+    a unit load error, so an absent token surfaces as the server's own
+    fail-closed exit in the journal instead.
+    """
+    out = _run_print(with_webapp=False, with_mcp=True)
+    assert "EnvironmentFile=-%h/.config/grove/mcp.env" in out
+
+
+def test_mcp_unit_does_not_bake_a_path() -> None:
+    """Only the daemon needs the install-time PATH bake — it runs user-authored
+    init scripts. The MCP server shells out to nothing, so a PATH line here
+    would be cargo-culted surface that silently goes stale.
+    """
+    out = _run_print(with_webapp=False, with_mcp=True)
+    mcp_unit = out.split("─── grove-mcp.service ───", 1)[1]
+    assert not [ln for ln in mcp_unit.splitlines() if ln.strip().startswith("Environment=PATH=")]
+
+
+def test_mcp_unit_defaults_track_the_cli_defaults() -> None:
+    """The Makefile's MCP_HOST/MCP_PORT and `McpServerConfig`'s defaults are the
+    same policy expressed in two languages — a Makefile cannot import Python, so
+    nothing but this test stops them drifting apart.
+
+    Drift here is quiet and nasty: the unit would serve on one port while every
+    doc, `--help` string, and client config still named the other.
+    """
+    out = _run_print(with_webapp=False, with_mcp=True)
+    expected = f"--host {McpServerConfig.DEFAULT_BIND_HOST} --port {McpServerConfig.DEFAULT_PORT}"
+    assert expected in out, f"unit does not carry the CLI defaults ({expected})"
+
+
 def test_no_unsubstituted_placeholders_remain() -> None:
-    """No @TOKEN@ should survive in either rendered unit."""
-    out = _run_print(with_webapp=True)
+    """No @TOKEN@ should survive in any rendered unit."""
+    out = _run_print(with_webapp=True, with_mcp=True)
     assert "@" not in out.replace("https://github.com/bearlike/Grove", ""), out

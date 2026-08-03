@@ -4,12 +4,16 @@ Two implementations share one Protocol surface so a client's xterm
 bridge is transport-agnostic:
 
 * ``LocalAttach`` — stdlib ``pty.fork`` + ``asyncio.add_reader``. Used
-  when ``BackendConfig.ssh_target`` is ``None``. ``with_command`` is
-  the test-only constructor; production callers always run
-  ``tmux attach -t <session>``.
+  when ``BackendConfig.ssh_target`` is ``None``.
 * ``SshAttach`` — ``asyncssh.SSHClientProcess`` over an existing
   ``SSHClientConnection``. The transport's connection is reused so
   HTTP traffic and the interactive attach share one TCP session.
+
+Neither composes the command: both take what the engine already decided
+(``AttachInstructionView.attach_argv()``), because *how* you reach a
+workspace's agent differs by runtime — ``tmux attach`` for a host workspace,
+``devcontainer exec … tmux`` for a containerized one — and a bridge is
+the wrong layer to hold that policy.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ import os
 import signal
 import struct
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 import asyncssh
@@ -53,28 +57,20 @@ class LocalAttach:
 
     _READ_CHUNK = 4096
 
-    def __init__(self, tmux_session: str) -> None:
-        """Default constructor — runs ``tmux attach -t <session>``."""
-        self._command: list[str] = ["tmux", "attach", "-t", tmux_session]
+    def __init__(self, argv: Sequence[str]) -> None:
+        """Run *argv* in a forked PTY — the engine's own way into this workspace.
+
+        Takes the whole argv rather than a session name: the command is
+        ``tmux attach`` for a host workspace and ``devcontainer exec … tmux``
+        for a containerized one, and only the engine can tell them apart. Tests
+        pass a deterministic ``cat`` for byte-level assertions, which is the
+        same constructor rather than a second one.
+        """
+        self._command: list[str] = list(argv)
         self._master_fd: int | None = None
         self._pid: int | None = None
         self._callback: Callable[[bytes], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-
-    @classmethod
-    def with_command(cls, command: list[str]) -> LocalAttach:
-        """Test/alternate constructor — run any command in the PTY.
-
-        Production code uses the default constructor (always tmux attach).
-        Tests use a deterministic ``cat`` for byte-level assertions.
-        """
-        instance = cls.__new__(cls)
-        instance._command = command
-        instance._master_fd = None
-        instance._pid = None
-        instance._callback = None
-        instance._loop = None
-        return instance
 
     def on_output(self, callback: Callable[[bytes], None]) -> None:
         self._callback = callback
@@ -156,17 +152,14 @@ class LocalAttach:
 class SshAttach:
     """Attach session driven via asyncssh process over a shared connection."""
 
-    def __init__(
-        self,
-        conn: asyncssh.SSHClientConnection,
-        tmux_session: str,
-        *,
-        _command_override: str | None = None,
-    ) -> None:
+    def __init__(self, conn: asyncssh.SSHClientConnection, command: str) -> None:
+        """*command* is one shell line — ssh runs a remote SHELL, not an argv.
+
+        The transport joins the engine's argv for us, so this class does
+        not decide what attaching means any more than :class:`LocalAttach` does.
+        """
         self._conn = conn
-        # ``_command_override`` is for tests only — production callers always
-        # attach to a tmux session that the daemon just confirmed exists.
-        self._command = _command_override or f"tmux attach -t {tmux_session}"
+        self._command = command
         self._process: asyncssh.SSHClientProcess[bytes] | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._callback: Callable[[bytes], None] | None = None

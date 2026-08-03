@@ -5,12 +5,16 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ContextBar } from "@/components/workspace/context-bar";
 import { AgentLiveStatus } from "@/lib/grove/agent-activity";
-import type { AgentActivityView, WorkspacePeekView, WorkspaceStateView } from "@/lib/grove/types";
+import type {
+  AgentActivityView,
+  PhaseView,
+  TicketRef,
+  WorkspacePeekView,
+  WorkspaceStateView,
+} from "@/lib/grove/types";
 
-// The consolidated session header (#153): a state-led title trigger that opens
-// ONE popover — restoring the user-validated #134/#136 consolidation the ADE
-// overhaul had flattened into an always-visible `identity-strip` + a separate
-// `LifecycleMenu` dropdown (both deleted). These pin the preserved seams:
+// The consolidated session header: a state-led title trigger that opens
+// ONE popover. These pin the preserved seams:
 // `identity-trigger` opens `branch-summary`; inside live `stat-trio`,
 // `placement-badge`, `branch-delta-dot`, and the folded-in lifecycle verbs
 // (`action-pause`/`action-resume`/`action-kill`). The full `commit-list` is NOT
@@ -41,6 +45,7 @@ function stateView(overrides: Partial<WorkspaceStateView> = {}): WorkspaceStateV
     updated_at: "2026-07-01T10:00:00Z",
     branch_provenance: "grove",
     placement: "worktree",
+    runtime: "host",
     ...overrides,
   } as WorkspaceStateView;
 }
@@ -59,6 +64,25 @@ function peek(overrides: Partial<WorkspacePeekView> = {}): WorkspacePeekView {
     ...overrides,
   } as WorkspacePeekView;
 }
+
+const PHASE: PhaseView = {
+  phase: "verifying",
+  note: "running the gates",
+  updated_at: "2026-07-31T10:00:00Z",
+  index: 3,
+  total: 6,
+};
+
+const ISSUE: TicketRef = {
+  provider: "gitea",
+  id: "330",
+  kind: "issue",
+  title: "webapp under-displays the axes",
+  url: "https://git.example/bearlike/Grove/issues/330",
+  status: "open",
+  assignee: null,
+  ambiguous: false,
+} as TicketRef;
 
 const WORKING = AgentLiveStatus.of({ state: "working", model: "sonnet-4-5" } as AgentActivityView);
 const NO_SESSION = AgentLiveStatus.of(null);
@@ -89,7 +113,7 @@ describe("ContextBar", () => {
     const live = screen.getByTestId("session-state-live");
     expect(live).toHaveTextContent("working");
     expect(live).toHaveAttribute("aria-live", "polite");
-    // The description/prompt text must NEVER ride the announced region (#136).
+    // The description/prompt text must NEVER ride the announced region.
     expect(live).not.toHaveTextContent("the full task description");
   });
 
@@ -120,6 +144,75 @@ describe("ContextBar", () => {
     expect(screen.getByTestId("placement-badge")).toBeInTheDocument();
     // The full commit list is NOT duplicated here — it lives in the Diff tab.
     expect(screen.queryByTestId("commit-list")).toBeNull();
+  });
+
+  it("names the runtime in the popover for BOTH runtimes, host included", async () => {
+    // The session surface must not lose an axis the wall shows — and unlike
+    // placement, the host case is never silent here (see RuntimeBadge).
+    const user = userEvent.setup();
+    const { rerender } = r(<ContextBar peek={peek()} live={WORKING} />);
+    await user.click(screen.getByTestId("identity-trigger"));
+    expect((await screen.findByTestId("runtime-badge")).dataset.runtime).toBe("host");
+
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ContextBar
+          peek={peek({ state: stateView({ runtime: "container" }) })}
+          live={WORKING}
+        />
+      </QueryClientProvider>,
+    );
+    await user.click(screen.getByTestId("identity-trigger"));
+    expect((await screen.findByTestId("runtime-badge")).dataset.runtime).toBe("container");
+  });
+
+  // ── the third axis + linked refs ──────────────────────────────────────────
+  // The phase axis must render here too, not only on the overview grid card,
+  // so opening a workspace never loses an axis you could see from the wall.
+
+  it("wears the task phase on the trigger, so opening a workspace keeps the axis", () => {
+    r(<ContextBar peek={peek()} live={WORKING} phase={PHASE} />);
+    const badge = within(screen.getByTestId("identity-trigger")).getByTestId("phase-badge");
+    expect(badge).toHaveAttribute("data-phase", "verifying");
+    expect(badge).toHaveTextContent("4/6");
+  });
+
+  it("renders no phase chrome at all when the agent reports no phase", () => {
+    r(<ContextBar peek={peek()} live={WORKING} />);
+    expect(screen.queryByTestId("phase-badge")).toBeNull();
+  });
+
+  it("opens the popover onto a Task section carrying the meter, name and note", async () => {
+    const user = userEvent.setup();
+    r(<ContextBar peek={peek()} live={WORKING} phase={PHASE} />);
+    await user.click(screen.getByTestId("identity-trigger"));
+    const summary = await screen.findByTestId("branch-summary");
+    expect(within(summary).getByTestId("phase-meter")).toHaveTextContent("verifying");
+    expect(within(summary).getByTestId("phase-note")).toHaveTextContent("running the gates");
+    expect(within(summary).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "4");
+  });
+
+  it("links the issue in the popover even when no PR exists yet", async () => {
+    const user = userEvent.setup();
+    r(<ContextBar peek={peek({ state: stateView({ ticket_refs: [ISSUE] }) })} live={WORKING} />);
+    await user.click(screen.getByTestId("identity-trigger"));
+    const summary = await screen.findByTestId("branch-summary");
+    expect(within(summary).getByTestId("ticket-linkage")).toBeInTheDocument();
+    expect(within(summary).getByRole("link", { name: /issue #330/i })).toHaveAttribute(
+      "href",
+      "https://git.example/bearlike/Grove/issues/330",
+    );
+  });
+
+  it("hides the Task and Links sections entirely when there is nothing to show", async () => {
+    const user = userEvent.setup();
+    r(<ContextBar peek={peek()} live={WORKING} />);
+    await user.click(screen.getByTestId("identity-trigger"));
+    const summary = await screen.findByTestId("branch-summary");
+    expect(summary).not.toHaveTextContent("Task");
+    expect(summary).not.toHaveTextContent("Links");
+    expect(within(summary).queryByTestId("phase-meter")).toBeNull();
+    expect(within(summary).queryByTestId("ticket-linkage")).toBeNull();
   });
 
   it("hosts the reversible pause verb in the popover for an active workspace", async () => {

@@ -77,7 +77,7 @@ describe("GroveClient", () => {
       expect.objectContaining({ method: "GET" }),
     );
 
-    // `candidates: true` flips to the ungated remap-picker scan (#132).
+    // `candidates: true` flips to the ungated remap-picker scan.
     await client.getSessions("w1", { candidates: true });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/grove/workspaces/w1/sessions?candidates=true",

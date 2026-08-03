@@ -28,9 +28,12 @@ import httpx
 from grove.client.backend import BackendConfig
 from grove.client.errors import NeedsPairingError, ProtocolError, TransportError
 from grove.client.transport import LocalTransport, Transport, UrlTransport
+from grove.core.contracts.activity import DashboardSnapshotView
 from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
+from grove.core.contracts.phase import PhaseView
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView, TodoListView
 from grove.core.contracts.tickets import (
     TicketProviderName,
     TicketProviderView,
@@ -38,12 +41,15 @@ from grove.core.contracts.tickets import (
     TicketSelector,
 )
 from grove.core.contracts.views import (
+    ATTACH_INSTRUCTION_ADAPTER,
     AttachInstructionView,
     HealthView,
+    ProjectView,
     WhoamiView,
     WorkspacePeekView,
     WorkspaceStateView,
 )
+from grove.core.phase import TaskPhase
 
 if TYPE_CHECKING:
     from grove.client.attach import AttachSession
@@ -53,6 +59,32 @@ class GroveClient:
     """One client per backend. Speaks the Grove daemon's REST protocol."""
 
     _DEFAULT_TIMEOUT_S = 30.0
+    """Per-request budget for the ordinary read/steer calls — a daemon that has
+    not answered a listing or a keystroke injection in 30s is wedged, not busy."""
+
+    _LIFECYCLE_TIMEOUT_S = 1260.0
+    """Per-request budget for create/resume/respawn, the calls that run the
+    user's init script, provision the workspace's container, and launch an agent.
+
+    It is deliberately larger than ``_DEFAULT_TIMEOUT_S`` rather than tuned to a
+    guess: the engine bounds the init script alone at
+    ``InitScriptConfig.timeout_seconds`` (default 300s), so a single 30s budget
+    for the whole operation gave up an order of magnitude before the daemon's own
+    limit on ONE of its steps. That is what made ``grove create`` succeed from the
+    shell (in-process, no HTTP, no deadline) while the identical MCP/daemon call
+    "failed" — and failed *after* the daemon had already committed to the work, so
+    the create landed anyway and the caller was told nothing. A client
+    deadline shorter than the server's own bound reports a healthy slow operation
+    as a failure.
+
+    The budget is the SUM of the engine's own per-step bounds plus headroom:
+    ``init_script`` 300s + ``container.up_timeout_seconds`` 900s (a cold
+    devcontainer build pulls a base image and installs Features) + 60s for
+    `git worktree add` and the agent launch. A create that times out here is
+    the worst failure shape for a containerized workspace — the daemon may
+    finish and leave a container the caller has no record of — so the
+    ordering is asserted in a test, not merely documented here.
+    """
 
     def __init__(self, config: BackendConfig) -> None:
         self._config = config
@@ -67,10 +99,9 @@ class GroveClient:
             return UrlTransport(config)
         if config.ssh_target is None:
             return LocalTransport(config)
-        # SshTransport lands in Task 13; deferred import keeps Task 12 buildable.
-        # Mirrors the AttachSession pattern in transport.py — symbol resolved
-        # at call time, not module-import time, so this file builds cleanly
-        # while the SSH transport is still in flight.
+        # Deferred import, mirroring the AttachSession pattern in transport.py:
+        # the symbol resolves at call time, not module-import time, so this
+        # file has no import-order dependency on transport.py.
         from grove.client.transport import (  # type: ignore[attr-defined,unused-ignore] # noqa: PLC0415
             SshTransport,
         )
@@ -184,7 +215,11 @@ class GroveClient:
         return [WorkspaceStateView.model_validate(item) for item in body]
 
     async def create_workspace(self, req: CreateWorkspaceRequest) -> WorkspaceStateView:
-        body = await self._post("/workspaces", json_payload=req.model_dump(mode="json"))
+        body = await self._post(
+            "/workspaces",
+            json_payload=req.model_dump(mode="json"),
+            timeout=self._LIFECYCLE_TIMEOUT_S,
+        )
         return WorkspaceStateView.model_validate(body)
 
     async def get_workspace(self, ws_id: str) -> WorkspaceStateView:
@@ -196,11 +231,19 @@ class GroveClient:
         return WorkspaceStateView.model_validate(body)
 
     async def resume(self, ws_id: str) -> WorkspaceStateView:
-        body = await self._post(f"/workspaces/{ws_id}/resume", json_payload={})
+        body = await self._post(
+            f"/workspaces/{ws_id}/resume",
+            json_payload={},
+            timeout=self._LIFECYCLE_TIMEOUT_S,
+        )
         return WorkspaceStateView.model_validate(body)
 
     async def respawn(self, ws_id: str) -> WorkspaceStateView:
-        body = await self._post(f"/workspaces/{ws_id}/respawn", json_payload={})
+        body = await self._post(
+            f"/workspaces/{ws_id}/respawn",
+            json_payload={},
+            timeout=self._LIFECYCLE_TIMEOUT_S,
+        )
         return WorkspaceStateView.model_validate(body)
 
     async def interrupt(self, ws_id: str) -> None:
@@ -246,31 +289,68 @@ class GroveClient:
     async def send_message(self, ws_id: str, text: str) -> None:
         """Inject a steering message into the workspace agent's pane.
 
-        Wraps ``POST /workspaces/{id}/message`` with body ``{"text": ...}``
-        (daemon issue #37). Tolerates both 200 and 204 success shapes — the
-        endpoint is being built in parallel, so this method pins only the
-        request contract. A daemon predating the endpoint answers 404/405
+        Wraps ``POST /workspaces/{id}/message`` with body ``{"text": ...}``.
+        Tolerates both 200 and 204 success shapes, so this method pins only
+        the request contract. A daemon predating the endpoint answers 404/405
         with a non-envelope body; that surfaces as ``ProtocolError`` with
         ``code="http_error"``, which callers treat as capability-unavailable
         rather than failure (see ``grove.mcp``).
+
+        Rides ``_request`` like every other verb rather than reaching for the
+        httpx client directly — a bypass here is precisely how an unguarded
+        httpx timeout could reach the MCP surface without translation.
         """
-        resp = await self._ensure_http().post(f"/workspaces/{ws_id}/message", json={"text": text})
+        resp = await self._request(
+            "POST", f"/workspaces/{ws_id}/message", json_payload={"text": text}
+        )
         if not resp.is_success:
             self._raise_for_status(resp)
 
     async def get_attach(self, ws_id: str) -> AttachInstructionView:
         body = await self._get(f"/workspaces/{ws_id}/attach")
-        return AttachInstructionView.model_validate(body)
+        return ATTACH_INSTRUCTION_ADAPTER.validate_python(body)
 
     async def peek(self, ws_id: str) -> WorkspacePeekView:
         body = await self._get(f"/workspaces/{ws_id}/peek")
         return WorkspacePeekView.model_validate(body)
+
+    async def get_activity(self) -> DashboardSnapshotView:
+        """One cross-project snapshot of every workspace's live status.
+
+        Mirrors ``GET /activity`` — zero-argument like :meth:`list_projects`,
+        because it is the read a watcher makes when it holds nothing but wants
+        the whole fleet. This is the ONLY read that answers the two axes the
+        per-workspace routes cannot answer together at fleet scale: the blended
+        ``AgentActivityView`` (working / waiting / ``needs_attention``, plus any
+        live ``questions``) and each workspace's reported ``phase`` and todo
+        counts. Every other client method here answers for ONE workspace, so a
+        caller polling twenty of them paid twenty round trips to learn what this
+        returns in one.
+
+        A snapshot, not a subscription: the daemon's SSE ``/events`` stream is
+        the push half and stays a transport concern (the TUI and webapp consume
+        it directly). Callers that poll should mind the cost — ``snapshot()``
+        does live git/tmux I/O per workspace daemon-side.
+        """
+        body = await self._get("/activity")
+        return DashboardSnapshotView.model_validate(body)
 
     async def list_branches(
         self, *, repo: Path, scope: Literal["local", "remote"]
     ) -> list[BranchInfo]:
         body = await self._get("/branches", params={"repo": str(repo), "scope": scope})
         return [BranchInfo.model_validate(item) for item in body]
+
+    async def list_projects(self) -> list[ProjectView]:
+        """Every project this daemon serves, newest config union included.
+
+        The call to make when you hold no repo path yet: a row's ``repo_root``
+        is the argument :meth:`list_agents`, :meth:`list_branches`, and
+        :meth:`create_workspace` all expect. Mirrors ``GET /projects``, which
+        takes no parameters because it is the listing that precedes knowing a
+        repo."""
+        body = await self._get("/projects")
+        return [ProjectView.model_validate(item) for item in body]
 
     async def list_agents(self, repo: Path) -> list[AgentSummaryView]:
         """The agents a client may offer for ``repo`` — one row per merged
@@ -318,8 +398,42 @@ class GroveClient:
         body = await self._get(f"/tickets/{provider}/{ticket_id}", params={"repo": str(repo)})
         return TicketRef.model_validate(body)
 
+    async def list_sessions(
+        self, *, repo: Path | None = None, limit: int = 50
+    ) -> list[SessionSummaryView]:
+        """Agent sessions newest-first — host-wide (default) or for one ``repo``.
+
+        Mirrors ``GET /sessions``, where scope is a value of the same parameter:
+        omitting ``repo`` returns the host catalog (every session in every
+        adapter's store, including directories Grove has never managed), giving
+        ``repo`` returns that project's fully-parsed listing. A catalog row is
+        metadata-only, so its ``activity``/``size_bytes`` are ``None`` while its
+        ``cwd``/``project``/``live`` are populated — see ``SessionSummaryView``.
+        """
+        params: dict[str, str] = {"limit": str(limit)}
+        if repo is not None:
+            params["repo"] = str(repo)
+        body = await self._get("/sessions", params=params)
+        return [SessionSummaryView.model_validate(item) for item in body]
+
+    async def session_turns(
+        self, session_id: str, *, kind: str, cwd: str, last: int | None = None
+    ) -> SessionDetailView:
+        """The conversation of a session that need not belong to any workspace.
+
+        Mirrors ``GET /sessions/{id}/turns``. ``kind`` and ``cwd`` are the
+        ``adapter_kind``/``cwd`` of the row this id came from — pass them back
+        verbatim; they are how a session with no workspace is addressed at all.
+        ``last`` keeps only the tail. A row with no ``cwd`` cannot be read.
+        """
+        params: dict[str, str] = {"kind": kind, "cwd": cwd}
+        if last is not None:
+            params["last"] = str(last)
+        body = await self._get(f"/sessions/{session_id}/turns", params=params)
+        return SessionDetailView.model_validate(body)
+
     async def remap_session(self, ws_id: str, session_ref: str) -> WorkspaceStateView:
-        """Pin an existing agent session as the workspace's tracked primary (#120).
+        """Pin an existing agent session as the workspace's tracked primary.
 
         Wraps ``POST /workspaces/{id}/session``. ``session_ref`` is a session id
         or a unique id-prefix, resolved in the workspace's project scope by the
@@ -331,12 +445,62 @@ class GroveClient:
         )
         return WorkspaceStateView.model_validate(body)
 
+    async def get_phase(self, ws_id: str) -> PhaseView | None:
+        """The workspace's current task-phase claim.
+
+        Wraps ``GET /workspaces/{id}/phase``. ``None`` means the agent has
+        not reported a phase yet — a real answer, not an error; distinguish
+        it from "reported scoping" rather than collapsing the two.
+        """
+        body = await self._get(f"/workspaces/{ws_id}/phase")
+        return PhaseView.model_validate(body) if body is not None else None
+
+    async def set_phase(self, ws_id: str, phase: TaskPhase, note: str | None = None) -> PhaseView:
+        """Set or correct the workspace's task-phase claim from outside the agent.
+
+        Wraps ``POST /workspaces/{id}/phase`` — the manual counterpart to the
+        agent's own file-channel report (see ``grove.core.phase``), mirroring
+        ``remap_session``'s trusted-write shape.
+        """
+        payload: dict[str, object] = {"phase": phase}
+        if note is not None:
+            payload["note"] = note
+        body = await self._post(f"/workspaces/{ws_id}/phase", json_payload=payload)
+        return PhaseView.model_validate(body)
+
+    async def get_todo(self, ws_id: str) -> TodoListView:
+        """The workspace's current todo/checklist state.
+
+        Wraps ``GET /workspaces/{id}/todo``. Raises ``ProtocolError`` with
+        code ``agent_session_not_found`` when the workspace has no recorded
+        agent session; an empty ``TodoListView`` means a session exists but
+        no todo/Task tool has been called yet — a real, not-yet-populated
+        state, never conflated with the 404.
+        """
+        body = await self._get(f"/workspaces/{ws_id}/todo")
+        return TodoListView.model_validate(body)
+
     async def attach_ticket(self, ws_id: str, selector: TicketSelector) -> WorkspaceStateView:
         """Associate a ticket with a workspace — returns the updated state."""
         body = await self._post(
             f"/workspaces/{ws_id}/tickets",
             json_payload=selector.model_dump(mode="json"),
         )
+        return WorkspaceStateView.model_validate(body)
+
+    async def attach_ticket_by_ref(self, ws_id: str, ref: str) -> WorkspaceStateView:
+        """Associate a ticket with a workspace from a raw human-typed reference.
+
+        Wraps the SAME ``POST /workspaces/{id}/tickets`` route as
+        :meth:`attach_ticket`, sending ``{"ref": ...}`` instead of a resolved
+        selector — a URL, ``#42``, ``42``, or ``owner/repo#42``. Resolution
+        (provider + issue-vs-PR) happens server-side, so a caller with no
+        provider name in hand never has to import or
+        reimplement the link grammar. Raises ``ProtocolError`` with code
+        ``ticket_link_ambiguous``/``ticket_link_invalid`` when ``ref`` names
+        more than one enabled provider, or parses as nothing at all.
+        """
+        body = await self._post(f"/workspaces/{ws_id}/tickets", json_payload={"ref": ref})
         return WorkspaceStateView.model_validate(body)
 
     async def detach_ticket(
@@ -346,13 +510,27 @@ class GroveClient:
         body = await self._delete(f"/workspaces/{ws_id}/tickets/{provider}/{ticket_id}")
         return WorkspaceStateView.model_validate(body)
 
-    async def open_attach(self, tmux_session: str) -> AttachSession:
-        """Return an interactive AttachSession bound to the tmux session.
+    async def detach_ticket_by_ref(self, ws_id: str, ref: str) -> WorkspaceStateView:
+        """Remove a ticket association by raw human-typed reference.
 
-        Local backend → spawns a PTY running ``tmux attach``.
-        Remote backend → re-uses the SSH connection to run ``tmux attach``.
+        Wraps ``DELETE /workspaces/{id}/tickets?ref=...`` — the ref-resolving
+        sibling of :meth:`detach_ticket`, resolved server-side the same way
+        :meth:`attach_ticket_by_ref` is.
         """
-        return await self._transport.open_attach(tmux_session)
+        body = await self._delete(f"/workspaces/{ws_id}/tickets", params={"ref": ref})
+        return WorkspaceStateView.model_validate(body)
+
+    async def open_attach(self, instruction: AttachInstructionView) -> AttachSession:
+        """Return an interactive AttachSession for what *instruction* names.
+
+        Local backend → spawns a PTY running it. Remote backend → re-uses the
+        SSH connection to run it. Takes the instruction rather than a session
+        name because a containerized workspace is reached by exec'ing into its
+        container, not by naming a session on this host — and
+        ``attach_argv()`` is where each variant answers that, so nothing here
+        branches on the runtime.
+        """
+        return await self._transport.open_attach(instruction.attach_argv())
 
     # ─── private HTTP helpers ────────────────────────────────────────────────
 
@@ -361,13 +539,63 @@ class GroveClient:
             raise TransportError("GroveClient not connected — call connect() first")
         return self._http
 
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_payload: dict[str, object] | None = None,
+        timeout: float | None = None,
+    ) -> httpx.Response:
+        """Issue one request, translating every transport failure into ``TransportError``.
+
+        THE seam every verb helper funnels through, and the reason it exists: a
+        raw ``httpx`` exception must never reach a caller. This module's contract
+        is "transport failures raise ``TransportError``", and
+        **``httpx.TimeoutException`` stringifies to the EMPTY STRING**
+        (verified: ``str(httpx.ReadTimeout(...)) == ""`` on a real read timeout,
+        because httpcore maps a bare ``TimeoutError()`` through and its message is
+        the empty string). Any caller that renders ``str(exc)`` unguarded therefore
+        reports a failure with no reason whatsoever — the MCP SDK does exactly that
+        (``f"Error executing tool {name}: {e}"``), which turns a dropped steering
+        message into an error with an empty body and leaves an orchestrator no
+        strategy but a blind retry.
+
+        A timeout is called out separately because it is the one failure that is
+        **not** a statement about the outcome: the daemon may be mid-operation and
+        may still commit it, so the honest advice is to check state rather than
+        retry. Everything else names its httpx type, which is what distinguishes a
+        refused connection from a dropped one.
+        """
+        client = self._ensure_http()
+        budget = self._DEFAULT_TIMEOUT_S if timeout is None else timeout
+        try:
+            return await client.request(
+                method, path, params=params, json=json_payload, timeout=budget
+            )
+        except httpx.TimeoutException as exc:
+            raise TransportError(
+                f"{method} {path} to daemon {client.base_url} timed out after {budget:g}s. "
+                "The daemon may still be running the operation and may yet apply it — "
+                "check the workspace's state before retrying, since a blind retry can "
+                "duplicate the effect."
+            ) from exc
+        except httpx.HTTPError as exc:
+            # `or type(exc).__name__` because several httpx errors also carry an
+            # empty message; the type name is the last resort that is never blank.
+            detail = str(exc) or type(exc).__name__
+            raise TransportError(
+                f"{method} {path} to daemon {client.base_url} failed: "
+                f"{type(exc).__name__}: {detail}"
+            ) from exc
+
     async def _get(self, path: str, *, params: dict[str, str] | None = None) -> Any:
         # Returns parsed JSON. Typed Any (not object) so callers can
         # dispatch via list/dict indexing without re-narrowing — the
         # Pydantic ``model_validate`` call at the next line is the
         # actual boundary that pins the shape.
-        resp = await self._ensure_http().get(path, params=params)
-        return self._unwrap(resp)
+        return self._unwrap(await self._request("GET", path, params=params))
 
     async def _post(
         self,
@@ -375,8 +603,9 @@ class GroveClient:
         *,
         json_payload: dict[str, object],
         expect_204: bool = False,
+        timeout: float | None = None,
     ) -> Any:
-        resp = await self._ensure_http().post(path, json=json_payload)
+        resp = await self._request("POST", path, json_payload=json_payload, timeout=timeout)
         if expect_204:
             if resp.status_code != 204:
                 self._raise_for_status(resp)
@@ -384,16 +613,34 @@ class GroveClient:
         return self._unwrap(resp)
 
     async def _patch(self, path: str, *, json_payload: dict[str, object]) -> Any:
-        resp = await self._ensure_http().patch(path, json=json_payload)
-        return self._unwrap(resp)
+        return self._unwrap(await self._request("PATCH", path, json_payload=json_payload))
 
-    async def _delete(self, path: str) -> Any:
-        resp = await self._ensure_http().delete(path)
-        return self._unwrap(resp)
+    async def _delete(self, path: str, *, params: dict[str, str] | None = None) -> Any:
+        return self._unwrap(await self._request("DELETE", path, params=params))
 
     def _unwrap(self, resp: httpx.Response) -> Any:
+        """Parsed JSON on success, a typed error otherwise — never a raw `ValueError`.
+
+        The success branch is the second half of `_request`'s guarantee:
+        a 200 whose body is not JSON is a transport-level failure — a proxy's
+        error page, a truncated response, something that is not the daemon
+        answering — so it must never escape as a bare `json.JSONDecodeError`,
+        which is neither `ProtocolError` (so the capability-degrade branches
+        cannot see it) nor `TransportError` (so this module's documented
+        contract would be false for it). An unguarded call renders as
+        "Expecting value: line 1 column 1", which reads like a Grove bug
+        rather than a broken hop.
+        """
         if resp.is_success:
-            return resp.json()
+            try:
+                return resp.json()
+            except ValueError as exc:
+                raise TransportError(
+                    f"{resp.request.method} {resp.request.url.path} returned "
+                    f"{resp.status_code} with a body that is not JSON "
+                    f"({type(exc).__name__}) — something other than the Grove daemon "
+                    "answered, or the response was truncated"
+                ) from exc
         self._raise_for_status(resp)
         raise AssertionError("unreachable — _raise_for_status always raises")
 

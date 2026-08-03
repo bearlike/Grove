@@ -56,6 +56,19 @@ function fallbackTreatment(workspaceStatus: WorkspaceStatus): TierTreatment {
   if (workspaceStatus === "active" || workspaceStatus === "running") {
     return { tier: "active", opacityClass: "opacity-100", accentVar: "var(--status-active)", treatment: "none" };
   }
+  // PROVISIONING is the active tier for the same reason ACTIVE is: work is
+  // happening. It can never have an agent session yet (the container does not
+  // exist), so it always arrives here — and dimming it to dormant is exactly
+  // the "looks dead, reach for a destructive verb" failure this state exists
+  // to end. Its own hue, not the active lime: alive, not yet ready.
+  if (workspaceStatus === "provisioning") {
+    return {
+      tier: "active",
+      opacityClass: "opacity-100",
+      accentVar: "var(--status-provisioning)",
+      treatment: "none",
+    };
+  }
   // idle → dormant-but-near (opacity-70); offline / paused / orphaned / error
   // → dim hardest (opacity-55).
   const near = workspaceStatus === "idle";

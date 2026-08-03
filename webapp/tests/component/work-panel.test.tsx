@@ -7,17 +7,18 @@ import { AgentLiveStatus } from "@/lib/grove/agent-activity";
 import type {
   AgentActivityView,
   CommitSummaryView,
+  PhaseView,
   SessionActivityView,
   SessionDetailView,
+  TicketRef,
   WorkspacePeekView,
   WorkspaceStateView,
 } from "@/lib/grove/types";
 
-// The tabbed panel replacing the once-bare TerminalPane (#142). Pins: Terminal
-// is the default tab and keeps every seam TerminalPane already owns; Diff
-// re-homes the stat trio + diff lines + commit list; Info re-homes the
-// metrics line + identity + timestamps + the fleet tree (#174); full-screen
-// toggles `aria-pressed`.
+// The tabbed panel. Pins: Terminal is the default tab and keeps every seam
+// TerminalPane already owns; Diff hosts the stat trio + diff lines + commit
+// list; Info hosts the metrics line + identity + timestamps + the fleet tree;
+// full-screen toggles `aria-pressed`.
 
 function stateView(overrides: Partial<WorkspaceStateView> = {}): WorkspaceStateView {
   return {
@@ -56,6 +57,36 @@ function peek(overrides: Partial<WorkspacePeekView> = {}): WorkspacePeekView {
 const COMMITS: CommitSummaryView[] = [
   { sha: "abc1234def5678", subject: "feat: wire the panel", committed_at: "2026-07-01T09:00:00Z" },
 ];
+
+const PHASE: PhaseView = {
+  phase: "delivering",
+  note: "PR is up",
+  updated_at: "2026-07-31T10:00:00Z",
+  index: 4,
+  total: 6,
+};
+
+const ISSUE = {
+  provider: "gitea",
+  id: "330",
+  kind: "issue",
+  title: "webapp under-displays the axes",
+  url: "https://git.example/bearlike/Grove/issues/330",
+  status: "open",
+  assignee: null,
+  ambiguous: false,
+} as TicketRef;
+
+const PR = {
+  provider: "gitea",
+  id: "331",
+  kind: "pull_request",
+  title: "surface all three axes",
+  url: "https://git.example/bearlike/Grove/pulls/331",
+  status: "open",
+  assignee: null,
+  ambiguous: false,
+} as TicketRef;
 
 const WORKING = AgentLiveStatus.of({
   state: "working",
@@ -109,6 +140,67 @@ describe("WorkPanel", () => {
     expect(screen.queryByText(/\/repo\/\.worktrees/)).toBeNull();
   });
 
+  // ── the third axis + linked refs on the Info tab ──────────────────────────
+
+  it("leads the Info tab with the Task meter — the phase axis in its read register", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkPanel workspaceId="w1" peek={peek()} live={WORKING} commits={[]} phase={PHASE} />,
+    );
+    await user.click(screen.getByTestId("work-panel-tab-info"));
+    const meter = screen.getByTestId("phase-meter");
+    expect(meter).toHaveTextContent("delivering");
+    expect(meter).toHaveTextContent("5/6");
+    expect(screen.getByTestId("phase-note")).toHaveTextContent("PR is up");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "5");
+  });
+
+  it("links the issue and the PR independently on the Info tab", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkPanel
+        workspaceId="w1"
+        peek={peek({ state: stateView({ ticket_refs: [ISSUE, PR] }) })}
+        live={WORKING}
+        commits={[]}
+      />,
+    );
+    await user.click(screen.getByTestId("work-panel-tab-info"));
+    expect(screen.getByRole("link", { name: /issue #330/i })).toHaveAttribute(
+      "href",
+      "https://git.example/bearlike/Grove/issues/330",
+    );
+    expect(screen.getByRole("link", { name: /pull request #331/i })).toHaveAttribute(
+      "href",
+      "https://git.example/bearlike/Grove/pulls/331",
+    );
+  });
+
+  it("shows the issue alone before any PR exists — the long middle of a workspace's life", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkPanel
+        workspaceId="w1"
+        peek={peek({ state: stateView({ ticket_refs: [ISSUE] }) })}
+        live={WORKING}
+        commits={[]}
+      />,
+    );
+    await user.click(screen.getByTestId("work-panel-tab-info"));
+    expect(screen.getByTestId("ticket-linkage")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /issue #330/i })).toBeInTheDocument();
+  });
+
+  it("keeps the Info tab unchanged when the wire carries no phase and no refs", async () => {
+    const user = userEvent.setup();
+    render(<WorkPanel workspaceId="w1" peek={peek()} live={WORKING} commits={[]} />);
+    await user.click(screen.getByTestId("work-panel-tab-info"));
+    expect(screen.queryByTestId("phase-meter")).toBeNull();
+    expect(screen.queryByTestId("ticket-linkage")).toBeNull();
+    expect(screen.getByTestId("work-panel-info-content")).not.toHaveTextContent("Task");
+    expect(screen.getByTestId("work-panel-info-content")).not.toHaveTextContent("Links");
+  });
+
   it("full screen toggles aria-pressed", async () => {
     const user = userEvent.setup();
     render(<WorkPanel workspaceId="w1" peek={peek()} live={WORKING} commits={[]} />);
@@ -119,7 +211,7 @@ describe("WorkPanel", () => {
   });
 });
 
-// ─── fleet tree (#174) ────────────────────────────────────────────────────────
+// ─── fleet tree ───────────────────────────────────────────────────────────────
 
 function fleetActivity(overrides: Partial<AgentActivityView> = {}): AgentActivityView {
   return {
@@ -176,6 +268,80 @@ function renderWithQuery(ui: React.ReactElement) {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
+const KNOWN_CHILD_ID = "a1";
+
+const CHILD_TURNS_DETAIL: SessionDetailView = {
+  session: {
+    session_id: KNOWN_CHILD_ID,
+    adapter_kind: "claude_code",
+    provenance: "fs_discovered",
+    // A discovered sub-agent thread is not the workspace's tracked primary.
+    primary: false,
+    workspace_id: "w1",
+    workspace_title: null,
+    workspace_branch: null,
+    git_branch: null,
+    created_at: null,
+    modified_at: null,
+    size_bytes: 0,
+    live: false,
+    title: "Explore",
+    first_prompt: null,
+    last_prompt: null,
+    activity: fleetActivity(),
+  },
+  turns: [{ user_text: "Map the webapp directory", started_at: null, entries: [] }],
+};
+
+/**
+ * A second fleet child under the same root whose session id was never
+ * recorded on the daemon side — the shape a stale/mismatched sub-agent
+ * thread id produces (Gitea tracking-bugs set): `GET .../sessions/{id}/turns`
+ * 404s `agent_session_not_found` rather than 200ing an empty transcript.
+ */
+const PRIMARY_AND_UNKNOWN_CHILD: SessionActivityView[] = [
+  PRIMARY_AND_CHILD[0],
+  {
+    session: {
+      session_id: "ghost",
+      adapter_kind: "claude_code",
+      provenance: "fs_discovered",
+      tmux_window: null,
+      parent_session_id: "s1",
+    },
+    activity: fleetActivity({ title: "Ghost", current_task: "Vanished mid-run" }),
+  },
+];
+
+/**
+ * Discriminating `/turns` stub mirroring the real daemon route
+ * (`workspace_session_turns` in `daemon/app.py`): the one KNOWN session id
+ * 200s with a realistic `SessionDetailView`; every other session id 404s
+ * with the daemon's typed error envelope (`{ detail: { error, message } }`,
+ * code `agent_session_not_found`). A blanket 200-for-any-`/turns`-URL stub
+ * previously masked a real daemon 404 on subagent thread ids — this is the
+ * regression guard for that class of bug.
+ */
+function mockFleetTurns(knownId: string, detail: SessionDetailView) {
+  const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
+    const u = String(url);
+    if (u.includes(`/sessions/${knownId}/turns`)) {
+      return new Response(JSON.stringify(detail), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        detail: { error: "agent_session_not_found", message: `no session ${u} recorded` },
+      }),
+      { status: 404, headers: { "content-type": "application/json" } },
+    );
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 describe("WorkPanel — fleet tree (#174)", () => {
   it("renders no tree chrome for a workspace with no itemized sub-agents", async () => {
     const user = userEvent.setup();
@@ -211,33 +377,7 @@ describe("WorkPanel — fleet tree (#174)", () => {
   });
 
   it("fetches a sub-agent's own turns on demand when its row expands", async () => {
-    const detail: SessionDetailView = {
-      session: {
-        session_id: "a1",
-        adapter_kind: "claude_code",
-        provenance: "fs_discovered",
-        workspace_id: "w1",
-        workspace_title: null,
-        workspace_branch: null,
-        git_branch: null,
-        created_at: null,
-        modified_at: null,
-        size_bytes: 0,
-        title: "Explore",
-        first_prompt: null,
-        last_prompt: null,
-        activity: fleetActivity(),
-      },
-      turns: [{ user_text: "Map the webapp directory", started_at: null, entries: [] }],
-    };
-    const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
-      expect(String(url)).toContain("/sessions/a1/turns");
-      return new Response(JSON.stringify(detail), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockFleetTurns(KNOWN_CHILD_ID, CHILD_TURNS_DETAIL);
 
     const user = userEvent.setup();
     renderWithQuery(
@@ -255,12 +395,35 @@ describe("WorkPanel — fleet tree (#174)", () => {
 
     const transcript = await screen.findByTestId("fleet-child-transcript");
     expect(transcript).toHaveTextContent("Map the webapp directory");
-    expect(fetchMock).toHaveBeenCalled();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(`/sessions/${KNOWN_CHILD_ID}/turns`);
+    vi.unstubAllGlobals();
+  });
+
+  it("shows an honest error state (not the quiet empty state) when the daemon 404s the sub-agent's turns", async () => {
+    mockFleetTurns(KNOWN_CHILD_ID, CHILD_TURNS_DETAIL);
+
+    const user = userEvent.setup();
+    renderWithQuery(
+      <WorkPanel
+        workspaceId="w1"
+        peek={peek()}
+        live={WORKING}
+        commits={[]}
+        sessions={PRIMARY_AND_UNKNOWN_CHILD}
+      />,
+    );
+    await user.click(screen.getByTestId("work-panel-tab-info"));
+    await user.click(screen.getByText(/1 sub-agent/));
+    await user.click(screen.getByText("Ghost"));
+
+    const transcript = await screen.findByTestId("fleet-child-transcript");
+    expect(transcript).toHaveTextContent("Couldn't load this sub-agent's transcript.");
+    expect(transcript).not.toHaveTextContent("No transcript recorded for this sub-agent yet.");
     vi.unstubAllGlobals();
   });
 });
 
-// ─── controls tab (#178) ──────────────────────────────────────────────────────
+// ─── controls tab ─────────────────────────────────────────────────────────────
 
 const CONTROLS = {
   commands: [{ name: "review", scope: "project", detail: "Review the diff" }],

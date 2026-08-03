@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => window.localStorage.removeItem("grove:ui"));
 });
 
-// The rail (v3, #158) is a FLAT, cross-project session list ordered `modified_at`
+// The rail is a FLAT, cross-project session list ordered `modified_at`
 // DESC — no project sections, no date groups, no attention pin. Each row carries
 // a provenance meta line (project · branch · ±change). Only "mapped" rows (whose
 // workspace is live in the /activity snapshot) show by default; unmapped
@@ -40,11 +40,16 @@ test.describe("session rail (desktop)", () => {
     await expect(waiting).toHaveAttribute("data-attention", "true");
 
     // Provenance meta: project name (dotted-underline cue) · branch · ±lines (30/4),
-    // plus a visible created-ago on the row (not tooltip-only, #163).
+    // plus a visible created-ago on the row (not tooltip-only).
     await expect(working.getByTestId("session-rail-project-name")).toContainText("Grove");
-    await expect(working).toContainText("kk/feat-dashboard");
+    await expect(working).toContainText("dev/feat-dashboard");
     await expect(working.getByTestId("session-rail-changes")).toContainText("+30");
     await expect(working.getByTestId("session-rail-age")).toBeVisible();
+
+    // …and the task phase as one more quiet sigil on that same line,
+    // absent on the row whose workspace reports none.
+    await expect(working.getByTestId("phase-badge")).toContainText("3/6");
+    await expect(waiting.getByTestId("phase-badge")).toHaveCount(0);
   });
 
   test("hides unmapped rows by default; the hidden-note reveals them inert", async ({

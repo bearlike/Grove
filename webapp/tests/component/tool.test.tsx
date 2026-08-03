@@ -3,8 +3,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ToolGroup } from "@/components/ai-elements/tool";
 import type { ToolCall } from "@/lib/grove/chat-turns";
 
-// Pins the modern-chat-native tool surface (#154): a BORDERLESS "Used N tools"
-// ghost expander (no card, no hairline), collapsed by default (#124), that
+// Pins the modern-chat-native tool surface: a BORDERLESS "Used N tools"
+// ghost expander (no card, no hairline), collapsed by default, that
 // reveals one digest row per call. The digest is load-bearing — the whole line
 // reads inline (no second disclosure, since Grove's wire carries no separate
 // args/result), the tool name bold and its target muted, in the code voice.
@@ -22,11 +22,11 @@ describe("ToolGroup — borderless tool expander (#154)", () => {
     const trigger = screen.getByRole("button", { name: /Used 2 tools/ });
     // Ghost trigger: muted until hover, not a filled/outlined bar.
     expect(trigger.className).toContain("text-muted-foreground");
-    // Borderless: none of the pre-#154 card chrome (frame / fill / rounding).
+    // Borderless: no card chrome (frame / fill / rounding).
     expect(group.className).not.toContain("border");
     expect(group.className).not.toContain("bg-muted");
     expect(group.className).not.toContain("rounded-lg");
-    // Collapsed: no digest rows mounted until asked (the #124 invariant).
+    // Collapsed: no digest rows mounted until asked.
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryAllByTestId("chat-tool")).toHaveLength(0);
   });

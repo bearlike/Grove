@@ -1,4 +1,4 @@
-"""Manual session remap (#120): pin an existing agent session as a workspace's
+"""Manual session remap: pin an existing agent session as a workspace's
 primary, mirroring the attach_ticket pattern.
 
 Exercises ``WorkspaceManager.remap_session`` against the FakeTmux seam + real
@@ -59,7 +59,7 @@ def test_remap_pins_a_discovered_session_by_full_id(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    # A claude workspace so the pinned claude session's kind matches (#F4).
+    # A claude workspace so the pinned claude session's kind matches.
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="host"))
     hand_started = "cafef00d-1111-2222-3333-444455556666"
     _write_transcript(cfg_home, Path(state.worktree_path), hand_started)
@@ -134,7 +134,7 @@ def test_remap_rejects_wrong_kind_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#F4: pinning a claude_code session onto a generic (shell) workspace is
+    """Pinning a claude_code session onto a generic (shell) workspace is
     rejected — the workspace's adapter could never read it, so a 200 would leave
     a permanent dead pointer. Names both kinds so the operator sees the mismatch."""
     del fake_tmux

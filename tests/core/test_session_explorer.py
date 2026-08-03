@@ -130,7 +130,7 @@ def test_list_does_not_annotate_foreign_kind_sessions_to_a_root_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """#164: the project browse (`list`) annotates a session to a workspace by
+    """The project browse (`list`) annotates a session to a workspace by
     cwd-equality — but a ROOT workspace's cwd is the shared repo root, where a
     foreign-kind (codex) rollout can already live. That session is NOT the
     workspace's own (its adapter can't read it, `remap_session` rejects a kind
@@ -313,7 +313,7 @@ def test_for_workspace_adopts_resumed_session_via_sidecar(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """`for_workspace` mirrors the ActivityService adoption rule (#117/#F1): a
+    """`for_workspace` mirrors the ActivityService adoption rule: a
     session born BEFORE the workspace but proven live in the workspace's OWN pane
     by a post-create hook sidecar is kept (the resumed-in-pane case). The pane is
     verified against the minted session's sidecar (the reference pane), so birth
@@ -356,8 +356,7 @@ def test_for_workspace_scans_nested_agent_cwd(
     manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
 ) -> None:
     """`for_workspace` scans agent_cwd (worktree/subpath), where a nested
-    project's agent records its transcript — not the worktree root (#118).
-    Pre-fix scanned the worktree root and returned nothing."""
+    project's agent records its transcript — not the worktree root."""
     sub = tmp_repo / "services" / "api"
     sub.mkdir(parents=True)
     (sub / ".keep").write_text("x\n", encoding="utf-8")
@@ -387,10 +386,10 @@ def test_for_workspace_scans_nested_agent_cwd(
 def test_for_workspace_scans_worktree_root_for_nested_project(
     manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
 ) -> None:
-    """#F7: a session hand-started at the WORKTREE ROOT of a nested project (cwd =
+    """A session hand-started at the WORKTREE ROOT of a nested project (cwd =
     worktree_path, not agent_cwd) is still discovered — `for_workspace` scans the
-    UNION of {agent_cwd, worktree_path}. Re-keying to agent_cwd alone (#118)
-    dropped it, leaving a repo-root `claude` untracked."""
+    UNION of {agent_cwd, worktree_path}. Scanning agent_cwd alone would drop it,
+    leaving a repo-root `claude` untracked."""
     sub = tmp_repo / "services" / "api"
     sub.mkdir(parents=True)
     (sub / ".keep").write_text("x\n", encoding="utf-8")
@@ -421,7 +420,7 @@ def test_for_workspace_scans_worktree_root_for_nested_project(
 def test_candidates_for_is_ungated_and_cwd_scoped(
     manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
 ) -> None:
-    """`candidates_for` is the remap-picker seam (#132): the ungated sibling of
+    """`candidates_for` is the remap-picker seam: the ungated sibling of
     `for_workspace`. It keeps a session the adoption gate drops — one born
     before the workspace (a dead-minted-pointer's live successor / foreign
     resumed session) — so a human can pin it, while staying scoped to the
@@ -471,7 +470,7 @@ def test_scan_workspace_excludes_foreign_kind_sessions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """#164: a claude_code ROOT workspace's cwd is the shared repo root, where the
+    """A claude_code ROOT workspace's cwd is the shared repo root, where the
     human also runs *other* tools — so a foreign-kind (codex) rollout can already
     live there. That session can never be this workspace's own: its adapter can't
     read it and `remap_session` rejects a kind mismatch. So neither the gated
