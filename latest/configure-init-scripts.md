@@ -40,6 +40,85 @@ resume or respawn.
 | `timeout_seconds` | int    | `300`    | Hard wall-clock cap. Past this, Grove kills the script and treats it as failed. |
 | `fail_fast`       | bool   | `true`   | Non-zero exit rolls back the worktree, the branch (if Grove created it), and the tmux session. |
 | `run_on_resume`   | bool   | `false`  | Re-run the script on resume. Off by default. |
+| `applies_to`      | string | `"all"`  | `"all"`, `"host"`, or `"container"`. Which workspaces the script runs for. |
+
+## Scoping to host or container
+
+A [container workspace](features-containers.md) already has its own setup
+step: a devcontainer's `postCreateCommand` and the rest of its lifecycle
+hooks. Grove's init script runs earlier and prepares something different,
+the host worktree itself, the directory that gets bind mounted into the
+container. Both run, in that order, so a project can end up preparing its
+environment twice if the two scripts overlap.
+
+`applies_to` lets you draw the line. Set it to `container` when a project's
+devcontainer hooks already install dependencies, so the host script skips
+straight past that work and only handles what the worktree needs before the
+container starts. Set it to `host` when the script installs tooling that
+only makes sense outside a container, and the devcontainer hooks cover the
+rest. Leave it at `all`, the default, when one script legitimately serves
+both, which is most projects.
+
+```json
+{
+  "init_script": {
+    "enabled": true,
+    "inline": "cp .env.example .env",
+    "applies_to": "host"
+  }
+}
+```
+
+The scope matches what the workspace actually is, not what was requested.
+A workspace that asked for a container and fell back to the host counts as
+a host workspace here, so `applies_to: "host"` still runs for it.
+
+When the scope excludes a workspace, nothing fails. The init step is simply
+reported as SKIPPED, the same as `enabled: false`.
+
+## What the script knows about its workspace
+
+Grove exports four variables into the script's environment, on every verb that
+runs it — create, and resume or respawn when `run_on_resume` is on.
+
+| Variable | What it holds |
+| --- | --- |
+| `GROVE_REPO` | Absolute path to the repository root |
+| `GROVE_WORKTREE` | Absolute path to this workspace's worktree |
+| `GROVE_BRANCH` | The branch this workspace is on |
+| `GROVE_AGENT` | The configured agent's name |
+
+They are derived from the workspace record each time the script runs, so they
+stay correct after a branch is renamed rather than reporting whatever was true
+at create.
+
+```json
+{
+  "init_script": {
+    "enabled": true,
+    "inline": "echo \"setting up $GROVE_BRANCH in $GROVE_WORKTREE\""
+  }
+}
+```
+
+> [!TIP]
+> The script also inherits your own environment, so anything already exported
+> in the shell that launched Grove is available too.
+
+## Inline and path are mutually exclusive
+
+Setting both `inline` and `path` in the same config layer fails at config
+load, before Grove ever tries to run the script.
+
+Across the cascade, whichever layer sets `inline` or `path` last wins the
+whole choice, not just the field it touched. If a lower layer set the
+other field, Grove drops it rather than merging both into one config. This
+is what lets your committed `.grove/config.json` script serve as the team
+default while your own `.grove/config.local.json` swaps in an inline
+snippet for your machine, or the reverse: the highest layer to declare
+either field decides the pattern outright. Grove logs a warning whenever
+an override actually strips a field this way, so the effective choice is
+never a surprise.
 
 ## Three patterns
 
@@ -94,7 +173,8 @@ report different things for the same situation. The display reads one of:
   the workspace stays alive in `ERROR` state and the contextual footer
   offers `kill` only.
 - **SKIPPED**: `enabled: false`, the "Skip init script" box was checked
-  for this create, or `run_on_resume: false` on a resume.
+  for this create, `run_on_resume: false` on a resume, or `applies_to`
+  excludes the workspace's actual runtime.
 - **TIMEOUT**: wall-clock exceeded `timeout_seconds`. Treated like FAILED.
 
 The init outcome is also exposed on the `WorkspaceEvent` stream so future
@@ -104,3 +184,7 @@ clients (web, MCP) can surface it without re-running the script.
 
 - [Daily workflow](use-workflow.md): where init fits in the create and resume flow.
 - [Workspace lifecycle](features-workspace-lifecycle.md): what rollback actually does.
+- [Configuration cascade](features-cascade.md): how layers merge, including the
+  `inline`/`path` override rule.
+- [Container workspaces](features-containers.md): the devcontainer lifecycle
+  hooks that run alongside the init script.

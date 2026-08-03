@@ -2,110 +2,114 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://bearlike.github.io/Grove/main/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/configure-agents/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/configure-init-scripts/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/configure-project/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/configure-ticket-providers/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/develop-architecture/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/develop-contributing/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/develop-principles/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/develop-public-api/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-activity/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-branch-provenance/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-cascade/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
+    </url>
+    <url>
+         <loc>https://bearlike.github.io/Grove/main/features-containers/</loc>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-notifications/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-peek/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-status/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-ticket-providers/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/features-workspace-lifecycle/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/getting-started/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/issue-ops/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/troubleshooting/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/use-auth/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/use-cli/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/use-mcp/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/use-tui/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/use-webapp/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/use-workflow/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://bearlike.github.io/Grove/main/configure-reference/</loc>
-         <lastmod>2026-07-12</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
 </urlset>

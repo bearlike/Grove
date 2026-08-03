@@ -38,6 +38,8 @@ All three providers default to **off**. Enable only what you use.
 | `repo`          | gitea, github | The repository name, used to fetch a ticket by id. |
 | `team_key`      | linear | The Linear team key (for example `ENG`). This is the key Grove matches in branch names (`ENG-123`). |
 | `branch_prefix` | gitea, github | Optional extra keyword the numeric providers also recognize in a branch name. Empty by default. |
+| `env_file`      | section | Optional dotenv file the token names are read from. Repo relative or absolute. |
+| `env_command`   | section | Optional command whose stdout is read as dotenv. Mutually exclusive with `env_file`. |
 
 ## Putting the token in your environment
 
@@ -52,6 +54,65 @@ export GROVE_LINEAR_TOKEN=...
 The daemon reads these from its own environment, so set them where the
 daemon starts. The config file only ever names the variable, so it stays
 free of secrets and safe to commit.
+
+## When the token only exists later
+
+A long running daemon reads its own environment once, when it starts.
+Anything that produces a credential afterwards cannot reach back into it:
+a workspace init script that writes a dotenv, a secret manager you log
+into, a token you rotate. For those cases point the `tickets` section at
+a source Grove reads on demand.
+
+```json
+{
+  "tickets": {
+    "env_file": ".grove/tickets.env",
+    "gitea": { "enabled": true, "owner": "your-org", "repo": "your-repo", "token_env": "GROVE_GITEA_TOKEN" }
+  }
+}
+```
+
+Or resolve the values without writing them to disk at all. Any command
+that prints dotenv to stdout works, so Grove needs to know nothing about
+your secret manager.
+
+```json
+{ "tickets": { "env_command": "my-secrets export grove" } }
+```
+
+One source serves every provider in the section, because it is keyed by
+the same `token_env` names. Still no secret in config: the file holds the
+values, the config holds its path.
+
+### Resolution order
+
+Grove resolves a provider's token at the moment it is used, never when
+the provider is built. Every lookup goes through the same two steps.
+
+1. The configured source. `env_command` is run, or `env_file` is read,
+   and the result is parsed as dotenv. The name from `token_env` is
+   looked up there first.
+2. The environment of the process running Grove, under the same name.
+
+Nothing is cached in between. That is what makes step 1 useful: a token
+written a second ago is found on the next request, and a rotated token
+replaces the old one with no restart. It is also why `env_command` must
+be cheap and safe to run repeatedly.
+
+A provider with no token anywhere reports `configured: false`, pickers
+gray it out, and a call to it fails with a clear error rather than an
+unauthenticated request. A configured `env_file` that does not exist is
+an error, not an empty environment, so a missing credential never looks
+like a working one.
+
+!!! warning "What a committed config may name"
+    `.grove/config.json` travels with the repository, so it may request a
+    capability but never grant one. A committed `env_command` is ignored,
+    because cloning a repository must not run a command from it. A
+    committed `env_file` must stay inside the repository, so it cannot
+    ferry an arbitrary host file. Put either in your user config or in
+    the gitignored `.grove/config.local.json` when you need the full
+    range. `container` follows the identical rule.
 
 ## Per-provider notes
 

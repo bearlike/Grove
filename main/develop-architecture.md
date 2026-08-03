@@ -34,7 +34,7 @@ grove/
 │
 ├── daemon/              # loopback FastAPI app: REST + SSE over the engine
 ├── client/              # transport-agnostic attach SDK (local PTY / SSH)
-├── mcp/                 # MCP server: stdio tools over the client SDK
+├── mcp/                 # MCP server: stdio or HTTP tools over the client SDK
 └── tui/                 # the Textual client
     ├── cli.py          # Typer entry points
     ├── app.py          # GroveApp(textual.App) root

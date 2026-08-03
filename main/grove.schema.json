@@ -101,9 +101,22 @@
       "title": "AuthConfig",
       "type": "object"
     },
+    "BriefConfig": {
+      "additionalProperties": false,
+      "description": "The one-paragraph brief a new workspace's agent is handed on its first\nturn, pointing it at Grove's ``working-in-grove`` skill. On by default.\n\nThe brief says where the agent is, that what it reports is published onto\nthe workspace's attached tickets, and which skill carries the rules; the\nskill itself carries everything else, so the cost is a few lines once per\nsession, once per agent.\n\nHow it arrives depends on what the workspace can carry. A ``claude_code``\nagent on the host is handed it by Grove's status hook, on its first prompt,\nwhether or not the workspace was given a task. An agent with no such hook \u2014\none running in a container \u2014 gets it prepended to the workspace's initial\nprompt instead, so it is briefed only when a prompt was given. A remote\n(mewbo) agent is never briefed: it runs on a backend, with no worktree to\nreport from.\n\nThis is the *default* for new workspaces. ``grove create --no-brief``\noverrides it per workspace, and the choice is recorded, so flipping this\nlater never changes a workspace that already exists.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "BriefConfig",
+      "type": "object"
+    },
     "ChannelsConfig": {
       "additionalProperties": false,
-      "description": "Grove-managed Claude Code *channel* delivery (#182; research preview).\n\nA channel is Claude Code's native seam for pushing a message a **running,\ninteractive** session acts on (and relaying permission decisions), unlike a\nhook (status push, one way) or steering (raw pane keystrokes). When\n``enabled``, Grove launches ``claude_code`` agents with ``--channels\n<grove-channel-settings>`` so the agent connects to the Grove channel MCP\nserver; the daemon then POSTs queued messages to that server's loopback\nreceiver and the agent receives them as ``notifications/claude/channel``.\n\nOff by default on purpose: channels are an auth-gated Claude Code research\npreview, so this stays a deliberately-flipped mechanism knob (not policy).\nDisabling is just flipping ``enabled`` back \u2014 the launch flag disappears and\nthe whole path degrades to a no-op, exactly like the hook ``--settings``.",
+      "description": "Grove-managed Claude Code *channel* delivery (research preview).\n\nA channel is Claude Code's native seam for pushing a message a **running,\ninteractive** session acts on (and relaying permission decisions), unlike a\nhook (status push, one way) or steering (raw pane keystrokes). When\n``enabled``, Grove launches ``claude_code`` agents with ``--channels\n<grove-channel-settings>`` so the agent connects to the Grove channel MCP\nserver; the daemon then POSTs queued messages to that server's loopback\nreceiver and the agent receives them as ``notifications/claude/channel``.\n\nOff by default on purpose: channels are an auth-gated Claude Code research\npreview, so this stays a deliberately-flipped mechanism knob (not policy).\nDisabling is just flipping ``enabled`` back \u2014 the launch flag disappears and\nthe whole path degrades to a no-op, exactly like the hook ``--settings``.",
       "properties": {
         "allowed_senders": {
           "items": {
@@ -121,13 +134,42 @@
       "title": "ChannelsConfig",
       "type": "object"
     },
+    "ContainerAgentConfig": {
+      "additionalProperties": false,
+      "description": "What the container shares from the host agent configuration.\n\nDefault ``full``: native integration with the host \u2014 config, sign-in,\nskills \u2014 is a *feature*, delivered through bind mounts, and it is what makes\na fully-autonomous agent useful rather than a second sign-in chore.\n``isolated`` restores the credential boundary for an untrusted repository at\nthe cost of that sign-in; ``projects`` shares transcripts only.\n\n**Trust rule (enforced in :class:`CommittedShareFloor`): a committed layer\nmay force a tighter value but never raise sharing.** A committed\n``.grove/config.json`` is untrusted input \u2014 a repo that could set\n``share: full`` would be granting itself the host's credentials.",
+      "properties": {
+        "share": {
+          "default": "full",
+          "enum": [
+            "full",
+            "projects",
+            "isolated"
+          ],
+          "title": "Share",
+          "type": "string"
+        },
+        "trust": {
+          "default": true,
+          "title": "Trust",
+          "type": "boolean"
+        }
+      },
+      "title": "ContainerAgentConfig",
+      "type": "object"
+    },
     "ContainerConfig": {
       "additionalProperties": false,
-      "description": "Run the agent inside a container instead of directly on the host (#65).\n\nOff by default (mechanism, not policy): a workspace opts in and its\n``DockerExecLaunchBackend`` builds/starts the container, bind-mounts the\nworktree at ``workspace_mount``, and runs the assembled agent command via\n``docker exec`` inside it. Every value cascades like the rest of the config;\na future Podman driver reads the SAME submodel behind the same protocol \u2014\n``docker_bin`` names the CLI, it is not the driver-swap seam.",
+      "description": "Run the agent inside a container instead of directly on the host.\n\n**Default-ON, deliberately reversing Grove's earlier \"containers are\nstrictly opt-in\" default.** The container is what lets an agent run fully\nautonomously (relaxed permissions) with its blast radius bounded to the\nworkspace, so it is the default new workspaces get; ``--runtime host`` is\nthe per-create escape hatch and the persisted ``WorkspaceState.runtime``\nmeans an existing workspace never moves. Turning it back off is a policy\nchoice about isolation, not a bug fix.\n\nEvery value cascades like the rest of the config; a future Podman driver\nreads the SAME submodel behind the same protocol \u2014 ``docker_bin`` names the\nCLI, it is not the driver-swap seam.\n\nThe inherited ``env_file`` / ``env_command`` knobs (:class:`EnvSourceConfig`)\nare resolved TWICE per workspace start: once to provision (the values reach\nthe project's lifecycle hooks via ``--secrets-file``) and once to launch (they\nreach the agent via the launch env). A missing file or a failing command is\nfatal at create, which is what keeps an agent from booting without its\ncredentials.",
       "properties": {
-        "build_context": {
-          "default": ".",
-          "title": "Build Context",
+        "agent_config": {
+          "$ref": "#/$defs/ContainerAgentConfig"
+        },
+        "decor": {
+          "$ref": "#/$defs/ContainerDecorConfig"
+        },
+        "default_config": {
+          "default": "",
+          "title": "Default Config",
           "type": "string"
         },
         "docker_bin": {
@@ -135,54 +177,196 @@
           "title": "Docker Bin",
           "type": "string"
         },
-        "dockerfile": {
-          "default": "",
-          "title": "Dockerfile",
-          "type": "string"
+        "egress": {
+          "$ref": "#/$defs/EgressConfig"
         },
         "enabled": {
-          "default": false,
+          "default": true,
           "title": "Enabled",
           "type": "boolean"
         },
-        "exec_user": {
-          "default": "",
-          "title": "Exec User",
-          "type": "string"
+        "env_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Command"
         },
-        "image": {
-          "default": "",
-          "title": "Image",
-          "type": "string"
+        "env_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env File"
         },
-        "mounts": {
-          "default": [],
+        "resources": {
+          "$ref": "#/$defs/ResourcesConfig"
+        },
+        "shell": {
+          "default": [
+            "bash",
+            "sh"
+          ],
           "items": {
             "type": "string"
           },
-          "title": "Mounts",
+          "title": "Shell",
           "type": "array"
         },
-        "network": {
-          "default": "",
-          "title": "Network",
-          "type": "string"
+        "tmux": {
+          "$ref": "#/$defs/ContainerTmuxConfig"
         },
-        "run_args": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Run Args",
-          "type": "array"
-        },
-        "workspace_mount": {
-          "default": "/workspace",
-          "title": "Workspace Mount",
-          "type": "string"
+        "up_timeout_seconds": {
+          "default": 900.0,
+          "title": "Up Timeout Seconds",
+          "type": "number"
         }
       },
       "title": "ContainerConfig",
+      "type": "object"
+    },
+    "ContainerDecorConfig": {
+      "additionalProperties": false,
+      "description": "Whether the container gets Grove's own tmux chrome and statusline.\n\nGrove bind-mounts a small read-only asset bundle into every containerized\nworkspace at ``/grove/decor``: a tmux config and a Claude Code statusline\nscript. Both exist because a person attached to a container workspace\notherwise has no way to tell they are in one \u2014 the user's own statusline\nscript is never shared into the container, and the in-container tmux has\nno config at all \u2014 and because a status bar inside a container must\nreport the CONTAINER's own cgroup CPU/memory limits, not\n``/proc/loadavg``, which is not namespaced and answers for the HOST.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "payload": {
+          "default": "",
+          "title": "Payload",
+          "type": "string"
+        },
+        "statusline": {
+          "default": true,
+          "title": "Statusline",
+          "type": "boolean"
+        },
+        "tmux_conf": {
+          "default": true,
+          "title": "Tmux Conf",
+          "type": "boolean"
+        }
+      },
+      "title": "ContainerDecorConfig",
+      "type": "object"
+    },
+    "ContainerTmuxConfig": {
+      "additionalProperties": false,
+      "description": "Whether the agent runs under a tmux INSIDE its container, and whose tmux.\n\nThe multiplexer used to sit on the far side of the namespace boundary from\nthe process it multiplexes: the agent ran as ``devcontainer exec \u2026 -- claude``\ntyped into a HOST pane, so the PTY died with the host client and nothing\ncould ever attach back to the surviving in-container process. Running the\nagent under a container-side tmux makes the host pane a *viewport* and the\nin-container tmux the owner of the agent's lifetime.\n\nTwo policy questions live here rather than in code, because both are\ngenuinely the operator's:\n\n* ``prefer_image`` \u2014 an image that ships its own tmux is almost always the\n  better answer (it matches the distro's terminfo and the user's own\n  expectations), but an operator standardizing on one tmux across a fleet\n  may want Grove's bundle everywhere.\n* ``payload`` \u2014 where the static binary comes from. Empty means Grove's own\n  built-and-cached bundle; a path lets an operator supply a vetted build\n  (an air-gapped host, a signed artifact, a different tmux version).\n\nEverything degrades honestly: with no image tmux and no payload, the launch\ncomposes a plain ``exec`` and the workspace loses persistence, never the\nworkspace itself.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "payload": {
+          "default": "",
+          "title": "Payload",
+          "type": "string"
+        },
+        "prefer_image": {
+          "default": true,
+          "title": "Prefer Image",
+          "type": "boolean"
+        },
+        "session": {
+          "default": "agent",
+          "title": "Session",
+          "type": "string"
+        },
+        "shell_session": {
+          "default": "shell",
+          "title": "Shell Session",
+          "type": "string"
+        },
+        "term_fallback": {
+          "default": "xterm-256color",
+          "title": "Term Fallback",
+          "type": "string"
+        }
+      },
+      "title": "ContainerTmuxConfig",
+      "type": "object"
+    },
+    "EgressConfig": {
+      "additionalProperties": false,
+      "description": "Where a containerized agent may reach on the network.\n\nWith credentials shared and permission prompts off, egress is the control\nthat carries the weight: it bounds where a token can be *sent*. The list is\n**derived, not restated** \u2014 the planner (``core.container_policy``) unions\nthe agent plane for the workspace's kind, the package plane, the repo's own\ngit remotes and the Grove plane, so normal dev work needs zero config.\n``allow`` is purely additive on top.\n\nDocumented ceilings, carried from the reference implementation this follows:\nUDP/53 stays open (DNS tunneling is not defended against) and name-based\nfiltering loses to domain fronting. ``open`` is the supported, un-nagged\nno-firewall path \u2014 never a warning, never a refusal.",
+      "properties": {
+        "agent_plane": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "propertyNames": {
+            "enum": [
+              "claude_code",
+              "codex",
+              "generic",
+              "mewbo"
+            ]
+          },
+          "title": "Agent Plane",
+          "type": "object"
+        },
+        "allow": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Allow",
+          "type": "array"
+        },
+        "grove_plane": {
+          "default": [
+            "host.docker.internal"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Grove Plane",
+          "type": "array"
+        },
+        "mode": {
+          "default": "allowlist",
+          "enum": [
+            "allowlist",
+            "open",
+            "deny"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "package_plane": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Package Plane",
+          "type": "array"
+        },
+        "range_sources": {
+          "items": {
+            "$ref": "#/$defs/RangeSource"
+          },
+          "title": "Range Sources",
+          "type": "array"
+        }
+      },
+      "title": "EgressConfig",
       "type": "object"
     },
     "GitHubTicketConfig": {
@@ -239,12 +423,13 @@
     },
     "GiteaTicketConfig": {
       "additionalProperties": false,
-      "description": "Gitea Issues provider settings (``provider: \"gitea\"``).\n\nSecret-free like every config layer: ``token_env`` is the NAME of the\nenvironment variable holding the API token, never the token itself, so a\ncommitted ``.grove/config.json`` stays publishable. ``base_url`` is the\ninstance root (the provider appends ``/api/v1``). ``branch_prefix`` is an\noptional extra keyword prepended when formatting a branch (e.g. ``\"gtea-\"``\n\u2192 ``gtea-123-slug``); empty means the bare numeric form ``123-slug``. The\nparser recognizes the bare numeric leading segment, the built-in keywords,\nand this configured prefix \u2014 mechanism, not policy.",
+      "description": "Gitea Issues provider settings (``provider: \"gitea\"``).\n\nSecret-free like every config layer: ``token_env`` is the NAME of the\nenvironment variable holding the API token, never the token itself, so a\ncommitted ``.grove/config.json`` stays publishable. ``base_url`` is the\ninstance root (the provider appends ``/api/v1``), and it also reads from\n``GROVE_GITEA_BASE_URL``: ``token_env`` already lets an operator instrument\nthe token, so leaving the endpoint config-only would mean a deployment could\nmove the credential and not the server it authenticates against \u2014 which is\nhow a token ends up pointed at the wrong host. ``branch_prefix`` is an\noptional extra keyword prepended when formatting a branch (e.g. ``\"gtea-\"``\n\u2192 ``gtea-123-slug``); empty means the bare numeric form ``123-slug``. The\nparser recognizes the bare numeric leading segment, the built-in keywords,\nand this configured prefix \u2014 mechanism, not policy.",
       "properties": {
         "base_url": {
           "default": "https://gitea.com",
           "title": "Base Url",
-          "type": "string"
+          "type": "string",
+          "x-env-var": "GROVE_GITEA_BASE_URL"
         },
         "branch_prefix": {
           "default": "",
@@ -291,12 +476,34 @@
     },
     "GotifyChannelConfig": {
       "additionalProperties": false,
-      "description": "Gotify push channel (#70's first channel).\n\n``server_url`` is the Gotify base (e.g. ``https://gotify.example.com``);\n``token_env`` is the NAME of the env var holding the application token, never\nthe token itself \u2014 committed config stays secret-free, exactly like\n``mewbo.api_key_env``.",
+      "description": "Gotify push channel.\n\n``server_url`` is the Gotify base (e.g. ``https://gotify.example.com``), and\nit also reads from ``GROVE_GOTIFY_API_URL`` so a deployment can point every\nrepo at its own server without editing a file. ``token_env`` is the NAME of\nthe env var holding the *application* token (Gotify's ``Axxx\u2026``, the\nsend-only kind), never the token itself \u2014 committed config stays secret-free,\nexactly like ``mewbo.api_key_env``.",
       "properties": {
         "enabled": {
           "default": false,
           "title": "Enabled",
           "type": "boolean"
+        },
+        "markdown": {
+          "default": true,
+          "title": "Markdown",
+          "type": "boolean"
+        },
+        "priorities": {
+          "additionalProperties": {
+            "maximum": 10,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "title": "Priorities",
+          "type": "object"
         },
         "priority": {
           "default": 5,
@@ -308,7 +515,8 @@
         "server_url": {
           "default": "",
           "title": "Server Url",
-          "type": "string"
+          "type": "string",
+          "x-env-var": "GROVE_GOTIFY_API_URL"
         },
         "timeout_seconds": {
           "default": 5.0,
@@ -327,8 +535,13 @@
     },
     "HooksConfig": {
       "additionalProperties": false,
-      "description": "Grove-managed Claude Code status hooks (#18; on by default since #171).\n\nWhen ``enabled``, Grove launches ``claude_code`` agents with\n``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact\nlifecycle status (``WORKING`` / ``WAITING`` / ``BLOCKED`` / ``IDLE``) into a\nper-session sidecar that the Activity Dashboard prefers over polled status \u2014\ngiving precise *blocked-on-a-permission-prompt* that polling can't see, plus\nan immediate daemon refresh over the native http hook (#171) instead of\nwaiting out the poll tick. On by default now that the sidecar is the\nprimary live signal rather than a dormant opt-in sidecar (still a\nmechanism knob, not policy); the user's own ``.claude/settings.json`` is\nnever touched, so disabling is just flipping this back to ``false``.",
+      "description": "Grove-managed Claude Code status hooks. On by default.\n\nWhen ``enabled``, Grove launches ``claude_code`` agents with\n``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact\nlifecycle status (``WORKING`` / ``WAITING`` / ``BLOCKED`` / ``IDLE``) into a\nper-session sidecar that the Activity Dashboard prefers over polled status \u2014\ngiving precise *blocked-on-a-permission-prompt* that polling can't see, plus\nan immediate daemon refresh over the native http hook instead of\nwaiting out the poll tick. On by default now that the sidecar is the\nprimary live signal rather than a dormant opt-in sidecar (still a\nmechanism knob, not policy); the user's own ``.claude/settings.json`` is\nnever touched, so disabling is just flipping this back to ``false``.",
       "properties": {
+        "daemon_url": {
+          "default": "",
+          "title": "Daemon Url",
+          "type": "string"
+        },
         "enabled": {
           "default": true,
           "title": "Enabled",
@@ -342,6 +555,16 @@
       "additionalProperties": false,
       "description": "Optional setup script run in its own tmux window before the agent starts.",
       "properties": {
+        "applies_to": {
+          "default": "all",
+          "enum": [
+            "all",
+            "host",
+            "container"
+          ],
+          "title": "Applies To",
+          "type": "string"
+        },
         "enabled": {
           "default": false,
           "title": "Enabled",
@@ -402,7 +625,7 @@
     },
     "IssueOpsConfig": {
       "additionalProperties": false,
-      "description": "Turn issue-comment mentions into workspace actions (#196) + mirror progress back (#197).\n\nOne submodel, two faces. INBOUND (#196): a commenter mentions the ``trigger``\ntoken as the first word of an issue comment; the forwarder (a stateless CI\naction) POSTs the event to the daemon, and the engine parses the grammar,\nenforces the permission policy, and routes to a workspace verb. OUTBOUND\n(#197): when ``enabled``, the daemon runs a status publisher that mirrors each\nworkspace's progress onto its ticket as one live sticky comment. Every knob\nhere is mechanism, not policy \u2014 the trigger word, who may drive it, the boot\nprompt, and the mirror's cadence are all data the deployment owns, never baked\ninto the engine.\n\n``enabled`` gates ONLY the outbound status mirror. The inbound command routing\nhas no on/off flag of its own \u2014 its real opt-in is installing the CI workflow\nAND enabling the matching ticket provider (``tickets.<provider>``) with the\nrepo's ``owner``/``repo`` (with neither, no event ever reaches the engine and\nno repo resolves for one that does). So a deployment can route commands without\nthe status mirror, mirror without routing, or run both.",
+      "description": "Turn issue-comment mentions into workspace actions, and mirror progress back.\n\nOne submodel, two faces. INBOUND: a commenter mentions the ``trigger``\ntoken as the first word of an issue comment; the forwarder (a stateless CI\naction) POSTs the event to the daemon, and the engine parses the grammar,\nenforces the permission policy, and routes to a workspace verb. OUTBOUND:\nwhen ``enabled``, the daemon runs a status publisher that mirrors each\nworkspace's progress onto its ticket as one live sticky comment. Every knob\nhere is mechanism, not policy \u2014 the trigger word, who may drive it, the boot\nprompt, and the mirror's cadence are all data the deployment owns, never baked\ninto the engine.\n\n``enabled`` gates ONLY the outbound status mirror. The inbound command routing\nhas no on/off flag of its own \u2014 its real opt-in is installing the CI workflow\nAND enabling the matching ticket provider (``tickets.<provider>``) with the\nrepo's ``owner``/``repo`` (with neither, no event ever reaches the engine and\nno repo resolves for one that does). So a deployment can route commands without\nthe status mirror, mirror without routing, or run both.",
       "properties": {
         "agent": {
           "default": "claude",
@@ -416,6 +639,11 @@
           "title": "Allowed Actors",
           "type": "array"
         },
+        "assign_bot": {
+          "default": false,
+          "title": "Assign Bot",
+          "type": "boolean"
+        },
         "deep_link_base_url": {
           "default": "",
           "title": "Deep Link Base Url",
@@ -426,8 +654,31 @@
           "title": "Enabled",
           "type": "boolean"
         },
+        "pickup_backoff_seconds": {
+          "default": 300.0,
+          "minimum": 0,
+          "title": "Pickup Backoff Seconds",
+          "type": "number"
+        },
+        "pickup_enabled": {
+          "default": false,
+          "title": "Pickup Enabled",
+          "type": "boolean"
+        },
+        "pickup_interval_seconds": {
+          "default": 60.0,
+          "minimum": 5,
+          "title": "Pickup Interval Seconds",
+          "type": "number"
+        },
+        "pickup_max_active": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Pickup Max Active",
+          "type": "integer"
+        },
         "prompt_template": {
-          "default": "You are handling tracker issue #{number}: \"{title}\".\n\nIssue description:\n{body}\n\nThe human triggered you with this comment:\n{command_text}\n\nDrive it to a merged PR autonomously: read the issue and map the affected\ncomponents (read the nearest owning CLAUDE.md before editing), implement the\nchange, run the project's gates, open a PR that closes the issue, and reply on\nthe issue with what changed and a link to the PR. Ask only about genuinely\nambiguous decisions; bias to action.\n\nIssue link: {url}\n",
+          "default": "You are handling tracker issue #{number}: \"{title}\".\n\nIssue description:\n{body}\n\nThread so far:\n{comments}\n\nHow you were engaged:\n{command_text}\n\nYour mandate:\n\n- Work autonomously through to an OPEN pull request. Read the issue, map the\n  affected components (read the nearest owning CLAUDE.md before editing),\n  implement the change, run the project's gates, open the PR, and reply on the\n  ticket saying what changed and where the PR is.\n- Where the ticket is underspecified, REPLY ON THE TICKET asking for exactly\n  what is missing, and say what you will assume if nobody answers. Do not stall\n  silently, and do not quietly guess at a requirement you could have asked\n  about.\n- Satisfy the stated goals faithfully and safely \u2014 the goals as written, not\n  the larger project you would rather do.\n- Stop and ask rather than take a risky or irreversible action: destroying\n  data, force-pushing a shared branch, or touching anything in production.\n\nIssue link: {url}\n",
           "title": "Prompt Template",
           "type": "string"
         },
@@ -483,7 +734,7 @@
     },
     "MewboConfig": {
       "additionalProperties": false,
-      "description": "Connection settings for the Mewbo orchestrator (``kind: \"mewbo\"`` agents).\n\n#35 registers the kind with a stub adapter; the REST-backed implementation\n(#36) reads these to reach the Mewbo API.",
+      "description": "Connection settings for the Mewbo orchestrator (``kind: \"mewbo\"`` agents).\n\nThe ``mewbo`` adapter reads these to reach the Mewbo API: a workspace of\nthat kind mints its session on the orchestrator rather than in a local\nprocess, so the connection details are config rather than discovery.",
       "properties": {
         "api_key_env": {
           "default": "MEWBO_API_KEY",
@@ -506,7 +757,7 @@
     },
     "NotificationsConfig": {
       "additionalProperties": false,
-      "description": "Push notifications on agent-state edges (#70). Off by default.\n\nThe broker fires a debounced rising edge into one of the ``on`` states \u2014\n``waiting`` (turn finished), ``blocked`` (awaiting input), ``error`` \u2014 and\nfans out to every enabled channel. ``deep_link_base_url`` is the webapp base\n(e.g. ``https://grove.example.com``); a notification deep-links to\n``{base}/w/{id}`` so tapping it opens that workspace. Mechanism, not policy:\nevery value cascades like the rest of the config.",
+      "description": "Push notifications on workspace edges. Off by default.\n\nThree independent triggers, each with its own switch, all fanning out to\nevery enabled channel:\n\n- ``on`` \u2014 a debounced rising edge into an agent state that wants the human:\n  ``waiting`` (turn finished), ``blocked`` (awaiting input), ``error``.\n- ``on_question`` \u2014 the agent posted a question. Deduped by question id, not\n  debounced: a second question inside the quiet window is a second thing the\n  human must answer, and it is the one push that must never be dropped.\n- ``on_lifecycle`` \u2014 the workspace itself changed (it broke, it was\n  orphaned, its session vanished).\n\n``deep_link_base_url`` is the webapp base (e.g. ``https://grove.example.com``);\na notification deep-links to ``{base}/w/{id}`` so tapping it opens that\nworkspace. Mechanism, not policy: every value cascades like the rest of the\nconfig.",
       "properties": {
         "debounce_seconds": {
           "default": 30.0,
@@ -515,7 +766,7 @@
           "type": "number"
         },
         "deep_link_base_url": {
-          "default": "",
+          "default": "http://localhost:3000",
           "title": "Deep Link Base Url",
           "type": "string"
         },
@@ -540,6 +791,28 @@
           "title": "On",
           "type": "array"
         },
+        "on_lifecycle": {
+          "items": {
+            "enum": [
+              "error",
+              "orphaned_detected",
+              "offline_detected",
+              "created",
+              "killed",
+              "paused",
+              "resumed",
+              "respawned"
+            ],
+            "type": "string"
+          },
+          "title": "On Lifecycle",
+          "type": "array"
+        },
+        "on_question": {
+          "default": true,
+          "title": "On Question",
+          "type": "boolean"
+        },
         "webhook": {
           "$ref": "#/$defs/WebhookChannelConfig"
         }
@@ -549,7 +822,7 @@
     },
     "PermissionConfig": {
       "additionalProperties": false,
-      "description": "Grove-hosted Claude Code ``--permission-prompt-tool`` answering (#172).\n\nA *permission prompt* is the \"allow this tool call?\" gate a headless / paneless\nsession hits with no interactive terminal to answer it. When ``enabled``, Grove\nlaunches ``claude_code`` agents with a Grove-owned MCP server registered\n(``--mcp-config <grove-permission-mcp>``) plus\n``--permission-prompt-tool mcp__grove_permission__permission_prompt`` \u2014 so\nClaude Code calls that Grove tool instead of blocking on a TTY, and the tool\nanswers with allow/deny JSON. It is the native replacement for typing a\npermission answer into the tmux pane (which only works with a human attached).\n\nOff by default on purpose (mechanism, not policy), and **fail-closed**:\n``default = \"deny\"`` means an un-relayed prompt is denied, never silently\nallowed \u2014 flipping ``enabled`` on can't widen what an unattended agent may do\nwithout an explicit ``default: \"allow\"``. Disabling is just flipping\n``enabled`` back \u2014 the launch flags disappear and the whole path is a no-op,\nexactly like the hook ``--settings`` / channel ``--channels`` appends.",
+      "description": "Grove-hosted Claude Code ``--permission-prompt-tool`` answering.\n\nA *permission prompt* is the \"allow this tool call?\" gate a headless / paneless\nsession hits with no interactive terminal to answer it. When ``enabled``, Grove\nlaunches ``claude_code`` agents with a Grove-owned MCP server registered\n(``--mcp-config <grove-permission-mcp>``) plus\n``--permission-prompt-tool mcp__grove_permission__permission_prompt`` \u2014 so\nClaude Code calls that Grove tool instead of blocking on a TTY, and the tool\nanswers with allow/deny JSON. It is the native replacement for typing a\npermission answer into the tmux pane (which only works with a human attached).\n\nOff by default on purpose (mechanism, not policy), and **fail-closed**:\n``default = \"deny\"`` means an un-relayed prompt is denied, never silently\nallowed \u2014 flipping ``enabled`` on can't widen what an unattended agent may do\nwithout an explicit ``default: \"allow\"``. Disabling is just flipping\n``enabled`` back \u2014 the launch flags disappear and the whole path is a no-op,\nexactly like the hook ``--settings`` / channel ``--channels`` appends.",
       "properties": {
         "default": {
           "default": "deny",
@@ -571,7 +844,7 @@
     },
     "ProxyConfig": {
       "additionalProperties": false,
-      "description": "Loopback LLM-gateway passthrough proxy for wire-truth capture (issue #177).\n\nOff by default (mechanism, not policy). When a deployment opts in and the\norchestrator serves the proxy (``grove.core.proxy.ProxyApp``), an agent is\npointed at it through :meth:`proxy_env` at the launch boundary and every\nprovider request/response is forwarded VERBATIM while telemetry (true TTFT,\ntoken usage, latency) is teed off the stream. Nothing here holds a secret \u2014\nupstreams are public API base URLs and the env-var NAMES that carry the\nproxy address to each runtime; auth flows untouched through the proxy, never\ninto config.\n\nTwo per-kind maps do the wiring, keyed by ``AgentKind`` (the map keys are the\nopt-in set, the ``TelemetryConfig.passthrough_kinds`` analogue expressed as\nmembership): ``upstreams`` = where the proxy forwards that kind's traffic;\n``base_url_env`` = the env var whose value :meth:`proxy_env` sets to the proxy\nURL (``claude_code`` reads ``ANTHROPIC_BASE_URL``; ``codex`` reads its\n``model_providers`` base-url env, ``OPENAI_BASE_URL`` by default). Both\ncascade and merge like every other config value.",
+      "description": "Loopback LLM-gateway passthrough proxy for wire-truth capture.\n\nOff by default (mechanism, not policy). When a deployment opts in and the\norchestrator serves the proxy (``grove.core.proxy.ProxyApp``), an agent is\npointed at it through :meth:`proxy_env` at the launch boundary and every\nprovider request/response is forwarded VERBATIM while telemetry (true TTFT,\ntoken usage, latency) is teed off the stream. Nothing here holds a secret \u2014\nupstreams are public API base URLs and the env-var NAMES that carry the\nproxy address to each runtime; auth flows untouched through the proxy, never\ninto config.\n\nTwo per-kind maps do the wiring, keyed by ``AgentKind`` (the map keys are the\nopt-in set, the ``TelemetryConfig.passthrough_kinds`` analogue expressed as\nmembership): ``upstreams`` = where the proxy forwards that kind's traffic;\n``base_url_env`` = the env var whose value :meth:`proxy_env` sets to the proxy\nURL (``claude_code`` reads ``ANTHROPIC_BASE_URL``; ``codex`` reads its\n``model_providers`` base-url env, ``OPENAI_BASE_URL`` by default). Both\ncascade and merge like every other config value.",
       "properties": {
         "base_url_env": {
           "additionalProperties": {
@@ -635,9 +908,55 @@
       "title": "ProxyConfig",
       "type": "object"
     },
+    "RangeSource": {
+      "additionalProperties": false,
+      "description": "A provider that publishes its own address ranges as JSON.\n\nMechanism, not a GitHub special case: any endpoint returning a JSON object\nwhose named keys are arrays of CIDR strings is expressible here, so the next\nprovider that publishes ranges costs a config entry rather than a branch.\n\n``keys`` is explicit rather than \"take everything\" because a provider\npublishes ranges Grove has no business allowing \u2014 GitHub's payload also\ncarries `actions`, `packages` and `codespaces`, which are not what a\nworkspace's `git fetch` needs.",
+      "properties": {
+        "keys": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Keys",
+          "type": "array"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "RangeSource",
+      "type": "object"
+    },
+    "ResourcesConfig": {
+      "additionalProperties": false,
+      "description": "Per-container caps, applied at launch.\n\nOne knob on the policy cascade, deliberately NOT a slice hierarchy: the\nagent container gets them via ``docker update`` after ``up`` (the\ndevcontainer CLI owns creation, so post-hoc update is the one dependable\napplication point) and compose stack services via ``deploy.resources`` in\nthe generated override. Empty/zero means \"do not cap\" \u2014 every field is\nindependently optional, so a memory-only policy emits a memory-only update.\n\n``hostRequirements`` in a ``devcontainer.json`` is a different question \u2014 a\n*declaration* Grove checks and refuses on, never a cap it applies.",
+      "properties": {
+        "cpus": {
+          "default": "",
+          "title": "Cpus",
+          "type": "string"
+        },
+        "memory": {
+          "default": "",
+          "title": "Memory",
+          "type": "string"
+        },
+        "pids": {
+          "default": 0,
+          "title": "Pids",
+          "type": "integer"
+        }
+      },
+      "title": "ResourcesConfig",
+      "type": "object"
+    },
     "TelemetryConfig": {
       "additionalProperties": false,
-      "description": "LangFuse credentials + OpenTelemetry passthrough knobs (issue #176).\n\nSecret-free like every other integration submodel (the ``mewbo.api_key_env``\ndiscipline): the three canonical values are env-var NAMES, never secret\nliterals, so committed config stays publishable \u2014 the actual host/keys live\nonly in the consuming process's environment. Off by default (mechanism, not\npolicy); a deployment opts in by setting ``enabled: true`` and pointing the\nthree ``*_env`` fields at whatever names its host actually exports (exact\nkey names per environment are TBD \u2014 this holds regardless of what a given\nhost calls them).",
+      "description": "LangFuse credentials + OpenTelemetry passthrough knobs.\n\nSecret-free like every other integration submodel (the ``mewbo.api_key_env``\ndiscipline): the three canonical values are env-var NAMES, never secret\nliterals, so committed config stays publishable \u2014 the actual host/keys live\nonly in the consuming process's environment. Off by default (mechanism, not\npolicy); a deployment opts in by setting ``enabled: true`` and pointing the\nthree ``*_env`` fields at whatever names its host actually exports (exact\nkey names per environment are TBD \u2014 this holds regardless of what a given\nhost calls them).",
       "properties": {
         "enabled": {
           "default": false,
@@ -682,8 +1001,32 @@
     },
     "TicketsConfig": {
       "additionalProperties": false,
-      "description": "External ticket-tracker integration, one submodel per MVP provider.\n\nEach provider is independently ``enabled`` and configured. All three stay\noff by default (mechanism, not policy): a repo opts in by enabling the\ntracker its branches reference. Credentials never live here \u2014 only the NAME\nof the env var holding each token.",
+      "description": "External ticket-tracker integration, one submodel per MVP provider.\n\nEach provider is independently ``enabled`` and configured. All three stay\noff by default (mechanism, not policy): a repo opts in by enabling the\ntracker its branches reference. Credentials never live here \u2014 only the NAME\nof the env var holding each token, and optionally where to READ that env var\nfrom (the inherited ``env_file`` / ``env_command``).\n\n**Resolution order for one provider's token, evaluated at the moment of use\nand never at construction:**\n\n1. ``tickets.env_command``'s stdout, or ``tickets.env_file``'s contents,\n   parsed as dotenv and looked up by that provider's ``token_env`` name.\n   The source is re-read on every resolution, so a credential an init script\n   (or a secret manager, or a login) produces AFTER the daemon started is\n   picked up without a restart.\n2. the consuming process's own environment (``os.environ``), same name.\n3. nothing \u2014 the provider reads ``configured: false`` and every network call\n   raises rather than sending an unauthenticated request.\n\nOne source serves all three providers because it is keyed by env-var NAME:\na repo whose ``.grove/config.local.json`` sets\n``\"env_command\": \"my-secrets export grove\"`` gets Gitea's, GitHub's and\nLinear's tokens from one resolution. Per-project configuration is the plain\ncascade (user \u2192 committed ``.grove/config.json`` \u2192 machine-local\n``.grove/config.local.json``), which this section has always had.",
       "properties": {
+        "env_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Command"
+        },
+        "env_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env File"
+        },
         "gitea": {
           "$ref": "#/$defs/GiteaTicketConfig"
         },
@@ -787,6 +1130,23 @@
           "title": "Enabled",
           "type": "boolean"
         },
+        "priorities": {
+          "additionalProperties": {
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "title": "Priorities",
+          "type": "object"
+        },
         "timeout_seconds": {
           "default": 5.0,
           "exclusiveMinimum": 0,
@@ -848,6 +1208,14 @@
     },
     "auth": {
       "$ref": "#/$defs/AuthConfig"
+    },
+    "brief": {
+      "$ref": "#/$defs/BriefConfig"
+    },
+    "builtin_agents": {
+      "default": true,
+      "title": "Builtin Agents",
+      "type": "boolean"
     },
     "channels": {
       "$ref": "#/$defs/ChannelsConfig"

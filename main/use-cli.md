@@ -105,8 +105,9 @@ grove ls | jq -r '.[] | select(.status=="offline" or .status=="orphaned" or .sta
 ### `grove show`
 
 Inspect a single workspace: identity, git ahead/behind/diff/dirty, agent state
-and turn counts, recent transcript turns, and a live pane snapshot. This is the
-CLI analogue of the TUI peek rail.
+and turn counts, the agent's reported [task phase](features-status.md#the-third-axis-task-phase)
+and its todo list, recent transcript turns, and a live pane snapshot. This is
+the CLI analogue of the TUI peek rail.
 
 ```bash
 grove show [WORKSPACE] [--last/-l N]
@@ -129,6 +130,36 @@ grove show a1b2 -l 5  # by id prefix, last 5 turns
 The output is human-readable sections (identity, git, agent, transcript, live
 pane). It never mutates anything.
 
+### `grove phase`
+
+Set or read a workspace's [task phase](features-status.md#the-third-axis-task-phase):
+how far through its task the agent says it is, separate from workspace status
+and agent activity state. This is the convenience surface for a host
+workspace; the underlying, always-available channel is the agent writing the
+file Grove names for it as `GROVE_PHASE_FILE`, inside its own worktree.
+
+```bash
+grove phase <phase> [--note TEXT] [WORKSPACE]   # set
+grove phase [WORKSPACE]                         # read
+```
+
+| Argument / option | Default | Meaning |
+|---|---|---|
+| `PHASE` | (none) | One of `scoping`, `planning`, `implementing`, `verifying`, `delivering`, `done`. Omit it to read instead of set. |
+| `--note` | none | Optional one-line note, 200 characters or less. |
+| `WORKSPACE` | inferred from cwd | Workspace id or unique prefix, the same resolution as `grove show`. |
+
+```bash
+grove phase implementing --note "wiring the parser"   # from inside the worktree
+grove phase                                           # read the current phase back
+grove phase verifying a1b2                             # set another workspace's phase by id
+```
+
+Setting writes the same file an agent would write itself; reading reflects
+whatever is on disk, whether it was written by this command, by the agent,
+or by another client. See [task phase](features-status.md#the-third-axis-task-phase)
+for the full model, including why the file is the primary channel.
+
 ### `grove sessions`
 
 Explore the coding-agent sessions recorded for this project. Think of it as
@@ -145,11 +176,12 @@ reads one conversation as turns. `dump` emits the raw native records.
 List every agent session across this project's worktrees, newest first.
 
 ```bash
-grove sessions list [--agent KIND] [-w PREFIX] [--since WINDOW] [-n N] [--json]
+grove sessions list [--host] [--agent KIND] [-w PREFIX] [--since WINDOW] [-n N] [--json]
 ```
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
+| `--host` | flag | off | Widen the scope to every repo on this host, not just this project. See [the Session Catalog](features-activity.md#the-session-catalog-every-session-on-this-host). |
 | `--agent` | text | all | Only sessions from this adapter kind, e.g. `claude_code`. |
 | `--workspace`, `-w` | text | all | Workspace id prefix, or a case-insensitive title substring. |
 | `--since` | text | all time | Only sessions modified since a relative window (`30m`, `6h`, `2d`, `1w`) or an ISO date. |
@@ -267,7 +299,7 @@ Create a workspace: a git worktree, a branch, a tmux session, and a running
 agent.
 
 ```bash
-grove create TITLE --agent/-a NAME [--model/-m ID] [branch flags] [--base REF] [--description/-d TEXT] [--no-init] [--prompt/-p TEXT]
+grove create TITLE --agent/-a NAME [--model/-m ID] [--runtime host|container] [branch flags] [--base REF] [--description/-d TEXT] [--no-init] [--prompt/-p TEXT] [--brief/--no-brief]
 ```
 
 | Option | Meaning |
@@ -275,6 +307,7 @@ grove create TITLE --agent/-a NAME [--model/-m ID] [branch flags] [--base REF] [
 | `TITLE` (required) | Human label; its slug seeds the worktree path and tmux session name. |
 | `--agent`, `-a` (required) | Agent to launch (must match a name in your config). |
 | `--model`, `-m ID` | Model id for the agent tool (e.g. claude: `sonnet`/`opus`/`haiku`, codex: `gpt-5.5`). Forwarded to the agent verbatim, never validated — the per-agent catalog only informs the choice. Blank means the tool's own default. |
+| `--runtime` | `host` or `container`. Omit to use the configured default. Create-time only, never editable afterward. See [Container Workspaces](features-containers.md). |
 | `--branch`, `-b NAME` | Create a new branch with this exact name off `--base`. |
 | `--checkout`, `-c NAME` | Check out an existing local branch into the worktree. |
 | `--track`, `-t REF` | Track a remote branch by creating a fresh local tracking branch. |
@@ -283,6 +316,7 @@ grove create TITLE --agent/-a NAME [--model/-m ID] [branch flags] [--base REF] [
 | `--description`, `-d` | Free-form note attached to the workspace. |
 | `--no-init` | Skip the init script for this create only. |
 | `--prompt`, `-p` | The agent's first task, delivered race-free at boot so the workspace starts working immediately. |
+| `--brief` / `--no-brief` | Hand the agent a short first-turn note pointing it at the `working-in-grove` skill, so it reports its task phase and keeps attached tickets current. Omit to use the configured default (`brief.enabled`, on). Create-time only; the choice is persisted. |
 
 The branch flags are mutually exclusive. Omitting all of them lets Grove
 auto-name a branch from the title slug, which is the standard default.
@@ -362,7 +396,9 @@ grove resume a1b2
 ### `grove respawn`
 
 Recreate a vanished tmux session when the worktree still exists. Use this, not
-`resume`, when the agent's terminal died but the files are still on disk.
+`resume`, when the agent's terminal died but the files are still on disk. For a
+container workspace it reattaches to the agent still running inside the
+container instead of launching a new one.
 
 ```bash
 grove respawn WORKSPACE
@@ -410,6 +446,103 @@ grove attach WORKSPACE
 grove attach a1b2
 ```
 
+### `grove shell`
+
+Open an interactive shell inside a container workspace's container, at the
+agent's own working directory. This replaces the current process, the same way
+`grove attach` does.
+
+The shell runs under the container's own tmux, so it persists between visits:
+leave it and come back to the same shell, with its history and anything still
+running. Detach with the usual tmux key (Ctrl-b d).
+
+```bash
+grove shell WORKSPACE
+```
+
+```bash
+grove shell a1b2
+```
+
+A host workspace has no container to enter, and `grove shell` says so and points
+you at `grove attach`. Which shell runs is `container.shell`, a chain tried in
+order. It defaults to `bash` then `sh`, because plenty of real base images ship
+only the second.
+
+### `grove agent`
+
+Run several agents inside one containerized workspace's container. Each gets
+its own persistent tmux session in there, so it survives you leaving. Nothing
+here happens on its own — Grove starts an extra agent only when you ask.
+
+```bash
+grove agent list WORKSPACE
+grove agent add WORKSPACE [--agent NAME] [--name SLOT] [--model ID] [--prompt TEXT]
+grove agent attach WORKSPACE SLOT
+grove agent peek WORKSPACE SLOT [--lines N]
+grove agent message WORKSPACE SLOT TEXT
+grove agent kill WORKSPACE SLOT [--yes]
+```
+
+```bash
+grove agent add a1b2 --agent codex --name reviewer
+grove agent message a1b2 reviewer "review the last three commits"
+```
+
+`add` names the new agent `agent-2`, `agent-3`, … unless you pass `--name`, and
+runs the workspace's own agent unless you pass `--agent`. `list` reads the
+container itself, so it always shows what is really running. `kill` refuses the
+workspace's own agent — that one is `grove pause` / `grove respawn` / `grove
+kill`, which deal with the container and the record too.
+
+Every verb needs a containerized workspace with a reachable tmux; a host
+workspace hosts one agent, and Grove says so rather than guessing.
+
+### `grove code`
+
+Open a container workspace in VS Code, attached to the running container via
+the Dev Containers extension. Needs the `code` CLI on your `PATH` and a
+workspace whose runtime is `container`.
+
+```bash
+grove code WORKSPACE
+```
+
+```bash
+grove code a1b2
+```
+
+See [Container Workspaces](features-containers.md#editing-in-vs-code) for the
+dual-editing rule this depends on.
+
+### `grove tickets`
+
+Attach, list, and detach the issues and pull requests linked to a workspace.
+`attach`/`detach` take one free-text `ref`: a pasted URL, `#42`, a bare `42`,
+or `owner/repo#42`. The provider and issue-vs-PR are both inferred from that
+ref, never a flag you have to supply — an id that could belong to more than
+one enabled tracker raises rather than guessing.
+
+```bash
+grove tickets attach REF [--workspace/-w ID]
+grove tickets list [--workspace/-w ID]
+grove tickets detach REF [--workspace/-w ID]
+```
+
+```bash
+grove tickets attach https://github.com/acme/api/pull/42   # cwd-inferred workspace
+grove tickets attach '#42' -w a1b2
+grove tickets list
+```
+
+`--workspace` is optional and inferred from the current worktree when
+omitted, the shape an agent linking its own workspace to the PR it just
+opened uses most. Both verbs are idempotent: attaching a ref that is already
+attached, or re-attaching the same id to correct a wrong issue/PR guess, is a
+no-op or an in-place fix, never a duplicate. See [ticket
+providers](features-ticket-providers.md) for how a ref resolves and what the
+link buys you.
+
 ## Admin commands
 
 ### `grove config show`
@@ -436,6 +569,20 @@ By default it refuses to clobber an existing file. The stub it writes covers
 the worktree root and branch prefix, a single `claude` agent, and a disabled
 init script. It also writes the JSON Schema next to your user config and points
 the stub's `$schema` at it, so your editor gets autocomplete immediately.
+
+### `grove init devcontainer`
+
+Scaffold `.devcontainer/devcontainer.json` from Grove's packaged default
+container config. The remedy every "default container" notice points at:
+a repo with no `.devcontainer/` still runs containerized, just not on a
+project-owned config. This graduates it to one.
+
+```bash
+grove init devcontainer          # writes .devcontainer/devcontainer.json
+grove init devcontainer --force  # overwrite an existing one
+```
+
+See [Container Workspaces](features-containers.md) for the full model.
 
 ### `grove config schema`
 
@@ -492,6 +639,24 @@ grove auth approve 7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f
 grove auth sessions
 grove auth revoke 9d21f0e4-1a2b-4c3d-8e5f-6a7b8c9d0e1f
 ```
+
+### `grove doctor`
+
+Check your host against what Grove's container runtime needs: the Docker
+daemon, Compose v2, and `@devcontainers/cli`. Prints ok/fail marks with an
+actionable hint for each failure. This is the same check Grove runs before
+it decides a workspace can containerize, so the command tells you exactly
+what a stuck create would hit.
+
+```bash
+grove doctor           # human-readable table
+grove doctor --json    # for scripts
+```
+
+Exit code is `0` only when every required check passes. Two rows are advisory
+and never fail the command. `in-container tmux` and `container firewall` are
+bundles Grove builds for itself on the next containerized create, so a missing
+one is a state you pass through rather than something to fix.
 
 ### `grove version`
 
@@ -635,6 +800,10 @@ grove pause a1b2
   `grove sessions`, agent state, and provenance, in product terms.
 - [Status semantics](features-status.md): what the `status` field from
   `grove ls` means, and the recovery path for each value.
+- [Task phase](features-status.md#the-third-axis-task-phase): the model
+  behind `grove phase`, and the per-agent file it reads and writes.
+- [Ticket providers](features-ticket-providers.md): what `grove tickets`
+  attaches, and how a ref resolves to a provider.
 - [Configuration cascade](features-cascade.md): how the layers `grove config
   show` resolves stack and merge.
 - [Configuration reference](configure-reference.md): the field-by-field schema

@@ -27,6 +27,10 @@ Out of the box Grove ships with three agents:
 | `codex`  | `codex`  | `codex` | OpenAI Codex CLI, when installed on `$PATH`. |
 | `shell`  | `$SHELL` | `generic` | A plain interactive shell. Useful for testing and for workspaces that do not need an agent. |
 
+These three are always merged into your roster, whether you list them or
+not. See [Hiding the built-ins](#hiding-the-built-ins) to run a closed set
+of your own agents instead.
+
 The most common addition is Aider:
 
 ```json
@@ -137,6 +141,101 @@ without disturbing the project's `claude` or `aider` entries:
 }
 ```
 
+## Hiding the built-ins
+
+Merge-by-name is why you cannot drop `claude`, `codex`, or `shell` just by
+leaving them out of your own `agents` list. Your entries add to the base
+roster; they never replace it. That is the right default for a fresh
+install, where the three built-ins should just work with zero config. It
+gets in the way once you run a curated fleet of your own agents and want
+the create modal to show only those.
+
+`builtin_agents` is the field that changes the rule. It defaults to `true`,
+which is the merge-by-name behavior above. Set it to `false`, and your
+config becomes the whole roster:
+
+```json
+{
+  "builtin_agents": false,
+  "agents": [
+    { "name": "aider",  "command": "aider --model sonnet" },
+    { "name": "cursor", "command": "cursor-agent", "description": "Cursor's CLI agent" }
+  ]
+}
+```
+
+Now the picker shows only `aider` and `cursor`. `claude`, `codex`, and
+`shell` are gone. Nothing deleted them. They simply went unnamed, and an
+unnamed built-in has nothing left to merge into.
+
+Think of `builtin_agents: false` as an allowlist rather than a set of
+on/off switches for each built-in. If you still want Claude Code, name it,
+and merge-by-name fills in its full built-in definition the same way it
+fills in gaps on any override:
+
+```json
+{
+  "builtin_agents": false,
+  "agents": [
+    { "name": "claude" },
+    { "name": "aider", "command": "aider --model sonnet" }
+  ]
+}
+```
+
+`{ "name": "claude" }` on its own is enough. Merge-by-name supplies
+`command` and `kind: "claude_code"` from the built-in entry, exactly as it
+would if you had overridden just one field on a `claude` agent you kept.
+
+The allowlist shape is deliberate, and it looks past today's three
+built-ins. If a future Grove release adds a fourth one, a roster set to
+`builtin_agents: false` will not see it appear in the picker on upgrade.
+It stays hidden until you name it, the same as `claude`, `codex`, or
+`shell` would if you never named them. A per-agent "disabled" flag could
+not offer that: it would need a new entry every time Grove shipped
+something new. An allowlist needs nothing, because your config is already
+the whole roster.
+
+Hiding an agent is a real gate, not just a filter on the create modal. A
+hidden agent cannot be used to create a workspace from the CLI, the MCP
+tools, or the web UI. Two consequences are worth knowing before you flip
+the switch:
+
+- **Existing workspaces are not grandfathered in.** If you hide the agent
+  a workspace was created with, that workspace can no longer be resumed or
+  respawned. Grove tells you the agent is no longer present in config, and
+  you either add it back or kill the workspace. Its entry keeps tracking
+  normally on the dashboard either way.
+- **An empty roster is not an error.** Set `builtin_agents` to `false` and
+  declare no agents of your own, and Grove hands you an empty picker
+  instead of stopping you. Nothing enforces that you name at least one.
+
+Three more ways this can surprise an operator, all real, none a bug:
+
+- **A project config can put the built-ins back.** `builtin_agents`
+  cascades like every other field, so a repo's committed
+  `.grove/config.json` can set it to `true` and restore the whole stock
+  roster there, even on a machine where you turned it off everywhere
+  else. Naming one built-in back in is a deliberate, readable choice; a
+  project quietly flipping the whole switch back on is the one that
+  catches people out. It is not a security boundary either way: a
+  project config can already declare agents that run any command it
+  wants.
+- **`grove config init` writes a `claude` entry.** Run it inside a
+  project and the scaffolded config declares a `claude` agent, opting
+  Claude Code back into that project's roster whether you meant to or
+  not. Remove that entry if you are keeping a closed roster.
+- **Issue ops looks for an agent named `claude` by default.** Hide the
+  built-ins without declaring your own `claude`, and every
+  issue-ops-created workspace fails to create. It fails loudly, not
+  silently: Grove replies on the ticket that the agent is unknown. Point
+  [issue ops](issue-ops.md)'s `agent` setting at one of your own agents
+  instead.
+
+`builtin_agents` cascades like every other setting: set it in your user
+config to apply everywhere, in a project's `.grove/config.json` to scope
+it to that repo, or for one shell with `GROVE_BUILTIN_AGENTS=false grove`.
+
 ## Running without an agent
 
 Pick `shell` from the create modal. Grove still creates the worktree, runs
@@ -166,3 +265,5 @@ off is just flipping the flag back to `false`.
 - [Project setup](configure-project.md): where the agent list lives.
 - [Configuration cascade](features-cascade.md): the merge-by-name rule in context.
 - [Agent activity and sessions](features-activity.md): what declaring a `kind` unlocks.
+- [Container workspaces](features-containers.md#passing-environment-variables-in):
+  where `env_file`/`env_command` values sit relative to an agent's own `env`.

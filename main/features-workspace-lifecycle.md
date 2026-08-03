@@ -128,6 +128,13 @@ If the worktree directory is also gone (someone deleted it manually),
 the workspace is ORPHANED. There is nothing to respawn against. `kill`
 is the only path forward.
 
+A [container workspace](features-containers.md) reads this differently,
+because its agent was never in the host session. A vanished host session
+costs it the viewport and not the agent, so Grove asks the container
+before calling such a workspace OFFLINE, and `respawn` rebuilds the
+session around the agent that is still running rather than launching a
+new one.
+
 ## Side effects live at the edges
 
 Grove's manager reads no config file directly and shells out to nothing.

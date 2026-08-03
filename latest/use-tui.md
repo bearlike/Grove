@@ -24,7 +24,8 @@ footer along the bottom.
   title, agent, branch, and a stat strip (ahead, behind, dirty) with
   polarity-aware colours. When Grove can read the agent's session, the card
   also shows the agent's state, glyph and label, such as `▶ working` or
-  `◑ waiting`.
+  `◑ waiting`, plus its reported [task phase](features-status.md#the-third-axis-task-phase)
+  when it has one.
 - **Peek rail** sits on the right. The *summary* card carries branch,
   stats, and age, plus an agent metrics line when a session is live: the
   model, turn and reply and tool-call counts, token usage, and the
