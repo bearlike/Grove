@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Agent Activity & Sessions · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/features-activity.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,223 +1312,181 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Run one agent and you watch it. Run six and you cannot. Five are fine,
-one has been sitting on a permission prompt for twenty minutes, and the
-only way to find out is to cycle through every tmux window. That does
-not scale past two workspaces.</p>
-<p>Grove watches for you. It reads what each agent is actually doing and
-puts the whole fleet on one wall. The wall answers one question: who
-needs me right now?</p>
+    <h2 id="watch-the-whole-fleet">Watch the whole fleet</h2>
+<p>Run one agent and you watch it. Run six and you cannot. Five are fine,
+one has sat on a permission prompt for twenty minutes, and the only way
+to find out is cycling every tmux window.</p>
+<p>Grove watches for you instead, reading what each agent is doing and
+putting the fleet on one wall that answers one question: who needs me
+right now?</p>
 <h2 id="two-views-one-system">Two views, one system</h2>
-<p>Grove tracks agents on two time scales, and gives each its own surface.</p>
+<p>Grove tracks agents on two time scales, each with its own surface.</p>
 <ul>
-<li><strong>Live activity</strong> is the present tense. What is each agent doing at
-  this moment? The Activity Dashboard shows it, across every project.</li>
-<li><strong>Session history</strong> is the past tense. What did the agent do, and
-  what did you ask for? <code>grove sessions</code> and the per-workspace
-  transcript on the web dashboard's detail page replay it.</li>
+<li><strong>Live activity</strong>: the present tense, what every agent is doing
+  right now, across every project.</li>
+<li><strong>Session history</strong>: the past tense, what happened and what you
+  asked for.</li>
 </ul>
-<p>Both are read-only by construction. Grove reads transcripts and git
-state from disk to build these views. It never edits a past session;
-when you steer an agent from the dashboard, that is a fresh follow-up to
-the live agent, not a rewrite of the record.</p>
+<p>Both are read-only, built from transcripts and git state on disk.
+Steering an agent from the dashboard sends a fresh follow-up, never a
+rewrite of the record.</p>
 <h2 id="the-activity-dashboard">The Activity Dashboard</h2>
-<p>Press <code>d</code> in the TUI, or open the <a href="../use-webapp/">web dashboard</a> home.
-Either way you get the same wall: every agent session across every
-repository the daemon knows about, on one attention-first surface that
-puts the agents needing you at the very top.</p>
+<p>Press <span class="keys"><kbd class="key-d">D</kbd></span> in the <abbr title="Terminal User Interface">TUI</abbr>, or open the <a href="../use-webapp/">web dashboard</a>
+home: the same wall, every agent session across every repository the
+daemon knows about, attention-first.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="The web dashboard's Hero composer as the default home surface, with the flat session rail on the left listing every agent session across projects" /></div>
-  <figcaption class="ms-shot__body">The wall in the browser, now the one unified home surface. A persisted Hero/Overview toggle swaps between the composer and the repo-grouped card grid; the session rail on the left stays put either way. Working agents glow, waiting agents carry the accent ring, and the idle ones dim.</figcaption>
+  <figcaption class="ms-shot__body">The wall in the browser, attention-first.</figcaption>
 </figure>
 
-<p>In the browser this wall is the home surface itself. The live grid and
-the old standalone activity page merged into one place, so
-<code>/activity</code> now just redirects home. A Hero composer is the default view;
-flip the persisted Hero/Overview toggle for the repo-grouped card grid,
-each card carrying a project chip to keep its origin legible. Either view
-streams live from the daemon over SSE (server-sent events), so a state
-change tweens into place within a second, no manual refresh; a poll
-fallback covers a dropped stream. The session rail on the left is a flat,
-recency-sorted list of every session, not a repo scope-switcher; its one
-consolidated filter dropdown narrows the wall by project, by agent state,
-or to just the ones that need attention, and your choices persist in the
-browser.</p>
-<p>Each card carries the agent and its state, the workspace title and
-project, the agent's own one-line summary of what it is doing right now,
-a compact turns-tools-tokens metrics line, and the last commit with its
-relative time. A working card offers a <em>Live</em> toggle: flip it and a
-single focused pane mirrors that agent's real terminal inline above the
-grid, colors and all, streamed over SSE. One live pane at a time, so the
-surface stays cheap on any device.</p>
-<p>In the TUI the same wall groups tiles by project and lets the active
-tiles grow a live tail in place: quiet tiles stay compact, and a tile
-whose agent is working, waiting, blocked, or erroring expands to show
-its terminal. Either way, the tiles that matter take the space.</p>
+<p>In the browser, the wall is the home surface (<code>/activity</code> redirects
+there):</p>
+<ul>
+<li>A persisted Hero/Overview toggle swaps the default composer for a
+  repo-grouped grid, project chip per card.</li>
+<li>Both stream over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr> within a second, with a poll fallback for
+  drops. A filter narrows the flat, recency-sorted rail by project,
+  state, or attention, and your choice persists.</li>
+<li>Each card carries the agent and state, workspace title and project, a
+  one-line agent summary, a turns-tools-tokens metrics line, and the
+  last commit's relative time. A working card's <em>Live</em> toggle mirrors
+  that agent's terminal inline over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr>, one pane at a time.</li>
+</ul>
+<p>In the <abbr title="Terminal User Interface">TUI</abbr>, tiles group by project. Quiet ones stay compact, and a
+working, waiting, blocked, or erroring one expands to a terminal tail.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-dashboard.svg" alt="The TUI Activity Dashboard: agent tiles grouped by project, working and waiting tiles promoted with token metrics and a live pane tail" /></div>
-  <figcaption class="ms-shot__body">The same wall in the terminal. Tiles group by project, and the working and waiting agents promote to show their state, token counts, and a tail of their pane.</figcaption>
+  <figcaption class="ms-shot__body">The same wall in the terminal.</figcaption>
 </figure>
 
 <h2 id="what-grove-watches">What Grove watches</h2>
 <p>Four signals feed every tile.</p>
 <ol>
-<li><strong>Agent state.</strong> For agents Grove knows how to introspect (Claude
-   Code and Codex from their on-disk transcripts, Mewbo over its API),
-   Grove derives a precise state: <code>◌ starting</code>, <code>▶ working</code>,
-   <code>◑ waiting</code>, <code>⚠ blocked</code>, <code>○ idle</code>, <code>✗ error</code>. Waiting means the
-   turn ended and the agent wants you. Blocked means it is stuck on an
-   explicit prompt. Before any session exists, the state reads as a
-   quiet <code>· unknown</code>.</li>
+<li><strong>Agent state.</strong> For agents Grove can introspect (Claude Code and
+   Codex from transcripts, Mewbo over its <abbr title="Application Programming Interface">API</abbr>): <code>◌ starting</code>,
+   <code>▶ working</code>, <code>◑ waiting</code>, <code>⚠ blocked</code>, <code>○ idle</code>, <code>✗ error</code>. Waiting
+   means the turn ended and the agent wants you, blocked means an
+   explicit prompt, and no session yet reads as <code>· unknown</code>.</li>
 <li><strong>Terminal output.</strong> Agents Grove cannot introspect still get a
-   signal. If the tmux window is producing output, the workspace reads
-   as active. Quiet past the threshold reads as idle.</li>
-<li><strong>Dirty files.</strong> The count of uncommitted paths in the worktree.
-   This is the earliest sign of progress, visible before any commit
-   lands.</li>
-<li><strong>Recent commits.</strong> The last few commits on the workspace branch.
-   The durable record of what actually got done, and when.</li>
+   signal: a producing tmux window reads as active, quiet as idle.</li>
+<li><strong>Dirty files.</strong> Uncommitted worktree paths, visible before any
+   commit.</li>
+<li><strong>Recent commits.</strong> The last few commits on the branch.</li>
 </ol>
-<p>The same agent state shows up outside the dashboard too. The workspace
-list adds the glyph and label to each card, and the peek rail adds a
-metrics line with the model, turn counts, and token usage. See the
-<a href="../use-tui/">TUI tour</a> for where each lands.</p>
-<p>Note the distinction from <a href="../features-status/">workspace status</a>. A
-workspace can be ACTIVE (the terminal is producing output) while its
-agent is WAITING (the turn ended and it wants you). Status describes
-the workspace; agent state describes the conversation inside it. The
-dashboard shows both.</p>
+<p>The same state shows on the workspace list and the <a href="../features-peek/">peek
+rail</a> (model, turns, tokens). It differs from
+<a href="../features-status/">workspace status</a>: a workspace can be ACTIVE
+while its agent is WAITING. Status describes the workspace, agent
+state the conversation inside it, and the dashboard shows both.</p>
 <h2 id="attention-never-dims">Attention never dims</h2>
-<p>Tiles render in three tiers, and the tiers drive both brightness and
-order.</p>
+<p>Tiles render in three tiers, driving both brightness and order.</p>
 <ul>
-<li><strong>Active</strong> tiles are full brightness with a pulsing glyph. Something
-  is happening.</li>
-<li><strong>Attention</strong> tiles (waiting, blocked, error) are full brightness
-  with an accent color. These are the ones that need you, so they are
-  never dimmed and they sort to the front.</li>
-<li><strong>Dormant</strong> tiles (idle, offline, starting) dim. They are alive but
-  have nothing to say.</li>
+<li><strong>Active</strong>: full brightness, pulsing glyph.</li>
+<li><strong>Attention</strong> (waiting, blocked, error): full brightness, accent
+  color. These need you, so they never dim and sort to the front.</li>
+<li><strong>Dormant</strong> (idle, offline, starting): dimmed, alive but nothing to
+  say.</li>
 </ul>
-<p>The result reads like a heat map. Bright means look here. Dim means
-all quiet.</p>
+<p>Bright means look here. Dim means all quiet.</p>
 <h2 id="which-agents-grove-can-read">Which agents Grove can read</h2>
-<p>Every agent entry in your config declares a <code>kind</code>. The kind tells
-Grove which adapter, if any, can introspect that agent's sessions.</p>
+<p>Every agent entry declares a <code>kind</code>, the adapter that introspects it.</p>
 <ul>
-<li><code>claude_code</code> enables the full treatment: transcript-derived state,
-  turn and token counts, the session's own title, and session history.
-  The built-in <code>claude</code> agent ships with this kind.</li>
-<li><code>codex</code> reads the Codex CLI's rollout transcripts for the same state,
-  turn, and token signals. The built-in <code>codex</code> agent ships with it.</li>
-<li><code>mewbo</code> introspects a remote Mewbo session over its REST API rather
-  than from local files.</li>
-<li><code>generic</code> is the default for everything else. The command runs
-  normally and the dashboard falls back to the terminal-output signal.</li>
+<li><code>claude_code</code>: transcript-derived state, turn and token counts,
+  title, and history.</li>
+<li><code>codex</code>: the Codex <abbr title="Command Line Interface">CLI</abbr>'s rollout transcripts, the same signals.</li>
+<li><code>mewbo</code>: introspects a remote session over its <abbr title="Representational State Transfer">REST</abbr> <abbr title="Application Programming Interface">API</abbr>.</li>
+<li><code>generic</code>: default, falls back to the terminal-output signal.</li>
 </ul>
-<p>Declaring a kind is one line in the agent spec. See
-<a href="../configure-agents/#telling-grove-what-kind-of-agent-it-is">Agents</a>
-for the field and the cascade rules around it.</p>
-<p>For exact state, there is one more opt-in. Set <code>hooks.enabled: true</code>
-and Grove launches Claude Code agents with a lightweight status hook
-that pushes the precise lifecycle state as it changes. Polling can tell
-you the agent went quiet. The hook can tell you it is blocked on a
-permission prompt. Your own <code>.claude/settings.json</code> is never touched,
-and turning it off is one flag.</p>
+<p>The built-in <code>claude</code> and <code>codex</code> agents ship with their matching kind.
+Declaring one is one line in the agent spec. See
+<a href="../configure-agents/#telling-grove-what-kind-of-agent-it-is">Agents</a>.</p>
+<p>Set <code>hooks.enabled: true</code> for exact state: a status hook pushes Claude
+Code's lifecycle state as it changes, instead of polling.
+<code>.claude/settings.json</code> stays untouched, and turning it off is one
+flag.</p>
 <h2 id="the-agents-own-todo-list">The agent's own todo list</h2>
-<p>Claude Code's <code>TodoWrite</code>, Codex's <code>update_plan</code>, and Mewbo's task board
-all give an agent a running checklist for the task in front of it. Grove
-has parsed that checklist out of the transcript for a while, to feed the
-<a href="../issue-ops/">issue-ops</a> sticky comment, but until now nothing else
-surfaced it.</p>
-<p>It is now reachable everywhere else too: <code>grove show</code> prints it, the TUI
-and web dashboard cards show it as a bounded progress count (<code>4/7 done</code>)
-rather than the full list, and <code>grove_get_workspace_todo</code> hands the raw
-items to an MCP client. It is read-only, the same as everything else on
-this page. See <a href="../features-status/#the-third-axis-task-phase">task phase</a>
-for the agent's own self-reported counterpart: the todo list is what
-Grove infers from the transcript, task phase is what the agent states
-directly.</p>
+<p>Claude Code's <code>TodoWrite</code>, Codex's <code>update_plan</code>, and Mewbo's task
+board each give an agent a running checklist. Grove parses it from the
+transcript for the <a href="../issue-ops/">issue-ops</a> sticky comment, and now
+surfaces it everywhere: <code>grove show</code> prints it, <abbr title="Terminal User Interface">TUI</abbr> and web cards show
+a bounded count (<code>4/7 done</code>), and <code>grove_get_workspace_todo</code> hands the
+raw items to an <abbr title="Model Context Protocol">MCP</abbr> client. It is read-only. See <a href="../features-status/#the-third-axis-task-phase">task
+phase</a> for the agent's
+counterpart: the todo list is inferred, task phase is stated directly.</p>
 <h2 id="session-history">Session history</h2>
 <p>Live state tells you what is happening. Sessions tell you what
-happened. Grove discovers every recorded agent session for a project,
-across the repo root and every worktree, whether Grove started it or
-you did.</p>
-<p>From the terminal, <code>grove sessions</code> is the front door. Think of it as
-<code>git log</code> for agent conversations:</p>
-<div class="codehilite"><pre><span></span><code>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w">                </span><span class="c1"># every session, newest first</span>
-grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>7b3f2c1a<span class="w">       </span><span class="c1"># one conversation, as turns</span>
-grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>7b3f2c1a<span class="w">       </span><span class="c1"># the raw transcript records</span>
-</code></pre></div>
-<p>The full command reference, with filters for agent, workspace, and
-time window, lives on the <a href="../use-cli/#grove-sessions">CLI page</a>.</p>
-<p>In the web dashboard, open a workspace and its detail page replays the
-conversation as a transcript: your prompts, the agent's replies, and the
-tool calls grouped into collapsible runs, the browser twin of
-<code>grove sessions show</code>.</p>
-<p>Grove also labels where each session came from. Sessions Grove launched
-are tagged as Grove's, because Grove handed the agent its session id at
-create time. Sessions you started by hand in the same directory show up
-too, labeled as hand-started. Nothing is hidden just because Grove did
-not start it.</p>
+happened. Grove discovers every recorded session for a project, across
+the repo root and every worktree.</p>
+<p><code>grove sessions</code> is the front door, the <code>git log</code> of agent
+conversations:</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w">                </span><span class="c1"># every session, newest first</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>7b3f2c1a<span class="w">       </span><span class="c1"># one conversation, as turns</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>7b3f2c1a<span class="w">       </span><span class="c1"># the raw transcript records</span>
+</span></code></pre></div>
+<p>Filters for agent, workspace, and time window live on the <a href="../use-cli/#grove-sessions"><abbr title="Command Line Interface">CLI</abbr>
+page</a>. The web dashboard's detail page
+replays the conversation, the browser twin of <code>grove sessions show</code>.</p>
+<p>Grove labels each session's origin too: sessions it launched are
+tagged as Grove's, and hand-started ones show up labeled as such.</p>
 <h3 id="adoption-and-recovery">Adoption and recovery</h3>
-<p>A workspace's pin to its live session has to survive a daemon restart or
-a different user attaching to the same box, so Grove never trusts a bare
-session id: adoption is pane-verified, meaning the candidate's transcript
-birth and the workspace's own tmux pane have to agree before Grove treats
-it as the live session (see <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a>
-and <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>manager.py</span></a>). Resume runs the same
-check, so it re-points a workspace at the correct live session rather than
-a stale one. If the Grove-minted session dies and a successor gets
-gate-rejected, the pointer goes stale and the transcript reads blank; fix
-it with <code>grove sessions remap WORKSPACE SESSION</code>, the TUI's <code>x</code> key, or the
-web dashboard's remap picker.</p>
+<p>A workspace's session pin must survive a daemon restart or another
+user on the box, so Grove never trusts a bare session id.
+Adoption is pane-verified: the candidate's transcript birth and the
+workspace's tmux pane must agree before Grove treats it as live (see
+<a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a> and
+<a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>manager.py</span></a>). Resume runs the same check. If the Grove-minted session dies and a
+successor gets gate-rejected, the pointer goes stale and the
+transcript reads blank.
+Fix it with <code>grove sessions remap WORKSPACE SESSION</code>, the <abbr title="Terminal User Interface">TUI</abbr>'s <span class="keys"><kbd class="key-x">X</kbd></span>
+key, or the web remap picker.</p>
 <h3 id="the-session-catalog-every-session-on-this-host">The Session Catalog: every session on this host</h3>
-<p>Everything above scopes to one project. Most of your agent history probably
-lives outside it. Every repository you have ever pointed Claude Code or
-Codex at holds its own transcripts on disk, whether or not you ever told
-Grove about it, and Grove already knows how to read any of them. It just
-never looked past the projects in its own configuration.</p>
-<p>The Session Catalog removes that limit. <code>grove sessions list --host</code> scans
-every session store on the machine instead of just this repository:</p>
-<div class="codehilite"><pre><span></span><code>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--host<span class="w">              </span><span class="c1"># every repo on this host</span>
-</code></pre></div>
-<p>The table gains a <code>PROJECT</code> and <code>BRANCH</code> column, since neither is implied
-once the scope widens past one repository, plus a live marker on rows with a
-matching agent process still running. Everything else about a row is
-unchanged: agent kind, last-modified time, and whether Grove launched it or
-you started it by hand. The <a href="../use-webapp/#the-session-catalog">web dashboard's Sessions
-screen</a> and the TUI sessions browser's
-<code>h</code> key show the identical catalog.</p>
-<p>The scan is a quick peek at each transcript's first few lines, never a full
-read, which is what keeps it fast with hundreds of sessions on disk. A
-session whose transcript never recorded a working directory, or whose
-directory turned out not to be a git repository, still shows up rather than
-being quietly dropped; Grove would rather hand you an incomplete row than
-hide a session because one field came back empty.</p>
-<p>The catalog is read-only, same as everything else here. There is no verb
-that adopts a session you find this way into a Grove workspace. Grove shows
-you what is already on the host; it does not reach in and take it over.</p>
+<p>Most of your agent history lives outside this project. Every
+repository you have pointed Claude Code or Codex at holds its own
+transcripts, and Grove already knows how to read them, but never
+looked past its own configured projects.</p>
+<p><code>grove sessions list --host</code> removes that limit, scanning every
+session store on the machine:</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--host<span class="w">              </span><span class="c1"># every repo on this host</span>
+</span></code></pre></div>
+<p>The table gains <code>PROJECT</code> and <code>BRANCH</code> columns, plus a live marker on
+rows with a matching agent process. Agent kind, last-modified time, and
+who launched it stay unchanged. The <a href="../use-webapp/#the-session-catalog">web dashboard's Sessions
+screen</a> and the <abbr title="Terminal User Interface">TUI</abbr>'s <code>h</code> key show
+the catalog.</p>
+<p>The scan reads only each transcript's first few lines, never the whole
+file, staying fast across hundreds of sessions. A transcript missing a
+working directory, or pointing at a non-git directory, still shows up
+rather than being dropped. The catalog is read-only. No verb adopts a
+session found this way into a workspace.</p>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="../use-tui/">TUI tour</a>: the dashboard screen, its keys, and where
-  agent state appears on the list.</li>
-<li><a href="../use-webapp/">Web dashboard</a>: the unified live grid, the focused
-  pane, and the per-workspace transcript in the browser.</li>
-<li><a href="../use-cli/#grove-sessions">CLI</a>: <code>grove sessions list</code>, <code>show</code>, and <code>dump</code>.</li>
+<li><a href="../use-tui/"><abbr title="Terminal User Interface">TUI</abbr> tour</a>: the dashboard screen and its keys.</li>
+<li><a href="../use-webapp/">Web dashboard</a>: the live grid and the transcript.</li>
+<li><a href="../use-cli/#grove-sessions"><abbr title="Command Line Interface">CLI</abbr></a>: <code>grove sessions list</code>, <code>show</code>, <code>dump</code>.</li>
 <li><a href="../configure-agents/">Agents</a>: declaring an agent's <code>kind</code>.</li>
-<li><a href="../features-status/#the-third-axis-task-phase">Task phase</a>: the agent's
-  own self-reported progress, alongside its inferred todo list.</li>
-<li><a href="../features-status/">Status semantics</a>: workspace status, the other
-  dimension on every tile.</li>
-<li><a href="../features-peek/">The peek rail</a>: the per-workspace view, one
-  selected agent in depth.</li>
+<li><a href="../features-status/#the-third-axis-task-phase">Task phase</a>: the
+  agent's self-reported progress.</li>
+<li><a href="../features-status/">Status semantics</a>: workspace status.</li>
+<li><a href="../features-peek/">The peek rail</a>: one agent, in depth.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1523,7 +1520,11 @@ you what is already on the host; it does not reach in and take it over.</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2356,19 +2357,27 @@ you what is already on the host; it does not reach in and take it over.</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#two-views-one-system"
@@ -2452,18 +2461,19 @@ you what is already on the host; it does not reach in and take it over.</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2512,7 +2522,9 @@ you what is already on the host; it does not reach in and take it over.</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2589,11 +2601,20 @@ you what is already on the host; it does not reach in and take it over.</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -2638,4 +2659,5 @@ you what is already on the host; it does not reach in and take it over.</p>
 }
 </script>
 </body>
+
 </html>

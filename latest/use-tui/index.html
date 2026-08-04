@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>TUI Tour · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/use-tui.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,48 +1312,40 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>The TUI is the primary way to drive Grove. This page names every region
-and lists every key.</p>
-<video autoplay muted loop playsinline preload="auto" poster="../img/posters/terminal-still.png" style="width:100%;max-width:960px;height:auto;display:block;margin:0 auto 1.75rem;">
+    <h2 id="every-region-and-key">Every region and key</h2>
+<p>The <abbr title="Terminal User Interface">TUI</abbr> is the primary way to drive Grove. This page names every region and
+key.</p>
+<video preload="auto" poster="../img/posters/terminal-still.png">
   <source src="../videos/1-grove-terminal.mp4" type="video/mp4" />
 </video>
 
 <h2 id="screen-anatomy">Screen anatomy</h2>
-<p>The list screen has three vertical zones with a status bar and contextual
-footer along the bottom.</p>
+<p>The list screen has three vertical zones, a status bar, and a contextual
+footer.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI showing four workspaces in mixed states with a live peek rail" /></div>
-  <figcaption class="ms-shot__body">Header (top), filter bar (slash-toggled), workspace list (left), peek rail (right), status bar and contextual footer (bottom).</figcaption>
+  <figcaption class="ms-shot__body">Header, filter bar (slash-toggled), workspace list left, peek rail right, status bar and footer at bottom.</figcaption>
 </figure>
 
 <ul>
-<li><strong>Header</strong> carries the repo name and a count chip.</li>
-<li><strong>Filter bar</strong> stays hidden until you press <code>/</code>. Type to narrow by title,
-  branch, or agent. <code>Esc</code> clears.</li>
-<li><strong>Workspace list</strong> is the left zone. Each row is a card with status glyph,
-  title, agent, branch, and a stat strip (ahead, behind, dirty) with
-  polarity-aware colours. When Grove can read the agent's session, the card
-  also shows the agent's state, glyph and label, such as <code>▶ working</code> or
-  <code>◑ waiting</code>, plus its reported <a href="../features-status/#the-third-axis-task-phase">task phase</a>
-  when it has one.</li>
-<li><strong>Peek rail</strong> sits on the right. The <em>summary</em> card carries branch,
-  stats, and age, plus an agent metrics line when a session is live: the
-  model, turn and reply and tool-call counts, token usage, and the
-  agent's state. It also lists recent commits. Below it, a <em>preview</em> pane
-  has two tabs. The <em>transcript</em> tab shows the agent's recent turns with
-  tool calls grouped into single rows. The <em>terminal</em> tab mirrors the
-  live tmux pane, refreshed at four ticks per second. See
-  <a href="../features-peek/">the peek rail</a> for the full breakdown.</li>
-<li><strong>Status bar</strong> sums the fleet on the left and shows the selected workspace
-  on the right. The bar's background changes with state: clay by default,
-  amber when any workspace needs attention, neutral when the fleet is empty.</li>
-<li><strong>Contextual footer</strong> lists the keys that apply right now. Global keys on
-  the left, selection keys on the right, separated by a muted divider.</li>
+<li><strong>Header.</strong> Repo name, count chip.</li>
+<li><strong>Filter bar.</strong> Hidden until <span class="keys"><kbd class="key-slash">/</kbd></span>, narrows by title, branch, or agent.
+  <span class="keys"><kbd class="key-escape">Esc</kbd></span> clears.</li>
+<li><strong>Workspace list.</strong> Left zone, one card per row: status glyph, title,
+  agent, branch, a stat strip (ahead, behind, dirty) in polarity-aware
+  colours, and, when readable, the agent's state (<code>▶ working</code>,
+  <code>◑ waiting</code>) and reported <a href="../features-status/#the-third-axis-task-phase">task phase</a>.</li>
+<li><strong>Peek rail.</strong> Right zone: a summary card (branch, stats, age, commits,
+  and when live, model, turn/reply/tool-call counts, tokens, agent state)
+  above a two-tab preview, transcript (grouped turns) and terminal (live
+  tmux, four ticks a second). Detail on <a href="../features-peek/">the peek rail</a>.</li>
+<li><strong>Status bar.</strong> Fleet left, workspace right. Colour tracks state: clay
+  default, amber on attention, neutral when empty.</li>
+<li><strong>Contextual footer.</strong> Global keys left, selection keys right.</li>
 </ul>
 <h2 id="keybindings">Keybindings</h2>
-<p>The footer splits into two groups. <strong>Global keys</strong> apply at any time,
-whatever row is selected. <strong>Selection keys</strong> act on the highlighted
-workspace, and the ones that do not fit its current status render dimmed.</p>
+<p>Global keys apply at any time. Selection keys act on the highlighted
+workspace and dim when they do not fit its status.</p>
 <p>Global keys:</p>
 <div class="table-wrapper"><table>
 <thead>
@@ -1325,31 +1356,31 @@ workspace, and the ones that do not fit its current status render dimmed.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>n</code></td>
-<td>Create a new workspace.</td>
+<td><span class="keys"><kbd class="key-n">N</kbd></span></td>
+<td>Create a workspace.</td>
 </tr>
 <tr>
-<td><code>d</code></td>
+<td><span class="keys"><kbd class="key-d">D</kbd></span></td>
 <td>Open the <a href="../features-activity/">Activity Dashboard</a>, the cross-project wall.</td>
 </tr>
 <tr>
-<td><code>P</code></td>
-<td>Switch project. Jump to another repository the daemon knows about.</td>
+<td><span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span></td>
+<td>Switch project, jump to another repository the daemon knows.</td>
 </tr>
 <tr>
-<td><code>r</code></td>
-<td>Refresh the list and the peek rail.</td>
+<td><span class="keys"><kbd class="key-r">R</kbd></span></td>
+<td>Refresh the list and peek rail.</td>
 </tr>
 <tr>
-<td><code>/</code></td>
-<td>Filter. Type to narrow, <code>Esc</code> clears.</td>
+<td><span class="keys"><kbd class="key-slash">/</kbd></span></td>
+<td>Filter. Type to narrow, <span class="keys"><kbd class="key-escape">Esc</kbd></span> clears.</td>
 </tr>
 <tr>
-<td><code>?</code></td>
-<td>Help modal. On-screen reference for every key.</td>
+<td><span class="keys"><kbd class="key-question">?</kbd></span></td>
+<td>Help modal, an on-screen reference for every key.</td>
 </tr>
 <tr>
-<td><code>q</code></td>
+<td><span class="keys"><kbd class="key-q">Q</kbd></span></td>
 <td>Quit.</td>
 </tr>
 </tbody>
@@ -1364,64 +1395,61 @@ workspace, and the ones that do not fit its current status render dimmed.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>Enter</code> / <code>a</code></td>
+<td><span class="keys"><kbd class="key-enter">Enter</kbd></span> / <span class="keys"><kbd class="key-a">A</kbd></span></td>
 <td>Attach to the selected workspace.</td>
 </tr>
 <tr>
-<td><code>m</code></td>
-<td>Send a message. Steer the running agent without attaching.</td>
+<td><span class="keys"><kbd class="key-m">M</kbd></span></td>
+<td>Send a message, steer the running agent without attaching.</td>
 </tr>
 <tr>
-<td><code>e</code></td>
-<td>Edit the selected workspace's title and description.</td>
+<td><span class="keys"><kbd class="key-e">E</kbd></span></td>
+<td>Edit the workspace's title and description.</td>
 </tr>
 <tr>
-<td><code>s</code></td>
+<td><span class="keys"><kbd class="key-s">S</kbd></span></td>
 <td>Browse the workspace's recorded agent sessions.</td>
 </tr>
 <tr>
-<td><code>x</code></td>
-<td>Remap session. Re-point the workspace at a live or recovered agent session, e.g. after <code>/clear</code> rotated the id. See <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/tui/screens/remap_session.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>screens/remap_session.py</span></a>.</td>
+<td><span class="keys"><kbd class="key-x">X</kbd></span></td>
+<td>Remap session. Re-point at a live or recovered session, e.g. after <code>/clear</code> rotates the id. See <a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/tui/screens/remap_session.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>screens/remap_session.py</span></a>.</td>
 </tr>
 <tr>
-<td><code>p</code></td>
-<td>Pause. Removes the worktree, keeps the branch.</td>
+<td><span class="keys"><kbd class="key-p">P</kbd></span></td>
+<td>Pause, removes the worktree, keeps the branch.</td>
 </tr>
 <tr>
-<td><code>R</code></td>
-<td>Resume. Recreates the worktree from the branch and restarts tmux.</td>
+<td><span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-r">R</kbd></span></td>
+<td>Resume, recreates the worktree from the branch and restarts tmux.</td>
 </tr>
 <tr>
-<td><code>o</code></td>
+<td><span class="keys"><kbd class="key-o">O</kbd></span></td>
 <td>Respawn an OFFLINE workspace whose tmux session vanished.</td>
 </tr>
 <tr>
-<td><code>k</code></td>
-<td>Kill. Removes the worktree and tmux session. Deletes the branch by default for Grove-created branches.</td>
+<td><span class="keys"><kbd class="key-k">K</kbd></span></td>
+<td>Kill, removes the worktree and tmux session, deletes the branch by default for Grove-created branches.</td>
 </tr>
 </tbody>
 </table></div>
-<p>The footer adapts to the selected row. Global keys stay on the left.
-Selection keys sit on the right, and the ones that do not apply to the
-row's current status render dimmed. A PAUSED row dims attach and pause,
-an OFFLINE row lights respawn, an ORPHANED row leaves only kill. The
-availability rule lives in one function in <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/tui/screens/list.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/tui/screens/list.py</span></a>, so the
-footer never drifts from what is actually runnable.</p>
+<p>A PAUSED row dims attach and pause, OFFLINE lights respawn, ORPHANED leaves
+only kill. The rule lives in one function in
+<a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/tui/screens/list.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/tui/screens/list.py</span></a>, so the footer never drifts from what
+is runnable.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-filter.svg" alt="Filter bar narrowed to workspaces matching "auth"" /></div>
-  <figcaption class="ms-shot__body">Filter bar in action. Values are matched substring-style across title, branch, and agent.</figcaption>
+  <figcaption class="ms-shot__body">Filter bar in action, matched substring-style across title, branch, and agent.</figcaption>
 </figure>
 
 <h2 id="the-activity-dashboard-screen">The Activity Dashboard screen</h2>
-<p>The list screen shows one repository. Press <code>d</code> and the screen flips to
-the Activity Dashboard: every workspace across every repository the
-daemon knows about, one tile per workspace, grouped by project.</p>
-<p>Tiles size themselves by urgency. A quiet workspace gets a compact
-three-row tile. A workspace whose agent is working, waiting, blocked,
-or erroring gets a taller tile with a live tail of the agent's
-terminal. Each tile carries branch, agent and model, diff and
-ahead-behind counts, turn and token totals, and the agent's one-line
-summary of what it is doing.</p>
+<p>Press <span class="keys"><kbd class="key-d">D</kbd></span> for the Activity Dashboard: every workspace across every
+repository the daemon knows, one tile each, grouped by project.</p>
+<ul>
+<li>Tiles size by urgency: quiet is a compact three-row tile, working,
+  waiting, blocked, or erroring gets a taller tile with a live terminal tail.</li>
+<li>Each tile carries branch, agent and model, diff and ahead-behind counts,
+  turn and token totals, and the agent's one-line summary.</li>
+</ul>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1431,70 +1459,69 @@ summary of what it is doing.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>l</code></td>
+<td><span class="keys"><kbd class="key-l">L</kbd></span></td>
 <td>Cycle the lens: all, needs attention, active.</td>
 </tr>
 <tr>
-<td><code>g</code></td>
+<td><span class="keys"><kbd class="key-g">G</kbd></span></td>
 <td>Toggle grouping: by project, or one flat wall.</td>
 </tr>
 <tr>
-<td><code>r</code></td>
+<td><span class="keys"><kbd class="key-r">R</kbd></span></td>
 <td>Refresh.</td>
 </tr>
 <tr>
-<td><code>d</code> / <code>Esc</code> / <code>q</code></td>
+<td><span class="keys"><kbd class="key-d">D</kbd></span> / <span class="keys"><kbd class="key-escape">Esc</kbd></span> / <span class="keys"><kbd class="key-q">Q</kbd></span></td>
 <td>Back to the list.</td>
 </tr>
 </tbody>
 </table></div>
-<p>What the tiles mean, which signals feed them, and how attention
-sorting works is on the
-<a href="../features-activity/">agent activity and sessions</a> page.</p>
+<p>Tile meaning and attention sorting are on
+<a href="../features-activity/">agent activity and sessions</a>.</p>
 <h2 id="the-project-switcher">The project switcher</h2>
-<p>The list screen shows one repository at a time. Press <code>P</code> to hop to
-another without leaving the TUI. A small picker opens with every
-repository the daemon knows about, each row showing the repo name and how
-many workspaces it holds. The one you are looking at carries a <em>current</em>
-tag.</p>
+<p>Press <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span> to hop repositories without leaving the <abbr title="Terminal User Interface">TUI</abbr>.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-project-switcher.svg" alt="Project switcher listing two repositories with workspace counts and a current tag" /></div>
-  <figcaption class="ms-shot__body">Project switcher. Type to narrow, arrows to move, <code>Enter</code> to switch. The current repo is tagged.</figcaption>
+  <figcaption class="ms-shot__body">Project switcher. Type to narrow, arrows to move, <code>Enter</code> to switch, current repo tagged.</figcaption>
 </figure>
 
-<p>The picker borrows the command-palette feel: a filter input holds focus,
-so you type to narrow and the arrow keys move the highlight. <code>Enter</code>
-switches to the highlighted repo, <code>Esc</code> cancels. The counts come from a
-cheap read, so the picker opens instantly even across many repos. It is a
-navigation chooser, not the dashboard. For live cross-repo agent status,
-reach for <code>d</code> instead.</p>
+<ul>
+<li>Lists every known repository with its workspace count, current one
+  tagged.</li>
+<li>Filter input holds focus, arrows move the highlight, <span class="keys"><kbd class="key-enter">Enter</kbd></span> switches,
+  <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
+<li>A cheap read keeps it instant across many repos. Navigation chooser, not
+  the dashboard. For live status, <span class="keys"><kbd class="key-d">D</kbd></span>.</li>
+</ul>
 <h2 id="steering-an-agent">Steering an agent</h2>
-<p>Press <code>m</code> to send a follow-up to the selected workspace's agent without
-attaching. Type your message, press <code>Enter</code>, and Grove delivers it.</p>
+<p>Press <span class="keys"><kbd class="key-m">M</kbd></span>, type a follow-up, and press <span class="keys"><kbd class="key-enter">Enter</kbd></span> to steer the selected
+workspace's agent without attaching.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-steer.svg" alt="Send-message modal with a follow-up typed to a running agent" /></div>
   <figcaption class="ms-shot__body">Steer modal. A quick redirect to a running agent, no attach required.</figcaption>
 </figure>
 
-<p>Delivery follows the agent. For a local agent, Grove types the message
-into its tmux pane, the same keystrokes you would send by hand. For a
-remote agent such as Mewbo, Grove sends it over the remote API. Either
-way you stay on the list. The <code>m</code> key lights up only for a running agent,
-and if the agent cannot take the message right now, Grove flashes the
-reason instead of failing silently.</p>
+<ul>
+<li>Delivery follows the agent: local agents get it typed into their tmux
+  pane, remote agents such as Mewbo get it over the remote <abbr title="Application Programming Interface">API</abbr>. Either way
+  you stay on the list.</li>
+<li><span class="keys"><kbd class="key-m">M</kbd></span> lights up only for a running agent, and Grove flashes the reason
+  rather than failing silently if it cannot take the message.</li>
+</ul>
 <h2 id="the-sessions-browser">The sessions browser</h2>
-<p>Press <code>s</code> to read a workspace's recorded agent sessions. The screen
-splits in two: a list of sessions on the left, the turn-by-turn history
-on the right.</p>
+<p>Press <span class="keys"><kbd class="key-s">S</kbd></span> for a workspace's recorded sessions on the left and
+turn-by-turn history on the right.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-sessions.svg" alt="Sessions browser with a session list on the left and turn history on the right" /></div>
-  <figcaption class="ms-shot__body">Sessions browser. Sessions on the left, the selected session's turns on the right.</figcaption>
+  <figcaption class="ms-shot__body">Sessions browser: sessions left, selected session's turns right.</figcaption>
 </figure>
 
-<p>Each session row carries its state, turn count, model, and whether Grove
-started it or you launched the agent by hand. Highlight a session and the
-right pane fills with its turns. Tool calls collapse into single grouped
-rows so the conversation stays readable.</p>
+<ul>
+<li>Each row carries state, turn count, model, and whether Grove or you
+  started the agent.</li>
+<li>Highlight a session and its turns fill the right pane, tool calls
+  collapsed into single grouped rows.</li>
+</ul>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1504,26 +1531,25 @@ rows so the conversation stays readable.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>t</code></td>
-<td>Toggle tool detail: collapse tool runs into one row, or expand each call.</td>
+<td><span class="keys"><kbd class="key-t">T</kbd></span></td>
+<td>Toggle tool detail: collapsed into one row, or expanded per call.</td>
 </tr>
 <tr>
-<td><code>r</code></td>
+<td><span class="keys"><kbd class="key-r">R</kbd></span></td>
 <td>Refresh the session list.</td>
 </tr>
 <tr>
-<td><code>Esc</code> / <code>q</code></td>
+<td><span class="keys"><kbd class="key-escape">Esc</kbd></span> / <span class="keys"><kbd class="key-q">Q</kbd></span></td>
 <td>Back to the list.</td>
 </tr>
 </tbody>
 </table></div>
-<p>Recorded history does not stream, so the screen has no live tick. It
-reads sessions straight from disk, which means transcripts outlive their
-worktrees. You can still read the history of a paused or even orphaned
-workspace.</p>
+<p>Recorded history does not stream, so the screen has no live tick. It reads
+straight from disk, so transcripts outlive their worktrees, readable even
+for a paused or orphaned workspace.</p>
 <h2 id="modals">Modals</h2>
 <h3 id="create">Create</h3>
-<p><code>n</code> opens a six-step modal.</p>
+<p><span class="keys"><kbd class="key-n">N</kbd></span> opens an eight-step modal.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal showing branch source variants and agent picker" /></div>
   <figcaption class="ms-shot__body">Create modal. Branch source on the left, agent picker, title input.</figcaption>
@@ -1531,71 +1557,61 @@ workspace.</p>
 
 <ol>
 <li><strong>Agent.</strong> Radio list of every agent the cascade resolved.</li>
-<li><strong>Model</strong> (blank = agent default). Free text, e.g. <code>sonnet</code>/<code>opus</code>/<code>haiku</code>
-   for claude, <code>gpt-5.5</code> for codex. The placeholder hints at the union of
-   every configured agent's resolved model catalog, but the field never
-   validates against it: whatever you type is forwarded to the agent
-   verbatim, same as <code>grove create --model</code> on the CLI. See
-   <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/tui/screens/create.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>screens/create.py</span></a>.</li>
-<li><strong>Title.</strong> Free text. Pre-fills with the chosen branch name when one is
-   available.</li>
-<li><strong>Branch source.</strong> Pick <em>Auto</em> (Grove names the branch), <em>New named</em> (you
-   type the name), <em>Existing local</em> (pick from your repo's branches),
-   <em>Track remote</em> (pick a remote-only branch and create a tracking local),
-   or <em>Root</em> (no worktree at all; the workspace runs in the repo root on
-   your current branch). Each variant carries its own form. All are mounted
-   in the DOM with the inactive ones hidden, so values persist across mode
-   switches. Root workspaces have their own rules; see
-   <a href="../features-workspace-lifecycle/#root-workspaces">root workspaces</a>.</li>
-<li><strong>Skip init script.</strong> A checkbox that skips the
-   <a href="../configure-init-scripts/">init script</a> for this one create. Picking
-   <em>Root</em> checks it for you, since init scripts are built to bootstrap
-   fresh worktrees. You can uncheck it.</li>
-<li><strong>Confirm</strong> with <code>Enter</code>. <code>Esc</code> cancels.</li>
+<li><strong>Runtime.</strong> Host or Container, marking the cascade default
+   (<code>container.enabled</code>).</li>
+<li><strong>First-turn brief.</strong> Cascade default, On, or Off, same as <code>--brief</code> on
+   the <a href="../use-cli/"><abbr title="Command Line Interface">CLI</abbr></a>. On briefs the agent toward <code>working-in-grove</code>.</li>
+<li><strong>Model</strong> (blank = agent default). Free text, e.g. <code>sonnet</code> or <code>gpt-5.5</code>,
+   unvalidated and forwarded verbatim, same as <code>grove create --model</code>. See
+   <a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/tui/screens/create.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>screens/create.py</span></a>.</li>
+<li><strong>Title.</strong> Free text, pre-fills from the chosen branch name.</li>
+<li><strong>Branch source.</strong> <em>Auto</em> (Grove names it), <em>New named</em> (you type it),
+   <em>Existing local</em> (from your branches), <em>Track remote</em> (a remote-only
+   branch, tracked locally), or <em>Root</em> (no worktree, repo root, current
+   branch). See <a href="../features-workspace-lifecycle/#root-workspaces">root workspaces</a>
+   and <a href="../features-branch-provenance/">branch provenance</a>.</li>
+<li><strong>Skip init script.</strong> Skips the <a href="../configure-init-scripts/">init script</a>
+   for this create, checked by default under <em>Root</em> since init scripts
+   bootstrap fresh worktrees. Uncheck it if not.</li>
+<li><strong>Confirm</strong> with <span class="keys"><kbd class="key-enter">Enter</kbd></span>. <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
 </ol>
-<p>The branch-source plumbing is documented in
-<a href="../features-branch-provenance/">branch provenance</a>.</p>
 <h3 id="edit">Edit</h3>
-<p><code>e</code> opens the edit modal to change a workspace's title and description. Both
-are metadata only. The worktree directory and tmux session keep their
-original names, so attached clients and your muscle memory are never
-disrupted.</p>
+<p><span class="keys"><kbd class="key-e">E</kbd></span> edits a workspace's title and description, metadata only, so the
+worktree directory and tmux session keep their original names.</p>
 <h3 id="kill-confirmation">Kill confirmation</h3>
-<p><code>k</code> opens a confirm modal that doubles as a branch-deletion toggle. The
-checkbox default is driven by the workspace's <code>branch_provenance</code>.
-GROVE_CREATED defaults to "delete the branch". USER_ATTACHED defaults to
-"keep the branch". You can flip either way. Grove never touches remote
-branches. Remote deletion requires <code>git push --delete</code> from your shell.</p>
+<p><span class="keys"><kbd class="key-k">K</kbd></span> opens a confirm modal with a branch-deletion toggle, defaulted from the
+workspace's <code>branch_provenance</code>: GROVE_CREATED deletes it, USER_ATTACHED keeps
+it, either flippable. Grove never touches remote branches, so remote deletion
+needs <code>git push --delete</code> from your shell.</p>
 <h3 id="pause-confirmation">Pause confirmation</h3>
-<p><code>p</code> opens a smaller confirm modal that names the branch retained and warns
-when there are uncommitted changes that would block the pause.</p>
+<p><span class="keys"><kbd class="key-p">P</kbd></span> opens a smaller confirm modal, naming the branch retained and warning
+if uncommitted changes would block the pause.</p>
 <h3 id="help">Help</h3>
-<p><code>?</code> opens a read-only key reference grouped by zone. Press any key to
-dismiss.</p>
+<p><span class="keys"><kbd class="key-question">?</kbd></span> opens a read-only key reference grouped by zone, any key dismisses.</p>
 <div class="swiper ms-shots">
   <div class="swiper-wrapper">
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/tui-edit-modal.svg" alt="Edit workspace modal with title and description fields">
-        <figcaption>Edit modal (<code>e</code>). Title and description are metadata; the worktree path and session name stay fixed.</figcaption>
+        <figcaption>Edit modal (<code>e</code>): title and description are metadata, worktree path and session name stay fixed.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/tui-kill-confirm.svg" alt="Kill confirm modal">
-        <figcaption>Kill confirm (<code>k</code>). The checkbox default reflects whether Grove created the branch.</figcaption>
+        <figcaption>Kill confirm (<code>k</code>): checkbox default reflects whether Grove created the branch.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/tui-pause-confirm.svg" alt="Pause confirm modal">
-        <figcaption>Pause confirm (<code>p</code>). Grove refuses to pause a dirty worktree. Commit or stash first.</figcaption>
+        <figcaption>Pause confirm (<code>p</code>): Grove refuses a dirty worktree, commit or stash first.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/tui-help.svg" alt="Help modal">
-        <figcaption>Help modal (<code>?</code>). Pulled from the same <code>DEFAULT_BINDINGS</code> tuple the contextual footer reads.</figcaption>
+        <figcaption>Help modal (<code>?</code>): pulled from the same <code>DEFAULT_BINDINGS</code> tuple the footer reads.</figcaption>
       </figure>
     </div>
   </div>
@@ -1605,26 +1621,36 @@ dismiss.</p>
 </div>
 
 <h3 id="pairing">Pairing</h3>
-<p>When the <a href="../use-webapp/">web dashboard</a> is in use, the TUI also surfaces
-device pairing. A request from a new browser pops a modal on top of whatever
-screen you are on, showing the device label and a code to confirm. Approve
-with <code>a</code>, deny with <code>d</code>. The full handshake, and the <code>grove auth</code> commands
-for headless hosts, are on the <a href="../use-auth/">authentication &amp; pairing</a> page.</p>
+<p>With the <a href="../use-webapp/">web dashboard</a>, a new browser's pairing request
+pops a modal showing the device label and a code to confirm. Approve with
+<span class="keys"><kbd class="key-a">A</kbd></span>, deny with <span class="keys"><kbd class="key-d">D</kbd></span>. Full handshake and the <code>grove auth</code> commands for
+headless hosts are on <a href="../use-auth/">authentication &amp; pairing</a>.</p>
 <h2 id="theme">Theme</h2>
-<p>Grove ships three built-in themes: <code>dark</code>, <code>light</code>, and <code>auto</code> (which
-follows the terminal polarity reported by Textual). User overrides land at
-<code>${user_config_dir}/grove/themes/&lt;name&gt;.toml</code>. Reference one by name in
-<code>ui.theme</code> and Grove resolves it at startup.</p>
+<p>Grove ships three built-in themes: <code>dark</code>, <code>light</code>, and <code>auto</code> (follows
+Textual's reported terminal polarity). User overrides land at
+<code>${user_config_dir}/grove/themes/&lt;name&gt;.toml</code>, referenced by name in
+<code>ui.theme</code>.</p>
 <h2 id="mouse-vs-keyboard">Mouse vs keyboard</h2>
-<p>Both work. The cursor selects rows on hover, and clicking a row selects.
-The selected row carries a clay border. Hovered rows that aren't selected
-get a muted gray outline so the mouse position is visible. Every action
+<p>Both work. Clicking selects a row, hover outlines it, and every action also
 has a keyboard binding.</p>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1658,7 +1684,11 @@ has a keyboard binding.</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2491,19 +2521,27 @@ has a keyboard binding.</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#screen-anatomy"
@@ -2623,18 +2661,19 @@ has a keyboard binding.</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2683,7 +2722,9 @@ has a keyboard binding.</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2760,11 +2801,20 @@ has a keyboard binding.</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -2809,4 +2859,5 @@ has a keyboard binding.</p>
 }
 </script>
 </body>
+
 </html>

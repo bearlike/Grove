@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Daily Workflow · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/use-workflow.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,78 +1312,55 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Five lifecycle operations cover almost every interaction with Grove. This
-page walks the path you travel in a normal day: create a workspace, attach
-to it, steer it without attaching, browse its past sessions, move between
-repos, hand work back when you are done, and recover when something went
-sideways. The same operations are reachable from four surfaces. The TUI is
-the primary one, but the CLI (<code>grove create</code>, <code>grove pause</code>, and friends),
-the web dashboard, and the MCP server all drive the identical engine. Pick
-whichever is in front of you.</p>
+    <h2 id="a-day-with-the-fleet">A day with the fleet</h2>
+<p>Five lifecycle operations cover almost every interaction with Grove: create,
+attach, steer, browse past sessions, and pause, resume, kill, or respawn.
+All five reach the identical engine from the <abbr title="Terminal User Interface">TUI</abbr>, the <abbr title="Command Line Interface">CLI</abbr> (<code>grove create</code>,
+<code>grove pause</code>, and friends), the web dashboard, or the <abbr title="Model Context Protocol">MCP</abbr> server.</p>
 <h2 id="create-a-workspace">Create a workspace</h2>
-<p>Press <code>n</code>. The create modal opens. Pick a branch source, an agent, and a
-title, then press <code>Enter</code>. Grove runs the create pipeline end to end:</p>
+<p>Press <span class="keys"><kbd class="key-n">N</kbd></span>, pick a branch source, an agent, and a title, then <span class="keys"><kbd class="key-enter">Enter</kbd></span>
+runs the pipeline:</p>
 <ol>
-<li><strong>Resolve the branch</strong> from your chosen source. <em>Auto</em> names it
-   <code>&lt;branch_prefix&gt;&lt;slug-of-title&gt;</code>. The other variants use the literal
-   name.</li>
-<li><strong>Add the worktree</strong> at <code>&lt;root_template&gt;/&lt;workspace_id&gt;</code>. The default
-   template is <code>${repo}/.worktrees</code>, so worktrees sit alongside the repo
-   and stay out of git's main checkout.</li>
-<li><strong>Run the init script</strong> if one is enabled. Output streams into the
-   <code>init</code> tmux window. The script must exit 0 within
-   <code>init_script.timeout_seconds</code>.</li>
-<li><strong>Spawn the tmux session</strong> with <code>agent</code> and <code>shell</code> windows. The agent
-   command goes into <code>agent</code> via <code>send-keys</code>. <code>shell</code> is a plain
-   interactive shell ready for git commits and ad-hoc work.</li>
+<li><strong>Resolve the branch.</strong> <em>Auto</em> names it
+   <code>&lt;branch_prefix&gt;&lt;slug-of-title&gt;</code>, other variants use the literal name.</li>
+<li><strong>Add the worktree</strong> at <code>&lt;root_template&gt;/&lt;workspace_id&gt;</code> (default
+   <code>${repo}/.worktrees</code>, out of git's main checkout).</li>
+<li><strong>Run the init script</strong> if enabled, streaming output into the <code>init</code>
+   tmux window. Must exit 0 within <code>init_script.timeout_seconds</code>.</li>
+<li><strong>Spawn the tmux session</strong> with <code>agent</code> and <code>shell</code> windows: the agent
+   command goes into <code>agent</code> via <code>send-keys</code>, <code>shell</code> is a plain
+   interactive shell for git and ad-hoc work.</li>
 </ol>
-<p>If any step fails, the workspace stays at <code>ERROR</code> (with <code>fail_fast</code> off)
-or rolls back entirely (with <code>fail_fast</code> on). Either way the manager
-records the outcome once and exposes it through the <code>WorkspaceEvent</code>
-stream.</p>
-<p>Two choices on the modal change the pipeline. The <em>Skip init script</em>
-checkbox skips step 3 for this one create, useful when a worktree does
-not need its bootstrap. Picking <em>Root</em> as the branch source skips steps
-1 and 2 entirely: the workspace runs in the repo root on your current
-branch, and Grove manages only the tmux session. See
-<a href="../features-workspace-lifecycle/#root-workspaces">root workspaces</a>.</p>
+<p>A failed step leaves the workspace at <code>ERROR</code> (<code>fail_fast</code> off) or rolls it
+back entirely (<code>fail_fast</code> on), recorded once through <code>WorkspaceEvent</code>.</p>
+<p><em>Skip init script</em> skips step 3. <em>Root</em> as the branch source skips steps 1
+and 2, running in the repo root on your current branch, Grove managing
+only tmux. See <a href="../features-workspace-lifecycle/#root-workspaces">root workspaces</a>.</p>
 <h2 id="attach-and-work">Attach and work</h2>
-<p><code>Enter</code> (or <code>a</code>) attaches. Inside outer tmux, Grove uses
-<code>tmux switch-client</code>. Outside outer tmux, it suspends Textual and runs
-<code>tmux attach</code>. Either path lands in the <code>agent</code> window with the agent's
-command already running.</p>
-<p>Detach with <code>Ctrl-B d</code> to return to Grove without stopping anything. The
-workspace keeps running. The activity rail tracks the agent window's
-output and flips ACTIVE to IDLE after <code>tmux.activity_threshold_seconds</code>
-of quiet (default <code>5</code>).</p>
-<p>The <code>shell</code> window is one tmux switch away (<code>Ctrl-B 0/1</code> or <code>Ctrl-B w</code>
-for the picker). Use it for <code>git commit</code>, <code>git push</code>, <code>lazygit</code>, or
-anything else you do at a shell. Grove never runs commits or pushes for
-you.</p>
+<p><span class="keys"><kbd class="key-enter">Enter</kbd></span> (or <span class="keys"><kbd class="key-a">A</kbd></span>) attaches: <code>tmux switch-client</code> inside outer tmux, or a
+suspended Textual plus <code>tmux attach</code> outside it, landing in the <code>agent</code>
+window with its command already running.</p>
+<p>Detach with <code>Ctrl-B d</code> without stopping anything. The activity rail flips
+ACTIVE to IDLE after <code>tmux.activity_threshold_seconds</code> of quiet (default
+<code>30</code>).</p>
+<p>The <code>shell</code> window is one tmux switch away (<code>Ctrl-B 0/1</code> or <code>Ctrl-B w</code>),
+for <code>git commit</code>, <code>git push</code>, <code>lazygit</code>, or anything else. Grove never
+runs commits or pushes for you.</p>
 <h2 id="steer-without-attaching">Steer without attaching</h2>
-<p>Sometimes the agent has paused with a question and you just want to nudge
-it forward. You do not have to attach for that. Press <code>m</code> to open the
-steer modal, type a follow-up, and Grove sends it straight into the
-agent's pane. The same thing works from the CLI (<code>grove message &lt;id&gt;
-"..."</code>), the web dashboard, and the MCP server, because steering is one
-engine call behind every surface. Use it to answer a prompt, redirect a
-task, or queue the next instruction while you are reading another
-workspace.</p>
+<p>Press <span class="keys"><kbd class="key-m">M</kbd></span> and type a follow-up to send it straight into the agent's pane,
+no attach needed, same as <code>grove message &lt;id&gt; "..."</code> from the <abbr title="Command Line Interface">CLI</abbr>, the web
+dashboard, or the <abbr title="Model Context Protocol">MCP</abbr> server, since steering is one engine call behind
+every surface.</p>
 <h2 id="browse-past-sessions">Browse past sessions</h2>
-<p>Press <code>s</code> to open the sessions browser for the selected workspace. It
-lists the recorded agent sessions discovered across the repo and its
-worktrees, and you can scrub through any session's turns to see what the
-agent did and why. Sessions are recorded history, so they outlive the
-worktree: even an ORPHANED or killed workspace's transcripts stay
-readable. From a shell, <code>grove sessions list</code> and <code>grove sessions show</code>
-expose the same history.</p>
+<p>Press <span class="keys"><kbd class="key-s">S</kbd></span> for recorded agent sessions across the repo and its worktrees,
+with any session's turns to scrub. Sessions outlive the worktree, so even
+an ORPHANED or killed workspace's transcripts stay readable, also via
+<code>grove sessions list</code> and <code>grove sessions show</code>.</p>
 <h2 id="move-between-repos">Move between repos</h2>
-<p>Grove is project-scoped, so a TUI launched in repo <code>A</code> shows only repo
-<code>A</code>'s workspaces. When you keep work in more than one repo, you do not
-have to quit and relaunch. Press <code>P</code> to open the project switcher, pick
-another repo Grove already knows about, and the list re-points at it in
-place. The picker opens instantly: it reads a cheap per-repo count, not a
-full live status, so switching stays fast even with many repos.</p>
+<p>Grove is project-scoped, so a <abbr title="Terminal User Interface">TUI</abbr> launched in repo <code>A</code> shows only repo
+<code>A</code>'s workspaces. Press <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span> for the project switcher, pick another
+known repo, and the list re-points there in place, instantly, since it
+reads a cheap per-repo count rather than a full live status.</p>
 <h2 id="pause-resume-kill-respawn">Pause, resume, kill, respawn</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1358,35 +1374,35 @@ full live status, so switching stays fast even with many repos.</p>
 </thead>
 <tbody>
 <tr>
-<td><strong>create</strong> (<code>n</code>)</td>
+<td><strong>create</strong> (<span class="keys"><kbd class="key-n">N</kbd></span>)</td>
 <td>created or attached</td>
 <td>created</td>
 <td>created</td>
 <td>runs (if enabled)</td>
 </tr>
 <tr>
-<td><strong>pause</strong> (<code>p</code>)</td>
+<td><strong>pause</strong> (<span class="keys"><kbd class="key-p">P</kbd></span>)</td>
 <td>kept</td>
 <td><strong>removed</strong></td>
 <td>killed</td>
 <td>n/a</td>
 </tr>
 <tr>
-<td><strong>resume</strong> (<code>R</code>)</td>
+<td><strong>resume</strong> (<span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-r">R</kbd></span>)</td>
 <td>kept</td>
 <td>recreated from branch</td>
 <td>recreated</td>
 <td>re-runs only if <code>run_on_resume: true</code></td>
 </tr>
 <tr>
-<td><strong>kill</strong> (<code>k</code>)</td>
+<td><strong>kill</strong> (<span class="keys"><kbd class="key-k">K</kbd></span>)</td>
 <td>deleted (default for Grove-created)</td>
 <td>removed</td>
 <td>killed</td>
 <td>n/a</td>
 </tr>
 <tr>
-<td><strong>respawn</strong> (<code>o</code>)</td>
+<td><strong>respawn</strong> (<span class="keys"><kbd class="key-o">O</kbd></span>)</td>
 <td>kept</td>
 <td>kept (must exist)</td>
 <td>recreated</td>
@@ -1411,65 +1427,68 @@ full live status, so switching stays fast even with many repos.</p>
     PAUSED --&gt; [*] : kill
     ACTIVE --&gt; [*] : kill
     IDLE --&gt; [*] : kill</code></pre>
-<p>The four computed views (ACTIVE, IDLE, OFFLINE, ORPHANED) and the three
-persisted intents (RUNNING, PAUSED, ERROR) live side by side in one enum.
-Reconciliation happens at one site, so the displayed status never drifts
-from the truth. See <a href="../features-status/">status semantics</a> for the
-mechanics.</p>
-<p><code>pause</code> is the right verb when you are done for the day, want to free
-disk, and plan to come back. It refuses on a dirty worktree. Grove will
-not stash or discard your uncommitted work. Commit first, then pause.</p>
-<p><code>kill</code> is for finished work. By default it deletes branches Grove created
-and keeps branches you attached. The kill modal lets you flip the default
-either way. Remote branches are never touched.</p>
-<p><code>respawn</code> recovers from one specific failure: a tmux session vanished
-externally (terminal restarted, host rebooted, <code>tmux kill-server</code> ran for
-unrelated reasons) but the worktree is still on disk. It rebuilds the
-session from scratch and the workspace returns to ACTIVE. If the worktree
-directory is gone, the workspace is ORPHANED and <code>kill</code> is the only path
-forward.</p>
+<p>The four computed views (ACTIVE, IDLE, OFFLINE, ORPHANED) and three
+persisted intents (RUNNING, PAUSED, ERROR) live in one enum, reconciled at
+one site so status never drifts from the truth. Mechanics on
+<a href="../features-status/">status semantics</a>.</p>
+<p><code>pause</code> suits being done for the day: it frees disk and keeps the branch.
+It refuses a dirty worktree rather than stashing or discarding uncommitted
+work, so commit first.</p>
+<p><code>kill</code> is for finished work, deleting branches Grove created and keeping
+branches you attached by default, flippable from the kill modal. Remote
+branches are never touched.</p>
+<p><code>respawn</code> recovers from one failure: a tmux session vanished externally
+(terminal restart, host reboot, an unrelated <code>tmux kill-server</code>) while the
+worktree stayed on disk. It rebuilds the session and returns the workspace
+to ACTIVE. If the worktree itself is gone, the workspace is ORPHANED and
+<code>kill</code> is the only path forward.</p>
 <h2 id="multitasking-patterns">Multitasking patterns</h2>
 <ul>
-<li><strong>Two-agent split.</strong> Run Claude on <code>feat/big-thing</code> while Aider works
-  on <code>chore/lint-pass</code> in another workspace. The activity rail shows
-  which one needs attention.</li>
-<li><strong>Watch the wall.</strong> Past three or four workspaces, stop cycling
-  through them. Press <code>d</code> for the
-  <a href="../features-activity/">Activity Dashboard</a> and let the waiting and
-  blocked agents come to you. The wall shows both axes at once: the
-  workspace status and each agent's live activity state.</li>
-<li><strong>Reach the fleet asynchronously.</strong> The same wall is the home surface
-  of the <a href="../use-webapp/">web dashboard</a>, reachable from any device on
-  your network. The focused pane streams live over SSE, so you can watch
-  an agent work in real time, and the web UI does more than watch: you
-  can create a workspace, steer a running agent, and run the full
-  lifecycle from the browser. The daemon stays loopback-only behind a
-  paired session, so a device reaches it through that paired link, not an
-  open port.</li>
-<li><strong>One agent, one shell.</strong> Spawn an agent workspace and a <code>shell</code>
-  workspace pointed at the same branch (use <em>Existing local</em> in the
-  create modal). The agent makes changes; the shell side runs <code>make
-  test</code>, <code>git diff</code>, etc.</li>
-<li><strong>Triage.</strong> Pause everything that is not current. Pause keeps the
-  branch and its commits intact. Resume on demand.</li>
+<li><strong>Two-agent split.</strong> Run Claude on <code>feat/big-thing</code>, Aider on
+  <code>chore/lint-pass</code>, the activity rail showing which needs attention.</li>
+<li><strong>Watch the wall.</strong> Past three or four workspaces, press <span class="keys"><kbd class="key-d">D</kbd></span> for the
+  <a href="../features-activity/">Activity Dashboard</a>: workspace status and each
+  agent's live activity, together.</li>
+<li><strong>Reach the fleet asynchronously.</strong> The same wall is the
+  <a href="../use-webapp/">web dashboard</a>'s home surface, reachable from any device
+  over a paired session, never an open port, streaming the focused pane
+  live over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr> and running the full lifecycle.</li>
+<li><strong>One agent, one shell.</strong> Spawn an agent workspace and a <code>shell</code> workspace
+  on the same branch (<em>Existing local</em>), one to change code, one to run
+  <code>make test</code> or <code>git diff</code>.</li>
+<li><strong>Triage.</strong> Pause everything not current, keeping the branch and its
+  commits intact for resume on demand.</li>
 </ul>
 <h2 id="what-grove-never-does-for-you">What Grove never does for you</h2>
 <p>By design:</p>
 <ul>
-<li><strong>No <code>git commit</code>.</strong> Commits belong to your shell or <code>lazygit</code>.</li>
-<li><strong>No <code>git push</code>.</strong> Push happens with your credentials, in your shell.</li>
-<li><strong>No <code>--yolo</code> autoyes daemon.</strong> Agents have their own auto-confirm
-  flags. Pass them in the agent's <code>command</code>, not in Grove.</li>
-<li><strong>No diff pane.</strong> That is <code>lazygit</code>. Grove opens the <code>shell</code> window so
-  it is one tmux switch away.</li>
+<li><strong>No <code>git commit</code>.</strong> Belongs to your shell or <code>lazygit</code>.</li>
+<li><strong>No <code>git push</code>.</strong> Happens with your credentials, in your shell.</li>
+<li><strong>No <code>--yolo</code> autoyes daemon.</strong> Agents have their own auto-confirm flags,
+  passed in the agent's <code>command</code>, not in Grove.</li>
+<li><strong>No diff pane.</strong> That is <code>lazygit</code>. Grove opens the <code>shell</code> window one
+  tmux switch away.</li>
 </ul>
 <p>The boundary keeps the engine small and the trust model legible. Grove
 manages worktrees and tmux. You manage the code.</p>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1503,7 +1522,11 @@ manages worktrees and tmux. You manage the code.</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2336,19 +2359,27 @@ manages worktrees and tmux. You manage the code.</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#create-a-workspace"
@@ -2416,18 +2447,19 @@ manages worktrees and tmux. You manage the code.</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2476,7 +2508,9 @@ manages worktrees and tmux. You manage the code.</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2553,11 +2587,20 @@ manages worktrees and tmux. You manage the code.</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -2602,4 +2645,5 @@ manages worktrees and tmux. You manage the code.</p>
 }
 </script>
 </body>
+
 </html>

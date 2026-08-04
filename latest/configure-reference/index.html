@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Configuration Reference · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/configure-reference.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,7 +1312,8 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page is generated from Grove's Pydantic model.  Edit <code>src/grove/core/config.py</code> and run <code>make docs</code> (or push to the default branch, which regenerates in CI) to refresh.</p>
+    <h2 id="every-field-and-its-default">Every field and its default</h2>
+<p>This page is generated from Grove's Pydantic model.  Edit <code>src/grove/core/config.py</code> and run <code>make docs</code> (or push to the default branch, which regenerates in <abbr title="Continuous Integration">CI</abbr>) to refresh.</p>
 <h2 id="environment-variable-overrides">Environment variable overrides</h2>
 <p>These fields read from a fixed environment variable when it is set and non-empty, so a deployment can supply the value without editing a config file. An unset or empty variable simply does not override. <code>GROVE_&lt;SECTION&gt;__&lt;FIELD&gt;</code> still wins over the name below, and any string value can also reference a variable you choose yourself with <code>${YOUR_VAR}</code> — see <a href="../features-cascade/">the cascade</a>.</p>
 <div class="table-wrapper"><table>
@@ -1445,7 +1485,7 @@ later never changes a workspace that already exists.</p>
 interactive</strong> session acts on (and relaying permission decisions), unlike a
 hook (status push, one way) or steering (raw pane keystrokes). When
 <code>enabled</code>, Grove launches <code>claude_code</code> agents with <code>--channels
-&lt;grove-channel-settings&gt;</code> so the agent connects to the Grove channel MCP
+&lt;grove-channel-settings&gt;</code> so the agent connects to the Grove channel <abbr title="Model Context Protocol">MCP</abbr>
 server; the daemon then POSTs queued messages to that server's loopback
 receiver and the agent receives them as <code>notifications/claude/channel</code>.</p>
 <p>Off by default on purpose: channels are an auth-gated Claude Code research
@@ -1487,7 +1527,7 @@ means an existing workspace never moves. Turning it back off is a policy
 choice about isolation, not a bug fix.</p>
 <p>Every value cascades like the rest of the config; a future Podman driver
 reads the SAME submodel behind the same protocol — <code>docker_bin</code> names the
-CLI, it is not the driver-swap seam.</p>
+<abbr title="Command Line Interface">CLI</abbr>, it is not the driver-swap seam.</p>
 <p>The inherited <code>env_file</code> / <code>env_command</code> knobs (:class:<code>EnvSourceConfig</code>)
 are resolved TWICE per workspace start: once to provision (the values reach
 the project's lifecycle hooks via <code>--secrets-file</code>) and once to launch (they
@@ -1556,7 +1596,7 @@ credentials.</p>
 <td><code>resources</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td>Per-container caps, applied at launch.  One knob on the policy cascade, deliberately NOT a slice hierarchy: the agent container gets them via <code>docker update</code> after <code>up</code> (the devcontainer CLI owns creation, so post-hoc update is the one dependable application point) and compose stack services via <code>deploy.resources</code> in the generated override. Empty/zero means "do not cap" — every field is independently optional, so a memory-only policy emits a memory-only update.  <code>hostRequirements</code> in a <code>devcontainer.json</code> is a different question — a <em>declaration</em> Grove checks and refuses on, never a cap it applies.</td>
+<td>Per-container caps, applied at launch.  One knob on the policy cascade, deliberately NOT a slice hierarchy: the agent container gets them via <code>docker update</code> after <code>up</code> (the devcontainer <abbr title="Command Line Interface">CLI</abbr> owns creation, so post-hoc update is the one dependable application point) and compose stack services via <code>deploy.resources</code> in the generated override. Empty/zero means "do not cap" — every field is independently optional, so a memory-only policy emits a memory-only update.  <code>hostRequirements</code> in a <code>devcontainer.json</code> is a different question — a <em>declaration</em> Grove checks and refuses on, never a cap it applies.</td>
 </tr>
 <tr>
 <td><code>shell</code></td>
@@ -1568,7 +1608,7 @@ credentials.</p>
 <td><code>tmux</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td>Whether the agent runs under a tmux INSIDE its container, and whose tmux.  The multiplexer used to sit on the far side of the namespace boundary from the process it multiplexes: the agent ran as <code>devcontainer exec … -- claude</code> typed into a HOST pane, so the PTY died with the host client and nothing could ever attach back to the surviving in-container process. Running the agent under a container-side tmux makes the host pane a <em>viewport</em> and the in-container tmux the owner of the agent's lifetime.  Two policy questions live here rather than in code, because both are genuinely the operator's:  * <code>prefer_image</code> — an image that ships its own tmux is almost always the   better answer (it matches the distro's terminfo and the user's own   expectations), but an operator standardizing on one tmux across a fleet   may want Grove's bundle everywhere. * <code>payload</code> — where the static binary comes from. Empty means Grove's own   built-and-cached bundle; a path lets an operator supply a vetted build   (an air-gapped host, a signed artifact, a different tmux version).  Everything degrades honestly: with no image tmux and no payload, the launch composes a plain <code>exec</code> and the workspace loses persistence, never the workspace itself.</td>
+<td>Whether the agent runs under a tmux INSIDE its container, and whose tmux.  The multiplexer used to sit on the far side of the namespace boundary from the process it multiplexes: the agent ran as <code>devcontainer exec … -- claude</code> typed into a HOST pane, so the <abbr title="Pseudo-terminal, the kernel device pair behind an interactive shell">PTY</abbr> died with the host client and nothing could ever attach back to the surviving in-container process. Running the agent under a container-side tmux makes the host pane a <em>viewport</em> and the in-container tmux the owner of the agent's lifetime.  Two policy questions live here rather than in code, because both are genuinely the operator's:  * <code>prefer_image</code> — an image that ships its own tmux is almost always the   better answer (it matches the distro's terminfo and the user's own   expectations), but an operator standardizing on one tmux across a fleet   may want Grove's bundle everywhere. * <code>payload</code> — where the static binary comes from. Empty means Grove's own   built-and-cached bundle; a path lets an operator supply a vetted build   (an air-gapped host, a signed artifact, a different tmux version).  Everything degrades honestly: with no image tmux and no payload, the launch composes a plain <code>exec</code> and the workspace loses persistence, never the workspace itself.</td>
 </tr>
 <tr>
 <td><code>up_timeout_seconds</code></td>
@@ -1679,7 +1719,7 @@ never touched, so disabling is just flipping this back to <code>false</code>.</p
 <h2 id="issueops"><code>issueops</code></h2>
 <p>Turn issue-comment mentions into workspace actions, and mirror progress back.</p>
 <p>One submodel, two faces. INBOUND: a commenter mentions the <code>trigger</code>
-token as the first word of an issue comment; the forwarder (a stateless CI
+token as the first word of an issue comment; the forwarder (a stateless <abbr title="Continuous Integration">CI</abbr>
 action) POSTs the event to the daemon, and the engine parses the grammar,
 enforces the permission policy, and routes to a workspace verb. OUTBOUND:
 when <code>enabled</code>, the daemon runs a status publisher that mirrors each
@@ -1688,7 +1728,7 @@ here is mechanism, not policy — the trigger word, who may drive it, the boot
 prompt, and the mirror's cadence are all data the deployment owns, never baked
 into the engine.</p>
 <p><code>enabled</code> gates ONLY the outbound status mirror. The inbound command routing
-has no on/off flag of its own — its real opt-in is installing the CI workflow
+has no on/off flag of its own — its real opt-in is installing the <abbr title="Continuous Integration">CI</abbr> workflow
 AND enabling the matching ticket provider (<code>tickets.&lt;provider&gt;</code>) with the
 repo's <code>owner</code>/<code>repo</code> (with neither, no event ever reaches the engine and
 no repo resolves for one that does). So a deployment can route commands without
@@ -1779,7 +1819,7 @@ the status mirror, mirror without routing, or run both.</p>
 </table></div>
 <h2 id="mewbo"><code>mewbo</code></h2>
 <p>Connection settings for the Mewbo orchestrator (<code>kind: "mewbo"</code> agents).</p>
-<p>The <code>mewbo</code> adapter reads these to reach the Mewbo API: a workspace of
+<p>The <code>mewbo</code> adapter reads these to reach the Mewbo <abbr title="Application Programming Interface">API</abbr>: a workspace of
 that kind mints its session on the orchestrator rather than in a local
 process, so the connection details are config rather than discovery.</p>
 <div class="table-wrapper"><table>
@@ -1885,7 +1925,7 @@ config.</p>
 <td><code>webhook</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td>Generic JSON webhook channel — the "mechanism, not policy" sink.  POSTs the notification as JSON to <code>url</code>. ntfy's JSON-publish API works directly: set <code>topic</code> and point <code>url</code> at the ntfy base. <code>token_env</code> (a NAME, never the secret) adds a <code>Bearer</code> header when set.</td>
+<td>Generic JSON webhook channel — the "mechanism, not policy" sink.  POSTs the notification as JSON to <code>url</code>. ntfy's JSON-publish <abbr title="Application Programming Interface">API</abbr> works directly: set <code>topic</code> and point <code>url</code> at the ntfy base. <code>token_env</code> (a NAME, never the secret) adds a <code>Bearer</code> header when set.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1893,7 +1933,7 @@ config.</p>
 <p>Grove-hosted Claude Code <code>--permission-prompt-tool</code> answering.</p>
 <p>A <em>permission prompt</em> is the "allow this tool call?" gate a headless / paneless
 session hits with no interactive terminal to answer it. When <code>enabled</code>, Grove
-launches <code>claude_code</code> agents with a Grove-owned MCP server registered
+launches <code>claude_code</code> agents with a Grove-owned <abbr title="Model Context Protocol">MCP</abbr> server registered
 (<code>--mcp-config &lt;grove-permission-mcp&gt;</code>) plus
 <code>--permission-prompt-tool mcp__grove_permission__permission_prompt</code> — so
 Claude Code calls that Grove tool instead of blocking on a TTY, and the tool
@@ -1937,7 +1977,7 @@ orchestrator serves the proxy (<code>grove.core.proxy.ProxyApp</code>), an agent
 pointed at it through :meth:<code>proxy_env</code> at the launch boundary and every
 provider request/response is forwarded VERBATIM while telemetry (true TTFT,
 token usage, latency) is teed off the stream. Nothing here holds a secret —
-upstreams are public API base URLs and the env-var NAMES that carry the
+upstreams are public <abbr title="Application Programming Interface">API</abbr> base URLs and the env-var NAMES that carry the
 proxy address to each runtime; auth flows untouched through the proxy, never
 into config.</p>
 <p>Two per-kind maps do the wiring, keyed by <code>AgentKind</code> (the map keys are the
@@ -2104,13 +2144,13 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>gitea</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td>Gitea Issues provider settings (<code>provider: "gitea"</code>).  Secret-free like every config layer: <code>token_env</code> is the NAME of the environment variable holding the API token, never the token itself, so a committed <code>.grove/config.json</code> stays publishable. <code>base_url</code> is the instance root (the provider appends <code>/api/v1</code>), and it also reads from <code>GROVE_GITEA_BASE_URL</code>: <code>token_env</code> already lets an operator instrument the token, so leaving the endpoint config-only would mean a deployment could move the credential and not the server it authenticates against — which is how a token ends up pointed at the wrong host. <code>branch_prefix</code> is an optional extra keyword prepended when formatting a branch (e.g. <code>"gtea-"</code> → <code>gtea-123-slug</code>); empty means the bare numeric form <code>123-slug</code>. The parser recognizes the bare numeric leading segment, the built-in keywords, and this configured prefix — mechanism, not policy.</td>
+<td>Gitea Issues provider settings (<code>provider: "gitea"</code>).  Secret-free like every config layer: <code>token_env</code> is the NAME of the environment variable holding the <abbr title="Application Programming Interface">API</abbr> token, never the token itself, so a committed <code>.grove/config.json</code> stays publishable. <code>base_url</code> is the instance root (the provider appends <code>/api/v1</code>), and it also reads from <code>GROVE_GITEA_BASE_URL</code>: <code>token_env</code> already lets an operator instrument the token, so leaving the endpoint config-only would mean a deployment could move the credential and not the server it authenticates against — which is how a token ends up pointed at the wrong host. <code>branch_prefix</code> is an optional extra keyword prepended when formatting a branch (e.g. <code>"gtea-"</code> → <code>gtea-123-slug</code>); empty means the bare numeric form <code>123-slug</code>. The parser recognizes the bare numeric leading segment, the built-in keywords, and this configured prefix — mechanism, not policy.</td>
 </tr>
 <tr>
 <td><code>github</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td>GitHub Issues provider settings (<code>provider: "github"</code>).  <code>base_url</code> defaults to the public REST API; point it at a GitHub Enterprise <code>/api/v3</code> root to use Enterprise. Same secret-free <code>token_env</code> + optional <code>branch_prefix</code> contract as the Gitea provider.</td>
+<td>GitHub Issues provider settings (<code>provider: "github"</code>).  <code>base_url</code> defaults to the public <abbr title="Representational State Transfer">REST</abbr> <abbr title="Application Programming Interface">API</abbr>; point it at a GitHub Enterprise <code>/api/v3</code> root to use Enterprise. Same secret-free <code>token_env</code> + optional <code>branch_prefix</code> contract as the Gitea provider.</td>
 </tr>
 <tr>
 <td><code>linear</code></td>
@@ -2195,7 +2235,7 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 </tbody>
 </table></div>
 <h2 id="ui"><code>ui</code></h2>
-<p>Client-facing UI knobs. The TUI consumes these; core ignores them.</p>
+<p>Client-facing UI knobs. The <abbr title="Terminal User Interface">TUI</abbr> consumes these; core ignores them.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -2249,8 +2289,21 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -2284,7 +2337,11 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -3117,19 +3174,27 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#environment-variable-overrides"
@@ -3293,18 +3358,19 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -3353,7 +3419,9 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -3430,11 +3498,20 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -3479,4 +3556,5 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 }
 </script>
 </body>
+
 </html>

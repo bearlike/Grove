@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Issue Ops · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/issue-ops.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,19 +1312,14 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Comment <code>@grove fix the flaky test</code> on an issue, and your own self-hosted Grove agent picks it up. One
-sticky status comment appears on the issue: a diagram of the agent's reported <a href="../features-status/#the-third-axis-task-phase">task
-phase</a>, a live todo checklist, every issue and pull request
-the workspace touches, and a link to the workspace itself. It keeps rewriting itself in place for the
-whole life of the session. Once the agent opens a pull request and links it back with
-<code>grove tickets attach</code>, the same status comment appears there too, each copy keeping its own comment
-identity so a failure on one target never disturbs the other. You read the same live report wherever you
-happen to be looking, the issue or the PR. Leave a follow-up comment and Grove steers the same running
-agent instead of starting over. Think of the status comment the way a pinned chat message works: one place
-that always shows the current state, edited in place, never a growing feed of separate posts.</p>
-<p>The phase diagram is the part you read at a glance. Six blocks, left to right, in the order the work
-converges. Finished phases go muted gray, the phase the agent is in right now takes its own colour from
-Grove's phase palette and wears a heavy outline, and everything still ahead stays pale.</p>
+    <h2 id="drive-agents-from-an-issue">Drive agents from an issue</h2>
+<p>Comment <code>@grove fix the flaky test</code> on an issue and your own self-hosted Grove agent picks it up. One sticky
+comment on the ticket rewrites itself in place for the life of the session, carrying the agent's
+<a href="../features-status/#the-third-axis-task-phase">task phase</a>, a live todo checklist, the tickets it touches,
+and a link to the workspace. Attach the pull request with <code>grove tickets attach</code> and the same comment
+appears there too, each copy keeping its own identity so a failure on one never disturbs the other.</p>
+<p>A follow-up comment steers that same running agent, because Grove's executor is a long-lived tmux session
+your daemon owns rather than a <abbr title="Continuous Integration">CI</abbr> job that dies with the workflow.</p>
 <pre class="mermaid"><code>flowchart LR
   classDef done fill:#96938c,stroke:#96938c,color:#111111
   classDef now fill:#84cc16,stroke:#111111,stroke-width:3px,color:#111111
@@ -1297,40 +1331,32 @@ Grove's phase palette and wears a heavy outline, and everything still ahead stay
   p4["Delivering"]:::todo
   p5["Done"]:::todo
   p0 --&gt; p1 --&gt; p2 --&gt; p3 --&gt; p4 --&gt; p5</code></pre>
-<p>Underneath it the same progress reads as one line of text, so nothing is lost on a surface that does not
-draw diagrams, and the checklist and the linked tickets follow.</p>
-<div class="codehilite"><pre><span></span><code>**Phase** ●●●●○○ Verifying (4/6) — running make lint
-
-**Checklist**
-- [x] Reproduce the flaky test
-- [x] Add a retry-free fix
-- [ ] Run the suite 20x to confirm
-
-**Tracking**
-- Issue #42 — open
-- Pull request #43 — merged
-- Open workspace
-</code></pre></div>
-<p>Both GitHub and Gitea draw the diagram natively in issue and pull request comments, with no extension and
-no setup on your side. A workspace whose agent has never reported a phase shows no diagram at all, rather
-than an empty one: not reporting is different from being at the start, and Grove will not guess which one
-you are looking at.</p>
-<p>That last part is the differentiator. Every CI-bound coding bot re-runs fresh per comment, because its
-executor is a job that dies the moment the workflow ends. Grove's executor is a long-lived daemon-owned
-tmux session, so a follow-up comment reaches the same agent, mid-task, instead of restarting it from
-scratch. A comment is a command, not a fresh run.</p>
+<p>Finished phases go gray, the current one wears a heavy outline, and everything ahead stays pale. The same
+progress reads as one line of text too, so nothing is lost where diagrams do not render.</p>
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>**Phase** ●●●●○○ Verifying (4/6) — running make lint
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>**Checklist**
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>- [x] Reproduce the flaky test
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>- [x] Add a retry-free fix
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>- [ ] Run the suite 20x to confirm
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>**Tracking**
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>- Issue #42 — open
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>- Pull request #43 — merged
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>- Open workspace
+</span></code></pre></div>
+<p>Both forges draw the diagram natively, with no extension to install. An agent that has never reported a
+phase gets no diagram at all, rather than an empty one. Not reporting is different from being at the start,
+and Grove will not guess.</p>
 <hr />
 <h2 id="how-it-works">How it works</h2>
 <ol>
-<li>You comment <code>@grove &lt;task&gt;</code> on a GitHub or Gitea issue.</li>
-<li>A thin caller workflow, triggered on <code>issue_comment</code>, forwards the event.</li>
-<li>Grove's composite action checks the commenter's permission, reacts 👀 to acknowledge receipt, and POSTs
-   a normalized event to your daemon.</li>
-<li>The daemon's issue-ops engine resolves the repo, parses the command, and creates a workspace or steers
-   the one already running for this ticket.</li>
-<li>A status publisher keeps a sticky comment rewritten with the task phase diagram, the todo checklist,
-   the linked issues and pull requests, and a link to the workspace, for as long as the session runs. It
-   writes to the issue and to any pull request linked to the same workspace, each as its own comment.</li>
+<li>You comment <code>@grove &lt;task&gt;</code>. A thin caller workflow, triggered on <code>issue_comment</code>, forwards the event.</li>
+<li>Grove's composite action checks the commenter's permission, reacts 👀, and POSTs a normalized event to
+   your daemon.</li>
+<li>The engine resolves the repo, parses the command, and creates a workspace or steers the one already on
+   this ticket, while a status publisher rewrites the sticky comment on the issue and on any linked pull
+   request.</li>
 </ol>
 <pre class="mermaid"><code>flowchart TD
     Comment(["issue comment: @grove ..."]) --&gt;|issue_comment: created| Caller[thin caller workflow]
@@ -1340,108 +1366,96 @@ scratch. A comment is a command, not a fresh run.</p>
     Workspace --&gt; Publisher[status publisher]
     Publisher --&gt;|sticky comment: phase diagram + todo + links| Comment
     Publisher --&gt;|same comment, own identity| PR(["linked pull request"])</code></pre>
-<p>Only steps 2 and 3 run in CI. Everything from step 4 on runs inside your own daemon, on your own host,
-against your own git remote. Nothing about the task itself ever leaves your infrastructure.</p>
+<p>Only the first two steps run in <abbr title="Continuous Integration">CI</abbr>. Everything after them runs inside your own daemon, on your own host.</p>
 <hr />
 <h2 id="setup-github">Setup: GitHub</h2>
-<p>GitHub's own hosted runners can't reach your daemon: they are a different machine entirely, and the
-daemon <a href="../use-auth/#the-security-model">binds loopback by design</a>, with no blessed
-<code>--host 0.0.0.0</code>. So the caller workflow needs a <strong>self-hosted runner on the same host</strong> as
-<code>grove daemon serve</code>. Register one under <em>Settings → Actions → Runners</em> and give it a label your caller
-pins to, so the job never lands on some other runner in your fleet.</p>
-<p>A minimal caller, copied from <code>docs/examples/</code> and adjusted for your repo:</p>
-<div class="codehilite"><pre><span></span><code><span class="c1"># .github/workflows/grove-issue-ops.yml</span>
-<span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Grove issue-ops</span>
-<span class="nt">on</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">issue_comment</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">types</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">created</span><span class="p p-Indicator">]</span>
-
-<span class="nt">jobs</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">grove</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">self-hosted</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">grove-host</span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># pinned to the host running grove daemon serve</span>
-<span class="w">    </span><span class="nt">steps</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bearlike/Grove/actions/issue-ops@main</span>
-<span class="w">        </span><span class="nt">with</span><span class="p">:</span>
-<span class="w">          </span><span class="nt">daemon-url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ vars.GROVE_DAEMON_URL }}</span>
-<span class="w">          </span><span class="nt">daemon-token</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ secrets.GROVE_DAEMON_TOKEN }}</span>
-</code></pre></div>
-<p><code>GROVE_DAEMON_URL</code> is an <strong>organization variable</strong> (not secret; it's just an address, e.g.
-<code>http://127.0.0.1:7421</code>, since the runner and the daemon share a host). <code>GROVE_DAEMON_TOKEN</code> is an
-<strong>organization secret</strong>, so every repo's caller reuses the one pairing without minting a token per repo.
-See <a href="https://github.com/bearlike/Grove/blob/49581e6d/actions/issue-ops/action.yml" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>actions/issue-ops/action.yml</span></a> for the composite action itself.</p>
+<p>The daemon <a href="../use-auth/#the-security-model">binds loopback by design</a> with no blessed <code>--host 0.0.0.0</code>, so
+GitHub's hosted runners cannot reach it. The caller needs a <strong>self-hosted runner on the same host</strong> as
+<code>grove daemon serve</code>, registered under <em>Settings → Actions → Runners</em> with a label the caller pins to.</p>
+<p>A minimal caller, copied from <code>docs/examples/</code>:</p>
+<div class="language-yaml codehilite"><span class="filename">.github/workflows/grove-issue-ops.yml</span><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Grove issue-ops</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">on</span><span class="p">:</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">issue_comment</span><span class="p">:</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">created</span><span class="p p-Indicator">]</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">jobs</span><span class="p">:</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">grove</span><span class="p">:</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">self-hosted</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">grove-host</span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># pinned to the host running grove daemon serve</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bearlike/Grove/actions/issue-ops@main</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">        </span><span class="nt">with</span><span class="p">:</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">          </span><span class="nt">daemon-url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ vars.GROVE_DAEMON_URL }}</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">          </span><span class="nt">daemon-token</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ secrets.GROVE_DAEMON_TOKEN }}</span>
+</span></code></pre></div>
+<p><code>GROVE_DAEMON_URL</code> is an <strong>organization variable</strong>, not a secret. It is only an address such as
+<code>http://127.0.0.1:7421</code>, since runner and daemon share a host. <code>GROVE_DAEMON_TOKEN</code> is an <strong>organization
+secret</strong>, so every caller reuses one pairing. The action is
+<a href="https://github.com/bearlike/Grove/blob/c20cae9d/actions/issue-ops/action.yml" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>actions/issue-ops/action.yml</span></a>.</p>
 <h3 id="minting-the-daemon-token">Minting the daemon token</h3>
-<p>The token is a normal Grove session, earned through the same human-gated <a href="../use-auth/#the-handshake">pairing
-handshake</a> the web dashboard uses. Nothing new to learn: the CI action is just
-another paired device.</p>
-<div class="codehilite"><pre><span></span><code><span class="c1"># 1. Ask the daemon to start a pairing (run from anywhere that can reach it)</span>
-curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:7421/auth/pair<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;content-type: application/json&#39;</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;label&quot;:&quot;issue-ops ci&quot;}&#39;</span>
-<span class="c1"># {&quot;challenge_id&quot;: &quot;...&quot;, &quot;code&quot;: &quot;XXXX-XXXX&quot;, ...}</span>
-
-<span class="c1"># 2. Approve it on the host, the same way you&#39;d approve a new device</span>
-grove<span class="w"> </span>auth<span class="w"> </span>pending
-grove<span class="w"> </span>auth<span class="w"> </span>approve<span class="w"> </span>&lt;challenge-id&gt;
-
-<span class="c1"># 3. Poll for the minted token (only returns it once, right after approval)</span>
-curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:7421/auth/pair/&lt;challenge-id&gt;
-<span class="c1"># {&quot;challenge_id&quot;: &quot;...&quot;, &quot;state&quot;: &quot;consumed&quot;, &quot;token&quot;: &quot;grove_v1_...&quot;, ...}</span>
-</code></pre></div>
-<p>Paste that <code>token</code> into the <code>GROVE_DAEMON_TOKEN</code> secret. It's a real session like any other: list it with
-<code>grove auth sessions</code> and revoke it with <code>grove auth revoke &lt;session-id&gt;</code> if it ever needs replacing.</p>
+<p>The token is a normal Grove session from the same human-gated
+<a href="../use-auth/#the-handshake">pairing handshake</a> the dashboard uses, and it is forge-agnostic.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># 1. Ask the daemon to start a pairing (run from anywhere that can reach it)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:7421/auth/pair<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;content-type: application/json&#39;</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;label&quot;:&quot;issue-ops ci&quot;}&#39;</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># {&quot;challenge_id&quot;: &quot;...&quot;, &quot;code&quot;: &quot;XXXX-XXXX&quot;, ...}</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1"># 2. Approve it on the host, the same way you&#39;d approve a new device</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>grove<span class="w"> </span>auth<span class="w"> </span>pending
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>grove<span class="w"> </span>auth<span class="w"> </span>approve<span class="w"> </span>&lt;challenge-id&gt;
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># 3. Poll for the minted token (only returns it once, right after approval)</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:7421/auth/pair/&lt;challenge-id&gt;
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># {&quot;challenge_id&quot;: &quot;...&quot;, &quot;state&quot;: &quot;consumed&quot;, &quot;token&quot;: &quot;grove_v1_...&quot;, ...}</span>
+</span></code></pre></div>
+<p>Paste that <code>token</code> into <code>GROVE_DAEMON_TOKEN</code>. List it with <code>grove auth sessions</code> and revoke it with
+<code>grove auth revoke &lt;session-id&gt;</code>.</p>
 <hr />
 <h2 id="setup-gitea">Setup: Gitea</h2>
-<p>Gitea's default <code>act_runner</code> job runs inside an isolated Docker bridge network, so it can't reach host
-loopback either (there's no <code>host.docker.internal</code> on Linux). Register a runner with a label ending in
-<code>:host</code> (act_runner's non-containerized execution mode) directly on the machine running
-<code>grove daemon serve</code>, and pin your caller's <code>runs-on</code> to that label.</p>
-<p>The caller must live in <code>.gitea/workflows/</code>, <strong>on the repo's default branch</strong>. Gitea (like GitHub) only
-ever loads issue-event workflows from the default branch, regardless of which branch you're working on;
-a caller committed to a feature branch never fires.</p>
-<div class="codehilite"><pre><span></span><code><span class="c1"># .gitea/workflows/grove-issue-ops.yml</span>
-<span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Grove issue-ops</span>
-<span class="nt">on</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">issue_comment</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">types</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">created</span><span class="p p-Indicator">]</span>
-
-<span class="nt">jobs</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">grove</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">host</span><span class="p p-Indicator">]</span>
-<span class="w">    </span><span class="nt">permissions</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">issues</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write</span>
-<span class="w">      </span><span class="nt">pull-requests</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write</span>
-<span class="w">    </span><span class="nt">steps</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://gitea.example.com/bearlike/Grove/actions/issue-ops@main</span>
-<span class="w">        </span><span class="nt">with</span><span class="p">:</span>
-<span class="w">          </span><span class="nt">daemon-url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ vars.GROVE_DAEMON_URL }}</span>
-<span class="w">          </span><span class="nt">daemon-token</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ secrets.GROVE_DAEMON_TOKEN }}</span>
-</code></pre></div>
-<p>Mint <code>GROVE_DAEMON_TOKEN</code> exactly as in the <a href="#minting-the-daemon-token">GitHub section above</a>: the pairing
-handshake is forge-agnostic.</p>
-<p>Note the full <code>https://gitea.example.com/...</code> form in <code>uses:</code>. Gitea's absolute-URL extension is what lets
-a consumer repo reference the composite action across repos without needing the newer, collaborative-owner
-<code>workflow_call</code> floor.</p>
+<p>Gitea's default <code>act_runner</code> job runs on an isolated Docker bridge network, and there is no
+<code>host.docker.internal</code> on Linux, so it cannot reach host loopback either. Register a runner labelled
+<code>:host</code>, act_runner's non-containerized mode, on the daemon's machine, and pin <code>runs-on</code> to that label.</p>
+<p>The caller must live in <code>.gitea/workflows/</code>, <strong>on the default branch</strong>. Both forges load issue-event
+workflows from there only, so a caller on a feature branch never fires.</p>
+<div class="language-yaml codehilite"><span class="filename">.gitea/workflows/grove-issue-ops.yml</span><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Grove issue-ops</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">on</span><span class="p">:</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">issue_comment</span><span class="p">:</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">created</span><span class="p p-Indicator">]</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nt">jobs</span><span class="p">:</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">grove</span><span class="p">:</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">host</span><span class="p p-Indicator">]</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nt">permissions</span><span class="p">:</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">      </span><span class="nt">issues</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">      </span><span class="nt">pull-requests</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://gitea.example.com/bearlike/Grove/actions/issue-ops@main</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">        </span><span class="nt">with</span><span class="p">:</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">          </span><span class="nt">daemon-url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ vars.GROVE_DAEMON_URL }}</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">          </span><span class="nt">daemon-token</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ secrets.GROVE_DAEMON_TOKEN }}</span>
+</span></code></pre></div>
+<p>Mint <code>GROVE_DAEMON_TOKEN</code> as <a href="#minting-the-daemon-token">above</a>. The full <code>https://gitea.example.com/...</code>
+form in <code>uses:</code> is Gitea's absolute-URL extension, which lets one repo reference the action in another
+without the newer, collaborative-owner <code>workflow_call</code> floor.</p>
 <div class="admonition warning">
 <p class="admonition-title">Version floors</p>
 <ul>
 <li>
-<p><strong>Gitea ≥ 1.21.6 is a hard requirement.</strong> Earlier versions never fire <code>issue_comment</code> for a comment
-  left on a pull request, only for comments on a genuine issue (go-gitea#29277). If you want <code>@grove</code> to
-  work from PR conversations too, there's no workaround below this version.</p>
+<p><strong>Gitea ≥ 1.21.6 is a hard requirement.</strong> Earlier versions fire <code>issue_comment</code> only for comments on a
+  genuine issue, never on a pull request (go-gitea#29277). Below it, <code>@grove</code> in <abbr title="Pull Request">PR</abbr> conversations has no
+  workaround.</p>
 </li>
 <li>
-<p><strong>Gitea ≥ 1.26.0 in Restricted mode needs the explicit <code>permissions:</code> block shown above.</strong> Earlier
-  versions parse but ignore <code>permissions:</code> entirely; 1.26.0 is the first release that enforces it, and a
-  Restricted-mode instance 403s an undeclared <code>issues: write</code> (go-gitea#36173). Declaring it on an older
-  instance is harmless, just unenforced.</p>
+<p><strong>Gitea ≥ 1.26.0 in Restricted mode needs the <code>permissions:</code> block above.</strong> Earlier versions parse it
+  and ignore it. 1.26.0 enforces it, and a Restricted-mode instance 403s an undeclared <code>issues: write</code>
+  (go-gitea#36173). Declaring it on an older instance is harmless.</p>
 </li>
 </ul>
 </div>
 <hr />
 <h2 id="commands">Commands</h2>
-<p>Every command opens with the configured <code>trigger</code> (<code>@grove</code> by default) as the first word of the comment,
-matched case-insensitively at a word boundary, so <code>@grovebot</code> or a mid-sentence mention never fires.
-There's no way to pass configuration in a comment, on purpose: the trigger word, who may drive it, and
-the agent are all cascade config, never comment syntax.</p>
+<p>A command opens with the configured <code>trigger</code> (<code>@grove</code> by default) as the comment's first word, matched
+case-insensitively at a word boundary, so <code>@grovebot</code> or a mid-sentence mention never fires. The trigger,
+who may drive it, and the agent are cascade config, never comment syntax.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1452,11 +1466,11 @@ the agent are all cascade config, never comment syntax.</p>
 <tbody>
 <tr>
 <td><code>@grove &lt;free text&gt;</code></td>
-<td>No workspace yet for this ticket: create one, seeded with the text as its initial prompt. A workspace already running: steer it, as a follow-up message to the live agent.</td>
+<td>No workspace yet for this ticket: create one, seeded with the text as its initial prompt. One already running: steer it, as a message to the live agent.</td>
 </tr>
 <tr>
 <td><code>@grove status</code></td>
-<td>Force an immediate refresh of the sticky status comment.</td>
+<td>Refresh the sticky status comment now.</td>
 </tr>
 <tr>
 <td><code>@grove pause</code></td>
@@ -1476,24 +1490,31 @@ the agent are all cascade config, never comment syntax.</p>
 </tr>
 </tbody>
 </table></div>
-<p>A prompt aimed at a workspace that exists but isn't running (paused, for example) gets a reply telling you
-to <code>@grove resume</code> it first, rather than silently resuming it for you: resume is its own explicit verb, not
-something a free-text prompt implies.</p>
+<p>A prompt aimed at a paused workspace gets a reply telling you to <code>@grove resume</code> it first. Resume is its own
+explicit verb, never something a prompt implies.</p>
+<h3 id="assignment-the-other-way-in">Assignment, the other way in</h3>
+<p>A comment is one route. The other is the tracker's own assignee field: assign Grove's account to an issue
+and the pickup poll starts a workspace for it, with no comment and no <abbr title="Continuous Integration">CI</abbr> runner involved. That is the only
+inbound route on a deployment with no runner at all. <code>grove tickets handover</code>, <code>owned</code> and <code>handback</code> drive
+the same path by hand, <code>issueops.pickup_max_active</code> (default 3, host-wide) bounds how many run at once, and
+both halves default off. Reading Grove's assigned issues works on all three trackers, while Grove putting
+its own account on a ticket needs Gitea or GitHub. See
+<a href="../features-ticket-providers/#the-assignee-is-the-work-queue">the assignee is the work queue</a>.</p>
 <hr />
 <h2 id="configuration">Configuration</h2>
 <p>Everything above cascades through the ordinary <a href="../features-cascade/">configuration cascade</a>, under one
-<code>issueops</code> section:</p>
-<div class="codehilite"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;issueops&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;trigger&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;@grove&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;allowed_actors&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;a-trusted-bot-account&quot;</span><span class="p">],</span>
-<span class="w">    </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claude&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;update_window_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;deep_link_base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://grove.example.com&quot;</span>
-<span class="w">  </span><span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div>
+<code>issueops</code> section.</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;issueops&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;trigger&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;@grove&quot;</span><span class="p">,</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">&quot;allowed_actors&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;a-trusted-bot-account&quot;</span><span class="p">],</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claude&quot;</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">&quot;update_window_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="nt">&quot;deep_link_base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://grove.example.com&quot;</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="p">}</span>
+</span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1506,7 +1527,7 @@ something a free-text prompt implies.</p>
 <tr>
 <td><code>enabled</code></td>
 <td><code>false</code></td>
-<td>Gates only the outbound sticky status comment. It does not gate command routing: a comment still creates or steers a workspace with this <code>false</code>, the sticky comment just never appears. Set it <code>true</code> for the live status comment described at the top of this page.</td>
+<td>Gates the sticky comment only, never routing. Commands still work with this <code>false</code>, and the checklist never comes back. Set it <code>true</code> for the live status comment.</td>
 </tr>
 <tr>
 <td><code>trigger</code></td>
@@ -1516,58 +1537,50 @@ something a free-text prompt implies.</p>
 <tr>
 <td><code>allowed_actors</code></td>
 <td><code>[]</code></td>
-<td>Logins allowed to drive issue-ops regardless of their own repo permission. Widens the default write-access policy; never narrows it.</td>
+<td>Logins allowed to drive issue-ops whatever their repo permission. Widens the write-access default, never narrows it.</td>
 </tr>
 <tr>
 <td><code>agent</code></td>
 <td><code>"claude"</code></td>
-<td>Which configured agent (from your <code>agents</code> list) an issue-ops-created workspace spawns.</td>
+<td>Which agent from your <code>agents</code> list a created workspace spawns.</td>
 </tr>
 <tr>
 <td><code>prompt_template</code></td>
-<td>a built-in autonomous issue-to-PR prompt</td>
-<td>The initial prompt a created workspace boots on. Supports <code>{title}</code>, <code>{body}</code>, <code>{number}</code>, <code>{url}</code>, <code>{command_text}</code> placeholders.</td>
+<td>a built-in autonomous issue-to-<abbr title="Pull Request">PR</abbr> prompt</td>
+<td>The prompt a created workspace boots on. Placeholders <code>{title}</code>, <code>{body}</code>, <code>{number}</code>, <code>{url}</code>, <code>{command_text}</code>.</td>
 </tr>
 <tr>
 <td><code>update_window_seconds</code></td>
 <td><code>5.0</code></td>
-<td>Coalescing window for the sticky status comment: every render-relevant change is folded and flushed at most once per window, so a burst of activity doesn't trip the forge's rate limit on repeated comment edits.</td>
+<td>Coalescing window. Changes fold and flush at most once per window, so a burst of activity does not trip the forge's rate limit on comment edits.</td>
 </tr>
 <tr>
 <td><code>deep_link_base_url</code></td>
 <td><code>""</code></td>
-<td>Your web dashboard's base URL. Set it and the sticky comment links straight to <code>{base}/w/{workspace-id}</code>; leave it empty and the comment just names the workspace.</td>
+<td>Your dashboard's base URL. Set it and the comment links to <code>{base}/w/{workspace-id}</code>. Empty, and it only names the workspace.</td>
 </tr>
 </tbody>
 </table></div>
-<p>You also need the matching <code>tickets.gitea</code> or <code>tickets.github</code> section <code>enabled</code>, with <code>owner</code>/<code>repo</code> set:
-issue-ops resolves an event by matching its repo against that config, never by a fleet-wide ticket scan.
-See <a href="../configure-ticket-providers/">ticket providers</a>.</p>
-<div class="admonition note">
-<p class="admonition-title">Turn on the status comment</p>
-<p><code>issueops.enabled</code> defaults to <code>false</code>, and commands keep working without it: a caller workflow plus an
-enabled <code>tickets.&lt;provider&gt;</code> section is all routing needs. But the sticky status comment, the flagship
-feature from the top of this page, only appears when <code>issueops.enabled</code> is <code>true</code>. Set it explicitly, or
-you'll drive workspaces from comments and never see the checklist come back.</p>
-</div>
+<p>The assignee queue adds <code>assign_bot</code>, <code>pickup_enabled</code>, <code>pickup_interval_seconds</code>, <code>pickup_max_active</code> and
+<code>pickup_backoff_seconds</code> to the same section.</p>
+<p>Routing also needs the matching <a href="../configure-ticket-providers/"><code>tickets.gitea</code> or <code>tickets.github</code></a> section
+<code>enabled</code>, with <code>owner</code>/<code>repo</code> set. Issue-ops resolves an event against that config, never by a fleet-wide
+scan.</p>
 <hr />
 <h2 id="security-model">Security model</h2>
 <ul>
-<li><strong>Write access is the default gate.</strong> A command is honored only when the forwarder asserts the
-  commenter has write access or above on the repo. <code>allowed_actors</code> is the one widening knob: it adds
-  trusted logins on top of write access, it never narrows what write access already grants.</li>
-<li><strong>Bots and self-replies are dropped before routing.</strong> A comment flagged as a bot actor, or one carrying
-  Grove's own signature marker (the invisible tag every reply and status comment is stamped with), is
-  ignored outright. That marker is the belt to the bot-flag's suspenders: even if the forwarder's bot
-  detection is ever wrong, Grove's own comments can never trigger Grove.</li>
-<li><strong>No fork code is ever checked out or executed.</strong> The workflow triggers only on <code>issue_comment</code>, which
-  always runs in the base repo's context with normal token permissions on both forges, so there's no
-  <code>pull_request_target</code>-style secret-exfiltration risk to guard against. What protects the repo instead is
-  everything else on this list: the write-access gate, the <code>allowed_actors</code> allowlist, the bot and
-  self-reply ignore, and the daemon's own re-check and dedupe.</li>
-<li><strong>The daemon re-checks and dedupes, it doesn't just trust the workflow.</strong> Every event is deduplicated by
-  <code>(provider, owner, repo, comment_id)</code> before anything else runs, so an at-least-once CI retry can never
-  act twice. A malformed or refused command always gets a reply; issue-ops never fails silently.</li>
+<li><strong>Write access is the default gate.</strong> A command is honored only when the forwarder asserts the commenter
+  has write access or above on the repo. <code>allowed_actors</code> adds trusted logins on top of that and never
+  narrows it.</li>
+<li><strong>Bots and self-replies are dropped before routing.</strong> A comment from a bot actor, or one carrying Grove's
+  own signature marker (the invisible tag every Grove comment is stamped with), is ignored outright. The
+  marker is the belt to the bot-flag's suspenders, so Grove's own comments can never trigger Grove.</li>
+<li><strong>No fork code is ever checked out or executed.</strong> <code>issue_comment</code> runs in the base repo's context with
+  normal token permissions on both forges, so there is no <code>pull_request_target</code>-style exfiltration risk to
+  guard against. The rest of this list is what protects the repo.</li>
+<li><strong>The daemon re-checks and dedupes rather than trusting the workflow.</strong> Every event is deduplicated by
+  <code>(provider, owner, repo, comment_id)</code> first, so an at-least-once <abbr title="Continuous Integration">CI</abbr> retry cannot act twice. A malformed or
+  refused command always gets a reply. Issue-ops never fails silently.</li>
 </ul>
 <hr />
 <h2 id="troubleshooting">Troubleshooting</h2>
@@ -1581,63 +1594,74 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
 </thead>
 <tbody>
 <tr>
-<td>Comment does nothing, no reaction at all</td>
-<td>The caller workflow isn't on the repo's default branch</td>
-<td>Gitea and GitHub both load issue-event workflows from the default branch only. Merge the caller there.</td>
+<td>No reaction at all</td>
+<td>The caller is not on the default branch</td>
+<td>Both forges load issue-event workflows from there only. Merge it in.</td>
 </tr>
 <tr>
-<td>Comment does nothing, no reaction at all</td>
-<td>Commenter lacks write access and isn't in <code>allowed_actors</code></td>
-<td>Grant repo write access, or add the login to <code>issueops.allowed_actors</code>.</td>
+<td>No reaction at all</td>
+<td>Commenter lacks write access and is not in <code>allowed_actors</code></td>
+<td>Grant write access, or add the login to <code>issueops.allowed_actors</code>.</td>
 </tr>
 <tr>
-<td>Comment does nothing, no reaction at all</td>
-<td>The comment was edited, not newly created</td>
-<td>Only <code>created</code> comment events trigger the pipeline, by design (an <code>edited</code> trigger is a silent re-fire hole). Leave a new comment.</td>
+<td>No reaction at all</td>
+<td>The comment was edited, not created</td>
+<td>Only <code>created</code> events trigger the pipeline. An <code>edited</code> trigger is a silent re-fire hole. Leave a new comment.</td>
 </tr>
 <tr>
-<td>Comment does nothing, no reaction at all</td>
-<td>The trigger token is misspelled, or isn't the first word</td>
-<td>The trigger must open the comment at a word boundary (<code>@grove ...</code>, not <code>hey @grove</code> or <code>@grovebot</code>). Check <code>issueops.trigger</code> with <code>grove config show</code>.</td>
+<td>No reaction at all</td>
+<td>The trigger is misspelled, or is not the first word</td>
+<td>It must open the comment at a word boundary (<code>@grove ...</code>, not <code>hey @grove</code> or <code>@grovebot</code>). Check <code>issueops.trigger</code> with <code>grove config show</code>.</td>
 </tr>
 <tr>
-<td>👀 reaction appears, but replies or status comments 403</td>
-<td>Gitea ≥ 1.26.0 in Restricted mode needs an explicit <code>permissions:</code> block</td>
-<td>Add <code>permissions: {issues: write, pull-requests: write}</code> to the caller workflow.</td>
+<td>👀 appears, replies or status comments 403</td>
+<td>Gitea ≥ 1.26.0 Restricted mode needs <code>permissions:</code></td>
+<td>Add <code>permissions: {issues: write, pull-requests: write}</code> to the caller.</td>
 </tr>
 <tr>
-<td>Runner job starts, then times out reaching the daemon</td>
-<td>The runner executes in an isolated Docker bridge network and can't reach host loopback</td>
-<td>Use a <code>:host</code>-labeled act_runner (Gitea) or a same-host self-hosted runner (GitHub), on the machine running <code>grove daemon serve</code>.</td>
+<td>Runner job times out reaching the daemon</td>
+<td>The runner is on an isolated Docker bridge network</td>
+<td>Use a <code>:host</code>-labeled act_runner (Gitea) or a same-host self-hosted runner (GitHub).</td>
 </tr>
 <tr>
-<td>The same command appears to run twice</td>
-<td>CI retried the delivery</td>
-<td>Expected. The engine dedupes by <code>(provider, owner, repo, comment_id)</code>; the retry is dropped silently, not acted on twice.</td>
+<td>The same command runs twice</td>
+<td><abbr title="Continuous Integration">CI</abbr> retried the delivery</td>
+<td>Expected. The engine dedupes by <code>(provider, owner, repo, comment_id)</code>.</td>
 </tr>
 <tr>
 <td>Status comment never appears, or stops updating</td>
-<td>The ticket provider's token lacks comment-write scope</td>
-<td>Confirm <code>tickets.&lt;provider&gt;.token_env</code> names a token with issue-comment write access. Check the daemon log for a swallowed provider error; a publish failure never crashes the daemon, it retries on the next update window.</td>
+<td>The provider token lacks comment-write scope</td>
+<td>Confirm <code>tickets.&lt;provider&gt;.token_env</code> names a token with issue-comment write access, then check the daemon log for a swallowed provider error. Publishes retry next window.</td>
 </tr>
 </tbody>
 </table></div>
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="../features-ticket-providers/">Ticket providers</a> and <a href="../configure-ticket-providers/">their setup</a>:
-  issue-ops resolves through the same <code>tickets.&lt;provider&gt;</code> config.</li>
-<li><a href="../features-status/#the-third-axis-task-phase">Task phase</a>: the six phases the sticky comment renders
-  as dot progress, and how an agent reports one.</li>
-<li><a href="../use-auth/">Authentication &amp; pairing</a>: the handshake the CI token comes from.</li>
-<li><a href="../features-cascade/">Configuration cascade</a>: where <code>issueops</code> sits among the other layers.</li>
-<li><a href="../features-workspace-lifecycle/">Workspace lifecycle</a>: what create, pause, resume, and kill do underneath the verbs above.</li>
+<li><a href="../features-ticket-providers/">Ticket providers</a> and <a href="../configure-ticket-providers/">their setup</a></li>
+<li><a href="../features-status/#the-third-axis-task-phase">Task phase</a>, the six phases and how an agent reports one</li>
+<li><a href="../use-auth/">Authentication &amp; pairing</a>, the handshake the <abbr title="Continuous Integration">CI</abbr> token comes from</li>
+<li><a href="../features-cascade/">Configuration cascade</a></li>
+<li><a href="../features-workspace-lifecycle/">Workspace lifecycle</a>, what the verbs above do underneath</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1671,7 +1695,11 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2504,19 +2532,27 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#how-it-works"
@@ -2560,6 +2596,15 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
             </a>
             
             
+            <a href="#assignment-the-other-way-in"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#assignment-the-other-way-in');">
+                Assignment, the other way in
+            </a>
+            
+            
+            
             <a href="#configuration"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -2593,18 +2638,19 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2653,7 +2699,9 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2730,11 +2778,20 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -2779,4 +2836,5 @@ you'll drive workspaces from comments and never see the checklist come back.</p>
 }
 </script>
 </body>
+
 </html>

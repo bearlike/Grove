@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Ticket Providers · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/configure-ticket-providers.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,29 +1312,27 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Grove can link each workspace to the ticket it serves, reading the link
-off the branch name. To turn that on, add a <code>tickets</code> section to your
-config. It cascades per repo and globally like every other section, so a
-team can pin providers in the committed project config and a developer can
-adjust them locally. The capability itself is described on
-<a href="../features-ticket-providers/">ticket providers</a>; this page is the setup.</p>
+    <h2 id="connect-your-issue-tracker">Connect your issue tracker</h2>
+<p>Grove links each workspace to the ticket it serves, read off the branch
+name. Turn it on with a <code>tickets</code> section, which cascades like every
+other: pin providers in project config, adjust locally. See <a href="../features-ticket-providers/">ticket
+providers</a> for the capability itself.</p>
 <p>All three providers default to <strong>off</strong>. Enable only what you use.</p>
 <div class="admonition note">
 <p class="admonition-title">Credentials are never stored in config</p>
 <p>Grove stores the <strong>name</strong> of an environment variable, never a token.
-Put the secret in your environment under that name. The config file
-holds <code>token_env</code>, your shell holds the value. Safe to commit, safe to
-review.</p>
+The secret lives in your environment under that name: config holds
+<code>token_env</code>, your shell holds the value, safe to commit.</p>
 </div>
 <h2 id="the-tickets-section">The <code>tickets</code> section</h2>
-<div class="codehilite"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;gitea&quot;</span><span class="p">:</span><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://gitea.example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITEA_TOKEN&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;branch_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="p">},</span>
-<span class="w">    </span><span class="nt">&quot;github&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.github.com&quot;</span><span class="p">,</span><span class="w">     </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITHUB_TOKEN&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;branch_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="p">},</span>
-<span class="w">    </span><span class="nt">&quot;linear&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.linear.app/graphql&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;team_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ENG&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_LINEAR_TOKEN&quot;</span><span class="w"> </span><span class="p">}</span>
-<span class="w">  </span><span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&quot;gitea&quot;</span><span class="p">:</span><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://gitea.example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITEA_TOKEN&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;branch_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;github&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.github.com&quot;</span><span class="p">,</span><span class="w">     </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITHUB_TOKEN&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;branch_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">&quot;linear&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.linear.app/graphql&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;team_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ENG&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_LINEAR_TOKEN&quot;</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">}</span>
+</span></code></pre></div>
 <h2 id="fields">Fields</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1309,179 +1346,181 @@ review.</p>
 <tr>
 <td><code>enabled</code></td>
 <td>all</td>
-<td>Master switch. <code>false</code> skips the provider in both branch parsing and fetch.</td>
+<td>Master switch. <code>false</code> skips the provider in both parsing and fetch.</td>
 </tr>
 <tr>
 <td><code>base_url</code></td>
 <td>all</td>
-<td>API root. See the per-provider notes below for the exact value.</td>
+<td><abbr title="Application Programming Interface">API</abbr> root. <code>https://api.github.com</code> (GitHub.com) or <code>&lt;host&gt;/api/v3</code> (GitHub Enterprise); your Gitea instance root; the Linear GraphQL endpoint.</td>
 </tr>
 <tr>
 <td><code>token_env</code></td>
 <td>all</td>
-<td>The <strong>name</strong> of the environment variable holding the API token. Not the token.</td>
+<td>The <strong>name</strong> of the environment variable holding the token. Not the token.</td>
 </tr>
 <tr>
 <td><code>owner</code></td>
 <td>gitea, github</td>
-<td>The repository owner or organization, used to fetch a ticket by id.</td>
+<td>Repository owner or organization, used to fetch a ticket by id.</td>
 </tr>
 <tr>
 <td><code>repo</code></td>
 <td>gitea, github</td>
-<td>The repository name, used to fetch a ticket by id.</td>
+<td>Repository name, used to fetch a ticket by id.</td>
 </tr>
 <tr>
 <td><code>team_key</code></td>
 <td>linear</td>
-<td>The Linear team key (for example <code>ENG</code>). This is the key Grove matches in branch names (<code>ENG-123</code>).</td>
+<td>Linear team key (for example <code>ENG</code>), the key Grove matches in branch names, so <code>ENG-123</code> anywhere resolves. No <code>owner</code>/<code>repo</code>: the team key plus issue number already identify the ticket.</td>
 </tr>
 <tr>
 <td><code>branch_prefix</code></td>
 <td>gitea, github</td>
-<td>Optional extra keyword the numeric providers also recognize in a branch name. Empty by default.</td>
+<td>Extra keyword recognized on top of the built-ins. For example <code>"bug"</code> on GitHub also matches <code>bug-42-...</code> as issue 42. Empty by default. Distinct from <code>worktree.branch_prefix</code>, which prefixes the branch names Grove generates.</td>
 </tr>
 <tr>
 <td><code>env_file</code></td>
 <td>section</td>
-<td>Optional dotenv file the token names are read from. Repo relative or absolute.</td>
+<td>Optional dotenv file the tokens are read from. Repo relative or absolute.</td>
 </tr>
 <tr>
 <td><code>env_command</code></td>
 <td>section</td>
-<td>Optional command whose stdout is read as dotenv. Mutually exclusive with <code>env_file</code>.</td>
+<td>Optional command whose stdout is read as dotenv. Exclusive with <code>env_file</code>.</td>
 </tr>
 </tbody>
 </table></div>
 <h2 id="putting-the-token-in-your-environment">Putting the token in your environment</h2>
-<p>Export the variable named by <code>token_env</code> before launching Grove:</p>
-<div class="codehilite"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">GROVE_GITEA_TOKEN</span><span class="o">=</span>...
-<span class="nb">export</span><span class="w"> </span><span class="nv">GROVE_GITHUB_TOKEN</span><span class="o">=</span>...
-<span class="nb">export</span><span class="w"> </span><span class="nv">GROVE_LINEAR_TOKEN</span><span class="o">=</span>...
-</code></pre></div>
-<p>The daemon reads these from its own environment, so set them where the
-daemon starts. The config file only ever names the variable, so it stays
-free of secrets and safe to commit.</p>
+<p>Export the variable named by <code>token_env</code> before launching Grove. The daemon
+reads these from its own environment, so set them where it starts:</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GROVE_GITEA_TOKEN</span><span class="o">=</span>...
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GROVE_GITHUB_TOKEN</span><span class="o">=</span>...
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GROVE_LINEAR_TOKEN</span><span class="o">=</span>...
+</span></code></pre></div>
 <h2 id="when-the-token-only-exists-later">When the token only exists later</h2>
-<p>A long running daemon reads its own environment once, when it starts.
-Anything that produces a credential afterwards cannot reach back into it:
-a workspace init script that writes a dotenv, a secret manager you log
-into, a token you rotate. For those cases point the <code>tickets</code> section at
-a source Grove reads on demand.</p>
-<div class="codehilite"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;env_file&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;.grove/tickets.env&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;gitea&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITEA_TOKEN&quot;</span><span class="w"> </span><span class="p">}</span>
-<span class="w">  </span><span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div>
-<p>Or resolve the values without writing them to disk at all. Any command
-that prints dotenv to stdout works, so Grove needs to know nothing about
-your secret manager.</p>
-<div class="codehilite"><pre><span></span><code><span class="p">{</span><span class="w"> </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;env_command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-secrets export grove&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
-</code></pre></div>
-<p>One source serves every provider in the section, because it is keyed by
-the same <code>token_env</code> names. Still no secret in config: the file holds the
-values, the config holds its path.</p>
+<p>A long running daemon reads its own environment once, at startup, so a
+credential produced later (an init script, a secret manager, a rotation)
+arrives too late. Point <code>tickets</code> at a source Grove reads on demand
+instead.</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&quot;env_file&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;.grove/tickets.env&quot;</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;gitea&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITEA_TOKEN&quot;</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Or resolve values without writing them to disk: any command printing
+dotenv to stdout works, so Grove needs to know nothing about your secret
+manager.</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;env_command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-secrets export grove&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</span></code></pre></div>
+<p>One source serves every provider, keyed by the same <code>token_env</code> names: the
+file holds the values, the config only the path.</p>
 <h3 id="resolution-order">Resolution order</h3>
-<p>Grove resolves a provider's token at the moment it is used, never when
-the provider is built. Every lookup goes through the same two steps.</p>
+<p>Grove resolves a token at the moment of use, never at build time, caching
+nothing between. Every lookup follows the same steps, under the
+<code>token_env</code> name:</p>
 <ol>
-<li>The configured source. <code>env_command</code> is run, or <code>env_file</code> is read,
-   and the result is parsed as dotenv. The name from <code>token_env</code> is
-   looked up there first.</li>
-<li>The environment of the process running Grove, under the same name.</li>
+<li>The configured source, if any. <code>env_command</code> runs fresh. <code>env_file</code> is
+   read fresh and parsed as dotenv.</li>
+<li>The environment of the process running Grove.</li>
 </ol>
-<p>Nothing is cached in between. That is what makes step 1 useful: a token
-written a second ago is found on the next request, and a rotated token
-replaces the old one with no restart. It is also why <code>env_command</code> must
-be cheap and safe to run repeatedly.</p>
-<p>A provider with no token anywhere reports <code>configured: false</code>, pickers
-gray it out, and a call to it fails with a clear error rather than an
-unauthenticated request. A configured <code>env_file</code> that does not exist is
-an error, not an empty environment, so a missing credential never looks
-like a working one.</p>
+<p>So a token written a second ago is found immediately, a rotation needs
+no restart, and <code>env_command</code> must stay cheap: it runs every lookup.</p>
+<ul>
+<li>No token anywhere: the provider reports <code>configured: false</code>, pickers
+  gray it out, and a call fails with a clear error, not an
+  unauthenticated request.</li>
+<li>A configured <code>env_file</code> that does not exist: an error, not an empty
+  environment, so a missing credential never looks like a working one.</li>
+</ul>
 <div class="admonition warning">
 <p class="admonition-title">What a committed config may name</p>
-<p><code>.grove/config.json</code> travels with the repository, so it may request a
-capability but never grant one. A committed <code>env_command</code> is ignored,
-because cloning a repository must not run a command from it. A
-committed <code>env_file</code> must stay inside the repository, so it cannot
-ferry an arbitrary host file. Put either in your user config or in
-the gitignored <code>.grove/config.local.json</code> when you need the full
-range. <code>container</code> follows the identical rule.</p>
+<p><code>.grove/config.json</code> may request a capability, never grant one: a
+committed <code>env_command</code> is ignored (cloning must not run a command
+from it), and a committed <code>env_file</code> must stay inside the repository.
+Get the full range from user config or the gitignored
+<code>.grove/config.local.json</code>. <code>container</code> follows the identical rule.</p>
 </div>
 <h2 id="per-provider-notes">Per-provider notes</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Provider</th>
+<th><code>base_url</code></th>
+<th><code>owner</code>/<code>repo</code></th>
+<th>Recognized branch forms</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gitea</td>
+<td>Your Gitea instance root</td>
+<td>Required, pins the repository</td>
+<td>bare leading number (<code>5-...</code>), <code>gitea-5-...</code>, <code>gtea-5-...</code></td>
+</tr>
+<tr>
+<td>GitHub</td>
+<td><code>https://api.github.com</code>, or your Enterprise <code>/api/v3</code> root</td>
+<td>Required, pins the repository</td>
+<td>bare leading number (<code>42-...</code>), <code>gh-42-...</code></td>
+</tr>
+<tr>
+<td>Linear</td>
+<td>Linear GraphQL endpoint</td>
+<td>Not used, the team key plus issue number identify it</td>
+<td><code>team_key</code> anywhere in the branch (for example <code>ENG-123</code>); <code>token_env</code> holds your personal <abbr title="Application Programming Interface">API</abbr> key</td>
+</tr>
+</tbody>
+</table></div>
 <h3 id="gitea">Gitea</h3>
-<div class="codehilite"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;gitea&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://gitea.example.com&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITEA_TOKEN&quot;</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">  </span><span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div>
-<p><code>base_url</code> is your Gitea instance root. <code>owner</code> and <code>repo</code> pin the
-repository Grove fetches issues from. Gitea recognizes a bare leading
-number in a branch name (<code>5-short-description</code>) plus the built-in
-keywords <code>gitea-</code> and <code>gtea-</code> (<code>gtea-5-...</code>).</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">&quot;gitea&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://gitea.example.com&quot;</span><span class="p">,</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">      </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITEA_TOKEN&quot;</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="p">}</span>
+</span></code></pre></div>
 <h3 id="github">GitHub</h3>
-<div class="codehilite"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;github&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.github.com&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITHUB_TOKEN&quot;</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">  </span><span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div>
-<p>For GitHub.com, leave <code>base_url</code> as <code>https://api.github.com</code>. For GitHub
-Enterprise, point it at your instance's <code>/api/v3</code> root (for example
-<code>https://github.example.com/api/v3</code>). GitHub recognizes a bare leading
-number (<code>42-short-description</code>) plus the built-in keyword <code>gh-</code>
-(<code>gh-42-...</code>).</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">&quot;github&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.github.com&quot;</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="nt">&quot;owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-org&quot;</span><span class="p">,</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">      </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;your-repo&quot;</span><span class="p">,</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">      </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_GITHUB_TOKEN&quot;</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
+</span></code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Bare numbers are ambiguous when both numeric providers run</p>
-<p>Gitea and GitHub share the numeric grammar, so a branch like
-<code>123-fix</code> matches both when both are enabled. Grove stores the match
-as ambiguous and the UI flags it. Prefer the keyword forms (<code>gh-42</code>,
-<code>gtea-5</code>) or a distinct <code>branch_prefix</code> per provider. See
-<a href="../features-ticket-providers/#the-bare-number-is-deliberately-ambiguous">ticket providers</a>.</p>
+<p>Gitea and GitHub share the numeric grammar, so <code>123-fix</code> matches both
+when both are enabled. Grove marks the match ambiguous and the UI
+flags it. Prefer keyword forms (<code>gh-42</code>, <code>gtea-5</code>) or a distinct
+<code>branch_prefix</code> per provider. See <a href="../features-ticket-providers/#the-bare-number-is-deliberately-ambiguous">ticket
+providers</a>.</p>
 </div>
 <h3 id="linear">Linear</h3>
-<div class="codehilite"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;linear&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.linear.app/graphql&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;team_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ENG&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_LINEAR_TOKEN&quot;</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">  </span><span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div>
-<p><code>base_url</code> is the Linear GraphQL endpoint. <code>token_env</code> names the variable
-holding your Linear personal API key. <code>team_key</code> is the team prefix Grove
-matches in branch names, so a branch containing <code>ENG-123</code> (anywhere)
-resolves to that ticket. Linear needs no <code>owner</code> or <code>repo</code>; the team key
-plus issue number identify the ticket.</p>
-<h2 id="the-optional-branch_prefix">The optional <code>branch_prefix</code></h2>
-<p><code>branch_prefix</code> is an extra keyword for the numeric providers, on top of
-the built-ins. Set <code>"branch_prefix": "bug"</code> on GitHub and Grove also
-reads <code>bug-42-...</code> as GitHub issue 42. Leave it empty to rely on the
-built-in keywords (<code>gh-</code> for GitHub, <code>gitea-</code> / <code>gtea-</code> for Gitea) and
-the bare leading number. This is separate from <code>worktree.branch_prefix</code>,
-which prefixes the branch names Grove generates.</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;tickets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">&quot;linear&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://api.linear.app/graphql&quot;</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">&quot;team_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ENG&quot;</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">      </span><span class="nt">&quot;token_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GROVE_LINEAR_TOKEN&quot;</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="p">}</span>
+</span></code></pre></div>
 <h2 id="where-this-config-lives">Where this config lives</h2>
-<p>The <code>tickets</code> section follows the same cascade as the rest of Grove
-config:</p>
+<p>The <code>tickets</code> section follows the same cascade as the rest of Grove.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1510,16 +1549,29 @@ config:</p>
 </table></div>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="../features-ticket-providers/">Ticket providers</a>: how Grove derives and displays ticket refs.</li>
-<li><a href="../configure-project/">Project setup</a>: where the config files live.</li>
-<li><a href="../features-cascade/">Configuration cascade</a>: the six layers and last-wins resolution.</li>
-<li><a href="../configure-reference/">Configuration reference</a>: every field, auto-generated from the model.</li>
+<li><a href="../features-ticket-providers/">Ticket providers</a>, how Grove derives and displays refs.</li>
+<li><a href="../configure-project/">Project setup</a>, where the config files live.</li>
+<li><a href="../features-cascade/">Configuration cascade</a>, the six layers and last-wins resolution.</li>
+<li><a href="../configure-reference/">Configuration reference</a>, every field, auto-generated.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1553,7 +1605,11 @@ config:</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2386,19 +2442,27 @@ config:</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#the-tickets-section"
@@ -2473,14 +2537,6 @@ config:</p>
             
             
             
-            <a href="#the-optional-branch_prefix"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-optional-branch_prefix');">
-                The optional branch_prefix
-            </a>
-            
-            
             <a href="#where-this-config-lives"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -2498,18 +2554,19 @@ config:</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2558,7 +2615,9 @@ config:</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2635,11 +2694,20 @@ config:</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -2684,4 +2752,5 @@ config:</p>
 }
 </script>
 </body>
+
 </html>

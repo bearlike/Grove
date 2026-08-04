@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Peek Rail · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/features-peek.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,118 +1312,186 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Grove's right-hand rail surfaces git position, agent metrics, and a live
-preview for the selected workspace, all without attaching. It is the
-per-workspace companion of the fleet-wide
-<a href="../features-activity/">Activity Dashboard</a>. The whole rail is
-best-effort by contract. Helpers that fail return zeros instead of
-blocking the render loop.</p>
+    <h2 id="read-a-workspace-at-a-glance">Read a workspace at a glance</h2>
+<p>The right-hand rail shows git position, agent metrics and a live preview for
+the selected workspace without attaching. It is the per-workspace companion of
+the <a href="../features-activity/">Activity Dashboard</a>. Every helper is best-effort: a
+failure returns zero, not a blocked render loop.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI with the peek rail showing the summary card and the transcript tab" /></div>
-  <figcaption class="ms-shot__body">The right-hand rail: <em>summary</em> with branch, git stats, agent metrics, and recent commits; below it a <em>preview</em> with transcript and terminal tabs.</figcaption>
+  <figcaption class="ms-shot__body">The <em>summary</em> card carries branch, git stats, agent metrics and recent commits. The <em>preview</em> below it has transcript and terminal tabs.</figcaption>
 </figure>
 
 <h2 id="what-the-rail-shows">What the rail shows</h2>
-<p>The peek rail stacks a summary card over a tabbed preview pane.</p>
-<p>The <strong>summary card</strong> carries one row per workspace property: branch,
-ahead, behind, dirty count, age. Counts are colour-coded by polarity.
-Green when there is work to push, amber when there is work to pull or
-clean, muted when zero. When Grove can read the agent's session, an
-agent metrics line joins the card: the model, turn and reply and
-tool-call counts, token usage, and the agent's state. If the agent has
-reported a <a href="../features-status/#the-third-axis-task-phase">task phase</a>,
-that shows too, alongside its bounded todo progress. The card closes
-with recent commits. Git facts and session facts read as one status
-block.</p>
-<p>The <strong>preview</strong> pane below it has two tabs:</p>
-<ul>
-<li>The <strong>transcript</strong> tab shows the agent's recent turns. Each consecutive
-  run of tool calls collapses into one grouped row, so the conversation
-  reads as a clean exchange rather than a wall of tool noise. It is a
-  glance surface, not the full sessions browser, so it never expands the
-  grouped rows. For the full history, press <code>s</code>. See
-  <a href="../use-tui/#the-sessions-browser">the sessions browser</a>.</li>
-<li>The <strong>terminal</strong> tab mirrors the tmux pane attached to the workspace's
-  agent window. Output, ANSI colours, cursor position, refreshed at four
-  ticks per second when the workspace is RUNNING. The border colour
-  changes to clay when the pane is live.</li>
-</ul>
-<p>The preview defaults to transcript when the agent has recorded turns, and
-to terminal otherwise. Pick a tab yourself and Grove keeps your choice
-for that workspace. Because transcripts outlive their worktrees, the
-preview stays visible for a paused workspace that still has a recorded
-session.</p>
+<p>A summary card sits over a tabbed preview pane, one row per workspace property.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Card row</th>
+<th>What it carries</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Git</td>
+<td>Branch, ahead, behind, dirty count and age, coloured by polarity: green for work to push, amber for work to pull or clean, muted at zero</td>
+</tr>
+<tr>
+<td>Agent</td>
+<td>Model, turn and reply and tool-call counts, token usage and agent state, when Grove can read the session</td>
+</tr>
+<tr>
+<td>Task phase</td>
+<td>The <a href="../features-status/#the-third-axis-task-phase">task phase</a> the agent reported, with its bounded todo progress</td>
+</tr>
+<tr>
+<td>Commits</td>
+<td>The three most recent commits</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Transcript</strong> groups every consecutive run of tool calls into one row and
+never expands a row, since it stays a glance surface. Press <span class="keys"><kbd class="key-s">S</kbd></span> for
+<a href="../use-tui/#the-sessions-browser">the sessions browser</a>.</p>
+<p><strong>Terminal</strong> mirrors the tmux pane on the agent window: output, ANSI colours
+and cursor position, four times a second while RUNNING. The border turns clay
+when the pane is live.</p>
+<p>Transcript is the default once the agent has recorded turns, terminal
+otherwise, and your choice sticks per workspace. Transcripts outlive their
+worktrees, so a paused workspace with a recorded session still shows a
+preview.</p>
 <h2 id="activity-signal">Activity signal</h2>
-<p>Grove uses <code>tmux #{window_activity}</code> as the activity timestamp. This
-format variable updates whenever any pane in a window emits output.
-Grove computes the workspace's age as <code>now - window_activity</code> and flips
-between ACTIVE and IDLE on the configured threshold
-(<code>tmux.activity_threshold_seconds</code>, default <code>30</code>).</p>
-<p>Grove deliberately does not use <code>#{pane_activity}</code>. That format variable
-was added in tmux ≥ 3.4 and returns an empty string on older versions
-including the 3.2a that Ubuntu 22.04 ships. An empty value coerces to
-<code>None</code> and reconciliation treats every workspace as IDLE. Grove's layout
-is one pane per window (shell, agent), so window-level and pane-level
-resolve to the same answer.</p>
+<p>Grove reads <code>tmux #{window_activity}</code> as the activity timestamp, updated
+whenever any pane in a window emits output. Workspace age is
+<code>now - window_activity</code>, flipping between ACTIVE and IDLE on
+<code>tmux.activity_threshold_seconds</code>, default <code>30</code>.</p>
+<p><code>#{pane_activity}</code> stays unused on purpose. It arrived in tmux 3.4 and returns
+an empty string on older versions, including the 3.2a Ubuntu 22.04 ships, and
+empty coerces to <code>None</code>, which reads every workspace as IDLE. Grove runs one
+pane per window, so both levels resolve the same way anyway.</p>
 <h2 id="pane-target-resolution">Pane-target resolution</h2>
-<p>The terminal tab needs to know which tmux pane to capture. The policy
-lives in <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>WorkspaceManager.pane_target</span></a> (<code>workspace_id</code>):</p>
-<ol>
-<li>The configured <code>agent_window_name</code> (default <code>agent</code>) if it exists.</li>
-<li>The first non-<code>shell</code> window otherwise.</li>
-<li>The <code>shell</code> window as last resort.</li>
-<li><code>None</code> if the session has no windows at all.</li>
-</ol>
-<p>The fallbacks exist because workspaces created or reorganized outside
-Grove (or whose agent window auto-closed when the agent process exited)
-have arbitrary window layouts. The rail must show something live
-whenever the session has any output. Hard-coding <code>f"{session}:{agent}"</code>
-was the original peek-empty bug.</p>
-<p>That whole list is the host answer. A <a href="../features-containers/">container
-workspace</a> resolves elsewhere, because its agent's
-pane lives on the tmux inside the container. Grove captures there, so the
-rail keeps updating with nothing attached on the host, and the target
-renders as <code>container:&lt;id&gt;:&lt;session&gt;</code> to say where the pane is rather than
-pass it off as one your own tmux can attach to.</p>
+<p><a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>WorkspaceManager.pane_target</span></a>
+(<code>workspace_id</code>) reconciles the workspace fresh from the store, then picks the
+pane the terminal tab captures.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Order</th>
+<th>Resolves to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>None</code> unless the workspace is live</td>
+</tr>
+<tr>
+<td>2</td>
+<td>For a <a href="../features-containers/">container workspace</a>, the agent's own session on the tmux inside the container</td>
+</tr>
+<tr>
+<td>3</td>
+<td>The configured <code>agent_window_name</code> (default <code>agent</code>) if that window exists</td>
+</tr>
+<tr>
+<td>4</td>
+<td>The first non-<code>shell</code> window otherwise</td>
+</tr>
+<tr>
+<td>5</td>
+<td>The <code>shell</code> window as last resort</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>None</code> if the session reports no windows</td>
+</tr>
+</tbody>
+</table></div>
+<p>The fallbacks cover a workspace reorganized outside Grove, or an agent window
+that closed with the agent process, both leaving an arbitrary layout.
+Hard-coding <code>f"{session}:{agent}"</code> was the original peek-empty bug. A caller
+holding a state already reconciled this tick uses <code>pane_target_for</code> instead,
+since re-reconciling costs three redundant tmux forks per poll.</p>
+<p>Grove captures a container pane inside the container, so the rail keeps
+updating with nothing attached on the host. That target renders as
+<code>container:&lt;id&gt;:&lt;session&gt;</code>, never a name your own tmux could attach to.</p>
 <h2 id="best-effort-by-contract">Best-effort by contract</h2>
-<p><code>peek()</code> never raises. It calls into <code>git</code>, <code>tmux</code>, the state store, and
-the activity-age helper. Any of them can fail (binary missing, branch
-deleted, session gone). Each helper catches its own failure, logs once
-at debug, and returns the zero value for its slot (empty string, zero
-count, <code>None</code>). The rail keeps painting and the user sees the slot as
-unknown rather than the whole UI stuttering.</p>
-<p>The lifecycle methods (<code>create</code>, <code>pause</code>, <code>kill</code>) keep a loud failure
-surface. Those are transactional, and a partial failure must surface to
-the operator. Peek is observation; lifecycle is action. The two have
-opposite contracts on purpose.</p>
+<p><code>peek()</code> never raises. It calls <code>git</code>, <code>tmux</code>, the state store and the
+activity-age helper, and any of them can fail. Each helper catches its own
+failure, logs once at debug, and returns the zero value for its slot: empty
+string, zero count, or <code>None</code>. Render-path reads are bounded too: a container
+tmux read gives up after 5 seconds, so a wedged docker costs one slow frame,
+not a stall across every surface that lists workspaces.</p>
+<p>The lifecycle methods (<code>create</code>, <code>pause</code>, <code>kill</code>) keep a loud failure surface
+instead, since they are transactional and a partial failure must reach the
+operator. Peek is observation. Lifecycle is action.</p>
 <h2 id="two-refresh-cadences">Two refresh cadences</h2>
-<p>Two timers keep the rail current at the right cost:</p>
-<ul>
-<li><strong>Fast pane tick</strong> (<code>peek_pane_refresh_seconds</code>, default <code>0.25</code>) calls
-  <code>peek_pane()</code> only. One <code>tmux capture-pane</code> per running workspace. No
-  git work, no state-store reads. Splices a fresh snapshot into the
-  cached full peek so the terminal tab looks live.</li>
-<li><strong>Slow stats tick</strong> (<code>peek_stats_refresh_seconds</code>, default <code>3.0</code>)
-  calls <code>peek()</code> end to end. git ahead and behind, dirty count, diff
-  stats, activity age. These do not change at sub-second granularity.
-  Rerunning them on every fast tick would burn IO without any
-  user-visible benefit.</li>
-</ul>
-<p>Both timers freeze when a modal is open
-(<code>if self.app.screen is not self: return</code>), so a confirm dialog never
-has the pane tick painting behind it.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Tick</th>
+<th>Config, default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fast pane tick</td>
+<td><code>peek_pane_refresh_seconds</code>, <code>0.25</code></td>
+<td>Calls <code>peek_pane()</code> only: one <code>tmux capture-pane</code> per running workspace, no git work and no store reads, spliced into the cached peek</td>
+</tr>
+<tr>
+<td>Slow stats tick</td>
+<td><code>peek_stats_refresh_seconds</code>, <code>3.0</code></td>
+<td>Re-enumerates the workspace set and calls <code>peek()</code> end to end, since ahead, behind, dirty count, diff stats and activity age never move at sub-second granularity</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every tick asks <code>_ticks_live()</code> first and skips while a modal owns the
+foreground or the terminal is handed to an attach, since publishing into an
+empty room is waste. Window focus is not part of that gate: an unfocused
+Grove on a second monitor is still a live surface.</p>
 <h2 id="see-also">See also</h2>
-<ul>
-<li><a href="../features-activity/">Agent activity and sessions</a>: the fleet-wide view. The peek
-  rail watches one workspace; the Activity Dashboard watches them all.</li>
-<li><a href="../features-status/">Status semantics</a>: how the activity age feeds ACTIVE and IDLE, and the task-phase axis.</li>
-<li><a href="../features-workspace-lifecycle/">Workspace lifecycle</a>: what RUNNING, PAUSED, and ERROR mean.</li>
-</ul>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../features-activity/">Agent activity and sessions</a></td>
+<td>The fleet-wide view. The rail watches one workspace</td>
+</tr>
+<tr>
+<td><a href="../features-status/">Status semantics</a></td>
+<td>Activity age feeding ACTIVE and IDLE, plus the task-phase axis</td>
+</tr>
+<tr>
+<td><a href="../features-workspace-lifecycle/">Workspace lifecycle</a></td>
+<td>RUNNING, PAUSED and ERROR</td>
+</tr>
+</tbody>
+</table></div>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1418,7 +1525,11 @@ has the pane tick painting behind it.</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2251,19 +2362,27 @@ has the pane tick painting behind it.</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#what-the-rail-shows"
@@ -2315,18 +2434,19 @@ has the pane tick painting behind it.</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2375,7 +2495,9 @@ has the pane tick painting behind it.</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2452,11 +2574,20 @@ has the pane tick painting behind it.</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -2501,4 +2632,5 @@ has the pane tick painting behind it.</p>
 }
 </script>
 </body>
+
 </html>

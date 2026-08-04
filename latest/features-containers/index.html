@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Containerized Agents · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../develop-architecture/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/features-containers.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,26 +1312,23 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>A container workspace hands one agent a complete stack of its own. It runs
-Docker in Docker, so the workspace starts its own database, its own services and
-its own ports, and none of them are yours.</p>
-<p>Three things own different parts of that workspace, and the rest of this page is
-easier to read once you know which is which.</p>
+    <h2 id="agents-in-their-own-stack">Agents in their own stack</h2>
+<p>A container workspace hands one agent a complete stack of its own: Docker in
+Docker, so it gets its own database, services, and ports, none of them
+yours.</p>
 <ul>
-<li><strong>You own the repo.</strong> The <code>.devcontainer/</code> and the Grove config are yours,
-  committed and reviewed like the code. Nothing on this page is a Grove format.</li>
-<li><strong>Grove owns the boundary.</strong> The worktree, the container lifecycle, the
-  mounts, the resource ceilings, the egress policy and the session. This is
-  everything around the agent, and it is all Grove touches.</li>
+<li><strong>You own the repo.</strong> The <code>.devcontainer/</code> and the Grove config, committed
+  like code. Nothing here is a Grove format.</li>
+<li><strong>Grove owns the boundary.</strong> Worktree, container lifecycle, mounts, resource
+  ceilings, egress policy, session.</li>
 <li><strong>The agent runtime owns the work.</strong> Grove passes your tool's flags through
-  untouched and never inspects, gates or second-guesses what it does inside.</li>
+  untouched and never gates what it does inside.</li>
 </ul>
-<video autoplay muted loop playsinline preload="auto" poster="../img/posters/devcontainer-still.png" style="width:100%;max-width:960px;height:auto;display:block;margin:0 auto 1.75rem;">
+<video preload="auto" poster="../img/posters/devcontainer-still.png">
   <source src="../videos/3-grove-devcontainer.mp4" type="video/mp4" />
 </video>
 <h2 id="host-or-container">Host or container</h2>
-<p>Runtime is a per workspace choice, so the answer can differ for two workspaces
-in the same repo.</p>
+<p>Runtime is a per workspace choice, so two workspaces in one repo can differ.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1302,43 +1338,36 @@ in the same repo.</p>
 </thead>
 <tbody>
 <tr>
-<td>You are running one or two agents. Their processes share your machine the way any other program does, and that is fine.</td>
-<td>You are running twenty. Each agent spawns sub agents, test runs and build processes with no ceiling of their own, so the ceiling has to come from somewhere.</td>
+<td>One or two agents, sharing your machine like any program.</td>
+<td>Twenty, each spawning sub agents, test runs and builds with no ceiling.</td>
 </tr>
 <tr>
-<td>You approve tool calls as they come. The permission prompt is your safety mechanism.</td>
-<td>You run with permissions turned off. The blast radius needs to be the workspace instead of everything your account can reach.</td>
+<td>You approve tool calls as they come.</td>
+<td>Permissions off, so the blast radius has to be the workspace.</td>
 </tr>
 <tr>
-<td>One environment, the one already working on your machine.</td>
-<td>A development stack and a test stack side by side, each with its own services, ports and dependency versions.</td>
+<td>One environment, the one already on your machine.</td>
+<td>A development stack and a test stack side by side, with their own services, ports and versions.</td>
 </tr>
 <tr>
-<td>You want the fastest start. Your credentials, your <code>PATH</code> and your language versions, with nothing to build.</td>
-<td>You want the environment the project already describes, out of the <code>.devcontainer/</code> your VS Code teammates read.</td>
+<td>Fastest start. Your credentials, your <code>PATH</code>, nothing to build.</td>
+<td>The environment the project describes, from the <code>.devcontainer/</code> your VS Code teammates read.</td>
 </tr>
 </tbody>
 </table></div>
 <ul>
-<li><strong>The fan out row is the one people meet last and feel first.</strong> A single
-  agent that shells out to a test suite can saturate a machine on its own, and
-  twenty of them is not a workload you can reason about after the fact. A
-  container turns that into a number you set beforehand.</li>
+<li><strong>The fan out row is met last and felt first.</strong> One agent shelling out to a
+  test suite can saturate a machine. A container makes that a number you set
+  beforehand.</li>
 </ul>
 <h2 id="what-the-container-is-actually-for">What the container is actually for</h2>
 <ul>
-<li><strong>Permission prompts are the safety mechanism when an agent runs on your
-  host. The container is the safety mechanism when it doesn't.</strong> Run
-  <code>claude --dangerously-skip-permissions</code> or Codex full-auto on your machine
-  and you trust the agent with everything you can touch.</li>
-<li><strong>Grove passes the agent's flags through untouched.</strong> It never gates or
-  second-guesses what the tool does. The container is what makes running with
-  permissions off a decision rather than a gamble.</li>
-<li><strong>The reachable set is the worktree, the mounts, and the nested docker daemon
-  the workspace owns.</strong> Not another workspace's code, not your dotfiles, not
-  the engine your own containers run on.</li>
-<li><strong>The container runs Docker in Docker</strong>, so the workspace gets its own
-  database, its own services and its own ports, and none of them are yours.</li>
+<li><strong>Permission prompts are the safety mechanism on the host. The container is
+  the mechanism when there are none.</strong> Run <code>claude --dangerously-skip-permissions</code>
+  or Codex full-auto and you trust the agent with everything you can touch.</li>
+<li><strong>The reachable set is the worktree, the mounts, and the workspace's own
+  nested docker daemon</strong>, not another workspace's code, your dotfiles, or the
+  engine your containers run on.</li>
 </ul>
 <h2 id="how-the-runtime-gets-chosen">How the runtime gets chosen</h2>
 <pre class="mermaid"><code>flowchart LR
@@ -1352,113 +1381,104 @@ in the same repo.</p>
     E --&gt; Z["Agent runs in&lt;br/&gt;the container"]
     G --&gt; Z</code></pre>
 <ul>
-<li><strong>Runtime is picked once at create</strong> and displayed for the workspace's whole
-  life. No surface lets you edit it afterward.</li>
-<li><strong>The one exception is a verb, not a field.</strong> <code>respawn</code> promotes a workspace
-  that fell back to host once its container runtime is available again.</li>
+<li><strong>Runtime is picked once at create</strong> and shown for the workspace's life.
+  No surface edits it afterward, except one verb: <code>respawn</code>.</li>
 </ul>
 <h2 id="start-from-the-devcontainer-you-already-have">Start from the devcontainer you already have</h2>
-<div class="codehilite"><pre><span></span><code>grove create &quot;fix login&quot; --agent claude                      # configured default
-grove create &quot;fix login&quot; --agent claude --runtime container
-grove create &quot;fix login&quot; --agent claude --runtime host
-</code></pre></div>
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>grove create &quot;fix login&quot; --agent claude                      # configured default
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove create &quot;fix login&quot; --agent claude --runtime container
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>grove create &quot;fix login&quot; --agent claude --runtime host
+</span></code></pre></div>
 <ul>
-<li><strong>The same choice appears everywhere a workspace is created:</strong> the CLI's
-  <code>--runtime</code> flag, the TUI create screen, the webapp composer, and the MCP
+<li><strong>The choice appears wherever a workspace is created</strong>: the <abbr title="Command Line Interface">CLI</abbr>'s
+  <code>--runtime</code> flag, the <abbr title="Terminal User Interface">TUI</abbr> create screen, the webapp composer, the <abbr title="Model Context Protocol">MCP</abbr>
   <code>grove_create_workspace</code> tool.</li>
-<li><strong>A repo that already has a <code>.devcontainer/devcontainer.json</code> is read as
-  is.</strong> Nothing to add and nothing Grove-specific to commit. A teammate opening
-  the same repo in VS Code gets the identical environment, because you are both
-  pointed at one file.</li>
-<li><strong>No <code>.devcontainer/</code> is not a reason to fall back to the host.</strong> The
-  workspace runs in Grove's packaged default image instead, marked with a quiet
-  informational badge. That is still full isolation, just not project-owned.</li>
-<li><strong>Container workspaces need Docker, Compose v2, and <code>@devcontainers/cli</code> on
-  your host, and Grove installs none of them.</strong> Run <code>grove doctor</code> to see what
-  is missing: it runs the same checks Grove uses at create time, so its answer
-  is exactly what a create will do.</li>
+<li><strong>A repo with a <code>.devcontainer/devcontainer.json</code> is read as is</strong>, nothing
+  Grove-specific to commit, so a VS Code teammate gets the same environment
+  from the same file.</li>
+<li><strong>No <code>.devcontainer/</code> still means a container</strong>, running Grove's packaged
+  default image under a quiet informational badge: full isolation, not
+  project-owned.</li>
+<li><strong>Docker, Compose v2, and <code>@devcontainers/cli</code> are yours to install.</strong>
+  <code>grove doctor</code> runs the checks a create runs.</li>
 </ul>
 <h2 id="where-your-code-lands">Where your code lands</h2>
 <ul>
-<li><strong>Grove never clones. It bind mounts your repository</strong> at the path the
-  <code>devcontainers</code> CLI would choose itself: source at your worktree, target
-  <code>/workspaces/&lt;worktree-directory-name&gt;</code>. Grove sets neither <code>workspaceMount</code>
-  nor <code>workspaceFolder</code> for a project's own config.</li>
-<li><strong>The mounted directory takes your worktree's name</strong>, not the repository's,
-  since each workspace gets its own worktree.</li>
-<li><strong>That path is also the agent's working directory</strong>, unless your
-  <code>devcontainer.json</code> pins its own <code>workspaceFolder</code>. Grove's own config does,
-  matching source and target so a rebuild never shifts the path under a running
-  session:</li>
+<li><strong>Grove bind mounts your worktree, never clones</strong>, at
+  <code>/workspaces/&lt;worktree-directory-name&gt;</code>: the path <code>devcontainers</code> <abbr title="Command Line Interface">CLI</abbr> picks
+  itself, named for the worktree. Grove sets no <code>workspaceMount</code> or
+  <code>workspaceFolder</code> over a project's own config.</li>
+<li><strong>That path is the working directory</strong>, unless your <code>devcontainer.json</code>
+  pins its own <code>workspaceFolder</code>. Grove's config does, matching source and
+  target so a rebuild never shifts the path under a running session:</li>
 </ul>
-<div class="codehilite"><pre><span></span><code><span class="nt">&quot;workspaceMount&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind&quot;</span><span class="p">,</span>
-<span class="nt">&quot;workspaceFolder&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;${localWorkspaceFolder}&quot;</span>
-</code></pre></div>
+<div class="language-json codehilite"><span class="filename">.devcontainer/devcontainer.json</span><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">&quot;workspaceMount&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind&quot;</span><span class="p">,</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">&quot;workspaceFolder&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;${localWorkspaceFolder}&quot;</span>
+</span></code></pre></div>
 <ul>
-<li><strong>Grove never guesses the container-side path.</strong> It reads back what the CLI
-  reported and translates every host path against it. A container that reported
-  no workspace folder gets no substitution rather than a host path that resolves
-  to nothing inside.</li>
+<li><strong>Grove never guesses the container-side path</strong>, but translates host paths
+  against what the <abbr title="Command Line Interface">CLI</abbr> reported. A container reporting none gets no
+  substitution, rather than a path resolving to nothing inside.</li>
 </ul>
 <div class="admonition tip">
 <p class="admonition-title">Why a linked worktree still works</p>
-<p>A worktree's <code>.git</code> is a <em>file</em> pointing outside the worktree, so mounting
-only the worktree breaks every git command inside the container.</p>
-<ul>
-<li><strong>Grove binds the shared git directory at the identical absolute path</strong> it
-  has on your host, with <code>GIT_COMMON_DIR</code> pointing at it.</li>
-<li><strong>It synthesizes that mount every start</strong> rather than relying on the CLI's
-  <code>--mount-git-worktree-common-dir</code>, which is silently ignored once a config
-  defines its own <code>workspaceMount</code>.</li>
-<li><strong>Those two are the only host paths Grove preserves rather than
-  translates.</strong> Each has to mean one thing on both sides of the boundary.</li>
-</ul>
+<p>A worktree's <code>.git</code> is a <em>file</em> pointing outside it, so mounting only the
+worktree breaks git inside. Grove binds the shared git directory at its
+identical host path with <code>GIT_COMMON_DIR</code> set, synthesized every start,
+since the <abbr title="Command Line Interface">CLI</abbr>'s <code>--mount-git-worktree-common-dir</code> is silently ignored
+once a config sets its own <code>workspaceMount</code>. These are the only two host
+paths Grove preserves rather than translates.</p>
 </div>
 <h2 id="getting-secrets-and-environment-in">Getting secrets and environment in</h2>
-<p>A host workspace inherits your shell. A container starts empty, so a token an
-<code>.mcp.json</code> server expects goes missing, the container comes up looking healthy,
-and the integration fails quietly.</p>
-<div class="codehilite"><pre><span></span><code>container.env_file: &quot;.env.grove&quot;                    # pick one
-container.env_command: &quot;./scripts/print-secrets.sh&quot; # or the other
-</code></pre></div>
-<ul>
-<li><strong>Two knobs, mutually exclusive.</strong> <code>env_file</code> loads a dotenv file, repo
-  relative or absolute, <code>~</code> expanded. <code>env_command</code> runs a host command and
-  parses its stdout as dotenv, so a secret never touches disk. A configured file
-  that is missing is a hard error at create.</li>
-<li><strong>Nothing here is Grove-specific.</strong> Any command printing <code>KEY=value</code> works:
-  <code>container.env_command: "acme-secrets export --format=dotenv --project=my-app"</code>.</li>
-<li><strong>Two separate roads lead into the container, and feeding one does not feed
-  the other.</strong> Grove resolves your knob twice per start: once through the
-  devcontainer CLI's <code>--secrets-file</code>, which reaches your <code>postCreateCommand</code>
-  and <code>postStartCommand</code> only, and once through <code>--remote-env</code>, which reaches
-  the agent process.</li>
-<li><strong>No value is cached or threaded between those calls.</strong> A daemon's manager
-  lives for days, so a cache would serve a secret long after its source rotated
-  it. The trade is that <code>env_command</code> must be idempotent and cheap.</li>
-<li><strong>Precedence, lowest to highest:</strong> telemetry passthrough, then <code>env_file</code> or
-  <code>env_command</code>, then agent configuration sharing variables, then the agent's
-  own <code>env</code>.</li>
-<li><strong>A committed layer may not set <code>env_command</code>.</strong> It is stripped with a warning
-  naming the section, because honoring it would let a repository run an
-  arbitrary command on anyone who clones it. Put it in
-  <code>.grove/config.local.json</code> or your user config.</li>
-<li><strong>A committed <code>env_file</code> is honored, but only inside the repository.</strong> Loading
-  a file executes nothing, so a committed layer may set it. An absolute path or
-  one escaping the repository is ignored.</li>
-</ul>
+<p>A host workspace inherits your shell. A container starts empty, so a
+missing token an <code>.mcp.json</code> server expects fails the integration quietly.</p>
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>container.env_file: &quot;.env.grove&quot;                    # pick one
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>container.env_command: &quot;./scripts/print-secrets.sh&quot; # or the other
+</span></code></pre></div>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Two knobs, mutually exclusive</td>
+<td><code>env_file</code> loads a dotenv file (repo relative, absolute, or <code>~</code> expanded); <code>env_command</code> parses a host command's stdout as dotenv instead, so a secret never touches disk. A missing configured file is a hard error at create.</td>
+</tr>
+<tr>
+<td>Any command printing <code>KEY=value</code> works</td>
+<td><code>container.env_command: "acme-secrets export --format=dotenv --project=my-app"</code>.</td>
+</tr>
+<tr>
+<td>Two entry points</td>
+<td><code>--secrets-file</code> reaches <code>postCreateCommand</code>/<code>postStartCommand</code>; <code>--remote-env</code> reaches the agent. Feeding one doesn't feed the other. Grove resolves each once and caches nothing, so <code>env_command</code> must be idempotent and cheap.</td>
+</tr>
+<tr>
+<td>Precedence, lowest to highest</td>
+<td>Telemetry passthrough, <code>env_file</code>/<code>env_command</code>, agent configuration sharing variables, the agent's own <code>env</code>.</td>
+</tr>
+<tr>
+<td>A committed layer can't set <code>env_command</code></td>
+<td>It would run an arbitrary command on anyone who clones the repo; Grove strips it with a warning. Use <code>.grove/config.local.json</code> or your user config instead.</td>
+</tr>
+<tr>
+<td>A committed <code>env_file</code> is honored inside the repository only</td>
+<td>Loading it executes nothing, and an absolute path, or one escaping the repo, is ignored.</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="extending-the-environment">Extending the environment</h2>
-<p>Nothing here is a Grove format. A container workspace is an ordinary
-devcontainer, so anything the spec supports is yours, and what you add every
-workspace inherits from the next create onward.</p>
+<p>A container workspace is an ordinary devcontainer: anything the spec
+supports is yours, and every later create inherits it.</p>
 <ul>
-<li><strong>Add a service, every agent gets its own.</strong> Postgres, a browser, a queue.
-  Your VS Code teammates get the same one from the same file.</li>
-<li><strong>Start from what Grove already runs.</strong> <code>grove init devcontainer</code> scaffolds
-  <code>.devcontainer/devcontainer.json</code> from the packaged default. Commit it and the
-  project has a versioned agent environment.</li>
-<li><strong>Where a change goes matters more than what it is.</strong> Four tiers, and the
-  right one is what keeps a dependency bump from forcing an image rebuild.</li>
+<li><strong><code>grove init devcontainer</code> scaffolds <code>.devcontainer/devcontainer.json</code></strong>
+  from the packaged default. Commit it for a versioned agent environment.</li>
+<li><strong>Pick the tier by change frequency</strong>, so a dependency bump doesn't force
+  a rebuild: anything changing more often than monthly belongs in tier 2 or
+  3 (<code>uv sync</code> in the <code>Dockerfile</code> rebuilds the image on every lockfile
+  bump).</li>
 </ul>
 <div class="table-wrapper"><table>
 <thead>
@@ -1497,39 +1517,37 @@ workspace inherits from the next create onward.</p>
 </tbody>
 </table></div>
 <ul>
-<li><strong>Anything changing more often than monthly belongs in tier 2 or 3.</strong> Baking
-  <code>uv sync</code> into the <code>Dockerfile</code> means every lockfile bump rebuilds the image.</li>
-<li><strong>Past a step or two, use the <code>init.d</code> convention.</strong> A phase runner
-  (<code>bootstrap.sh create|start</code>) iterating numbered idempotent scripts under
-  <code>.devcontainer/init.d/</code>, so new setup is a new file rather than a longer
-  one-liner.</li>
-<li><strong>The first workspace builds the image.</strong> Every one after it starts in
-  seconds.</li>
+<li><strong>Past a step or two, use the <code>init.d</code> convention</strong>: <code>bootstrap.sh
+  create|start</code> over numbered idempotent scripts in
+  <code>.devcontainer/init.d/</code>.</li>
+<li><strong>The first workspace builds the image, the rest start in seconds</strong>: the
+  build window reads <code>PROVISIONING</code>, with an elapsed clock and the
+  provisioner's last line, and a respawn destroys that build in flight.</li>
 </ul>
 <div class="admonition tip">
 <p class="admonition-title">Your image needs <code>iproute2</code>. Grove brings its own <code>iptables</code>.</p>
+<p>The egress allowlist is an in-container firewall run from
+<code>postStartCommand</code>. A missing tool aborts container start, rather than
+leaving a workspace you believe is firewalled and isn't.</p>
 <ul>
-<li>The egress allowlist runs as an in-container firewall from
-  <code>postStartCommand</code>, and a missing tool aborts container start rather than
-  leaving a workspace you believe is firewalled and is not.</li>
-<li>Grove builds a static <code>iptables</code>/<code>ip6tables</code> pair per host and mounts it
-  read only at <code>/grove/netfilter</code>, used <strong>only</strong> when your image ships
-  none of its own. <code>grove doctor</code> reports it as <code>container firewall</code>.</li>
-<li>Grove does not supply <code>ip</code> (iproute2). Ubuntu's devcontainer base has it,
-  <code>python:*-slim</code> and <code>node:*</code> do not, so add
-  <code>apt-get install -y iproute2</code> there.</li>
-<li>Any failure names the missing tool and both remedies: install it in the
-  image, or set <code>container.egress.mode = "open"</code>.</li>
+<li>Grove mounts a static <code>iptables</code>/<code>ip6tables</code> pair read only at
+  <code>/grove/netfilter</code>, used <strong>only</strong> when your image ships none
+  (<code>grove doctor</code> calls it <code>container firewall</code>).</li>
+<li>Grove supplies no <code>ip</code> (iproute2): Ubuntu's base has it,
+  <code>python:*-slim</code> and <code>node:*</code> don't (<code>apt-get install -y iproute2</code>
+  there).</li>
+<li>Failures name the missing tool and both remedies: install it, or set
+  <code>container.egress.mode = "open"</code>.</li>
 </ul>
 </div>
 <h2 id="setting-the-limits">Setting the limits</h2>
 <p>Three controls, each one config line.</p>
-<div class="codehilite"><pre><span></span><code>container.agent_config.share: full | projects | isolated   # default: full
-container.egress.mode: allowlist | open | deny             # default: allowlist
-container.resources: { memory: &quot;8g&quot;, cpus: 4, pids: 2048 }
-</code></pre></div>
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>container.agent_config.share: full | projects | isolated   # default: full
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>container.egress.mode: allowlist | open | deny             # default: allowlist
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>container.resources: { memory: &quot;8g&quot;, cpus: 4, pids: 2048 }
+</span></code></pre></div>
 <ul>
-<li><strong>Agent configuration sharing decides what crosses in from your host.</strong></li>
+<li><strong>Sharing decides what crosses in from your host.</strong></li>
 </ul>
 <div class="table-wrapper"><table>
 <thead>
@@ -1557,120 +1575,183 @@ container.resources: { memory: &quot;8g&quot;, cpus: 4, pids: 2048 }
 </tr>
 </tbody>
 </table></div>
-<ul>
-<li><strong>Claude Code plugins cross in the same way</strong>, as a read-only seed the tool
-  resolves in place. Your marketplaces and plugins are there, and anything
-  installed from inside the container lands in that workspace's own plugin
-  directory, never on your host.</li>
-<li><strong>Egress derives its allowlist for you:</strong> the agent's plane, your package
-  registries, your repo's git remote, and Grove's plane. Ordinary development
-  needs no configuration.</li>
-<li><strong>Entries in <code>container.egress.allow</code> are hostnames or CIDRs resolved once at
-  start</strong>, so wildcards do not work. List the hostnames you actually reach, or
-  set <code>mode: open</code>.</li>
-<li><strong>Resources apply to every service the workspace runs</strong>, and take effect on the
-  next launch. Unset means uncapped.</li>
-</ul>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Claude Code plugins cross as a read-only seed</td>
+<td>Anything installed inside lands in that workspace's own plugin directory, never on your host.</td>
+</tr>
+<tr>
+<td>Workspace folder stamped trusted before the container starts</td>
+<td>The first-run trust dialog is a prompt nobody is there to answer. <code>container.agent_config.trust: false</code> restores it, and a workspace waiting for you.</td>
+</tr>
+<tr>
+<td>Egress allowlist is derived</td>
+<td>From the agent's plane, your package registries, your git remote, and Grove's plane. Ordinary development needs no configuration.</td>
+</tr>
+<tr>
+<td><code>container.egress.allow</code> entries are hostnames or CIDRs</td>
+<td>Resolved once at start, so wildcards don't work. List the hostnames you reach, or set <code>mode: open</code>.</td>
+</tr>
+<tr>
+<td>A container started outside Grove reads unprovisioned</td>
+<td>Until you respawn, since the firewall runs from <code>postStartCommand</code> and that start never ran it.</td>
+</tr>
+<tr>
+<td>Resources apply to every service the workspace runs</td>
+<td>Take effect next launch; default is uncapped.</td>
+</tr>
+</tbody>
+</table></div>
 <div class="admonition danger">
 <p class="admonition-title">A blast-radius boundary, not a credential boundary</p>
-<p>Under the default <code>share: full</code>, your real agent credentials are mounted in,
-so a prompt-injected agent could use your token as you. Two things bound
-that: the egress allowlist limits where a token can be sent, and Grove seeds
-<code>~/.claude.json</code> per workspace so an MCP-rewrite attack dies with the
-workspace. For a repository you do not trust, set <code>share: isolated</code> and
-accept a separate sign-in.</p>
+<p>Under the default <code>share: full</code>, your real agent credentials are mounted
+in, so a prompt-injected agent could use your token as you. The egress
+allowlist bounds where a token can go, and Grove seeds <code>~/.claude.json</code>
+per workspace so an <abbr title="Model Context Protocol">MCP</abbr>-rewrite attack dies with the workspace. For a
+repository you don't trust, set <code>share: isolated</code> and accept a separate
+sign-in.</p>
 </div>
 <ul>
-<li><strong>A committed config layer may tighten sharing to <code>isolated</code>, but can never
-  loosen it back to <code>full</code>.</strong> Only your own non-committed config can grant a
-  capability.</li>
+<li><strong>A committed layer may tighten sharing to <code>isolated</code>, never loosen it to
+  <code>full</code>.</strong> Only your own uncommitted config can grant a capability.</li>
 </ul>
 <h2 id="when-it-falls-back-to-the-host">When it falls back to the host</h2>
-<p>If Docker or the devcontainer CLI is unreachable, Grove finds out before it touches anything.</p>
 <ul>
-<li><strong>The check runs first.</strong> The probe runs before Grove touches the filesystem, so rolling back costs nothing.</li>
-<li><strong>The fallback is visible, not silent.</strong> The workspace lands on host and every surface shows a persistent warning for the whole life of the workspace, not a line that scrolls off your terminal. The message names the failing probe and the remedy.</li>
-<li><strong>Recovery is a respawn.</strong> Fix the runtime, run <code>grove respawn</code>, and Grove promotes the workspace and clears the marker. Your branch and worktree are untouched.</li>
-<li><strong>An explicit <code>--runtime host</code> is different.</strong> That is your decision, so Grove never auto-promotes it.</li>
+<li><strong>The check runs first</strong>, so if Docker or the devcontainer <abbr title="Command Line Interface">CLI</abbr> is
+  unreachable, Grove finds out before touching the filesystem and rolling
+  back costs nothing.</li>
+<li><strong>The fallback is visible, not silent.</strong> The workspace lands on host, and
+  every surface carries a persistent warning for its whole life, naming the
+  failing probe and the remedy.</li>
+<li><strong>Recovery is a respawn.</strong> Fix the runtime, run <code>grove respawn</code>, and Grove
+  promotes the workspace and clears the marker. Branch and worktree stay untouched.</li>
+<li><strong>An explicit <code>--runtime host</code> is different</strong>: that's your decision, so
+  Grove never auto-promotes it.</li>
 </ul>
 <h2 id="sessions-outlive-your-terminal">Sessions outlive your terminal</h2>
-<p>The agent runs under tmux inside the container, not in your host tmux. Your host
-session is only a viewport onto it.</p>
+<p>The agent runs under tmux inside the container, not your host tmux. Your
+host session is only a viewport onto it.</p>
 <ul>
-<li><strong>Closing your terminal does not stop the agent.</strong> Detach, close the terminal,
-  restart the daemon or let your host tmux server die. What owns the agent's
-  terminal is inside the container with it.</li>
+<li><strong>Closing your terminal doesn't stop the agent.</strong> Detach, close the
+  terminal, restart the daemon, or let your host tmux server die: the
+  container owns the agent's terminal.</li>
 <li><strong><code>grove attach</code> returns you to the same agent</strong>, mid-task, with its
-  scrollback. If the host session is what went away, attach says so and names
-  the remedy.</li>
-<li><strong><code>grove respawn</code> rebuilds the viewport, not the agent.</strong> It reattaches rather
-  than starting a second one.</li>
-<li><strong>A detached workspace stays observable.</strong> Peek, the webapp terminal tab and
-  steering all read the agent's own pane inside the container.</li>
+  scrollback, and names the remedy if the host session itself is gone.</li>
+<li><strong><code>grove respawn</code> rebuilds the viewport, not the agent</strong>, reattaching
+  rather than starting a second one.</li>
+<li><strong>A detached workspace stays observable</strong>: peek, the webapp terminal tab,
+  and steering all read the agent's own pane.</li>
 </ul>
 <div class="admonition tip">
 <p class="admonition-title">Grove brings its own tmux, the same way it brings <code>iptables</code></p>
-<ul>
-<li><strong>No common base image ships tmux</strong>, so Grove builds a static one per host
-  and architecture and mounts it read only beside a full terminfo database.
-  An image with its own keeps it. <code>container.tmux.prefer_image: false</code> uses
-  Grove's everywhere.</li>
-<li><strong>The terminfo travels with the binary</strong> because the pane needs an entry
-  for the type tmux hands it, and the client needs one for your <code>TERM</code>,
-  without which tmux refuses the attach outright. An unpackaged <code>TERM</code>
-  retries once with <code>container.tmux.term_fallback</code> (<code>xterm-256color</code>) and
-  warns. Empty it to disable the retry.</li>
-<li><strong><code>grove doctor</code> reports it as <code>in-container tmux</code></strong>, a warning rather
-  than a failure. Until the bundle exists, an image without its own tmux
-  runs the agent the old way. It works, and it dies with your terminal.</li>
-</ul>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>What</th>
+<th>Why it works this way</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No base image ships tmux</td>
+<td>Grove mounts a static build per host and architecture, read only, beside a full terminfo database. An image with its own keeps it; <code>container.tmux.prefer_image: false</code> uses Grove's everywhere.</td>
+</tr>
+<tr>
+<td>Terminfo travels with the binary</td>
+<td>tmux refuses an attach without an entry for your <code>TERM</code>. An unpackaged <code>TERM</code> retries once with <code>container.tmux.term_fallback</code> (<code>xterm-256color</code>) and warns; empty it to disable the retry.</td>
+</tr>
+<tr>
+<td><code>grove doctor</code> warns, doesn't fail</td>
+<td>Reports <code>in-container tmux</code>. Without the bundle the agent runs the old way, which works and dies with your terminal.</td>
+</tr>
+</tbody>
+</table></div>
 </div>
 <h2 id="getting-a-shell-inside">Getting a shell inside</h2>
-<p><code>grove attach</code> drops you into the workspace's tmux session. For a container workspace its shell window is already inside the container, so switching to it (Ctrl-b 0) puts you at a container prompt rather than a host one.</p>
 <ul>
+<li><strong><code>grove attach</code> puts you in the workspace's tmux session</strong>, whose shell
+  window is already inside the container (Ctrl-b 0 for a container prompt).</li>
 <li><strong><code>grove shell WORKSPACE</code> goes straight there</strong> without attaching first.</li>
-<li><strong>Both land in the same place, and it is the same shell each time.</strong> It has its own session on the same in-container tmux the agent uses, so it survives you leaving and is still there when you come back, with its history, its environment, and anything still running.</li>
+<li><strong>Both land in the same shell every time</strong>: its own session on the
+  in-container tmux, surviving you leaving, with history, environment, and
+  anything still running.</li>
 <li><strong>Which shell runs is <code>container.shell</code></strong>, a chain tried in order.</li>
 </ul>
 <h2 id="reading-the-container-status-line">Reading the container status line</h2>
-<p>Grove bind-mounts a small, read-only set of terminal assets into every containerized workspace, at <code>/grove/decor</code>, so attach shows a status bar rather than bare default chrome.</p>
-<ul>
-<li><strong>The vocabulary switches with your terminal's fonts.</strong> It uses a Nerd Font icon vocabulary by default, where the icon replaces the word rather than decorating it. Set <code>GROVE_STATUSLINE_GLYPHS=ascii</code> in the agent's environment and the words come back instead.</li>
-<li><strong>The resource figures come from the container's own cgroup, not the host.</strong> <code>/proc/loadavg</code> is not namespaced and reports the host's load inside a container, so Grove's bundled script reads the container's own cgroup cpu and memory limits instead, with a cgroup v1 fallback for an older host.</li>
-<li><strong>An absent segment means an absent fact, not a bug.</strong> On an API-key login there are no subscription quota pools to report, so that segment is absent rather than showing a zero. Identity works the same way: the user and machine names come off a chain of cheap sources, and when nothing can answer, the segment is absent rather than half rendered.</li>
-<li><strong>The toggles live in the configuration reference.</strong> <code>container.decor.enabled</code>, <code>.statusline</code>, <code>.tmux_conf</code> and <code>.payload</code> turn pieces off or replace the bundle wholesale; a host workspace already has your own tmux and status line, so none of this applies there.</li>
-</ul>
+<p>Grove bind-mounts a read-only set of terminal assets at <code>/grove/decor</code>, so
+attach shows a status bar instead of bare default chrome.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Behavior</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vocabulary follows your terminal's fonts</td>
+<td>Nerd Font icons by default, replacing the word. Set <code>GROVE_STATUSLINE_GLYPHS=ascii</code> for words instead.</td>
+</tr>
+<tr>
+<td>Figures come from the container's own cgroup, not the host</td>
+<td><code>/proc/loadavg</code> isn't namespaced. The bundled script reads cgroup CPU and memory limits, with a cgroup v1 fallback.</td>
+</tr>
+<tr>
+<td>An absent segment means an absent fact, not a bug</td>
+<td>An <abbr title="Application Programming Interface">API</abbr>-key login has no subscription quota pools, so that segment is absent, not zero; identity behaves the same when nothing can answer.</td>
+</tr>
+<tr>
+<td>Toggles: <code>container.decor.enabled</code>, <code>.statusline</code>, <code>.tmux_conf</code>, <code>.payload</code></td>
+<td>Turn pieces off or replace the bundle. A host workspace already has your own tmux and status line.</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="several-agents-in-one-container">Several agents in one container</h2>
-<p>A workspace runs one agent. When you want a second, say a reviewer reading what
-the first wrote, start it in the same container rather than a new workspace.</p>
+<p>A workspace runs one agent. For a second, say a reviewer reading what the
+first wrote, start it in the same container instead of a new workspace.</p>
 <ul>
 <li><strong><code>grove agent add WORKSPACE</code> starts one</strong>, optionally of another kind:
-  <code>--agent codex --name reviewer</code>. Each gets its own persistent tmux session
-  inside the container. Grove starts one only when you ask.</li>
-<li><strong><code>grove agent list</code>, <code>attach</code>, <code>peek</code>, <code>message</code> and <code>kill</code> manage them.</strong>
-  <code>list</code> reads the container itself rather than a stored roster, so an agent
-  that ended simply stops appearing.</li>
+  <code>--agent codex --name reviewer</code>. Each gets its own persistent tmux session,
+  and only starts when you ask.</li>
+<li><strong><code>grove agent list</code>, <code>attach</code>, <code>peek</code>, <code>message</code>, and <code>kill</code> manage them.</strong>
+  <code>list</code> reads the container itself, so an ended agent stops appearing.</li>
 <li><strong>An extra of the workspace's own kind joins its agent axis</strong>, visible in
-  <code>grove sessions list --workspace WORKSPACE</code>. One of a different kind runs and
-  is fully reachable, but the workspace card stays about its own kind.</li>
-<li><strong>They share the worktree, branch and container.</strong> That is the point, and the
-  caveat: two agents editing the same files collide exactly as two people would.
-  Use separate workspaces for isolation.</li>
+  <code>grove sessions list --workspace WORKSPACE</code>. A different kind runs and is
+  fully reachable, but the workspace card still tracks its own kind.</li>
+<li><strong>They share the worktree, branch, and container</strong>, which is the point and
+  the caveat: two agents editing the same files collide like two people
+  would.</li>
 <li><strong>This needs a containerized workspace with a reachable tmux.</strong> A host
-  workspace hosts one agent.</li>
+  workspace holds one agent only.</li>
 </ul>
 <h2 id="opening-it-in-vs-code">Opening it in VS Code</h2>
 <p><code>grove code WORKSPACE</code> opens VS Code's editor running inside the container.</p>
 <ul>
-<li><strong>Source stays on the bind mount, build artifacts stay in the container's own volumes.</strong> The editor's server runs inside the container too, which is what keeps a container-built <code>node_modules</code> from confusing a host language server.</li>
-<li><strong>Cursor and VSCodium cannot open the container this way.</strong> VS Code's Dev Containers extension is proprietary, so on those editors <code>grove shell</code> and <code>grove attach</code> are the way in until an SSH transport ships.</li>
+<li><strong>Source stays on the bind mount. Build artifacts stay in the container's
+  own volumes.</strong> The editor's server runs inside too, keeping a
+  container-built <code>node_modules</code> from confusing a host language server.</li>
+<li><strong>Cursor and VSCodium can't open the container this way</strong>, since VS Code's
+  Dev Containers extension is proprietary. <code>grove shell</code> and <code>grove attach</code>
+  are the way in until an SSH transport ships.</li>
 </ul>
 <h2 id="grove-init-scripts-and-container-hooks">Grove init scripts and container hooks</h2>
-<p>A <a href="../configure-init-scripts/">Grove init script</a> and a devcontainer hook run in different places, in a fixed order.</p>
+<p>A <a href="../configure-init-scripts/">Grove init script</a> and a devcontainer hook run
+in different places, in a fixed order.</p>
 <ul>
-<li><strong>The init script prepares the host worktree</strong>, the directory that gets bind mounted into the container. It runs first.</li>
-<li><strong>The devcontainer's own hooks prepare the container.</strong> They run second, inside the container, after the mount is in place.</li>
-<li><strong>Set <code>init_script.applies_to: "host"</code> to stop the init script running twice.</strong> If your devcontainer hooks already install dependencies, this keeps a containerized workspace from repeating work the hooks already did. <code>init_script.applies_to</code> also accepts <code>all</code> (the default) and <code>container</code>.</li>
+<li><strong>The init script prepares the host worktree</strong>, the directory bind mounted
+  into the container, and runs first.</li>
+<li><strong>The devcontainer's own hooks run second</strong>, inside the container, after
+  the mount is in place.</li>
+<li><strong><code>init_script.applies_to: "host"</code> stops the init script running twice</strong>
+  when your hooks already install what it would. It also accepts <code>all</code>
+  (default) and <code>container</code>.</li>
 </ul>
 <h2 id="configuration-reference">Configuration reference</h2>
 <div class="table-wrapper"><table>
@@ -1685,72 +1766,72 @@ the first wrote, start it in the same container rather than a new workspace.</p>
 <tr>
 <td><code>container.enabled</code></td>
 <td><code>true</code></td>
-<td>Cascade default for <code>runtime</code> when you omit <code>--runtime</code>.</td>
+<td>Cascade default for <code>runtime</code>.</td>
 </tr>
 <tr>
 <td><code>container.docker_bin</code></td>
 <td><code>docker</code></td>
-<td>The container CLI Grove shells out to.</td>
+<td>Container <abbr title="Command Line Interface">CLI</abbr> Grove shells out to.</td>
 </tr>
 <tr>
 <td><code>container.shell</code></td>
 <td><code>["bash", "sh"]</code></td>
-<td>Interactive shells <code>grove shell</code> tries, in order, resolved inside the container.</td>
+<td>Shells <code>grove shell</code> tries, in order.</td>
 </tr>
 <tr>
 <td><code>container.tmux.enabled</code></td>
 <td><code>true</code></td>
-<td>Run the agent under a tmux inside the container. <code>false</code> restores the bare exec, and loses persistence with it.</td>
+<td>Agent under an in-container tmux. <code>false</code> is a bare exec, no persistence.</td>
 </tr>
 <tr>
 <td><code>container.tmux.prefer_image</code></td>
 <td><code>true</code></td>
-<td>Use the image's own tmux when it has one. <code>false</code> always uses Grove's bundle.</td>
+<td>Prefer the image's own tmux.</td>
 </tr>
 <tr>
 <td><code>container.tmux.payload</code></td>
 <td>unset</td>
-<td>Directory holding an operator-supplied <code>bin/&lt;arch&gt;/tmux</code> and <code>terminfo/</code>. Unset uses Grove's own build and cache.</td>
+<td>Directory of a supplied <code>bin/&lt;arch&gt;/tmux</code> and <code>terminfo/</code>.</td>
 </tr>
 <tr>
 <td><code>container.tmux.session</code></td>
 <td><code>agent</code></td>
-<td>In-container tmux session the agent runs in. A reattach identity, so renaming it orphans a live agent.</td>
+<td>Agent's session. Renaming it orphans a live agent.</td>
 </tr>
 <tr>
 <td><code>container.tmux.shell_session</code></td>
 <td><code>shell</code></td>
-<td>In-container tmux session <code>grove shell</code> and the shell window attach to.</td>
+<td>Session <code>grove shell</code> attaches to.</td>
 </tr>
 <tr>
 <td><code>container.tmux.term_fallback</code></td>
 <td><code>xterm-256color</code></td>
-<td><code>TERM</code> to retry an attach with when tmux refuses your terminal's own. Empty disables the retry.</td>
+<td><code>TERM</code> retried on a refused attach. Empty disables it.</td>
 </tr>
 <tr>
 <td><code>container.default_config</code></td>
 <td>packaged default</td>
-<td>The <code>devcontainer.json</code> used for a repo with none of its own.</td>
+<td><code>devcontainer.json</code> for a repo with none.</td>
 </tr>
 <tr>
 <td><code>container.decor.enabled</code></td>
 <td><code>true</code></td>
-<td>Mount and compose Grove's tmux and statusline chrome at all.</td>
+<td>Mount and compose the terminal chrome at all.</td>
 </tr>
 <tr>
 <td><code>container.decor.statusline</code></td>
 <td><code>true</code></td>
-<td>Compose the statusline into the agent's settings.</td>
+<td>Statusline into the agent's settings.</td>
 </tr>
 <tr>
 <td><code>container.decor.tmux_conf</code></td>
 <td><code>true</code></td>
-<td>Pass Grove's tmux config to the in-container tmux.</td>
+<td>Grove's tmux config into the container.</td>
 </tr>
 <tr>
 <td><code>container.decor.payload</code></td>
 <td>unset</td>
-<td>Host directory of assets replacing Grove's bundled ones.</td>
+<td>Host assets replacing the bundled ones.</td>
 </tr>
 <tr>
 <td><code>container.agent_config.share</code></td>
@@ -1758,14 +1839,19 @@ the first wrote, start it in the same container rather than a new workspace.</p>
 <td><code>full</code>, <code>projects</code>, or <code>isolated</code>.</td>
 </tr>
 <tr>
+<td><code>container.agent_config.trust</code></td>
+<td><code>true</code></td>
+<td>Folder seeded trusted, <code>.mcp.json</code> servers approved.</td>
+</tr>
+<tr>
 <td><code>container.env_file</code></td>
 <td>unset</td>
-<td>Dotenv file loaded into the container and agent environment.</td>
+<td>Dotenv file loaded into container and agent.</td>
 </tr>
 <tr>
 <td><code>container.env_command</code></td>
 <td>unset</td>
-<td>Host command whose stdout is parsed as dotenv. Mutually exclusive with <code>env_file</code>.</td>
+<td>Host command printing dotenv. Excludes <code>env_file</code>.</td>
 </tr>
 <tr>
 <td><code>container.egress.mode</code></td>
@@ -1775,7 +1861,7 @@ the first wrote, start it in the same container rather than a new workspace.</p>
 <tr>
 <td><code>container.egress.allow</code></td>
 <td>derived</td>
-<td>Extra hosts and CIDRs added to the derived allowlist.</td>
+<td>Extra hosts and CIDRs on the allowlist.</td>
 </tr>
 <tr>
 <td><code>container.resources.memory</code></td>
@@ -1794,22 +1880,35 @@ the first wrote, start it in the same container rather than a new workspace.</p>
 </tr>
 <tr>
 <td><code>container.up_timeout_seconds</code></td>
-<td>see reference</td>
-<td>How long Grove waits before treating a container as failed.</td>
+<td><code>900</code></td>
+<td>Seconds before a container counts as failed.</td>
 </tr>
 </tbody>
 </table></div>
-<p>The full generated schema is on the <a href="../configure-reference/">configuration reference</a> page.</p>
+<p>Full schema on the <a href="../configure-reference/">configuration reference</a> page.</p>
 <h2 id="see-also">See also</h2>
 <ul>
 <li><a href="../features-workspace-lifecycle/">Workspace lifecycle</a>: every lifecycle verb, including <code>respawn</code>.</li>
-<li><a href="../use-cli/">CLI</a>: <code>grove create --runtime</code>, <code>grove init devcontainer</code>, <code>grove doctor</code>, <code>grove shell</code>, <code>grove agent</code>, and <code>grove code</code>.</li>
+<li><a href="../use-cli/"><abbr title="Command Line Interface">CLI</abbr></a>: <code>grove create --runtime</code>, <code>grove init devcontainer</code>, <code>grove doctor</code>, <code>grove shell</code>, <code>grove agent</code>, and <code>grove code</code>.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1843,7 +1942,11 @@ the first wrote, start it in the same container rather than a new workspace.</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2676,19 +2779,27 @@ the first wrote, start it in the same container rather than a new workspace.</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#host-or-container"
@@ -2828,18 +2939,19 @@ the first wrote, start it in the same container rather than a new workspace.</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2888,7 +3000,9 @@ the first wrote, start it in the same container rather than a new workspace.</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2965,11 +3079,20 @@ the first wrote, start it in the same container rather than a new workspace.</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -3014,4 +3137,5 @@ the first wrote, start it in the same container rather than a new workspace.</p>
 }
 </script>
 </body>
+
 </html>

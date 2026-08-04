@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://bearlike.github.io/Grove/main"; /* for search plugin notably */
+        
+        const base_url = (new URL("..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../js/dark.js"></script>
 
@@ -12,12 +13,13 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
     
+    
+    
 
 
 
 
 <title>Architecture · Grove</title>
-<meta property="og:site_name" content="Grove">
 
 
 
@@ -44,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Grove">
+
 
 <!-- Twitter Card -->
 
@@ -58,11 +62,13 @@
 
 
 
+    
     <link href="../logos/grove-logo.png" rel="icon"/>
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -87,7 +93,7 @@
         }
     </style>
     <link href="../assets/_mkdocstrings.css" rel="stylesheet"/>
-    <link href="../stylesheets/grove.css?v=2" rel="stylesheet"/>
+    <link href="../stylesheets/grove.css?v=5" rel="stylesheet"/>
 
     
 
@@ -121,7 +127,7 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default ms-has-header-tabs">
 <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         
 <header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
@@ -141,7 +147,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://bearlike.github.io/Grove/main">
                 <span class="mewbo-brand__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
                 
@@ -154,7 +162,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -187,6 +195,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -209,6 +224,25 @@
         </div>
     </div>
     
+    <nav class="ms-header-tabs" aria-label="Sections">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container ms-header-tabs__rail">
+            <a class="ms-header-tabs__item" href="..">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></g></svg></span>
+                <span>Home</span>
+            </a>
+            <a class="ms-header-tabs__item" href="../getting-started/">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
+                <span>User Guide</span>
+            </a>
+            <a class="ms-header-tabs__item" href="./" aria-current="page">
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m18 16l4-4l-4-4M6 8l-4 4l4 4m8.5-12l-5 16"/></svg></span>
+                <span>Developer Reference</span>
+            </a>
+        </div>
+    </div>
+</nav>
+    
 </header>
 
 
@@ -227,7 +261,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -380,7 +414,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1209,11 +1243,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1223,8 +1260,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://bearlike.github.io/Grove/develop-architecture.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1235,6 +1273,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -1273,132 +1312,104 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Grove is one engine with several clients around it. The engine
-(<code>grove.core</code>) owns every decision. The daemon (<code>grove.daemon</code>) serves
-it over loopback HTTP, with REST for lifecycle and SSE for live activity.
-The client SDK (<code>grove.client</code>) is the transport-agnostic way to attach.
-The TUI (<code>grove.tui</code>) is the primary interactive client. The MCP server
-(<code>grove.mcp</code>) exposes the same lifecycle to MCP-capable agents. The web
-dashboard (<code>webapp/</code>) is a Next.js client whose own backend-for-frontend
-(BFF) routes sit in front of the daemon. The boundaries between all of
-them are enforced in CI.</p>
-<h2 id="the-package-layout">The package layout</h2>
-<div class="codehilite"><pre><span></span><code>grove/
-├── core/                # the engine, zero UI dependencies
-│   ├── __init__.py     # public API (re-exports only)
-│   ├── config.py       # Pydantic models + cascade resolver + schema dump
-│   ├── workspace.py    # state dataclass + identity + transitions
-│   ├── git.py          # subprocess wrappers (the `git` side-effect surface)
-│   ├── tmux.py         # libtmux wrappers + init runner (the `tmux` side-effect surface)
-│   ├── mewbo.py        # Mewbo REST I/O (the `mewbo` side-effect surface)
-│   ├── store.py        # atomic JSON state, repo-scoped queries
-│   ├── manager.py      # WorkspaceManager façade, orchestration only
-│   ├── registry.py     # RepoRegistry: one manager per repo, for multi-repo clients
-│   ├── activity.py     # ActivityService: the cross-project activity hub
-│   ├── sessions.py     # SessionExplorer: agent-session discovery across worktrees
-│   ├── auth.py         # pairing handshake + session store
-│   ├── paths.py        # platformdirs helpers
-│   ├── errors.py       # exception hierarchy
-│   ├── contracts/      # cross-boundary Pydantic shapes (plans, requests, views, palettes)
-│   └── agents/         # agent adapters: per-kind session introspection
-│
-├── daemon/              # loopback FastAPI app: REST + SSE over the engine
-├── client/              # transport-agnostic attach SDK (local PTY / SSH)
-├── mcp/                 # MCP server: stdio or HTTP tools over the client SDK
-└── tui/                 # the Textual client
-    ├── cli.py          # Typer entry points
-    ├── app.py          # GroveApp(textual.App) root
-    ├── theme.py        # color tokens + theme registration
-    ├── _status.py      # Rich-side glyph + color accessors
-    ├── keys.py         # global key spec + footer key partitions
-    ├── screens/        # list, dashboard, sessions, project picker, create, edit, steer, confirms, help, pairing
-    └── widgets/        # workspace list, dashboard grid, peek rail, status bar, footer
-
-webapp/                  # Next.js dashboard; its BFF routes talk to the daemon
-</code></pre></div>
-<p>The shape encodes a single rule: <code>grove.core</code> must not depend on UI
-code. Not Textual, not Rich, not Typer, not Click, and nothing inside
-<code>grove.tui</code>. Every client, present or future, imports
-<code>WorkspaceManager</code> and the public types. Same engine, new client.</p>
-<h2 id="the-boundaries-enforced">The boundaries, enforced</h2>
-<p><a href="https://github.com/bearlike/Grove/blob/49581e6d/pyproject.toml" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>pyproject.toml</span></a> configures <code>import-linter</code> with four contracts:</p>
+    <h2 id="how-the-packages-fit-together">How the packages fit together</h2>
+<p>Grove is one engine with several clients around it. <code>grove.core</code> owns
+every decision, and <abbr title="Continuous Integration">CI</abbr> enforces the boundaries between them.</p>
 <ul>
-<li><strong>Core has no UI dependencies.</strong> <code>grove.core</code> may not import
-  <code>textual</code>, <code>rich</code>, <code>typer</code>, <code>click</code>, or <code>grove.tui</code>.</li>
-<li><strong>Daemon depends only on core.</strong> <code>grove.daemon</code> may not import
-  <code>grove.client</code> or <code>grove.tui</code>. The direction is clients → daemon →
-  core, never the reverse.</li>
-<li><strong>The client SDK stays clean.</strong> <code>grove.client</code> may not import
-  <code>grove.daemon</code> or <code>grove.tui</code>. It speaks wire shapes and HTTP, not
-  process internals.</li>
-<li><strong>The MCP server speaks only through the client SDK.</strong> <code>grove.mcp</code>
-  reaches the engine as MCP client → <code>grove.mcp</code> → <code>GroveClient</code> →
-  daemon → core, never by importing engine internals. That is what lets
-  it run on a different host than the engine.</li>
+<li><strong><code>grove.daemon</code></strong>: loopback FastAPI, <abbr title="Representational State Transfer">REST</abbr> plus <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr>.</li>
+<li><strong><code>grove.client</code></strong>: transport-agnostic attach <abbr title="Software Development Kit">SDK</abbr>.</li>
+<li><strong><code>grove.tui</code></strong>: the primary interactive client.</li>
+<li><strong><code>grove.mcp</code></strong>: the same lifecycle for <abbr title="Model Context Protocol">MCP</abbr>-capable agents.</li>
+<li><strong><code>webapp/</code></strong>: a Next.js client with its own <abbr title="Backend For Frontend, a server-side proxy that serves exactly one client">BFF</abbr>.</li>
 </ul>
-<p><code>include_external_packages = true</code> is what makes the third-party block
-real. Without it, <code>import textual</code> from inside <code>grove.core</code> would slip
-through silently. CI runs <code>lint-imports</code> on every push. A violation
-fails the lint job.</p>
+<h2 id="the-package-layout">The package layout</h2>
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>grove/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── core/                # the engine, zero UI dependencies
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│   ├── __init__.py     # public API (re-exports only)
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>│   ├── config.py       # Pydantic models + cascade resolver + schema dump
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>│   ├── workspace.py    # state dataclass + identity + transitions
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>│   ├── git.py          # subprocess wrappers (the `git` side-effect surface)
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>│   ├── tmux.py         # libtmux wrappers + init runner (the `tmux` side-effect surface)
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│   ├── mewbo.py        # Mewbo REST I/O (the `mewbo` side-effect surface)
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>│   ├── store.py        # atomic JSON state, repo-scoped queries
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>│   ├── manager.py      # WorkspaceManager façade, orchestration only
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>│   ├── registry.py     # RepoRegistry: one manager per repo, for multi-repo clients
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>│   ├── activity.py     # ActivityService: the cross-project activity hub
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>│   ├── sessions.py     # SessionExplorer: agent-session discovery across worktrees
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>│   ├── auth.py         # pairing handshake + session store
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>│   ├── paths.py        # platformdirs helpers
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>│   ├── errors.py       # exception hierarchy
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>│   ├── contracts/      # cross-boundary Pydantic shapes (plans, requests, views, palettes)
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>│   └── agents/         # agent adapters: per-kind session introspection
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>│
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>├── daemon/              # loopback FastAPI app: REST + SSE over the engine
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>├── client/              # transport-agnostic attach SDK (local PTY / SSH)
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>├── mcp/                 # MCP server: stdio or HTTP tools over the client SDK
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>└── tui/                 # the Textual client
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    ├── cli.py          # Typer entry points
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    ├── app.py          # GroveApp(textual.App) root
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    ├── theme.py        # color tokens + theme registration
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    ├── _status.py      # Rich-side glyph + color accessors
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>    ├── keys.py         # global key spec + footer key partitions
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    ├── screens/        # list, dashboard, sessions, project picker, create, edit, steer, confirms, help, pairing
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    └── widgets/        # workspace list, dashboard grid, peek rail, status bar, footer
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>webapp/                  # Next.js dashboard; its BFF routes talk to the daemon
+</span></code></pre></div>
+<p>Every client imports <code>WorkspaceManager</code> and the public types. Four
+<code>import-linter</code> contracts in <a href="https://github.com/bearlike/Grove/blob/c20cae9d/pyproject.toml" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>pyproject.toml</span></a>
+make that a build gate.</p>
+<h2 id="the-boundaries-enforced">The boundaries, enforced</h2>
+<ul>
+<li><strong>Core has no UI dependencies.</strong> No <code>textual</code>, <code>rich</code>, <code>typer</code>, <code>click</code>, or <code>grove.tui</code> inside <code>grove.core</code>.</li>
+<li><strong>Daemon depends only on core.</strong> No <code>grove.client</code> or <code>grove.tui</code> inside <code>grove.daemon</code>. Clients depend on the daemon, never the reverse.</li>
+<li><strong>The client <abbr title="Software Development Kit">SDK</abbr> stays clean.</strong> No <code>grove.daemon</code> or <code>grove.tui</code> inside <code>grove.client</code>. It speaks wire shapes, not process internals.</li>
+<li><strong>The <abbr title="Model Context Protocol">MCP</abbr> server speaks only through the client <abbr title="Software Development Kit">SDK</abbr>.</strong> <abbr title="Model Context Protocol">MCP</abbr> client to <code>grove.mcp</code> to <code>GroveClient</code> to daemon to core, so it can run on a different host.</li>
+</ul>
+<p><code>include_external_packages = true</code> catches third-party imports too, or
+<code>import textual</code> would slip through silently. <code>lint-imports</code> runs on
+every push.</p>
 <h2 id="side-effects-at-the-edges">Side effects at the edges</h2>
-<p>Side effects live in dedicated modules. <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/core/git.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/core/git.py</span></a> carries
-everything git-shaped (worktree add and remove, branch delete, status,
-log). <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/core/tmux.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/core/tmux.py</span></a> carries everything tmux-shaped (session
-create, capture-pane, list-windows, switch-client). <a href="https://github.com/bearlike/Grove/blob/49581e6d/src/grove/core/mewbo.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/core/mewbo.py</span></a>
-carries the Mewbo REST I/O for remote sessions, the HTTP sibling of the
-other two.</p>
-<p>Manager methods orchestrate them. The manager itself reads no config
-file directly, runs no subprocess, and is fully testable against
-in-memory fakes for those side-effect modules. New I/O concerns belong
-in one of these files, or a fourth side-effect module. They should not be
-scattered.</p>
+<ul>
+<li><a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/git.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/core/git.py</span></a>: worktree add and remove, branch delete, status, log.</li>
+<li><a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/tmux.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/core/tmux.py</span></a>: session create, capture-pane, list-windows, switch-client.</li>
+<li><a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/mewbo.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/core/mewbo.py</span></a>: Mewbo <abbr title="Representational State Transfer">REST</abbr> I/O for remote sessions.</li>
+</ul>
+<p>Manager methods orchestrate them, staying testable against in-memory
+fakes. A new I/O concern belongs in one of these files, or a fourth,
+never scattered.</p>
 <h2 id="the-contracts-layer">The contracts layer</h2>
-<p><code>grove.core.contracts</code> is the canonical home for cross-boundary shapes:
-anything that crosses a client-to-engine line now or could later. That
-covers the branch-source intent (<code>BranchPlan</code>, a discriminated union
-over <code>AutoBranch</code>, <code>NewNamedBranch</code>, <code>ExistingLocalBranch</code>,
-<code>TrackRemoteBranch</code>, <code>RootBranch</code>), the request envelopes, the response
-views the daemon serializes (<code>WorkspaceStateView</code>, <code>WorkspacePeekView</code>,
-the activity and session views), and the status and agent-state color
-palettes every client must render identically.</p>
-<p>The convention is sharp. Pydantic at public-contract boundaries. Plain
-dataclass for in-process state. Anything that might travel through JSON
-is Pydantic with <code>extra="forbid"</code>. Anything that lives only inside the
-engine (<code>WorkspaceState</code>, the resolved-branch IR) is a plain
-<code>@dataclass(slots=True)</code>.</p>
-<p>When in doubt: would a non-Python client ever construct or receive
-this? If yes, Pydantic. If no, dataclass.</p>
+<p><code>grove.core.contracts</code> holds anything crossing a client-engine line now
+or later:</p>
+<ul>
+<li>the branch-source intent (<code>BranchPlan</code>, a union over <code>AutoBranch</code>, <code>NewNamedBranch</code>, <code>ExistingLocalBranch</code>, <code>TrackRemoteBranch</code>, <code>RootBranch</code>)</li>
+<li>the request envelopes</li>
+<li>the daemon's response views (<code>WorkspaceStateView</code>, <code>WorkspacePeekView</code>, activity and session views)</li>
+<li>the status and agent-state color palettes every client renders alike</li>
+</ul>
+<p>Pydantic at public-contract boundaries with <code>extra="forbid"</code>, plain
+<code>@dataclass(slots=True)</code> for in-process state (<code>WorkspaceState</code>, the
+resolved-branch IR). Test: would a non-Python client construct or
+receive this? Pydantic if yes, dataclass if no.</p>
 <h2 id="the-agents-layer">The agents layer</h2>
 <p><code>grove.core.agents</code> is the provider boundary for coding agents. Each
-adapter knows how to introspect one kind of agent's sessions: where the
-transcripts live, how to parse them, and how to derive a live state.
-<code>claude_code</code> reads Claude Code's transcript format. <code>codex</code> reads the
-Codex CLI's rollout files. <code>mewbo</code> reads remote Mewbo sessions over REST.
-<code>generic</code> is the deliberate no-op for everything else. Each one maps its
-tool's own vocabulary onto the shared <code>AgentActivityState</code> axis.</p>
-<p>An adapter normalizes shape, not semantics. It translates launch
-parameters and transcript formats. It never second-guesses what a model
-does. Engine code asks the registry for an adapter by <code>kind</code> and stays
+adapter introspects one agent kind's sessions and maps its vocabulary
+onto the shared <code>AgentActivityState</code> axis: <code>claude_code</code> for Claude
+Code's transcripts, <code>codex</code> for Codex <abbr title="Command Line Interface">CLI</abbr> rollout files, <code>mewbo</code> for
+remote Mewbo sessions over <abbr title="Representational State Transfer">REST</abbr>, <code>generic</code> a deliberate no-op.</p>
+<p>An adapter normalizes shape, not semantics. It never second-guesses what
+a model does. Engine code asks the registry for an adapter by <code>kind</code>,
 agnostic about which agent is behind it.</p>
 <h2 id="the-observability-spine">The observability spine</h2>
-<p>Three engine pieces feed every dashboard, and both the TUI and the
-daemon consume them the same way:</p>
+<p>Three engine pieces feed every dashboard, consumed the same way by the
+<abbr title="Terminal User Interface">TUI</abbr> and the daemon.</p>
 <ul>
-<li><strong><code>ActivityService</code></strong> is the hub. It polls each repo's workspaces,
-  blends agent state with tmux output, tracks dirty files and recent
-  commits, and emits deltas only when something changed. The TUI's
-  dashboard screen consumes it in process; the daemon streams the same
-  events over SSE to the web dashboard.</li>
-<li><strong><code>RepoRegistry</code></strong> holds one <code>WorkspaceManager</code> per repository, so
-  multi-repo clients (the daemon, the activity wall) dispatch to the
-  right engine without re-reading config.</li>
-<li><strong><code>SessionExplorer</code></strong> discovers recorded agent sessions across the
-  repo root and every worktree. The <code>grove sessions</code> CLI, the daemon's
-  session endpoints, and the web sessions panel are all thin views over
-  it.</li>
+<li><strong><code>ActivityService</code></strong>, the hub. Polls workspaces, blends agent state with tmux output, tracks dirty files and commits, emits deltas only on change. The <abbr title="Terminal User Interface">TUI</abbr> consumes it in process, and the daemon streams it over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr>.</li>
+<li><strong><code>RepoRegistry</code></strong>, one <code>WorkspaceManager</code> per repository, so clients dispatch without re-reading config.</li>
+<li><strong><code>SessionExplorer</code></strong>, agent sessions found across the repo root and every worktree. <code>grove sessions</code>, the daemon endpoints, and the web sessions panel are thin views over it.</li>
 </ul>
 <h2 id="dependencies-flow-inward">Dependencies flow inward</h2>
-<p>The dependency graph runs strictly inward from clients to the engine:</p>
+<p>The dependency graph runs strictly inward, clients to engine:</p>
 <pre class="mermaid"><code>flowchart LR
     Browser([browser / phone]) -.http.-&gt; BFF([webapp BFF])
     BFF -.http + SSE.-&gt; Daemon([grove.daemon])
@@ -1412,20 +1423,32 @@ daemon consume them the same way:</p>
     Core --&gt; Store([core.store])
     Core --&gt; Contracts([core.contracts])
     Core --&gt; Agents([core.agents])</code></pre>
-<p>Reverse arrows are smells. When a low-level helper has to know about a
-high-level caller, the boundary is wrong. Most circular-import pain in
-this codebase has historically traced back to that.</p>
+<p>Reverse arrows are smells. Most circular-import pain here traces back to
+a low-level helper that knew about a high-level caller.</p>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="../develop-public-api/">Public API</a>: the actual re-exports and their docstrings.</li>
+<li><a href="../develop-public-api/">Public <abbr title="Application Programming Interface">API</abbr></a>: the re-exports and docstrings.</li>
 <li><a href="../develop-principles/">Engineering principles</a>: the rules this layout enforces.</li>
-<li><a href="../develop-contributing/">Contributing</a>: make targets, commit format, PR conventions.</li>
+<li><a href="../develop-contributing/">Contributing</a>: make targets, commits, PRs.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -1459,7 +1482,11 @@ this codebase has historically traced back to that.</p>
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -2292,19 +2319,27 @@ this codebase has historically traced back to that.</p>
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#the-package-layout"
@@ -2372,18 +2407,19 @@ this codebase has historically traced back to that.</p>
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -2432,7 +2468,9 @@ this codebase has historically traced back to that.</p>
       <a class="mewbo-footer__logo" href="https://bearlike.github.io/Grove/main" aria-label="Grove home">
         <span class="mewbo-footer__glyph">
 
+
 <img class="size-5" src="../logos/grove-logo.png" alt="icon">
+
 
 </span>
         <span class="mewbo-footer__name">Grove</span>
@@ -2509,11 +2547,20 @@ this codebase has historically traced back to that.</p>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
@@ -2558,4 +2605,5 @@ this codebase has historically traced back to that.</p>
 }
 </script>
 </body>
+
 </html>
