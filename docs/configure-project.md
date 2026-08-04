@@ -1,27 +1,20 @@
 # Project setup
 
-Grove keeps configuration close to the code it serves. Every repository
-that uses Grove carries a `.grove/` directory with one or two JSON files
-that pin worktree layout, agent registry, init scripts, tmux behavior,
-and UI preferences.
+## Config the whole team shares
+
+A Grove repository carries a `.grove/` directory of one or two JSON files:
+worktree layout, agents, init scripts, tmux behavior, UI preferences.
 
 ## Why per-repo config
 
-A single global config can serve multiple repositories, but it cannot
-*pin* anything for the team. Project-scoped configuration solves that.
-The `.grove/config.json` file lives in the repo, gets reviewed in pull
-requests, and ships the same defaults to every contributor. Personal
-overrides land in `.grove/config.local.json`, which is gitignored.
+A global config pins nothing team-wide. A committed, PR-reviewed
+`.grove/config.json` ships one default set to every contributor.
 
 ## Cascade in one paragraph
 
-Grove resolves configuration from six layers, applied in order with
-last-wins semantics: Pydantic defaults, user JSON, project JSON,
-project-local JSON, environment variables, then CLI overrides. Most
-lists *replace* wholesale across layers. The `agents` list is the
-exception and merges by `name`, so a project can override one entry
-without redefining all of them. See [configuration
-cascade](features-cascade.md) for the full narrative.
+Layers resolve last wins, built-in defaults to CLI flags. Lists replace
+wholesale, `agents` merges by `name`. See [Configuration
+cascade](features-cascade.md).
 
 ## Three files you may touch
 
@@ -29,19 +22,18 @@ cascade](features-cascade.md) for the full narrative.
 |---|---|---|
 | **Project** | `<repo>/.grove/config.json` | Team baseline. Commit this. |
 | **Project-local** | `<repo>/.grove/config.local.json` | Per-machine overrides. Gitignored. |
-| **User** | `${user_config_dir}/grove/config.json` | Per-user defaults applied to every repo. |
+| **User** | `${user_config_dir}/grove/config.json` | Per-user defaults for every repo. |
 
 `${user_config_dir}` follows `platformdirs`: XDG on Linux, `%APPDATA%` on
 Windows, `~/Library/Application Support` on macOS.
 
 ## Known projects (keep empty repos visible)
 
-Grove learns which projects exist from the workspaces it has created. So a
-repo with zero workspaces (a freshly-added project, or one whose workspaces
-were all killed) drops out of the webapp new-workspace dialog and the TUI
-project switcher. Declare such repos in the user config to keep them listed.
+Grove learns which projects exist from its workspaces. A zero-workspace
+repo drops out of the webapp new-workspace dialog and TUI switcher, so
+declare it in user config.
 
-```json
+```json title="${user_config_dir}/grove/config.json"
 {
   "projects": [
     "~/code/my-app",
@@ -50,16 +42,13 @@ project switcher. Declare such repos in the user config to keep them listed.
 }
 ```
 
-`projects` is a plain list of repo-root paths (`~` is expanded). Each path
-joins the "known projects" set alongside the repos Grove already tracks,
-deduped by canonical path. A declared path that does not exist, or is not a
-git repo, is ignored silently. It never breaks config load. This is a
-user-level convenience, so it belongs in
-`${user_config_dir}/grove/config.json`.
+- `projects` takes repo-root paths, `~` expanded, unioned with tracked
+  repos, deduped by canonical path.
+- A missing or non-git path is ignored silently, never breaking config load.
 
 ## Worked example
 
-```json
+```json title=".grove/config.json"
 {
   "$schema": "~/.config/grove/config.schema.json",
   "worktree": {
@@ -91,20 +80,21 @@ user-level convenience, so it belongs in
 }
 ```
 
-`${repo}` and `${repo_name}` placeholders inside string values expand at
-*consume* time, not validate time, so the same global config can serve
-every repo without re-validation.
+`${repo}` and `${repo_name}` inside string values expand at *consume* time,
+not validate time: one config serves every repo.
 
 ## IDE autocomplete via JSON Schema
 
-Grove can write a JSON Schema for the config model. Editors then
-autocomplete keys and surface enum values inline. `grove config init`
-writes the schema. `grove config schema` rewrites it on demand. Reference
-the schema from your project config with `"$schema"`:
+Grove writes a JSON Schema so editors autocomplete keys and enum values
+inline. `grove config init` writes it. `grove config schema` rewrites on
+demand.
 
 ```bash
 grove config schema     # writes ${user_config_dir}/grove/config.schema.json
 ```
+
+Point `"$schema"` at it by any path: VS Code, JetBrains, Helix and Neovim
+(`coc.nvim` or `lspconfig`) pick it up automatically:
 
 ```json
 {
@@ -113,24 +103,19 @@ grove config schema     # writes ${user_config_dir}/grove/config.schema.json
 }
 ```
 
-The path is yours to set, relative or absolute. Most IDEs (VS Code,
-JetBrains, Helix, Neovim with `coc.nvim` or `lspconfig`) pick it up
-automatically.
-
 ## Per-repo cascade applies everywhere
 
-The daemon, the TUI, and the web dashboard all resolve each repository's full
-cascade (user, project, project-local) independently. A project-scoped agent
-defined in `<repo>/.grove/config.json` shows up in that repo's create picker
-across every surface. A project-enabled `init_script` runs for every new
-workspace in that repo, regardless of whether the create came from the CLI,
-the TUI, or an MCP tool. No daemon restart is needed when you add or update
-the project config: the next workspace create in that repo picks up the
-current cascade.
+The daemon, TUI and web dashboard each resolve a repo's cascade
+independently, user through project to project-local.
+
+- A project-scoped agent appears in that repo's create picker everywhere.
+- A project-enabled `init_script` runs for every workspace there, from
+  CLI, TUI or MCP.
+- No daemon restart needed: the next create picks up the cascade.
 
 ## See also
 
-- [Agents](configure-agents.md): adding a new agent, the merge-by-name rule.
+- [Agents](configure-agents.md): adding an agent, the merge-by-name rule.
 - [Init scripts](configure-init-scripts.md): automating per-workspace setup.
-- [Configuration reference](configure-reference.md): every field, auto-generated from the model.
-- [Configuration cascade](features-cascade.md): the philosophy behind the six layers.
+- [Configuration reference](configure-reference.md): every field, auto-generated.
+- [Configuration cascade](features-cascade.md): the layers' philosophy.

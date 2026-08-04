@@ -622,7 +622,7 @@ wheels = [
 
 [[package]]
 name = "grove"
-version = "0.0.5"
+version = "0.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -730,7 +730,7 @@ docs = [
     { name = "mike" },
     { name = "mkdocs" },
     { name = "mkdocs-callouts", specifier = ">=1.16.0" },
-    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl" },
+    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl" },
     { name = "mkdocstrings", extras = ["python"] },
     { name = "pymdown-extensions", specifier = ">=10.20.1" },
 ]
@@ -1212,16 +1212,17 @@ wheels = [
 
 [[package]]
 name = "mkdocs-shadcn-mewbo"
-version = "1.6.1"
-source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl" }
+version = "1.15.0"
+source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl" }
 dependencies = [
     { name = "bottle" },
     { name = "gitpython" },
     { name = "mkdocs" },
+    { name = "pygments" },
     { name = "pymdown-extensions" },
 ]
 wheels = [
-    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl", hash = "sha256:c4968531904f28979ebc797d5520447cb55cfd8e6d268c5c36fc184c6c85a106" },
+    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl", hash = "sha256:27a7850d103f3279dc1ba4893471e8ba4187df255354e01b217da75b5ce5aaee" },
 ]
 
 [package.metadata]
@@ -1230,6 +1231,7 @@ requires-dist = [
     { name = "gitpython", specifier = ">=3.1.45" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "properdocs", marker = "python_full_version >= '3.9' and extra == 'properdocs'", specifier = ">=1.6.7" },
+    { name = "pygments", specifier = ">=2.18.0" },
     { name = "pymdown-extensions", specifier = ">=10.14.3" },
 ]
 provides-extras = ["properdocs"]

@@ -6,7 +6,8 @@
    Grove-domain-specific and deliberately not generalized.
 
    Brand palette anchors (mirrors src/grove/tui/theme.py):
-     primary clay         var(--primary)   (#c46b48)
+     primary clay         var(--primary)       (#c46b48) — fills and rules
+     primary clay, read   var(--primary-text)  the same hue re-tuned for text
      active lime          #84cc16
      idle blue            #4a90d9
      paused/offline gray  #96938c
@@ -14,13 +15,33 @@
      error red            #e64c4c
 */
 
+/* ── Abbreviations in headings ──────────────────────────────────────
+   `abbr` marks EVERY occurrence of a glossary term, headings included, and
+   there is no way to scope the extension to prose. In a heading the dotted
+   underline reads as a link, which is the one thing a heading must not look
+   like. Drop the affordance and keep the tooltip: the term is already
+   explained wherever it appears in the body text below.
+
+   The selector carries `article`/`.md-content` and `[title]` deliberately:
+   the theme styles these as `article abbr[title]`, so a bare `h2 abbr` loses
+   on specificity and the rule silently does nothing.
+*/
+
+article :is(h1, h2, h3, h4, h5, h6) abbr[title],
+.md-content :is(h1, h2, h3, h4, h5, h6) abbr[title] {
+  text-decoration: none;
+  cursor: inherit;
+}
+
 /* ── Status chip gallery ───────────────────────────────────────────── */
 
 .grove-status-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 0.6rem;
-  margin: 1.5rem 0;
+  /* The theme declares one prose spacing scale on `article`; a hard-coded
+     1.5rem here would silently drift the day the scale moves. */
+  margin-block: var(--prose-flow, 1.5rem);
 }
 .grove-status-chip {
   display: flex;
@@ -32,11 +53,15 @@
   border-radius: 0.5rem;
   background: var(--card, transparent);
 }
+/* Glyph and label are READ, so their default accent is `--primary-text`, the
+   clay re-tuned for legibility on a light surface. `--primary` is the fill
+   token; on the light page it measures under 4.5:1 as text. The per-status
+   accents below are already text-safe hues and override both. */
 .grove-status-chip__glyph {
   font-family: "Fira Code", ui-monospace, "SF Mono", monospace;
   font-size: 1.1rem;
   line-height: 1.2;
-  color: var(--grove-chip-accent, var(--primary, #c46b48));
+  color: var(--grove-chip-accent, var(--primary-text, #c46b48));
   flex: 0 0 auto;
 }
 .grove-status-chip__text {
@@ -53,7 +78,7 @@
 .grove-status-chip__label {
   font-weight: 600;
   font-size: 0.92rem;
-  color: var(--grove-chip-accent, var(--primary, #c46b48));
+  color: var(--grove-chip-accent, var(--primary-text, #c46b48));
 }
 .grove-status-chip__body {
   font-size: 0.85rem;

@@ -1,19 +1,15 @@
 # Issue ops
 
-Comment `@grove fix the flaky test` on an issue, and your own self-hosted Grove agent picks it up. One
-sticky status comment appears on the issue: a diagram of the agent's reported [task
-phase](features-status.md#the-third-axis-task-phase), a live todo checklist, every issue and pull request
-the workspace touches, and a link to the workspace itself. It keeps rewriting itself in place for the
-whole life of the session. Once the agent opens a pull request and links it back with
-`grove tickets attach`, the same status comment appears there too, each copy keeping its own comment
-identity so a failure on one target never disturbs the other. You read the same live report wherever you
-happen to be looking, the issue or the PR. Leave a follow-up comment and Grove steers the same running
-agent instead of starting over. Think of the status comment the way a pinned chat message works: one place
-that always shows the current state, edited in place, never a growing feed of separate posts.
+## Drive agents from an issue
 
-The phase diagram is the part you read at a glance. Six blocks, left to right, in the order the work
-converges. Finished phases go muted gray, the phase the agent is in right now takes its own colour from
-Grove's phase palette and wears a heavy outline, and everything still ahead stays pale.
+Comment `@grove fix the flaky test` on an issue and your own self-hosted Grove agent picks it up. One sticky
+comment on the ticket rewrites itself in place for the life of the session, carrying the agent's
+[task phase](features-status.md#the-third-axis-task-phase), a live todo checklist, the tickets it touches,
+and a link to the workspace. Attach the pull request with `grove tickets attach` and the same comment
+appears there too, each copy keeping its own identity so a failure on one never disturbs the other.
+
+A follow-up comment steers that same running agent, because Grove's executor is a long-lived tmux session
+your daemon owns rather than a CI job that dies with the workflow.
 
 ```mermaid
 flowchart LR
@@ -29,8 +25,8 @@ flowchart LR
   p0 --> p1 --> p2 --> p3 --> p4 --> p5
 ```
 
-Underneath it the same progress reads as one line of text, so nothing is lost on a surface that does not
-draw diagrams, and the checklist and the linked tickets follow.
+Finished phases go gray, the current one wears a heavy outline, and everything ahead stays pale. The same
+progress reads as one line of text too, so nothing is lost where diagrams do not render.
 
 ```
 **Phase** ●●●●○○ Verifying (4/6) — running make lint
@@ -46,29 +42,20 @@ draw diagrams, and the checklist and the linked tickets follow.
 - Open workspace
 ```
 
-Both GitHub and Gitea draw the diagram natively in issue and pull request comments, with no extension and
-no setup on your side. A workspace whose agent has never reported a phase shows no diagram at all, rather
-than an empty one: not reporting is different from being at the start, and Grove will not guess which one
-you are looking at.
-
-That last part is the differentiator. Every CI-bound coding bot re-runs fresh per comment, because its
-executor is a job that dies the moment the workflow ends. Grove's executor is a long-lived daemon-owned
-tmux session, so a follow-up comment reaches the same agent, mid-task, instead of restarting it from
-scratch. A comment is a command, not a fresh run.
+Both forges draw the diagram natively, with no extension to install. An agent that has never reported a
+phase gets no diagram at all, rather than an empty one. Not reporting is different from being at the start,
+and Grove will not guess.
 
 ---
 
 ## How it works
 
-1. You comment `@grove <task>` on a GitHub or Gitea issue.
-2. A thin caller workflow, triggered on `issue_comment`, forwards the event.
-3. Grove's composite action checks the commenter's permission, reacts 👀 to acknowledge receipt, and POSTs
-   a normalized event to your daemon.
-4. The daemon's issue-ops engine resolves the repo, parses the command, and creates a workspace or steers
-   the one already running for this ticket.
-5. A status publisher keeps a sticky comment rewritten with the task phase diagram, the todo checklist,
-   the linked issues and pull requests, and a link to the workspace, for as long as the session runs. It
-   writes to the issue and to any pull request linked to the same workspace, each as its own comment.
+1. You comment `@grove <task>`. A thin caller workflow, triggered on `issue_comment`, forwards the event.
+2. Grove's composite action checks the commenter's permission, reacts 👀, and POSTs a normalized event to
+   your daemon.
+3. The engine resolves the repo, parses the command, and creates a workspace or steers the one already on
+   this ticket, while a status publisher rewrites the sticky comment on the issue and on any linked pull
+   request.
 
 ```mermaid
 flowchart TD
@@ -81,23 +68,19 @@ flowchart TD
     Publisher -->|same comment, own identity| PR(["linked pull request"])
 ```
 
-Only steps 2 and 3 run in CI. Everything from step 4 on runs inside your own daemon, on your own host,
-against your own git remote. Nothing about the task itself ever leaves your infrastructure.
+Only the first two steps run in CI. Everything after them runs inside your own daemon, on your own host.
 
 ---
 
 ## Setup: GitHub
 
-GitHub's own hosted runners can't reach your daemon: they are a different machine entirely, and the
-daemon [binds loopback by design](use-auth.md#the-security-model), with no blessed
-`--host 0.0.0.0`. So the caller workflow needs a **self-hosted runner on the same host** as
-`grove daemon serve`. Register one under *Settings → Actions → Runners* and give it a label your caller
-pins to, so the job never lands on some other runner in your fleet.
+The daemon [binds loopback by design](use-auth.md#the-security-model) with no blessed `--host 0.0.0.0`, so
+GitHub's hosted runners cannot reach it. The caller needs a **self-hosted runner on the same host** as
+`grove daemon serve`, registered under *Settings → Actions → Runners* with a label the caller pins to.
 
-A minimal caller, copied from `docs/examples/` and adjusted for your repo:
+A minimal caller, copied from `docs/examples/`:
 
-```yaml
-# .github/workflows/grove-issue-ops.yml
+```yaml title=".github/workflows/grove-issue-ops.yml"
 name: Grove issue-ops
 on:
   issue_comment:
@@ -113,16 +96,15 @@ jobs:
           daemon-token: ${{ secrets.GROVE_DAEMON_TOKEN }}
 ```
 
-`GROVE_DAEMON_URL` is an **organization variable** (not secret; it's just an address, e.g.
-`http://127.0.0.1:7421`, since the runner and the daemon share a host). `GROVE_DAEMON_TOKEN` is an
-**organization secret**, so every repo's caller reuses the one pairing without minting a token per repo.
-See [`actions/issue-ops/action.yml`](repo:actions/issue-ops/action.yml) for the composite action itself.
+`GROVE_DAEMON_URL` is an **organization variable**, not a secret. It is only an address such as
+`http://127.0.0.1:7421`, since runner and daemon share a host. `GROVE_DAEMON_TOKEN` is an **organization
+secret**, so every caller reuses one pairing. The action is
+[`actions/issue-ops/action.yml`](repo:actions/issue-ops/action.yml).
 
 ### Minting the daemon token
 
-The token is a normal Grove session, earned through the same human-gated [pairing
-handshake](use-auth.md#the-handshake) the web dashboard uses. Nothing new to learn: the CI action is just
-another paired device.
+The token is a normal Grove session from the same human-gated
+[pairing handshake](use-auth.md#the-handshake) the dashboard uses, and it is forge-agnostic.
 
 ```bash
 # 1. Ask the daemon to start a pairing (run from anywhere that can reach it)
@@ -139,24 +121,21 @@ curl -s http://127.0.0.1:7421/auth/pair/<challenge-id>
 # {"challenge_id": "...", "state": "consumed", "token": "grove_v1_...", ...}
 ```
 
-Paste that `token` into the `GROVE_DAEMON_TOKEN` secret. It's a real session like any other: list it with
-`grove auth sessions` and revoke it with `grove auth revoke <session-id>` if it ever needs replacing.
+Paste that `token` into `GROVE_DAEMON_TOKEN`. List it with `grove auth sessions` and revoke it with
+`grove auth revoke <session-id>`.
 
 ---
 
 ## Setup: Gitea
 
-Gitea's default `act_runner` job runs inside an isolated Docker bridge network, so it can't reach host
-loopback either (there's no `host.docker.internal` on Linux). Register a runner with a label ending in
-`:host` (act_runner's non-containerized execution mode) directly on the machine running
-`grove daemon serve`, and pin your caller's `runs-on` to that label.
+Gitea's default `act_runner` job runs on an isolated Docker bridge network, and there is no
+`host.docker.internal` on Linux, so it cannot reach host loopback either. Register a runner labelled
+`:host`, act_runner's non-containerized mode, on the daemon's machine, and pin `runs-on` to that label.
 
-The caller must live in `.gitea/workflows/`, **on the repo's default branch**. Gitea (like GitHub) only
-ever loads issue-event workflows from the default branch, regardless of which branch you're working on;
-a caller committed to a feature branch never fires.
+The caller must live in `.gitea/workflows/`, **on the default branch**. Both forges load issue-event
+workflows from there only, so a caller on a feature branch never fires.
 
-```yaml
-# .gitea/workflows/grove-issue-ops.yml
+```yaml title=".gitea/workflows/grove-issue-ops.yml"
 name: Grove issue-ops
 on:
   issue_comment:
@@ -175,50 +154,54 @@ jobs:
           daemon-token: ${{ secrets.GROVE_DAEMON_TOKEN }}
 ```
 
-Mint `GROVE_DAEMON_TOKEN` exactly as in the [GitHub section above](#minting-the-daemon-token): the pairing
-handshake is forge-agnostic.
-
-Note the full `https://gitea.example.com/...` form in `uses:`. Gitea's absolute-URL extension is what lets
-a consumer repo reference the composite action across repos without needing the newer, collaborative-owner
-`workflow_call` floor.
+Mint `GROVE_DAEMON_TOKEN` as [above](#minting-the-daemon-token). The full `https://gitea.example.com/...`
+form in `uses:` is Gitea's absolute-URL extension, which lets one repo reference the action in another
+without the newer, collaborative-owner `workflow_call` floor.
 
 > [!WARNING] Version floors
-> - **Gitea ≥ 1.21.6 is a hard requirement.** Earlier versions never fire `issue_comment` for a comment
->   left on a pull request, only for comments on a genuine issue (go-gitea#29277). If you want `@grove` to
->   work from PR conversations too, there's no workaround below this version.
-> - **Gitea ≥ 1.26.0 in Restricted mode needs the explicit `permissions:` block shown above.** Earlier
->   versions parse but ignore `permissions:` entirely; 1.26.0 is the first release that enforces it, and a
->   Restricted-mode instance 403s an undeclared `issues: write` (go-gitea#36173). Declaring it on an older
->   instance is harmless, just unenforced.
+> - **Gitea ≥ 1.21.6 is a hard requirement.** Earlier versions fire `issue_comment` only for comments on a
+>   genuine issue, never on a pull request (go-gitea#29277). Below it, `@grove` in PR conversations has no
+>   workaround.
+> - **Gitea ≥ 1.26.0 in Restricted mode needs the `permissions:` block above.** Earlier versions parse it
+>   and ignore it. 1.26.0 enforces it, and a Restricted-mode instance 403s an undeclared `issues: write`
+>   (go-gitea#36173). Declaring it on an older instance is harmless.
 
 ---
 
 ## Commands
 
-Every command opens with the configured `trigger` (`@grove` by default) as the first word of the comment,
-matched case-insensitively at a word boundary, so `@grovebot` or a mid-sentence mention never fires.
-There's no way to pass configuration in a comment, on purpose: the trigger word, who may drive it, and
-the agent are all cascade config, never comment syntax.
+A command opens with the configured `trigger` (`@grove` by default) as the comment's first word, matched
+case-insensitively at a word boundary, so `@grovebot` or a mid-sentence mention never fires. The trigger,
+who may drive it, and the agent are cascade config, never comment syntax.
 
 | Comment | What happens |
 |---|---|
-| `@grove <free text>` | No workspace yet for this ticket: create one, seeded with the text as its initial prompt. A workspace already running: steer it, as a follow-up message to the live agent. |
-| `@grove status` | Force an immediate refresh of the sticky status comment. |
+| `@grove <free text>` | No workspace yet for this ticket: create one, seeded with the text as its initial prompt. One already running: steer it, as a message to the live agent. |
+| `@grove status` | Refresh the sticky status comment now. |
 | `@grove pause` | Pause the ticket's running workspace. |
 | `@grove resume` | Resume a paused workspace. |
 | `@grove stop` | Kill the ticket's workspace. |
 | `@grove` alone, or any other verb-shaped word | A usage reply. Grove never stays silent on a malformed command. |
 
-A prompt aimed at a workspace that exists but isn't running (paused, for example) gets a reply telling you
-to `@grove resume` it first, rather than silently resuming it for you: resume is its own explicit verb, not
-something a free-text prompt implies.
+A prompt aimed at a paused workspace gets a reply telling you to `@grove resume` it first. Resume is its own
+explicit verb, never something a prompt implies.
+
+### Assignment, the other way in
+
+A comment is one route. The other is the tracker's own assignee field: assign Grove's account to an issue
+and the pickup poll starts a workspace for it, with no comment and no CI runner involved. That is the only
+inbound route on a deployment with no runner at all. `grove tickets handover`, `owned` and `handback` drive
+the same path by hand, `issueops.pickup_max_active` (default 3, host-wide) bounds how many run at once, and
+both halves default off. Reading Grove's assigned issues works on all three trackers, while Grove putting
+its own account on a ticket needs Gitea or GitHub. See
+[the assignee is the work queue](features-ticket-providers.md#the-assignee-is-the-work-queue).
 
 ---
 
 ## Configuration
 
 Everything above cascades through the ordinary [configuration cascade](features-cascade.md), under one
-`issueops` section:
+`issueops` section.
 
 ```json
 {
@@ -235,43 +218,37 @@ Everything above cascades through the ordinary [configuration cascade](features-
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Gates only the outbound sticky status comment. It does not gate command routing: a comment still creates or steers a workspace with this `false`, the sticky comment just never appears. Set it `true` for the live status comment described at the top of this page. |
+| `enabled` | `false` | Gates the sticky comment only, never routing. Commands still work with this `false`, and the checklist never comes back. Set it `true` for the live status comment. |
 | `trigger` | `"@grove"` | The mention token that must open a comment for Grove to act. |
-| `allowed_actors` | `[]` | Logins allowed to drive issue-ops regardless of their own repo permission. Widens the default write-access policy; never narrows it. |
-| `agent` | `"claude"` | Which configured agent (from your `agents` list) an issue-ops-created workspace spawns. |
-| `prompt_template` | a built-in autonomous issue-to-PR prompt | The initial prompt a created workspace boots on. Supports `{title}`, `{body}`, `{number}`, `{url}`, `{command_text}` placeholders. |
-| `update_window_seconds` | `5.0` | Coalescing window for the sticky status comment: every render-relevant change is folded and flushed at most once per window, so a burst of activity doesn't trip the forge's rate limit on repeated comment edits. |
-| `deep_link_base_url` | `""` | Your web dashboard's base URL. Set it and the sticky comment links straight to `{base}/w/{workspace-id}`; leave it empty and the comment just names the workspace. |
+| `allowed_actors` | `[]` | Logins allowed to drive issue-ops whatever their repo permission. Widens the write-access default, never narrows it. |
+| `agent` | `"claude"` | Which agent from your `agents` list a created workspace spawns. |
+| `prompt_template` | a built-in autonomous issue-to-PR prompt | The prompt a created workspace boots on. Placeholders `{title}`, `{body}`, `{number}`, `{url}`, `{command_text}`. |
+| `update_window_seconds` | `5.0` | Coalescing window. Changes fold and flush at most once per window, so a burst of activity does not trip the forge's rate limit on comment edits. |
+| `deep_link_base_url` | `""` | Your dashboard's base URL. Set it and the comment links to `{base}/w/{workspace-id}`. Empty, and it only names the workspace. |
 
-You also need the matching `tickets.gitea` or `tickets.github` section `enabled`, with `owner`/`repo` set:
-issue-ops resolves an event by matching its repo against that config, never by a fleet-wide ticket scan.
-See [ticket providers](configure-ticket-providers.md).
+The assignee queue adds `assign_bot`, `pickup_enabled`, `pickup_interval_seconds`, `pickup_max_active` and
+`pickup_backoff_seconds` to the same section.
 
-> [!NOTE] Turn on the status comment
-> `issueops.enabled` defaults to `false`, and commands keep working without it: a caller workflow plus an
-> enabled `tickets.<provider>` section is all routing needs. But the sticky status comment, the flagship
-> feature from the top of this page, only appears when `issueops.enabled` is `true`. Set it explicitly, or
-> you'll drive workspaces from comments and never see the checklist come back.
+Routing also needs the matching [`tickets.gitea` or `tickets.github`](configure-ticket-providers.md) section
+`enabled`, with `owner`/`repo` set. Issue-ops resolves an event against that config, never by a fleet-wide
+scan.
 
 ---
 
 ## Security model
 
-- **Write access is the default gate.** A command is honored only when the forwarder asserts the
-  commenter has write access or above on the repo. `allowed_actors` is the one widening knob: it adds
-  trusted logins on top of write access, it never narrows what write access already grants.
-- **Bots and self-replies are dropped before routing.** A comment flagged as a bot actor, or one carrying
-  Grove's own signature marker (the invisible tag every reply and status comment is stamped with), is
-  ignored outright. That marker is the belt to the bot-flag's suspenders: even if the forwarder's bot
-  detection is ever wrong, Grove's own comments can never trigger Grove.
-- **No fork code is ever checked out or executed.** The workflow triggers only on `issue_comment`, which
-  always runs in the base repo's context with normal token permissions on both forges, so there's no
-  `pull_request_target`-style secret-exfiltration risk to guard against. What protects the repo instead is
-  everything else on this list: the write-access gate, the `allowed_actors` allowlist, the bot and
-  self-reply ignore, and the daemon's own re-check and dedupe.
-- **The daemon re-checks and dedupes, it doesn't just trust the workflow.** Every event is deduplicated by
-  `(provider, owner, repo, comment_id)` before anything else runs, so an at-least-once CI retry can never
-  act twice. A malformed or refused command always gets a reply; issue-ops never fails silently.
+- **Write access is the default gate.** A command is honored only when the forwarder asserts the commenter
+  has write access or above on the repo. `allowed_actors` adds trusted logins on top of that and never
+  narrows it.
+- **Bots and self-replies are dropped before routing.** A comment from a bot actor, or one carrying Grove's
+  own signature marker (the invisible tag every Grove comment is stamped with), is ignored outright. The
+  marker is the belt to the bot-flag's suspenders, so Grove's own comments can never trigger Grove.
+- **No fork code is ever checked out or executed.** `issue_comment` runs in the base repo's context with
+  normal token permissions on both forges, so there is no `pull_request_target`-style exfiltration risk to
+  guard against. The rest of this list is what protects the repo.
+- **The daemon re-checks and dedupes rather than trusting the workflow.** Every event is deduplicated by
+  `(provider, owner, repo, comment_id)` first, so an at-least-once CI retry cannot act twice. A malformed or
+  refused command always gets a reply. Issue-ops never fails silently.
 
 ---
 
@@ -279,23 +256,21 @@ See [ticket providers](configure-ticket-providers.md).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Comment does nothing, no reaction at all | The caller workflow isn't on the repo's default branch | Gitea and GitHub both load issue-event workflows from the default branch only. Merge the caller there. |
-| Comment does nothing, no reaction at all | Commenter lacks write access and isn't in `allowed_actors` | Grant repo write access, or add the login to `issueops.allowed_actors`. |
-| Comment does nothing, no reaction at all | The comment was edited, not newly created | Only `created` comment events trigger the pipeline, by design (an `edited` trigger is a silent re-fire hole). Leave a new comment. |
-| Comment does nothing, no reaction at all | The trigger token is misspelled, or isn't the first word | The trigger must open the comment at a word boundary (`@grove ...`, not `hey @grove` or `@grovebot`). Check `issueops.trigger` with `grove config show`. |
-| 👀 reaction appears, but replies or status comments 403 | Gitea ≥ 1.26.0 in Restricted mode needs an explicit `permissions:` block | Add `permissions: {issues: write, pull-requests: write}` to the caller workflow. |
-| Runner job starts, then times out reaching the daemon | The runner executes in an isolated Docker bridge network and can't reach host loopback | Use a `:host`-labeled act_runner (Gitea) or a same-host self-hosted runner (GitHub), on the machine running `grove daemon serve`. |
-| The same command appears to run twice | CI retried the delivery | Expected. The engine dedupes by `(provider, owner, repo, comment_id)`; the retry is dropped silently, not acted on twice. |
-| Status comment never appears, or stops updating | The ticket provider's token lacks comment-write scope | Confirm `tickets.<provider>.token_env` names a token with issue-comment write access. Check the daemon log for a swallowed provider error; a publish failure never crashes the daemon, it retries on the next update window. |
+| No reaction at all | The caller is not on the default branch | Both forges load issue-event workflows from there only. Merge it in. |
+| No reaction at all | Commenter lacks write access and is not in `allowed_actors` | Grant write access, or add the login to `issueops.allowed_actors`. |
+| No reaction at all | The comment was edited, not created | Only `created` events trigger the pipeline. An `edited` trigger is a silent re-fire hole. Leave a new comment. |
+| No reaction at all | The trigger is misspelled, or is not the first word | It must open the comment at a word boundary (`@grove ...`, not `hey @grove` or `@grovebot`). Check `issueops.trigger` with `grove config show`. |
+| 👀 appears, replies or status comments 403 | Gitea ≥ 1.26.0 Restricted mode needs `permissions:` | Add `permissions: {issues: write, pull-requests: write}` to the caller. |
+| Runner job times out reaching the daemon | The runner is on an isolated Docker bridge network | Use a `:host`-labeled act_runner (Gitea) or a same-host self-hosted runner (GitHub). |
+| The same command runs twice | CI retried the delivery | Expected. The engine dedupes by `(provider, owner, repo, comment_id)`. |
+| Status comment never appears, or stops updating | The provider token lacks comment-write scope | Confirm `tickets.<provider>.token_env` names a token with issue-comment write access, then check the daemon log for a swallowed provider error. Publishes retry next window. |
 
 ---
 
 ## See also
 
-- [Ticket providers](features-ticket-providers.md) and [their setup](configure-ticket-providers.md):
-  issue-ops resolves through the same `tickets.<provider>` config.
-- [Task phase](features-status.md#the-third-axis-task-phase): the six phases the sticky comment renders
-  as dot progress, and how an agent reports one.
-- [Authentication & pairing](use-auth.md): the handshake the CI token comes from.
-- [Configuration cascade](features-cascade.md): where `issueops` sits among the other layers.
-- [Workspace lifecycle](features-workspace-lifecycle.md): what create, pause, resume, and kill do underneath the verbs above.
+- [Ticket providers](features-ticket-providers.md) and [their setup](configure-ticket-providers.md)
+- [Task phase](features-status.md#the-third-axis-task-phase), the six phases and how an agent reports one
+- [Authentication & pairing](use-auth.md), the handshake the CI token comes from
+- [Configuration cascade](features-cascade.md)
+- [Workspace lifecycle](features-workspace-lifecycle.md), what the verbs above do underneath

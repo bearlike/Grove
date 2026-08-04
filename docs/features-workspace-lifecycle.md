@@ -1,8 +1,9 @@
 # Workspace lifecycle
 
-Every Grove workspace passes through the same small set of operations.
-This page covers what each one touches and what each one deliberately
-does not.
+## Every verb and its effect
+
+Every Grove workspace passes through the same small set of operations. This
+page covers what each touches and what it deliberately does not.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI showing four workspaces in mixed lifecycle states" /></div>
@@ -34,118 +35,85 @@ stateDiagram-v2
 
 | Op | Branch | Worktree | tmux session | Init script |
 |---|---|---|---|---|
-| **create** (`n`)  | created or attached | created | created | runs if `enabled: true` |
-| **pause** (`p`)   | kept | **removed** | killed | n/a |
-| **resume** (`R`)  | kept | recreated from branch | recreated | re-runs only if `run_on_resume: true` |
-| **kill** (`k`)    | deleted (Grove-created default; user-attached default keeps it) | removed | killed | n/a |
-| **respawn** (`o`) | kept | **must exist** | recreated | not re-run by default |
+| **create** (++n++)  | created or attached | created | created | runs if `enabled: true` |
+| **pause** (++p++)   | kept | **removed** | killed | n/a |
+| **resume** (++shift+r++)  | kept | recreated from branch | recreated | re-runs only if `run_on_resume: true` |
+| **kill** (++k++)    | deleted if Grove-created, kept if user-attached | removed | killed | n/a |
+| **respawn** (++o++) | kept | **must exist** | recreated | not re-run by default |
 
-`create`, `pause`, `resume`, and `kill` are the four lifecycle verbs the
-operator drives directly. `respawn` is a recovery path for the specific
-case where the tmux session vanished externally but the worktree is
-intact. `attach` opens an interactive session into a running workspace.
+`create`, `pause`, `resume` and `kill` are the four verbs you drive directly.
+`respawn` recovers a vanished tmux session over an intact worktree, and
+`attach` opens an interactive session into a running workspace.
 
-Every one of these verbs reaches the same engine, so they behave the same
-wherever you call them: the [TUI](use-tui.md), the [CLI](use-cli.md), the
-[web dashboard](use-webapp.md), and the [MCP server](use-mcp.md). One
-lifecycle, four front doors. Create a workspace from your editor's MCP
-client, pause it from the TUI, and resume it from the web dashboard. The
-state lives in one shared store, not in any single client.
+Every verb reaches the same engine and behaves identically across the
+[TUI](use-tui.md), [CLI](use-cli.md), [web dashboard](use-webapp.md) and
+[MCP server](use-mcp.md): one lifecycle, four front doors, one shared store.
 
-The table above describes the default shape, where each workspace gets
-its own worktree. A workspace can also run in the repo root instead. See
-[root workspaces](#root-workspaces) for how that changes the picture.
+The table describes the default shape, one worktree per workspace, though a
+workspace can also run in the [repo root](#root-workspaces).
 
 ## Why pause refuses dirty worktrees
 
-`pause` removes the worktree, which would silently lose any uncommitted
-work. Grove refuses. The lifecycle method raises a typed
-`DirtyWorktreeError`. The TUI surfaces a flash message that names the
-dirty paths. The fix is yours: commit, stash, or push, then pause.
+`pause` removes the worktree, which would silently lose uncommitted work, so
+Grove refuses before any side effect runs. A refused pause really is a
+no-op: the lifecycle method raises a typed `WorkspaceStateError`, and the TUI
+warns with the count of uncommitted changes. Commit, stash, or push, then
+pause, or `grove pause --force` to discard them on purpose.
 
-This is the same principle that keeps Grove out of `git commit` and
-`git push`. The user owns the code's lifecycle, and Grove owns the
-workspace's lifecycle. The two sit alongside each other and do not
-share a verb.
+The same principle keeps Grove out of `git commit` and `git push`. You own
+the code's lifecycle, Grove owns the workspace's, and the two share no verb.
 
 ## Why kill never touches remotes
 
-`kill` deletes the local branch by default when Grove created it. It
-does not touch remotes. There is no flag that opts in. Remote branches
-are deleted with `git push --delete`, which uses your push credentials
-and your access policy. That belongs in your shell, with the rest of the
-team-policy machinery (CI, branch protection, code review) that Grove
-sits below.
+`kill` deletes the local branch by default when Grove created it, and never
+touches remotes. No flag opts in. A remote branch is deleted with
+`git push --delete`, using your own credentials and shell, alongside the CI,
+branch protection and review machinery Grove sits below.
 
-The provenance details that decide which local branch gets deleted by
-default live in [branch provenance](features-branch-provenance.md).
+[Branch provenance](features-branch-provenance.md) decides which local
+branch gets deleted by default.
 
 ## Root workspaces
 
-Most workspaces get a private worktree under `.worktrees`, like a clean
-bench cloned from your repo. A root workspace skips that. It runs the
-agent and the tmux session in the repo root itself, on whatever branch
-you already have checked out.
+Most workspaces get a private worktree under `.worktrees`, a clean bench
+cloned from your repo. A root workspace skips that, running the agent and
+tmux session in the repo root on whatever branch you already have checked
+out. Pick "Root" in the create modal. Grove manages only the tmux session:
+no worktree, no branch.
 
-Pick "Root" in the create modal when you want an agent working in place
-rather than in an isolated copy. There is no worktree to set up and no
-branch to create. Grove manages only the tmux session.
-
-Because the working directory is your real repo and the branch is your
-live checkout, Grove never removes either. `kill` stops the session and
-forgets the record. It does not delete the directory, and it does not
-delete the branch, even if you ask it to. Your git stays yours.
-
-Root workspaces support a smaller set of verbs: create, kill, and
-respawn. Pause and resume do not apply, because there is no worktree to
-free or rebuild. If the session vanishes, `respawn` brings it back. A
-root workspace is never orphaned, because the repo root is always there.
-
-The init script is built to bootstrap a fresh worktree, so it can be
-unwanted in your real repo root. The create modal checks "Skip init
-script" for you when you pick Root. Uncheck it if you do want the script
-to run this time. The checkbox is also available in every other mode,
-for the times a worktree simply does not need its init step.
-
-Two agents in two root workspaces share one directory and one branch.
-Grove allows it, and the call is yours. Two agents editing the same
-files at once can step on each other, so reach for root when you want
-one agent in place, and reach for worktrees when you want isolation.
+| Aspect | In a root workspace |
+|---|---|
+| Ownership | Your working directory and branch are your real, live checkout, so Grove never removes either. `kill` stops the session and forgets the record, even if asked to remove more. Your git stays yours |
+| Verb set | Only create, kill and respawn apply. Pause and resume do not, since there is no worktree to free or rebuild. `respawn` brings a vanished session back, and a root workspace is never orphaned, since the repo root is always there |
+| Init script | Often unwanted against a real repo root, so the create modal checks "Skip init script" for you on Root. Uncheck it to run anyway. The checkbox is available in every mode |
+| Sharing | Two agents in two root workspaces can share one directory and branch, which Grove allows, though editing the same files can make them collide. Reach for root for one agent in place, worktrees for isolation |
 
 ## Recovery from a vanished session
 
-A tmux session can disappear without notice. A terminal restarts, a host
-reboots, or someone runs `tmux kill-server`. The worktree on disk does
-not move; it stays exactly where it was.
-
-When this happens, Grove's reconciler promotes the workspace from
-RUNNING to OFFLINE on the next list refresh. The footer offers exactly
-two keys: `o` (respawn) and `k` (kill). `respawn` rebuilds the tmux
-session from scratch with the same windows and the same agent command.
-The workspace returns to ACTIVE.
-
-If the worktree directory is also gone (someone deleted it manually),
-the workspace is ORPHANED. There is nothing to respawn against. `kill`
-is the only path forward.
+A tmux session can disappear without notice: a terminal restart, a host
+reboot, or a `tmux kill-server`. The worktree on disk does not move, and
+Grove's reconciler promotes the workspace from RUNNING to OFFLINE on the next
+refresh. The footer offers ++o++ (respawn) and ++k++ (kill). `respawn`
+rebuilds the tmux session from scratch with the same windows and agent
+command, back to ACTIVE. If the worktree is also gone, the workspace is
+ORPHANED, and `kill` is the only path.
 
 A [container workspace](features-containers.md) reads this differently,
-because its agent was never in the host session. A vanished host session
-costs it the viewport and not the agent, so Grove asks the container
-before calling such a workspace OFFLINE, and `respawn` rebuilds the
-session around the agent that is still running rather than launching a
-new one.
+since its agent was never in the host session. A vanished host session costs
+only the viewport, so Grove asks the container before calling it OFFLINE,
+and `respawn` rebuilds the session around the agent still running.
 
 ## Side effects live at the edges
 
-Grove's manager reads no config file directly and shells out to nothing.
-Two modules carry every side effect. [`src/grove/core/git.py`](repo:src/grove/core/git.py) wraps the five
-`git` subcommands the lifecycle needs. [`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py) wraps
-`libtmux`. Everything else (branch resolution, cascade merging, state
-reconciliation, init-outcome capture) is pure logic that runs against
-in-memory data.
+Grove's manager touches no config file and shells out to nothing directly.
+Two modules carry every side effect:
+[`src/grove/core/git.py`](repo:src/grove/core/git.py) wraps the five `git`
+subcommands the lifecycle needs, and
+[`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py) wraps `libtmux`.
+Everything else, branch resolution, cascade merging, state reconciliation,
+init-outcome capture, is pure logic against in-memory data.
 
-The manager is testable without git or tmux binaries. The side-effect
-modules are testable with real binaries behind an integration marker.
-New I/O concerns belong in those two files, or a third side-effect
-module. They should not be scattered across the codebase. See
+The manager tests without git or tmux binaries, and the side-effect modules
+test with real ones behind an integration marker. New I/O concerns belong in
+those two files, or a third, never scattered across the codebase. See
 [architecture](develop-architecture.md) for the full boundary diagram.

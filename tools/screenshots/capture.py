@@ -64,6 +64,27 @@ OUT_DIR = _fleet.REPO_ROOT / "docs" / "img" / "screenshots"
 
 # ─── pilot runner ────────────────────────────────────────────────────────────
 
+# Textual writes `<svg class="rich-terminal" viewBox="0 0 W H">` with no width
+# or height, which leaves the file with an aspect ratio but NO intrinsic size.
+# Inline that is invisible, because the docs CSS sizes the image anyway. It
+# stops being invisible the moment something has to size the image on its own:
+# the docs theme's full-screen viewer read 263x150 for a 1629x928 capture and
+# opened it THREE TIMES SMALLER than it renders in the page. Stamping the
+# viewBox onto width/height costs nothing and makes the asset self-describing.
+_SVG_OPEN = '<svg class="rich-terminal" viewBox="0 0 '
+
+
+def _with_intrinsic_size(svg: str) -> str:
+    if not svg.startswith(_SVG_OPEN):
+        return svg
+    box = svg[len(_SVG_OPEN) : svg.index('"', len(_SVG_OPEN))]
+    width, height = box.split(" ")
+    return svg.replace(
+        '<svg class="rich-terminal" ',
+        f'<svg class="rich-terminal" width="{width}" height="{height}" ',
+        1,
+    )
+
 
 async def _shoot(
     manager: Any,
@@ -81,7 +102,7 @@ async def _shoot(
         if actions is not None:
             await actions(pilot)
             await pilot.pause(0.4)
-        svg = app.export_screenshot(title=title)
+        svg = _with_intrinsic_size(app.export_screenshot(title=title))
         (OUT_DIR / f"{name}.svg").write_text(svg, encoding="utf-8")
 
 

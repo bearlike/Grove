@@ -1,44 +1,38 @@
 # Authentication & pairing
 
-The [web dashboard](use-webapp.md) talks to a real HTTP daemon, so the daemon needs to know who is
-calling. Grove borrows the model your headphones already use. A new device asks to connect. Both sides
-show the same short code. You approve it on the host. There is no open, unauthenticated door on the
-network. The daemon binds loopback, and every device earns its access by pairing.
+## Pair a device with Grove
+
+The [web dashboard](use-webapp.md) talks to a real HTTP daemon, so it needs to know who is calling.
+Grove borrows the model your headphones already use: a new device asks to connect, both sides show
+the same short code, and you approve it on the host. The daemon binds loopback, and pairing is how a
+device earns access.
 
 ## The handshake
 
-Pairing is a three-step handshake, and the steps happen out of band. The first time a browser opens the
-dashboard, it lands on a pairing screen.
+Pairing is a three-step handshake, out of band, and a browser's first visit lands on a pairing screen.
 
-Step one happens on the device. The browser suggests a label from its user agent, such as "Pixel 8" or
-"MacBook". Edit it to something you will recognize, then request pairing. The daemon records the request
-and returns a code.
-
-Step two also happens on the device. The browser shows an eight-character code in the form `XXXX-XXXX`
-and starts polling. This code is your proof. You compare it against what the host shows before you
-approve.
-
-Step three happens on the host. Confirm the matching code on the machine that runs the daemon. The
-moment you approve, the browser's next poll picks up its session and redirects into the dashboard.
+- **Step one, on the device.** Edit the suggested label, such as "Pixel 8", then request pairing. The daemon returns a code.
+- **Step two, on the device.** The browser shows an eight-character code, `XXXX-XXXX`, and polls. Compare it against the host before approving.
+- **Step three, on the host.** Confirm the matching code. Approval redirects the browser into the dashboard.
 
 <div class="swiper ms-shots">
   <div class="swiper-wrapper">
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/webapp-pair-device.png" alt="Web dashboard pairing screen with a device-name field">
-        <figcaption>Step 1 — on the device. Name it, then request pairing.</figcaption>
+        <figcaption>Step 1, on the device. Name it, then request pairing.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/webapp-pair-code.png" alt="Web dashboard showing the pairing code to confirm on the host">
-        <figcaption>Step 2 — on the device. The eight-character code to confirm on the host. It expires after five minutes.</figcaption>
+        <figcaption>Step 2, on the device. The code to confirm on the host, expiring after five minutes.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/tui-pair-approve.svg" alt="Grove TUI pairing modal prompting to approve a new device">
-        <figcaption>Step 3 — on the host. The TUI pops this modal on its own. Approve with <code>a</code>, deny with <code>d</code>.</figcaption>
+        <figcaption>Step 3, on the host. The TUI pops this modal on its own: approve with <code>a</code>, deny with <code>d</code>.</figcaption>
       </figure>
     </div>
   </div>
@@ -49,11 +43,8 @@ moment you approve, the browser's next poll picks up its session and redirects i
 
 ## Approving on the host
 
-There are two ways to approve, and both run on the host. Approval never travels over HTTP, so a remote
-caller can never approve itself.
-
-While the TUI is running, it watches for new requests and pops the modal above on its own. Press `a` to
-approve or `d` to deny. On a headless host, use the CLI instead.
+Both ways to approve run on the host, since approval never travels over HTTP: the TUI's own modal, or
+the CLI on a headless host.
 
 ```bash
 grove auth pending                 # list requests; each line shows the code
@@ -61,40 +52,28 @@ grove auth approve <challenge-id>  # approve the matching one
 grove auth deny <challenge-id>     # reject it
 ```
 
-Approve only when the code on the host matches the code on the device. That single check is what stops
-someone who merely reached the pairing screen. The code lives for five minutes. After that it expires,
-and the device has to start over.
+Approve only when the codes match. That single check stops someone who merely reached the pairing
+screen. The code expires after five minutes, and the device starts over.
 
 ## Managing sessions
 
-A session lasts thirty days and renews itself on every use. So a device you use daily pairs just once.
-List and revoke sessions from the host.
+A session lasts thirty days, renewing on every use, so a daily device pairs once.
 
 ```bash
 grove auth sessions                # active sessions with labels and expiry
 grove auth revoke <session-id>     # lock a device out until it pairs again
 ```
 
-The full command reference, with arguments, lives on the [CLI page](use-cli.md#grove-auth).
+The full reference lives on the [CLI page](use-cli.md#grove-auth).
 
 ## The security model
 
-Grove's access control rests on a few deliberate rules. Read them as one idea seen from several sides.
-Keep the daemon private, and let people in by hand.
+Grove's access control rests on keeping the daemon private and letting people in by hand.
 
-- **Loopback by default.** `grove daemon serve` binds `127.0.0.1`. There is no blessed
-  `--host 0.0.0.0`. To reach the daemon from elsewhere, forward a port over SSH or stand up a real
-  tunnel. See [reaching the dashboard from outside](use-webapp.md#reaching-it-from-outside-the-network).
-  Widening the bind is the wrong lever.
-- **Only two open endpoints.** The health probe (`/healthz`) and the pairing handshake answer without a
-  session, so a device can bootstrap. Every other endpoint needs a session token, sent as
-  `Authorization: Bearer`.
-- **Approval cannot cross the wire.** The daemon exposes deny over HTTP, but never approve. A request
-  can only be granted from the host's TUI or CLI.
-- **Secrets stay where they belong.** Session tokens are stored only as SHA-256 hashes, in
-  `${user_config_dir}/grove/auth.json`, with mode `0600`. The plaintext token is handed to the device
-  once and never written to disk. In the browser the token never appears at all. The web app holds it
-  on the server and gives the browser an `HttpOnly` cookie.
+- **Loopback by default.** `grove daemon serve` binds `127.0.0.1`, no blessed `--host 0.0.0.0`. Reach it from elsewhere by forwarding a port over SSH. See [reaching the dashboard from outside](use-webapp.md#reaching-it-from-outside-the-network).
+- **Only two open endpoints.** `/healthz` and the pairing handshake answer without a session. Every other endpoint needs a session token as `Authorization: Bearer`.
+- **Approval cannot cross the wire.** The daemon exposes deny over HTTP, never approve, so only the host's TUI or CLI can grant a request.
+- **Secrets stay where they belong.** Session tokens live only as SHA-256 hashes, in `${user_config_dir}/grove/auth.json`, mode `0600`. The plaintext token reaches the device once, never touching disk. In the browser it never appears: the server holds it, giving an `HttpOnly` cookie.
 
 ## See also
 

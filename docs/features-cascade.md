@@ -1,21 +1,20 @@
 # Configuration cascade
 
-Grove provides mechanism and leaves policy to the user. Defaults are
-sensible but held lightly. Any value a developer might reasonably want
-to change is reachable from outside the code. Layers stack so a team can
-pin a shared standard while an individual still owns the last word on
-their own setup.
+## How the layers resolve
+
+Grove provides mechanism and leaves policy to you. Any value worth
+changing is reachable from outside the code, and layers stack so a team
+pins a shared standard while you still own the last word on your setup.
 
 ## Mechanism, not policy
 
-Three properties distinguish the cascade from a flat config file:
+Three properties set the cascade apart:
 
-- **Layered overrides.** Each later layer overrides the earlier layer.
-- **No layer is mandatory.** If a layer is absent, Grove skips it and
-  the next layer wins. The defaults at the bottom are enough to run.
-- **Last-wins, with one exception.** Lists usually replace wholesale.
-  `agents` merges by `name`, so the team's list and the individual's
-  list compose without one wiping the other.
+- **Layered overrides.** Each later layer overrides the earlier one.
+- **No layer is mandatory.** An absent layer is skipped for the next.
+- **Last-wins, with one exception.** Lists replace wholesale, but
+  `agents` merges by `name`, so a team's list and an individual's list
+  compose.
 
 ## Seven layers
 
@@ -32,15 +31,14 @@ Three properties distinguish the cascade from a flat config file:
 `${user_config_dir}` follows `platformdirs`: XDG on Linux, `%APPDATA%` on
 Windows, `~/Library/Application Support` on macOS.
 
-The merge runs every time Grove resolves config (once per CLI invocation,
-once per TUI launch). The result is a fully validated `GroveConfig`
-object. Pydantic validates once, at the single boundary, with
-`extra="forbid"` so typos in any layer raise loudly.
+The merge runs once per CLI invocation and once per TUI launch. Pydantic
+validates the result once, with `extra="forbid"`, so a typo in any layer
+raises loudly.
 
 ## Lists merge by name (only `agents`)
 
-Every other list (`ui.keybindings`, for example) replaces wholesale
-across layers. `agents` is special:
+Every other list (`ui.keybindings`, for example) replaces wholesale.
+`agents` is special:
 
 ```python
 [
@@ -56,38 +54,30 @@ If your project layer adds:
 { "agents": [{ "name": "aider", "command": "aider --model sonnet" }] }
 ```
 
-The merged result is all four: the defaults `claude`, `codex`, and `shell`
-plus the project's `aider`. New names append in overlay order. Matching names
-merge field by field: the overlay's fields win, and the base entry fills
-the gaps. Override only the `claude` agent's `command` and its
-`kind: "claude_code"` survives, so the [Activity
-Dashboard](features-activity.md) keeps tracking it. This is the cascade
-principle applied one level deeper, value by value instead of list by
-list, and it is what makes the team-vs-individual story work without
-forking lists.
+The merged result is all four: the defaults `claude`, `codex`, and
+`shell`, plus the project's `aider`. New names append in order.
+Matching names merge field by field: overlay wins, base fills gaps, so
+overriding only `claude`'s `command` still leaves `kind: "claude_code"`
+for the [Activity Dashboard](features-activity.md).
 
-When you need to *replace* the defaults, give every entry a custom name.
-The merge cannot insert a `claude` you did not ask for.
+To *replace* the defaults, give every entry a custom name. The merge
+never inserts a `claude` you did not ask for.
 
 ## Exclusive field pairs override as a group
 
-Plain field-by-field merging works until two fields are mutually
-exclusive. `init_script.inline` and `path` are one such pair: a single
-layer cannot set both, and the cascade cannot let one layer's `path`
-survive next to another layer's `inline` either. For this pair, the
-highest layer to set either field wins the whole choice. Grove drops the
-other field rather than merging it in, and logs a warning when it does.
-See [init scripts](configure-init-scripts.md#inline-and-path-are-mutually-exclusive)
-for the full rule.
+Field-by-field merging breaks for a mutually exclusive pair like
+`init_script.inline` and `path`, where a single layer cannot set both.
+The highest layer to set either field wins the whole choice, and Grove
+drops the other and logs a warning. See
+[init scripts](configure-init-scripts.md#inline-and-path-are-mutually-exclusive).
 
 ## Per-repo resolution
 
-The daemon, the TUI, and the web dashboard all resolve each repo's full
-cascade independently. The user layer applies to every repo; layers 3 and 4
-(project and project-local) apply only for workspaces in that specific repo.
-A project-scoped agent or a project-enabled init script defined in
-`<repo>/.grove/config.json` is honored consistently across every surface for
-that repo. You do not need to duplicate project settings in your user config.
+The daemon, TUI, and web dashboard each resolve every repo's cascade
+independently: the user layer applies everywhere, layers 3 and 4
+(project, project-local) only within that repo. An agent or init
+script in `<repo>/.grove/config.json` is honored the same way
+everywhere, so you never duplicate it in your user config.
 
 ## `${repo}` and `${repo_name}` expand at consume time
 
@@ -101,18 +91,15 @@ Path-shaped config fields can carry placeholders:
 }
 ```
 
-`${repo}` is the absolute path to the repo root. `${repo_name}` is its
-basename. The substitution happens at consume time, when a manager
-method needs the value, not at validate time. The same global config
-then serves every repo without re-validation.
-
-A raw `~` for the user home directory works too. `Path.expanduser`
-resolves it the same way.
+`${repo}` is the repo root's absolute path, `${repo_name}` its
+basename. Substitution happens at consume time, not validate time, so
+one config serves every repo without re-validation. A raw `~` resolves
+the same way, via `Path.expanduser`.
 
 ## Environment variables
 
 `GROVE_<SECTION>__<FIELD>=value` overrides a single field. Double
-underscore separates nesting depth. Field names are lowercase:
+underscore separates nesting depth, and field names are lowercase:
 
 ```bash
 GROVE_TMUX__HISTORY_LIMIT=100000 grove        # one-shot, this invocation only
@@ -125,10 +112,9 @@ bool, etc. happens at the boundary.
 
 ## `${VAR}` references pull a value from a variable you name
 
-`GROVE_<SECTION>__<FIELD>` above is an override layer, and the variable
-name is fixed by the field's position in the schema. When you want the
-value to come from a variable *you* choose, reference it from the config
-itself. Any string value can:
+`GROVE_<SECTION>__<FIELD>` fixes the variable name to the field's schema
+position. A `${VAR}` reference lets you name the variable instead, in
+any string value:
 
 ```json
 {
@@ -138,89 +124,67 @@ itself. Any string value can:
 }
 ```
 
-A value can be exactly one reference or embed several:
-`"http://${GOTIFY_HOST}:${GOTIFY_PORT}"`. References resolve after the
-layers merge and before validation, so a resolved value is checked
-exactly like a literal one — `"kind": "${MY_AGENT_KIND}"` resolving to
-`not-a-kind` fails the same way typing `not-a-kind` would.
-
-**A reference to an unset or empty variable is an error**, and it names
-both the variable and the field:
+- A value can hold one or several references, like
+  `"http://${GOTIFY_HOST}:${GOTIFY_PORT}"`.
+- Resolution happens after the layers merge and before validation, so
+  a bad value fails the same way a literal typo would.
+- **An unset or empty variable is an error.** Writing the reference is
+  deliberate, so a missing variable should stop the load, not
+  silently notify nowhere:
 
 ```
 Invalid configuration: config: 'notifications.gotify.server_url'
 references environment variable 'MY_GOTIFY_URL', which is not set
 ```
 
-That is deliberate. Writing the reference is how you opt in, so a
-missing variable is a mistake worth stopping for. The alternative —
-treating it as "not set, carry on" — gives you a config that loads
-cleanly with an empty base URL and then sends every notification
-nowhere.
+- **`$${VAR}` is the only escape**, resolving to a literal `${VAR}`.
+  Any other `$`, bare or an unbraced `$FOO`, is left alone.
+  `${repo}`/`${repo_name}` stay reserved for the consume-time
+  expansion above.
 
-Three rules round it out:
-
-- **`$${VAR}` is the escape.** It resolves to a literal `${VAR}` and is
-  the only escape.
-- **Anything else with a `$` is left alone.** A bare `$`, or `$FOO`
-  without braces, is an ordinary string. This is a reference mechanism,
-  not shell interpolation.
-- **`${repo}` and `${repo_name}` are reserved** for the consume-time
-  expansion described above, and pass through untouched.
-
-Use this for non-secret values that differ per machine — a base URL, a
-hostname, a path. A **secret** stays on the dedicated `*_env` fields
+Use this for values that differ per machine: a base URL, hostname, or
+path. A **secret** stays on a `*_env` field instead
 (`tickets.gitea.token_env`, `notifications.gotify.token_env`,
-`mewbo.api_key_env`, and friends). Those fields already hold the *name*
-of a variable so the config never holds the credential, and Grove reads
-them at the moment it needs the value rather than folding it into the
-config object. They are not references and are never resolved here.
+`mewbo.api_key_env`), holding only the variable's name. Grove reads it
+when needed and never resolves it here.
 
 ## A few fields declare their own variable
 
-A handful of fields name a fixed environment variable in Grove's own
-schema. Set it and the field takes that value, with no config file and no
-`${VAR}` written anywhere:
+A handful of fields name a fixed variable in Grove's schema, and setting
+it fills the field with no config file or `${VAR}` needed:
 
 ```bash
 export GROVE_GOTIFY_API_URL=https://gotify.example.com   # notifications.gotify.server_url
 export GROVE_GITEA_BASE_URL=https://gitea.example.com    # tickets.gitea.base_url
 ```
 
-The full list is generated from the schema and lives in the
-[configuration reference](configure-reference.md#environment-variable-overrides).
-The names are declared per field, not derived from the field's path — read
-the exact string off that table rather than reconstructing it.
+The full list is generated from the schema, in the
+[configuration reference](configure-reference.md#environment-variable-overrides),
+with names declared per field rather than derived from its path.
 
-**An unset or empty declared variable simply does not override.** Nobody
-asked for it; it is always on, so silence is the only correct answer and
-your config file's value stands. That is the opposite of a `${VAR}`
-reference, which errors when its variable is missing — and both are right,
-because a reference is something you typed on purpose and a declared
-variable is one Grove offers whether you use it or not.
+**An unset or empty declared variable simply does not override**: your
+config file's value stands. A `${VAR}` reference errors when missing
+instead, since writing one is deliberate while a declared variable is
+offered either way.
 
-Precedence for one of these fields, lowest to highest:
+Precedence, lowest to highest:
 
 1. the literal value in a config file
-2. a `${VAR}` reference in that file — it *is* the file's value, resolved
+2. a `${VAR}` reference in that file, which *is* the file's value, resolved
 3. the field's declared variable, e.g. `GROVE_GOTIFY_API_URL`
 4. `GROVE_<SECTION>__<FIELD>`, e.g. `GROVE_NOTIFICATIONS__GOTIFY__SERVER_URL`
 
-3 loses to 4 because 4 names the exact field it fills and is unambiguous
-by construction, while 3 is a convenience alias. If you have exported both,
-the one that says what it means wins.
+3 loses to 4: 4 names the exact field, 3 is only a convenience alias.
 
-Only non-secret fields declare a variable. A credential still goes through
-a `*_env` field, which names the variable holding it.
+Only non-secret fields declare one. A credential still goes through a
+`*_env` field naming its variable.
 
 ## Worked example
 
-A team agrees that every workspace should run `uv sync` first and that
-the worktree root should sit beside the repo.
+A team agrees every workspace runs `uv sync` first, worktree root
+beside the repo, in `<repo>/.grove/config.json` (committed):
 
-`<repo>/.grove/config.json` (committed):
-
-```json
+```json title=".grove/config.json"
 {
   "worktree": { "root_template": "${repo}/.worktrees" },
   "init_script": {
@@ -231,25 +195,23 @@ the worktree root should sit beside the repo.
 }
 ```
 
-A teammate prefers the dark theme. They drop:
+A teammate prefers dark theme, gitignored in
+`<repo>/.grove/config.local.json`:
 
-`<repo>/.grove/config.local.json` (gitignored):
-
-```json
+```json title=".grove/config.local.json"
 { "ui": { "theme": "dark" } }
 ```
 
-Another teammate wants Aider for one workspace without disturbing the
-team's `claude` default. They add to their user layer:
+Another wants Aider for one workspace without disturbing the team's
+`claude` default, added per machine (all repos) in
+`~/.config/grove/config.json`:
 
-`~/.config/grove/config.json` (per-machine, all repos):
-
-```json
+```json title="~/.config/grove/config.json"
 { "agents": [{ "name": "aider", "command": "aider --model sonnet" }] }
 ```
 
-The merged config carries all three pieces. No coordination needed. No
-list got wiped. The team baseline is intact.
+The merged config carries all three pieces, with no coordination needed
+and no list wiped.
 
 ## See also
 

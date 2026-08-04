@@ -1,14 +1,15 @@
 # Architecture
 
-Grove is one engine with several clients around it. The engine
-(`grove.core`) owns every decision. The daemon (`grove.daemon`) serves
-it over loopback HTTP, with REST for lifecycle and SSE for live activity.
-The client SDK (`grove.client`) is the transport-agnostic way to attach.
-The TUI (`grove.tui`) is the primary interactive client. The MCP server
-(`grove.mcp`) exposes the same lifecycle to MCP-capable agents. The web
-dashboard (`webapp/`) is a Next.js client whose own backend-for-frontend
-(BFF) routes sit in front of the daemon. The boundaries between all of
-them are enforced in CI.
+## How the packages fit together
+
+Grove is one engine with several clients around it. `grove.core` owns
+every decision, and CI enforces the boundaries between them.
+
+- **`grove.daemon`**: loopback FastAPI, REST plus SSE.
+- **`grove.client`**: transport-agnostic attach SDK.
+- **`grove.tui`**: the primary interactive client.
+- **`grove.mcp`**: the same lifecycle for MCP-capable agents.
+- **`webapp/`**: a Next.js client with its own BFF.
 
 ## The package layout
 
@@ -47,104 +48,70 @@ grove/
 webapp/                  # Next.js dashboard; its BFF routes talk to the daemon
 ```
 
-The shape encodes a single rule: `grove.core` must not depend on UI
-code. Not Textual, not Rich, not Typer, not Click, and nothing inside
-`grove.tui`. Every client, present or future, imports
-`WorkspaceManager` and the public types. Same engine, new client.
+Every client imports `WorkspaceManager` and the public types. Four
+`import-linter` contracts in [`pyproject.toml`](repo:pyproject.toml)
+make that a build gate.
 
 ## The boundaries, enforced
 
-[`pyproject.toml`](repo:pyproject.toml) configures `import-linter` with four contracts:
+- **Core has no UI dependencies.** No `textual`, `rich`, `typer`, `click`, or `grove.tui` inside `grove.core`.
+- **Daemon depends only on core.** No `grove.client` or `grove.tui` inside `grove.daemon`. Clients depend on the daemon, never the reverse.
+- **The client SDK stays clean.** No `grove.daemon` or `grove.tui` inside `grove.client`. It speaks wire shapes, not process internals.
+- **The MCP server speaks only through the client SDK.** MCP client to `grove.mcp` to `GroveClient` to daemon to core, so it can run on a different host.
 
-- **Core has no UI dependencies.** `grove.core` may not import
-  `textual`, `rich`, `typer`, `click`, or `grove.tui`.
-- **Daemon depends only on core.** `grove.daemon` may not import
-  `grove.client` or `grove.tui`. The direction is clients → daemon →
-  core, never the reverse.
-- **The client SDK stays clean.** `grove.client` may not import
-  `grove.daemon` or `grove.tui`. It speaks wire shapes and HTTP, not
-  process internals.
-- **The MCP server speaks only through the client SDK.** `grove.mcp`
-  reaches the engine as MCP client → `grove.mcp` → `GroveClient` →
-  daemon → core, never by importing engine internals. That is what lets
-  it run on a different host than the engine.
-
-`include_external_packages = true` is what makes the third-party block
-real. Without it, `import textual` from inside `grove.core` would slip
-through silently. CI runs `lint-imports` on every push. A violation
-fails the lint job.
+`include_external_packages = true` catches third-party imports too, or
+`import textual` would slip through silently. `lint-imports` runs on
+every push.
 
 ## Side effects at the edges
 
-Side effects live in dedicated modules. [`src/grove/core/git.py`](repo:src/grove/core/git.py) carries
-everything git-shaped (worktree add and remove, branch delete, status,
-log). [`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py) carries everything tmux-shaped (session
-create, capture-pane, list-windows, switch-client). [`src/grove/core/mewbo.py`](repo:src/grove/core/mewbo.py)
-carries the Mewbo REST I/O for remote sessions, the HTTP sibling of the
-other two.
+- [`src/grove/core/git.py`](repo:src/grove/core/git.py): worktree add and remove, branch delete, status, log.
+- [`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py): session create, capture-pane, list-windows, switch-client.
+- [`src/grove/core/mewbo.py`](repo:src/grove/core/mewbo.py): Mewbo REST I/O for remote sessions.
 
-Manager methods orchestrate them. The manager itself reads no config
-file directly, runs no subprocess, and is fully testable against
-in-memory fakes for those side-effect modules. New I/O concerns belong
-in one of these files, or a fourth side-effect module. They should not be
-scattered.
+Manager methods orchestrate them, staying testable against in-memory
+fakes. A new I/O concern belongs in one of these files, or a fourth,
+never scattered.
 
 ## The contracts layer
 
-`grove.core.contracts` is the canonical home for cross-boundary shapes:
-anything that crosses a client-to-engine line now or could later. That
-covers the branch-source intent (`BranchPlan`, a discriminated union
-over `AutoBranch`, `NewNamedBranch`, `ExistingLocalBranch`,
-`TrackRemoteBranch`, `RootBranch`), the request envelopes, the response
-views the daemon serializes (`WorkspaceStateView`, `WorkspacePeekView`,
-the activity and session views), and the status and agent-state color
-palettes every client must render identically.
+`grove.core.contracts` holds anything crossing a client-engine line now
+or later:
 
-The convention is sharp. Pydantic at public-contract boundaries. Plain
-dataclass for in-process state. Anything that might travel through JSON
-is Pydantic with `extra="forbid"`. Anything that lives only inside the
-engine (`WorkspaceState`, the resolved-branch IR) is a plain
-`@dataclass(slots=True)`.
+- the branch-source intent (`BranchPlan`, a union over `AutoBranch`, `NewNamedBranch`, `ExistingLocalBranch`, `TrackRemoteBranch`, `RootBranch`)
+- the request envelopes
+- the daemon's response views (`WorkspaceStateView`, `WorkspacePeekView`, activity and session views)
+- the status and agent-state color palettes every client renders alike
 
-When in doubt: would a non-Python client ever construct or receive
-this? If yes, Pydantic. If no, dataclass.
+Pydantic at public-contract boundaries with `extra="forbid"`, plain
+`@dataclass(slots=True)` for in-process state (`WorkspaceState`, the
+resolved-branch IR). Test: would a non-Python client construct or
+receive this? Pydantic if yes, dataclass if no.
 
 ## The agents layer
 
 `grove.core.agents` is the provider boundary for coding agents. Each
-adapter knows how to introspect one kind of agent's sessions: where the
-transcripts live, how to parse them, and how to derive a live state.
-`claude_code` reads Claude Code's transcript format. `codex` reads the
-Codex CLI's rollout files. `mewbo` reads remote Mewbo sessions over REST.
-`generic` is the deliberate no-op for everything else. Each one maps its
-tool's own vocabulary onto the shared `AgentActivityState` axis.
+adapter introspects one agent kind's sessions and maps its vocabulary
+onto the shared `AgentActivityState` axis: `claude_code` for Claude
+Code's transcripts, `codex` for Codex CLI rollout files, `mewbo` for
+remote Mewbo sessions over REST, `generic` a deliberate no-op.
 
-An adapter normalizes shape, not semantics. It translates launch
-parameters and transcript formats. It never second-guesses what a model
-does. Engine code asks the registry for an adapter by `kind` and stays
+An adapter normalizes shape, not semantics. It never second-guesses what
+a model does. Engine code asks the registry for an adapter by `kind`,
 agnostic about which agent is behind it.
 
 ## The observability spine
 
-Three engine pieces feed every dashboard, and both the TUI and the
-daemon consume them the same way:
+Three engine pieces feed every dashboard, consumed the same way by the
+TUI and the daemon.
 
-- **`ActivityService`** is the hub. It polls each repo's workspaces,
-  blends agent state with tmux output, tracks dirty files and recent
-  commits, and emits deltas only when something changed. The TUI's
-  dashboard screen consumes it in process; the daemon streams the same
-  events over SSE to the web dashboard.
-- **`RepoRegistry`** holds one `WorkspaceManager` per repository, so
-  multi-repo clients (the daemon, the activity wall) dispatch to the
-  right engine without re-reading config.
-- **`SessionExplorer`** discovers recorded agent sessions across the
-  repo root and every worktree. The `grove sessions` CLI, the daemon's
-  session endpoints, and the web sessions panel are all thin views over
-  it.
+- **`ActivityService`**, the hub. Polls workspaces, blends agent state with tmux output, tracks dirty files and commits, emits deltas only on change. The TUI consumes it in process, and the daemon streams it over SSE.
+- **`RepoRegistry`**, one `WorkspaceManager` per repository, so clients dispatch without re-reading config.
+- **`SessionExplorer`**, agent sessions found across the repo root and every worktree. `grove sessions`, the daemon endpoints, and the web sessions panel are thin views over it.
 
 ## Dependencies flow inward
 
-The dependency graph runs strictly inward from clients to the engine:
+The dependency graph runs strictly inward, clients to engine:
 
 ```mermaid
 flowchart LR
@@ -162,12 +129,11 @@ flowchart LR
     Core --> Agents([core.agents])
 ```
 
-Reverse arrows are smells. When a low-level helper has to know about a
-high-level caller, the boundary is wrong. Most circular-import pain in
-this codebase has historically traced back to that.
+Reverse arrows are smells. Most circular-import pain here traces back to
+a low-level helper that knew about a high-level caller.
 
 ## See also
 
-- [Public API](develop-public-api.md): the actual re-exports and their docstrings.
+- [Public API](develop-public-api.md): the re-exports and docstrings.
 - [Engineering principles](develop-principles.md): the rules this layout enforces.
-- [Contributing](develop-contributing.md): make targets, commit format, PR conventions.
+- [Contributing](develop-contributing.md): make targets, commits, PRs.

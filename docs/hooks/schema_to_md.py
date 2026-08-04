@@ -61,7 +61,14 @@ def _render(schema_path: Path) -> str:
     props = schema.get("properties", {})
 
     lines: list[str] = [
+        # The H1 must stay the FIRST block and the H2 must follow it directly:
+        # from theme v1.12.0 the pair is one masthead, the H1 rendering as a
+        # small label and this H2 as the page's title. Put anything above the
+        # H1 (a provenance comment is the obvious temptation on a generated
+        # page) and the theme stops lifting it, so the page prints its own
+        # title twice. Nothing warns; the build stays clean.
         "# Configuration reference\n",
+        "## Every field and its default\n",
         (
             "This page is generated from Grove's Pydantic model.  Edit "
             "`src/grove/core/config.py` and run `make docs` (or push to "

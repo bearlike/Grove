@@ -118,7 +118,7 @@ docs = [
     # theme ships a release. Tagged assets are permanent. To upgrade: pick
     # the new tag, update both the tag and the filename here, then
     #     uv lock --upgrade-package mkdocs-shadcn-mewbo
-    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.6.1/mkdocs_shadcn_mewbo-1.6.1-py3-none-any.whl",
+    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl",
     "mkdocstrings[python]",
     "pymdown-extensions>=10.20.1",
 ]

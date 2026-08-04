@@ -25,11 +25,56 @@ theme:
   versions_root: Grove
   show_version_switcher: true
   show_build_info: true
+
+  # OFF because it renders INSIDE the masthead. The H1 label and the first H2
+  # are one unit the theme spaces at 4px; the updated-date row lands between
+  # them in the same flex column and adds its own 16px pad plus a 20px line,
+  # measured 40px on `getting-started` against the 4px contract. A bare
+  # `8/4/2026` at half opacity is not worth breaking the page's front door.
+  # The footer still carries build info, which is the same signal with a home.
+  show_datetime: false
   carousel: true
+  sortable_tables: true
   code_refs: {}
+
+  # This site is mostly screenshots of a terminal, and a TUI screenshot is
+  # unreadable at column width. Every shot over 96px opens full screen on
+  # click, and a carousel becomes one gallery rather than one entry per
+  # cloned slide.
+  lightbox: true
+
+  # mkdocs rewrites and validates MARKDOWN links only. Every `<video poster=…>`
+  # and hand-written `<a href=…>` on this site passes through verbatim, so a
+  # relative prefix that is right on the landing page and wrong one level down
+  # 404s in production behind a green `--strict` build. This resolves them
+  # against the directory each page actually lands in; under `--strict` it
+  # raises. Fix what it reports; never switch it back off.
+  link_check: true
+
+  # The nav's two halves are the site's whole IA, and until now they were only
+  # visible once you looked at the sidebar. Page names here are flat, so `match`
+  # prefixes do the routing that a directory layout would elsewhere.
+  header_tabs:
+    # `.` and not `/`. mkdocs' `url` filter passes an absolute path through
+    # untouched, so `/` lands on the HOST root and leaves the docs site: this
+    # site is served under `/grove/` on the internal host and `/Grove/` on
+    # GitHub Pages, and neither is the server root. `.` relativizes per page.
+    - label: Home
+      icon: lucide:house
+      url: .
+    - label: User Guide
+      icon: lucide:book-open
+      url: getting-started/
+      match: [getting-started, configure-, use-, features-, issue-ops, troubleshooting]
+    - label: Developer Reference
+      icon: lucide:code-xml
+      url: develop-architecture/
+      match: [develop-]
 
   nav_icons:
     Home: lucide:house
+    "User Guide": lucide:book-open
+    "Developer Reference": lucide:code-xml
     "Get Started": lucide:rocket
     Troubleshooting: lucide:life-buoy
 
@@ -66,30 +111,47 @@ theme:
 
 hooks:
   - docs/hooks/schema_to_md.py
-  - docs/hooks/og_site_name.py
   - docs/hooks/no_tracker_refs.py
 
+# Order matters: the theme's authoring skill documents this sequence, and a
+# missing extension degrades SILENTLY (a fence title prints as text, `++k++`
+# prints literally, an abbreviation gets no underline) with nothing in the
+# build to point at it.
 markdown_extensions:
-  - pymdownx.highlight:
-      use_pygments: true
-      linenums: false
-      css_class: codehilite
+  - admonition
+  # `extra` bundles abbr, attr_list, def_list, footnotes, md_in_html and
+  # tables. abbr is the one that has to be asked for by name otherwise, and
+  # the glossary below is worthless without it.
+  - extra
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      use_pygments: true
+      linenums: false           # off globally; pages opt in per fence
+      css_class: codehilite     # the theme's CSS and copy button select on it
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
   - pymdownx.inlinehilite
-  - admonition
   - pymdownx.details
   - pymdownx.tabbed:
       alternate_style: true
-  - tables
-  - attr_list
-  - md_in_html
+  - pymdownx.keys              # ++ctrl+k++ renders real <kbd> elements
+  # `base_path` resolves from THIS file's directory, not `docs/`. `auto_append`
+  # puts the abbreviation glossary on every page, so a term defined once gets
+  # its tooltip wherever it is written.
+  - pymdownx.snippets:
+      base_path: [docs]
+      auto_append: [_glossary.md]
+  - shadcn.extensions.iconify
+  - shadcn.extensions.hover_card
 
 exclude_docs: |
   superpowers/
+  _glossary.md
   hooks/
   design-system.md
   CLAUDE.md
@@ -121,7 +183,7 @@ extra:
     provider: mike
 
 extra_css:
-  - stylesheets/grove.css?v=2
+  - stylesheets/grove.css?v=5
 
 nav:
   - Home: index.md

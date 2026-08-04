@@ -1,81 +1,49 @@
 # CLI
 
-The CLI is Grove's full-featured shell surface. It covers the complete workspace
-lifecycle (create, steer, pause, resume, respawn, kill, attach), read-only
-inspection (ls, show, sessions), and host-level admin (config, auth, daemon).
-Every lifecycle verb goes through the same engine the TUI uses, so the CLI, TUI,
-web dashboard, and MCP are at feature parity.
+## Every command and flag
 
-Reach for the CLI to script around Grove, to drive workspaces from an agent's
-own shell, to feed JSON to another tool, or to inspect what sibling agents on
-the same project have been doing.
+Every verb runs the same engine as the TUI, so the CLI, TUI, web dashboard, and
+MCP are at feature parity.
 
 ## The contract
 
-A few properties hold across every command.
-
-**Repo-scoped versus host-scoped.** Most commands resolve the project from the
-current directory and operate on it. `grove`, `grove ls`, `grove create`,
-`grove sessions`, `grove config`, and `grove debug` all walk up from `cwd` to
-the enclosing git repository. They work from anywhere inside the project,
-including from inside any linked worktree. Two groups are different: `grove
-daemon` and `grove auth` act on the host, not on a single repo. The daemon
-serves every repo Grove knows about from one process, and pairing lives in a
-host-wide session store.
-
-**Workspace resolution.** All lifecycle and inspection verbs accept a workspace
-WORKSPACE argument. The engine resolves it by exact id first, then by a unique
-id prefix. The eight-character prefix the tables print is almost always enough.
-An ambiguous prefix exits `1` and lists the candidates, so you can extend it
-without re-running `grove ls`.
-
-**JSON first.** Every read command is built to pipe. `grove ls` and `grove
-debug` are JSON-native. `grove sessions list` and `grove sessions show` print a
-human table or transcript by default and switch to JSON with `--json`. `grove
-sessions dump` is JSON by default. Field names are a stable contract: parse
-them, do not scrape the human tables.
-
-**Exit codes.** `0` means success. `1` means a typed Grove error: not in a git
-repository, a config that failed to load, a session reference that matched
-nothing, a malformed id. The message goes to stderr. `2` comes from the
-argument parser for a usage mistake, an unknown flag, or a missing required
-argument.
-
-**Non-interactive.** There are no pagers and no prompts (except the `grove
-kill` confirmation, which `--yes` skips). Output goes straight to stdout, errors
-to stderr. Everything is safe to run unattended from a script, a CI job, or an
-agent's shell.
+- **Scope.** Most commands resolve the repo by walking up from `cwd`, so any
+  linked worktree works. `daemon`, `auth`, `fleet`, and `tickets owned` are
+  host-wide, since one daemon serves every repo and pairing lives in a host-wide
+  session store.
+- **Workspace resolution.** A WORKSPACE argument takes an exact id or a unique
+  prefix. An ambiguous prefix exits `1` and lists the candidates.
+- **JSON first.** `ls`, `fleet`, and `debug` are JSON-native, `sessions list`
+  and `sessions show` take `--json`, `sessions dump` is JSON by default. Field
+  names are a stable contract, so parse them, not the tables.
+- **Exit codes.** `0` succeeds. `1` is a typed Grove error on stderr, such as no
+  git repository, a config that failed to load, a session ref matching nothing,
+  or a malformed id. `2` is the argument parser rejecting an unknown flag or a
+  missing required argument.
+- **Non-interactive.** No pagers, and no prompt but the `grove kill`
+  confirmation `--yes` skips.
 
 ## `grove`
 
-Launch the TUI for the current repository.
+Launch the TUI for the repo found from `cwd`, against the merged config, or
+exit `1` outside a git repository. See the [TUI tour](use-tui.md). It also
+carries Typer's `--install-completion` and `--show-completion`.
 
 ```bash
 cd /path/to/my-project
 grove
 ```
 
-No subcommand runs the TUI. It locates the repo root from `cwd`, builds the
-workspace manager against the merged config, and hands control to the Textual
-app. If `cwd` is not inside a git repository it prints the error to stderr and
-exits `1`. For everything the TUI can do, see the [TUI tour](use-tui.md).
-
-The root command also carries the standard Typer shell-completion helpers,
-`--install-completion` and `--show-completion`, which install or print a
-completion script for your current shell.
-
 ## Read commands
 
 ### `grove ls`
 
-Print this repo's workspaces as JSON, one record per workspace.
+This repo's workspaces as JSON, one record each, in creation order. No
+options.
 
 ```bash
 grove ls
 ```
-
-This is the scriptable twin of the TUI list. There are no options: it always
-emits the full array to stdout, in creation order.
 
 ```json
 [
@@ -91,23 +59,32 @@ emits the full array to stdout, in creation order.
 ]
 ```
 
-The `status` field is Grove's reconciled view. It is one of `active`, `idle`,
-`paused`, `offline`, `orphaned`, or `error`. See
-[status semantics](features-status.md) for the recovery path for each value.
-
-A typical recipe: find every workspace that needs attention without opening the
-TUI.
+`status` is Grove's reconciled view, one of `active`, `idle`, `paused`,
+`offline`, `orphaned`, or `error`. See [status
+semantics](features-status.md) for each recovery path.
 
 ```bash
+# Every workspace that needs attention, without opening the TUI.
 grove ls | jq -r '.[] | select(.status=="offline" or .status=="orphaned" or .status=="error") | "\(.status)\t\(.title)\t\(.branch)"'
+```
+
+### `grove fleet`
+
+Every workspace on this host as JSON, with lifecycle status, blended agent
+activity, task phase, and ticket refs. Same shape as the daemon's activity feed
+and the `grove_get_fleet_status` MCP tool.
+
+```bash
+grove fleet
+grove fleet | jq '.projects[].workspaces[] | select(.needs_attention)'
 ```
 
 ### `grove show`
 
-Inspect a single workspace: identity, git ahead/behind/diff/dirty, agent state
-and turn counts, the agent's reported [task phase](features-status.md#the-third-axis-task-phase)
-and its todo list, recent transcript turns, and a live pane snapshot. This is
-the CLI analogue of the TUI peek rail.
+One workspace's identity, git ahead/behind/diff/dirty, agent state and turn
+counts, reported [task phase](features-status.md#the-third-axis-task-phase) and
+todo list, recent transcript turns, and a live pane snapshot. The peek rail as a
+command, and it mutates nothing.
 
 ```bash
 grove show [WORKSPACE] [--last/-l N]
@@ -115,28 +92,20 @@ grove show [WORKSPACE] [--last/-l N]
 
 | Argument / option | Default | Meaning |
 |---|---|---|
-| `WORKSPACE` | inferred from cwd | Workspace id or unique prefix. Omit when running from inside a worktree. |
-| `--last`, `-l` | 10 | Number of recent transcript turns to show. |
-
-With no argument it infers the workspace from the current directory. With an
-id it resolves by exact match then unique prefix, the same as every other
-lifecycle verb.
+| `WORKSPACE` | inferred from cwd | Id or unique prefix. Omit from inside a worktree. |
+| `--last`, `-l` | 10 | Recent transcript turns to show. |
 
 ```bash
 grove show            # from inside a worktree, infers the workspace
 grove show a1b2 -l 5  # by id prefix, last 5 turns
 ```
 
-The output is human-readable sections (identity, git, agent, transcript, live
-pane). It never mutates anything.
-
 ### `grove phase`
 
-Set or read a workspace's [task phase](features-status.md#the-third-axis-task-phase):
-how far through its task the agent says it is, separate from workspace status
-and agent activity state. This is the convenience surface for a host
-workspace; the underlying, always-available channel is the agent writing the
-file Grove names for it as `GROVE_PHASE_FILE`, inside its own worktree.
+Set or read a workspace's [task
+phase](features-status.md#the-third-axis-task-phase), how far through its task
+the agent reports itself to be. Setting writes the file Grove names as
+`GROVE_PHASE_FILE`, the channel available everywhere.
 
 ```bash
 grove phase <phase> [--note TEXT] [WORKSPACE]   # set
@@ -145,9 +114,9 @@ grove phase [WORKSPACE]                         # read
 
 | Argument / option | Default | Meaning |
 |---|---|---|
-| `PHASE` | (none) | One of `scoping`, `planning`, `implementing`, `verifying`, `delivering`, `done`. Omit it to read instead of set. |
-| `--note` | none | Optional one-line note, 200 characters or less. |
-| `WORKSPACE` | inferred from cwd | Workspace id or unique prefix, the same resolution as `grove show`. |
+| `PHASE` | (none) | `scoping`, `planning`, `implementing`, `verifying`, `delivering`, or `done`. Omit to read instead of set. |
+| `--note` | none | One-line note, 200 characters or less. |
+| `WORKSPACE` | inferred from cwd | Id or unique prefix, resolved as in `grove show`. |
 
 ```bash
 grove phase implementing --note "wiring the parser"   # from inside the worktree
@@ -155,25 +124,16 @@ grove phase                                           # read the current phase b
 grove phase verifying a1b2                             # set another workspace's phase by id
 ```
 
-Setting writes the same file an agent would write itself; reading reflects
-whatever is on disk, whether it was written by this command, by the agent,
-or by another client. See [task phase](features-status.md#the-third-axis-task-phase)
-for the full model, including why the file is the primary channel.
-
 ### `grove sessions`
 
-Explore the coding-agent sessions recorded for this project. Think of it as
-`git log` for agent conversations. Every worktree of the repo is scanned, so
-a session started in a Grove workspace, in a hand-made worktree, or in the
-repo root all show up in one place. Transcripts outlive worktrees, so paused
-workspaces show up too. Everything here is read-only.
-
-Three subcommands form a cost ladder. `list` is one line per session. `show`
-reads one conversation as turns. `dump` emits the raw native records.
+The sessions recorded for this project, a kind of `git log` for agent
+conversations. Every worktree is scanned and transcripts outlive worktrees, so
+Grove workspaces, hand-made worktrees, the repo root and paused workspaces all
+appear in one read-only place. The subcommands form a cost ladder.
 
 #### `grove sessions list`
 
-List every agent session across this project's worktrees, newest first.
+Every session across this project's worktrees, newest first.
 
 ```bash
 grove sessions list [--host] [--agent KIND] [-w PREFIX] [--since WINDOW] [-n N] [--json]
@@ -181,17 +141,16 @@ grove sessions list [--host] [--agent KIND] [-w PREFIX] [--since WINDOW] [-n N] 
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `--host` | flag | off | Widen the scope to every repo on this host, not just this project. See [the Session Catalog](features-activity.md#the-session-catalog-every-session-on-this-host). |
-| `--agent` | text | all | Only sessions from this adapter kind, e.g. `claude_code`. |
-| `--workspace`, `-w` | text | all | Workspace id prefix, or a case-insensitive title substring. |
-| `--since` | text | all time | Only sessions modified since a relative window (`30m`, `6h`, `2d`, `1w`) or an ISO date. |
-| `--limit`, `-n` | integer | unbounded | Keep the newest N rows after filtering. |
-| `--json` | flag | off | Emit JSON instead of the table. |
+| `--host` | flag | off | Every repo on this host. See [the Session Catalog](features-activity.md#the-session-catalog-every-session-on-this-host). |
+| `--agent` | text | all | This adapter kind only, e.g. `claude_code`. |
+| `--workspace`, `-w` | text | all | Workspace id prefix, or case-insensitive title substring. |
+| `--since` | text | all time | Modified since a window (`30m`, `6h`, `2d`, `1w`) or ISO date. |
+| `--limit`, `-n` | integer | unbounded | Newest N rows after filtering. |
+| `--json` | flag | off | JSON instead of the table, the metadata the dashboard reads. |
 
-The default is a compact table, one row per session, newest first. The `STATE`
-column is the agent's live, computed-from-transcript state: `starting`,
-`working`, `waiting`, `blocked`, `idle`, `error`, or `unknown`. `waiting` and
-`blocked` are the ones that want a human.
+`STATE` is computed from the transcript, one of `starting`, `working`,
+`waiting`, `blocked`, `idle`, `error`, or `unknown`. `waiting` and `blocked`
+want a human.
 
 ```text
 SESSION    AGENT        WORKSPACE            STATE     TURNS MODIFIED         TITLE / PROMPT
@@ -199,25 +158,18 @@ SESSION    AGENT        WORKSPACE            STATE     TURNS MODIFIED         TI
 a91e0d34   claude_code  Radar overlay        working       6 just now        Wire the radar tiles onto the map
 ```
 
-With `--json` you get the full metadata for each session, the same fields the
-web dashboard reads. Field names are a stable contract.
-
-A common scripted recipe: which agents are waiting for a human?
-
 ```bash
+# Which agents are waiting for a human?
 grove sessions list --json \
   | jq -r '.[] | select(.state=="waiting" or .state=="blocked") | "\(.state)\t\(.workspace_title // "-")\t\(.title // .last_prompt)"'
-```
 
-Or show only what moved in the last two hours, the five most recent:
-
-```bash
+# Only what moved in the last two hours, five most recent.
 grove sessions list --since 2h --limit 5
 ```
 
 #### `grove sessions show`
 
-Print a session's conversation as normalized turns, oldest first.
+One conversation as normalized turns, oldest first.
 
 ```bash
 grove sessions show REF [-l N] [--json]
@@ -225,25 +177,19 @@ grove sessions show REF [-l N] [--json]
 
 | Argument / option | Default | Meaning |
 |---|---|---|
-| `REF` (required) | (none) | Session id, or any unique prefix. |
-| `--last`, `-l` | all turns | Print only the most recent N turns. |
-| `--json` | off | Emit structured turns as JSON. |
-
-Use `--last` to catch up on where an agent landed without reading the whole
-history:
+| `REF` (required) | (none) | Session id or unique prefix. |
+| `--last`, `-l` | all turns | The most recent N turns only. |
+| `--json` | off | Turns as JSON, metadata under `session` plus ordered `turns`. |
 
 ```bash
 grove sessions show 7b3f2c1a --last 3
 ```
 
-With `--json` the turns become structured data: the session's full metadata
-under `session`, plus an ordered `turns` array.
-
 #### `grove sessions dump`
 
-Dump a session's raw native records (main transcript plus any sub-agent files).
-This is the escape hatch for when the normalized turns are not enough, for
-example to inspect exact `tool_result` payloads or token accounting.
+Raw native records, the main transcript plus any sub-agent files, for exact
+`tool_result` payloads or token accounting. Megabytes are possible, so `list`
+and `show --last N` are cheaper for catching up.
 
 ```bash
 grove sessions dump REF [--jsonl]
@@ -251,12 +197,8 @@ grove sessions dump REF [--jsonl]
 
 | Argument / option | Default | Meaning |
 |---|---|---|
-| `REF` (required) | (none) | Session id, or any unique prefix. |
-| `--jsonl` | off | Stream the original transcript lines verbatim instead of the JSON object. |
-
-A long session's transcript can be megabytes. Reach for `dump` only when you
-genuinely need the raw records; for catching up, `list` and `show --last N` are
-far cheaper.
+| `REF` (required) | (none) | Session id or unique prefix. |
+| `--jsonl` | off | Original transcript lines verbatim, not the JSON object. |
 
 ```bash
 grove sessions dump 7b3f2c1a --jsonl | jq -c 'select(.type=="assistant")'
@@ -264,11 +206,11 @@ grove sessions dump 7b3f2c1a --jsonl | jq -c 'select(.type=="assistant")'
 
 #### `grove sessions remap`
 
-Implemented in [`cli_sessions.py`](repo:src/grove/tui/cli_sessions.py). Pin an existing agent session as a workspace's tracked primary. This is the
-manual counterpart to Grove's automatic session tracking: re-point a
-workspace whose Grove-minted session died (a `/clear` rotated the id, the
-process crashed) at the live or recovered session, or adopt a hand-started
-session as the workspace's own.
+Implemented in [`cli_sessions.py`](repo:src/grove/tui/cli_sessions.py). Pin an
+existing session as a workspace's tracked primary, after a `/clear` rotated the
+id or the process crashed, or to adopt a hand-started session. Re-running the
+same pair is a no-op, and success prints the workspace id, title, and tracked
+session id.
 
 ```bash
 grove sessions remap WORKSPACE SESSION
@@ -276,27 +218,19 @@ grove sessions remap WORKSPACE SESSION
 
 | Argument | Meaning |
 |---|---|
-| `WORKSPACE` (required) | Workspace id, or any unique prefix. |
-| `SESSION` (required) | Session id, or any unique prefix, resolved in the workspace's project. |
+| `WORKSPACE` (required) | Workspace id or unique prefix. |
+| `SESSION` (required) | Session id or unique prefix, in the workspace's project. |
 
 ```bash
 grove sessions remap a1b2 cafef00d
 ```
 
-Trusted and idempotent: the session ref is resolved in the workspace's own
-project, and re-running with the same pair is a no-op. On success it prints
-the workspace id, title, and the session id now tracked.
-
 ## Lifecycle commands
-
-All lifecycle verbs accept an id prefix for the WORKSPACE argument. They make
-in-process calls through the same engine the TUI uses, so the CLI, TUI,
-dashboard, and MCP are at full parity.
 
 ### `grove create`
 
-Create a workspace: a git worktree, a branch, a tmux session, and a running
-agent.
+Create a workspace, meaning a git worktree, a branch, a tmux session, and a
+running agent.
 
 ```bash
 grove create TITLE --agent/-a NAME [--model/-m ID] [--runtime host|container] [branch flags] [--base REF] [--description/-d TEXT] [--no-init] [--prompt/-p TEXT] [--brief/--no-brief]
@@ -304,22 +238,23 @@ grove create TITLE --agent/-a NAME [--model/-m ID] [--runtime host|container] [b
 
 | Option | Meaning |
 |---|---|
-| `TITLE` (required) | Human label; its slug seeds the worktree path and tmux session name. |
-| `--agent`, `-a` (required) | Agent to launch (must match a name in your config). |
-| `--model`, `-m ID` | Model id for the agent tool (e.g. claude: `sonnet`/`opus`/`haiku`, codex: `gpt-5.5`). Forwarded to the agent verbatim, never validated — the per-agent catalog only informs the choice. Blank means the tool's own default. |
-| `--runtime` | `host` or `container`. Omit to use the configured default. Create-time only, never editable afterward. See [Container Workspaces](features-containers.md). |
-| `--branch`, `-b NAME` | Create a new branch with this exact name off `--base`. |
-| `--checkout`, `-c NAME` | Check out an existing local branch into the worktree. |
-| `--track`, `-t REF` | Track a remote branch by creating a fresh local tracking branch. |
-| `--root` | Run in the repo root on the current branch, no worktree. |
-| `--base REF` | Git ref to branch off (default `HEAD`). Valid only with auto or `--branch`. |
-| `--description`, `-d` | Free-form note attached to the workspace. |
+| `TITLE` (required) | Label whose slug seeds the worktree path and tmux session name. |
+| `--agent`, `-a` (required) | Agent to launch, matching a name in your config. |
+| `--model`, `-m ID` | Model id (claude: `sonnet`/`opus`/`haiku`, codex: `gpt-5.5`), forwarded verbatim, never validated. The catalog only informs the choice, blank means the tool's default. |
+| `--runtime` | `host` or `container`. Omit for the default. Create-time only, never editable after. See [Container Workspaces](features-containers.md). |
+| `--branch`, `-b NAME` | New branch with this exact name off `--base`. |
+| `--checkout`, `-c NAME` | Existing local branch, checked out into the worktree. |
+| `--track`, `-t REF` | Remote branch, via a fresh local tracking branch. |
+| `--root` | Repo root on the current branch, no worktree. |
+| `--base REF` | Ref to branch off (default `HEAD`). Valid only with auto or `--branch`. |
+| `--description`, `-d` | Free-form note on the workspace. |
 | `--no-init` | Skip the init script for this create only. |
-| `--prompt`, `-p` | The agent's first task, delivered race-free at boot so the workspace starts working immediately. |
-| `--brief` / `--no-brief` | Hand the agent a short first-turn note pointing it at the `working-in-grove` skill, so it reports its task phase and keeps attached tickets current. Omit to use the configured default (`brief.enabled`, on). Create-time only; the choice is persisted. |
+| `--prompt`, `-p` | First task, delivered race-free at boot so it starts working immediately. |
+| `--brief` / `--no-brief` | A first-turn note pointing at the `working-in-grove` skill, so the agent reports task phase and keeps tickets current. Omit for the default (`brief.enabled`, on). Create-time only, and persisted. |
 
-The branch flags are mutually exclusive. Omitting all of them lets Grove
-auto-name a branch from the title slug, which is the standard default.
+The branch flags are mutually exclusive, and omitting them all auto-names a
+branch from the title slug. Success prints the workspace id, title, agent,
+branch, worktree path, and tmux session name.
 
 ```bash
 # Auto branch (title slug → grove/fix-login-YYYYMMDD-HHmmss)
@@ -341,28 +276,21 @@ grove create "in place" --agent claude --root
 grove create "add cache" --agent claude --prompt "add an LRU cache in front of the API client"
 ```
 
-On success it prints the new workspace id, title, agent, branch, worktree path,
-and tmux session name.
-
 ### `grove message`
 
-Send a follow-up steering message to a running workspace's agent.
+Steer a running workspace's agent, the TUI steer modal's path. With no live
+pane to deliver to, the engine raises a clean error.
 
 ```bash
 grove message WORKSPACE TEXT
-```
-
-```bash
 grove message a1b2 "now add a test for the empty case"
 ```
 
-Mirrors the TUI's steer modal. The workspace must be running; the engine raises
-a clean error if there is no live pane to deliver the message to.
-
 ### `grove pause`
 
-Remove a workspace's worktree and tmux session while keeping the branch. The
-branch is safe; `grove resume` rebuilds the worktree from it later.
+Remove the worktree and tmux session, keeping the branch `grove resume`
+rebuilds from later. Without `--force`, Grove refuses to pause a workspace with
+uncommitted changes, so no work is silently discarded.
 
 ```bash
 grove pause WORKSPACE [--force/-f]
@@ -370,10 +298,7 @@ grove pause WORKSPACE [--force/-f]
 
 | Option | Meaning |
 |---|---|
-| `--force`, `-f` | Pause even with uncommitted changes in the worktree. |
-
-Without `--force`, Grove refuses to pause a workspace that has uncommitted
-changes, so no work is ever silently discarded.
+| `--force`, `-f` | Pause even with uncommitted changes. |
 
 ```bash
 grove pause a1b2
@@ -382,36 +307,30 @@ grove pause a1b2 --force    # discard uncommitted changes
 
 ### `grove resume`
 
-Recreate a paused workspace's worktree from its branch and relaunch the tmux
-session and agent.
+Rebuild a paused workspace's worktree from its branch, and relaunch tmux and
+the agent.
 
 ```bash
 grove resume WORKSPACE
-```
-
-```bash
 grove resume a1b2
 ```
 
 ### `grove respawn`
 
-Recreate a vanished tmux session when the worktree still exists. Use this, not
-`resume`, when the agent's terminal died but the files are still on disk. For a
-container workspace it reattaches to the agent still running inside the
-container instead of launching a new one.
+Recreate a vanished tmux session when the worktree still exists, which `resume`
+does not cover. For a container workspace it reattaches to the agent still
+running inside, rather than launching a new one.
 
 ```bash
 grove respawn WORKSPACE
-```
-
-```bash
 grove respawn a1b2
 ```
 
 ### `grove kill`
 
-Destroy a workspace: the tmux session and worktree are removed. Remote branches
-are never touched.
+Destroy a workspace. The tmux session and worktree go, remote branches are
+never touched, and the local branch follows provenance, so Grove-created
+branches are deleted and `--checkout` branches kept.
 
 ```bash
 grove kill WORKSPACE [--delete-branch | --keep-branch] [--yes/-y]
@@ -419,13 +338,9 @@ grove kill WORKSPACE [--delete-branch | --keep-branch] [--yes/-y]
 
 | Option | Meaning |
 |---|---|
-| `--delete-branch` | Also delete the local branch. |
-| `--keep-branch` | Keep the local branch (overrides the default provenance logic). |
+| `--delete-branch` | Delete the local branch too. |
+| `--keep-branch` | Keep it, overriding the provenance default. |
 | `--yes`, `-y` | Skip the confirmation prompt. |
-
-By default the engine decides based on provenance: Grove-created branches are
-deleted, branches you attached via `--checkout` are kept. Override this with
-`--delete-branch` or `--keep-branch`.
 
 ```bash
 grove kill a1b2              # prompts for confirmation
@@ -434,46 +349,36 @@ grove kill a1b2 --keep-branch -y   # keep branch, no prompt
 
 ### `grove attach`
 
-Attach your terminal to a workspace's tmux session. This replaces the current
-process with `tmux attach` (or `tmux switch-client` when you are already inside
-tmux). Detach with the usual tmux key (Ctrl-b d).
+Attach your terminal to a workspace's tmux session, replacing the current
+process with `tmux attach`, or `tmux switch-client` from inside tmux. Detach
+with Ctrl-b d.
 
 ```bash
 grove attach WORKSPACE
-```
-
-```bash
 grove attach a1b2
 ```
 
 ### `grove shell`
 
-Open an interactive shell inside a container workspace's container, at the
-agent's own working directory. This replaces the current process, the same way
-`grove attach` does.
-
-The shell runs under the container's own tmux, so it persists between visits:
-leave it and come back to the same shell, with its history and anything still
-running. Detach with the usual tmux key (Ctrl-b d).
+An interactive shell inside a container workspace's container, at the agent's
+working directory, replacing the current process like `grove attach`. It runs
+under the container's own tmux, so the shell, its history and anything running
+survive between visits.
 
 ```bash
 grove shell WORKSPACE
-```
-
-```bash
 grove shell a1b2
 ```
 
-A host workspace has no container to enter, and `grove shell` says so and points
-you at `grove attach`. Which shell runs is `container.shell`, a chain tried in
-order. It defaults to `bash` then `sh`, because plenty of real base images ship
-only the second.
+A host workspace has no container, so `grove shell` says so and points at
+`grove attach`. Which shell runs is `container.shell`, a chain tried in order,
+`bash` then `sh` by default because plenty of base images ship only the
+second.
 
 ### `grove agent`
 
-Run several agents inside one containerized workspace's container. Each gets
-its own persistent tmux session in there, so it survives you leaving. Nothing
-here happens on its own — Grove starts an extra agent only when you ask.
+Several agents in one containerized workspace's container, each in its own
+persistent tmux session, and only when you ask.
 
 ```bash
 grove agent list WORKSPACE
@@ -489,44 +394,40 @@ grove agent add a1b2 --agent codex --name reviewer
 grove agent message a1b2 reviewer "review the last three commits"
 ```
 
-`add` names the new agent `agent-2`, `agent-3`, … unless you pass `--name`, and
+`add` names slots `agent-2`, `agent-3`, and so on unless you pass `--name`, and
 runs the workspace's own agent unless you pass `--agent`. `list` reads the
-container itself, so it always shows what is really running. `kill` refuses the
-workspace's own agent — that one is `grove pause` / `grove respawn` / `grove
-kill`, which deal with the container and the record too.
-
-Every verb needs a containerized workspace with a reachable tmux; a host
-workspace hosts one agent, and Grove says so rather than guessing.
+container, so it shows what is really running. `kill` refuses the workspace's
+own agent, which belongs to `grove pause`, `grove respawn`, and `grove kill`.
+Every verb needs a containerized workspace with a reachable tmux.
 
 ### `grove code`
 
 Open a container workspace in VS Code, attached to the running container via
-the Dev Containers extension. Needs the `code` CLI on your `PATH` and a
-workspace whose runtime is `container`.
+the Dev Containers extension. Needs the `code` CLI on `PATH` and a `container`
+runtime. See [Container
+Workspaces](features-containers.md#opening-it-in-vs-code) for the dual-editing
+rule.
 
 ```bash
 grove code WORKSPACE
-```
-
-```bash
 grove code a1b2
 ```
 
-See [Container Workspaces](features-containers.md#editing-in-vs-code) for the
-dual-editing rule this depends on.
-
 ### `grove tickets`
 
-Attach, list, and detach the issues and pull requests linked to a workspace.
-`attach`/`detach` take one free-text `ref`: a pasted URL, `#42`, a bare `42`,
-or `owner/repo#42`. The provider and issue-vs-PR are both inferred from that
-ref, never a flag you have to supply — an id that could belong to more than
-one enabled tracker raises rather than guessing.
+Attach, list, and detach the issues and pull requests linked to a workspace,
+and hand an issue to the fleet. `attach`, `detach`, `handover`, and `handback`
+take one free-text `ref`, a URL, `#42`, a bare `42`, or `owner/repo#42`, with
+provider and issue-vs-PR inferred from it. An id matching two enabled trackers
+raises rather than guessing.
 
 ```bash
 grove tickets attach REF [--workspace/-w ID]
 grove tickets list [--workspace/-w ID]
 grove tickets detach REF [--workspace/-w ID]
+grove tickets handover REF
+grove tickets owned
+grove tickets handback REF
 ```
 
 ```bash
@@ -535,59 +436,94 @@ grove tickets attach '#42' -w a1b2
 grove tickets list
 ```
 
-`--workspace` is optional and inferred from the current worktree when
-omitted, the shape an agent linking its own workspace to the PR it just
-opened uses most. Both verbs are idempotent: attaching a ref that is already
-attached, or re-attaching the same id to correct a wrong issue/PR guess, is a
-no-op or an in-place fix, never a duplicate. See [ticket
-providers](features-ticket-providers.md) for how a ref resolves and what the
-link buys you.
+`--workspace` is inferred from the current worktree when omitted, the shape an
+agent linking its workspace to the PR it opened uses most. `attach` and `detach`
+are idempotent, so re-attaching a ref, or correcting a wrong guess, fixes in
+place rather than duplicating.
+
+```bash
+grove tickets handover 42   # assign Grove's account, start a workspace on it
+grove tickets owned         # every ticket Grove holds, host-wide, and whether work is live
+grove tickets handback 42   # unassign, leaving any workspace alone
+```
+
+`handover` records the durable marker the poll uses, so no second workspace
+starts for that ticket. `handback` keeps that marker, so the poll does not take
+the ticket straight back, and stopping the work stays `grove kill`'s job. See
+[ticket providers](features-ticket-providers.md).
 
 ## Admin commands
 
 ### `grove config show`
 
-Print the merged effective config for the current repo, as JSON, after the full
-six-layer cascade has resolved.
+The merged effective config for this repo, as JSON, after the six-layer cascade
+resolves.
 
 ```bash
 grove config show
 grove config show | jq '.worktree.root_template'
 ```
 
-### `grove config init`
+### `grove config add-project`
 
-Scaffold a project config at `<repo>/.grove/config.json`. One of the two CLI
-commands that write to disk.
+Register a git repo (default `cwd`) in the user config's known-projects list,
+so it appears in cross-project surfaces with zero workspaces and no
+`.grove/config.json`.
 
 ```bash
-grove config init       # writes .grove/config.json
-grove config init -f    # overwrite an existing config
+grove config add-project
+grove config add-project /path/to/other-project
 ```
 
-By default it refuses to clobber an existing file. The stub it writes covers
-the worktree root and branch prefix, a single `claude` agent, and a disabled
-init script. It also writes the JSON Schema next to your user config and points
-the stub's `$schema` at it, so your editor gets autocomplete immediately.
+### `grove config init`
+
+Scaffold a project config at `<repo>/.grove/config.json`, refusing to clobber
+an existing file without `-f`. The stub covers the worktree root and branch
+prefix, a single `claude` agent, and a disabled init script, with its `$schema`
+pointed at the JSON Schema it writes beside your user config.
+
+```bash
+grove config init                    # writes .grove/config.json
+grove config init -f                 # overwrite an existing config
+grove config init --with-onboarding  # also install skills + register the MCP server
+```
+
+### `grove skills install`
+
+Copy Grove's bundled skills into Claude and Codex skill directories.
+
+```bash
+grove skills install                          # asks where to install
+grove skills install --target project         # user | project | all
+grove skills install -t user --agent claude   # claude | codex | all
+```
+
+### `grove mcp install`
+
+Register this install as an MCP server via `claude mcp add` or `codex mcp add`,
+with the same `--target` and `--agent` flags.
+
+```bash
+grove mcp install
+grove mcp install --target project --agent claude
+```
 
 ### `grove init devcontainer`
 
 Scaffold `.devcontainer/devcontainer.json` from Grove's packaged default
-container config. The remedy every "default container" notice points at:
-a repo with no `.devcontainer/` still runs containerized, just not on a
-project-owned config. This graduates it to one.
+container config, the remedy every "default container" notice points at. A repo
+with no `.devcontainer/` still runs containerized, just not on a project-owned
+config. See [Container Workspaces](features-containers.md).
 
 ```bash
 grove init devcontainer          # writes .devcontainer/devcontainer.json
 grove init devcontainer --force  # overwrite an existing one
 ```
 
-See [Container Workspaces](features-containers.md) for the full model.
-
 ### `grove config schema`
 
-Write the JSON Schema next to the user config, without scaffolding anything
-else. Useful after upgrading Grove when the config model may have gained fields.
+Write the JSON Schema next to the user config and nothing else. Useful after an
+upgrade, when the config model may have gained fields.
 
 ```bash
 grove config schema           # write to disk
@@ -596,9 +532,9 @@ grove config schema --stdout  # print to stdout instead
 
 ### `grove daemon serve`
 
-Run the HTTP daemon that backs the [web dashboard](use-webapp.md). It binds
-loopback by default and serves every repo Grove knows about from one process.
-This is a host-scoped command.
+The HTTP daemon behind the [web dashboard](use-webapp.md), serving every repo
+Grove knows about from one process. Normally the [systemd user
+service](use-webapp.md#always-on-with-systemd) keeps it up.
 
 ```bash
 grove daemon serve              # 127.0.0.1:7421
@@ -609,32 +545,25 @@ grove daemon serve --port 7777
 |---|---|---|
 | `--host` | `127.0.0.1` | Interface to bind. Loopback is deliberate. See [the security model](use-auth.md#the-security-model). |
 | `--port` | `7421` | Port to listen on. `0` auto-picks a free one. |
-| `--print-port` | off | Print the bound port to stdout once listening. Used by the local transport to discover an auto-picked port. |
-
-In normal use you do not run this by hand; the
-[systemd user service](use-webapp.md#always-on-with-systemd) keeps it up.
+| `--print-port` | off | Print the bound port once listening, so the local transport finds an auto-picked one. |
 
 ### `grove auth`
 
-Approve or deny pairing requests and manage active sessions. These commands act
-on the host's session store, so they work from any directory. The full pairing
-story is on the [authentication](use-auth.md) page.
+Pairing requests and active sessions, against the host's session store, from
+any directory. See [authentication](use-auth.md) for the pairing story.
 
-`grove auth pending` lists requests waiting for approval.
+- `grove auth pending` lists requests waiting for approval.
+- `grove auth approve <challenge-id>` approves one, and the device picks up its
+  token on its next poll.
+- `grove auth deny <challenge-id>` rejects one.
+- `grove auth sessions` lists active sessions.
+- `grove auth revoke <session-id>` cuts one off, and that device pairs again to
+  return.
 
 ```bash
 grove auth pending
 # 7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f  code=BFCD-GH23  label='My Tablet'  state=pending  expires_at=...
-```
 
-`grove auth approve <challenge-id>` approves a request. The requesting device
-picks up its token on its next poll. `grove auth deny <challenge-id>` rejects
-one.
-
-`grove auth sessions` lists the currently active sessions. `grove auth revoke
-<session-id>` cuts one off; that device must pair again to return.
-
-```bash
 grove auth approve 7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f
 grove auth sessions
 grove auth revoke 9d21f0e4-1a2b-4c3d-8e5f-6a7b8c9d0e1f
@@ -642,21 +571,19 @@ grove auth revoke 9d21f0e4-1a2b-4c3d-8e5f-6a7b8c9d0e1f
 
 ### `grove doctor`
 
-Check your host against what Grove's container runtime needs: the Docker
-daemon, Compose v2, and `@devcontainers/cli`. Prints ok/fail marks with an
-actionable hint for each failure. This is the same check Grove runs before
-it decides a workspace can containerize, so the command tells you exactly
-what a stuck create would hit.
+Check the host against what Grove's container runtime needs, the Docker daemon,
+Compose v2, and `@devcontainers/cli`, with an actionable hint per failure. Grove
+runs it before deciding a workspace can containerize.
 
 ```bash
 grove doctor           # human-readable table
 grove doctor --json    # for scripts
 ```
 
-Exit code is `0` only when every required check passes. Two rows are advisory
-and never fail the command. `in-container tmux` and `container firewall` are
-bundles Grove builds for itself on the next containerized create, so a missing
-one is a state you pass through rather than something to fix.
+Exit code is `0` only when every required check passes. The two advisory rows,
+`in-container tmux` and `container firewall`, are bundles Grove builds for
+itself on the next containerized create, so a missing one is a state you pass
+through, not a fault.
 
 ### `grove version`
 
@@ -669,9 +596,9 @@ grove version
 
 ### `grove debug`
 
-Print the resolved paths Grove would use for this repo, plus whether the config
-loaded cleanly. JSON, for easy `jq` consumption. Run this first when something
-is "not loading".
+The resolved paths Grove would use for this repo, plus whether the config
+loaded cleanly. Run it first when something is "not loading". Values are
+`grove config show`'s job.
 
 ```bash
 grove debug
@@ -689,35 +616,26 @@ grove debug
 }
 ```
 
-Note that `debug` reports paths and a load flag, never the config values
-themselves; for the merged values use `grove config show`.
-
 ## `GROVE_DEBUG=1`
 
-Set the environment variable to flip the logger's stderr handler from `WARNING`
-to `DEBUG`. Every `git` and `tmux` subprocess invocation, every cascade merge,
-and every state-file read becomes visible on stderr. It is the companion to
-`grove debug`: that tells you which files Grove will read; this shows you what
-happens when it reads them.
+Flip the logger's stderr handler from `WARNING` to `DEBUG`. Every `git` and
+`tmux` subprocess invocation, cascade merge, and state-file read becomes visible
+on stderr, which keeps stdout JSON pipeable.
 
 ```bash
 GROVE_DEBUG=1 grove ls
 ```
 
-Because the diagnostics go to stderr, they never pollute the JSON on stdout, so
-you can keep piping to `jq` while you watch the trace.
-
 ## Using the CLI from an agent
 
-If you are a coding agent with shell access inside a Grove-managed worktree,
-you have the full command surface available. You can read what sibling agents
-have been doing and, when authorized, drive lifecycle actions on the same fleet.
+A coding agent with shell access inside a Grove-managed worktree has the full
+command surface, to read what siblings have been doing and, when authorized, to
+drive the same fleet.
 
 ### Discover what is happening
 
-Start by mapping the project. `grove ls` gives you the workspaces and their
-status. `grove sessions list` gives you the agent conversations across all of
-them. Both resolve the whole project automatically from inside any worktree.
+`grove ls` gives the workspaces and their status, `grove sessions list` the
+conversations across them.
 
 ```bash
 # Every workspace in this project, with its reconciled status.
@@ -736,17 +654,9 @@ grove sessions list --json \
 
 ### Read context cheaply, and bound the token cost
 
-The three `sessions` subcommands are a deliberate cost ladder. Stop at the
-first rung that answers your question.
-
-1. `grove sessions list` is one line per session. It is almost always enough
-   to answer "who is doing what" and "what needs attention". Filter it before
-   you read anything heavier.
-2. `grove sessions show <id> --last N` reads only the tail of one conversation.
-   A handful of recent turns usually tells you where a sibling agent landed,
-   at a fraction of the tokens.
-3. `grove sessions dump <id>` is the raw records, and the output can be
-   megabytes. Escalate only when you truly need the unnormalized transcript.
+Stop at the first rung that answers your question. `list` is one line per
+session, `show <id> --last N` one conversation's tail at a fraction of the
+tokens, `dump <id>` the raw records.
 
 ```bash
 # Cheapest: scan the list, filtered to recent activity.
@@ -761,8 +671,7 @@ grove sessions dump a91e0d34 --jsonl > /tmp/a91e0d34.jsonl
 
 ### Create and steer workspaces from a script
 
-The lifecycle verbs are the same engine path as the TUI, so they work from any
-agent shell.
+The lifecycle verbs run from any shell.
 
 ```bash
 # Spin up a new workspace with an initial task.
@@ -781,33 +690,19 @@ grove pause a1b2
 
 ### Rules of thumb
 
-- Always pass `--json` when you intend to parse the result, and pipe it through
-  `jq`. The tables are for humans.
-- Resolve a session by its full id, or by a unique prefix. The eight characters
-  the table shows are usually unique and stable.
-- Treat any non-zero exit as "no data": either not found, ambiguous prefix, or
-  not in a git repository. Read stderr for which one. Exit `2` specifically
-  means you got a flag or argument wrong.
-- Climb the cost ladder: `list`, then `show --last N`, then `dump`, and stop at
-  the first rung that answers your question. Redirect `dump` output to a file
-  rather than into your own context.
-- Use `--since` and `-w` to shrink the result before you read it, rather than
-  listing everything and filtering in your head.
+- Pass `--json` whenever you parse the result. Tables are for humans.
+- Treat a non-zero exit as "no data", meaning not found, ambiguous prefix, or no
+  git repository.
+- Redirect `dump` to a file, not your context, and use `--since` and `-w` to
+  shrink a result first.
 
 ## See also
 
-- [Agent activity and sessions](features-activity.md): the capability behind
-  `grove sessions`, agent state, and provenance, in product terms.
-- [Status semantics](features-status.md): what the `status` field from
-  `grove ls` means, and the recovery path for each value.
-- [Task phase](features-status.md#the-third-axis-task-phase): the model
-  behind `grove phase`, and the per-agent file it reads and writes.
-- [Ticket providers](features-ticket-providers.md): what `grove tickets`
-  attaches, and how a ref resolves to a provider.
-- [Configuration cascade](features-cascade.md): how the layers `grove config
-  show` resolves stack and merge.
-- [Configuration reference](configure-reference.md): the field-by-field schema
-  `grove config schema` generates.
-- [Authentication and pairing](use-auth.md): the device side of `grove auth`.
-- [Web dashboard](use-webapp.md): the browser surface `grove daemon serve`
-  backs.
+- [Agent activity and sessions](features-activity.md), `grove sessions`.
+- [Status semantics](features-status.md), `grove ls`.
+- [Task phase](features-status.md#the-third-axis-task-phase), `grove phase`.
+- [Ticket providers](features-ticket-providers.md), `grove tickets`.
+- [Configuration cascade](features-cascade.md), `grove config show`.
+- [Configuration reference](configure-reference.md), `grove config schema`.
+- [Authentication and pairing](use-auth.md), `grove auth`.
+- [Web dashboard](use-webapp.md), `grove daemon serve`.

@@ -1,8 +1,10 @@
 # Public API
 
+## The importable surface
+
 The `grove.core` package re-exports its contract from one file. Internal
 modules (`config`, `git`, `tmux`, `store`, `manager`, `workspace`,
-`activity`, `sessions`, `registry`) are renamable; clients import from
+`activity`, `sessions`, `registry`) are renamable. Clients import from
 the package root. The names below are what `from grove.core import X` is
 allowed to reach for.
 

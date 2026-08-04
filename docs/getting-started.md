@@ -1,7 +1,9 @@
 # Get Started
 
-Grove pairs one git worktree with one tmux session per agent, scoped to the
-repository it is launched from. This page covers install and first run.
+## From install to first agent
+
+Grove pairs one git worktree with one tmux session per agent, scoped to
+the repository it launches from.
 
 ## Prerequisites
 
@@ -9,28 +11,25 @@ repository it is launched from. This page covers install and first run.
 |---|---|
 | Linux   | `git` ≥ 2.30, `tmux` ≥ 3.0 |
 | macOS   | `git` (Xcode CLT), `tmux` (`brew install tmux`) |
-| Windows | WSL2 with the above. The Windows-native install runs the non-tmux subcommands (`grove version`, `grove config show`, `grove debug`). The TUI itself requires tmux and runs from inside WSL. |
+| Windows | WSL2 with the above. Windows-native runs only the non-tmux subcommands (`grove version`, `grove config show`, `grove debug`). The TUI needs WSL. |
 
 ## Install
 
-Grove installs to your user bin (`~/.local/bin`) as `grove`, straight from the
-repo, so you can invoke it by name from anywhere. Each tab below needs one
-fewer dependency than the last, so reach for whichever tool you already have.
-The `[daemon]` extra pulls in the web dashboard backend; drop it for a
-TUI-only install.
+Grove installs to your user bin (`~/.local/bin`) as `grove`, straight
+from the repo. The `[daemon]` extra adds the web dashboard backend,
+drop it for TUI-only.
 
 !!! warning "Install from the repo, never by bare name"
-    The name `grove` on PyPI belongs to an unrelated log-collection
-    framework. A bare `uv tool install grove` (or `pipx install grove`,
-    `pip install grove`) installs that package, and running it fails with
-    `Failed to initialise configuration handler`. Always use the full
-    `grove[daemon] @ git+...` form shown below. See
-    [Troubleshooting](troubleshooting.md) if you already hit this.
+    `grove` on PyPI is an unrelated log-collection framework. A bare
+    `uv tool install grove` (or `pipx`, `pip`) installs that instead,
+    failing with `Failed to initialise configuration handler`. Use the
+    full `grove[daemon] @ git+...` form below. See
+    [Troubleshooting](troubleshooting.md) if this happened.
 
 === "uv (recommended)"
 
-    Fewest steps. [uv](https://docs.astral.sh/uv/) installs Grove in its own
-    isolated environment and links `grove` onto your `$PATH`.
+    [uv](https://docs.astral.sh/uv/) isolates Grove and links `grove`
+    onto your `$PATH`.
 
     ```bash
     uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
@@ -38,12 +37,11 @@ TUI-only install.
     uv tool uninstall grove    # remove
     ```
 
-    No uv yet? Install it first: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+    No uv yet? `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 
 === "pipx"
 
-    No uv required. pipx also installs Grove in an isolated environment on your
-    `$PATH`.
+    No uv required:
 
     ```bash
     pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"
@@ -52,46 +50,39 @@ TUI-only install.
 
 === "pip"
 
-    Only Python and pip required. Installs the `grove` script into your user
-    bin.
+    Only Python and pip required:
 
     ```bash
     pip install --user "grove[daemon] @ git+https://github.com/bearlike/Grove"
     ```
 
-    Re-run with `--upgrade` to update. On a system with an externally managed
-    Python, add `--break-system-packages`, or use pipx instead.
+    Re-run with `--upgrade` to update. On an externally managed Python,
+    add `--break-system-packages`, or use pipx instead.
 
 ## Configure it
 
-Grove runs on sensible defaults, so you can launch it now and tune it later.
-Two files shape its behavior, and they layer on top of each other. The
-**project config** at `<repo>/.grove/config.json` is committed and shared by
-the repo; `grove config init` scaffolds it, and it pins the agent roster, the
-worktree layout, and the init script every workspace runs. The **user config**
-at `${user_config_dir}/grove/config.json` (for example
-`~/.config/grove/config.json` on Linux) holds your personal defaults across
-every repo. Where both set the same option, the project layer wins.
-
-Configuration has a few layers and many knobs, so you do not have to write it by
-hand.
+Grove runs on defaults you can tune later, from two files that layer
+together. The **project config** at `<repo>/.grove/config.json`
+(scaffolded by `grove config init`) is committed and shared, pinning the
+agent roster, worktree layout, and workspace init script. The **user
+config** at `${user_config_dir}/grove/config.json` (`~/.config/grove/config.json`
+on Linux) holds your personal defaults across every repo. The project
+layer wins on a shared option.
 
 !!! tip "Let an agent configure it for you"
-    Hand this prompt to Claude Code, Codex, or any coding agent. It reads Grove's
-    config skill and sets things up with you, verifying every field against your
-    installed version.
+    Hand this prompt to Claude Code, Codex, or any coding agent to
+    configure it with you.
 
     ```text
     Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
     ```
 
 !!! note "Or write it yourself"
-    [Project setup](configure-project.md) walks through `.grove/config.json`,
-    [Agents](configure-agents.md) covers wiring Claude Code, Aider, or any
-    command, and [Init scripts](configure-init-scripts.md) prepare each new
-    workspace. Every field is in the
-    [Configuration reference](configure-reference.md), and the
-    [Configuration cascade](features-cascade.md) shows how the six layers merge.
+    [Project setup](configure-project.md), [Agents](configure-agents.md),
+    and [Init scripts](configure-init-scripts.md) cover each by hand.
+    Every field is in the [Configuration reference](configure-reference.md),
+    and the [Configuration cascade](features-cascade.md) explains the six
+    layers.
 
 ---
 
@@ -103,28 +94,25 @@ grove config init      # writes .grove/config.json with sensible defaults
 grove                  # launch the TUI
 ```
 
-A fresh repo lands on the empty state with a prompt to create the first
-workspace.
+A fresh repo lands on the empty state, prompting a first workspace.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-empty.svg" alt="Grove TUI empty state" /></div>
-  <figcaption class="ms-shot__body">Empty state. The contextual footer lists the available keys.</figcaption>
+  <figcaption class="ms-shot__body">Empty state. Keys available are listed in the footer.</figcaption>
 </figure>
 
-Press `n` to open the create modal. Pick an agent, choose a branch source,
-type a workspace title. Grove resolves the branch, creates the worktree,
-runs the init script if one is configured, spawns a tmux session with
-`agent` and `shell` windows, and sends the agent's command into the agent
-window.
+Press ++n++, pick an agent, choose a branch source, and type a title.
+Grove resolves the branch, creates the worktree, runs the init script if
+configured, spawns a tmux session with `agent` and `shell` windows, and
+sends in the agent's command.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal" /></div>
-  <figcaption class="ms-shot__body">Create modal. Branch source variants are atomic. Picking one activates only that variant's inputs.</figcaption>
+  <figcaption class="ms-shot__body">Create modal. Picking a branch source activates only that variant's inputs.</figcaption>
 </figure>
 
-Press `Enter` (or `a`) to attach. Detach with `Ctrl-B d` to return to Grove.
-The workspace keeps running. The activity rail tracks output and flips
-between ACTIVE and IDLE on its own.
+Press ++enter++ (or ++a++) to attach, `Ctrl-B d` to detach. The workspace
+keeps running, and the activity rail flips ACTIVE/IDLE on its own.
 
 ## Verify
 
@@ -134,16 +122,15 @@ grove debug            # prints the resolved config + state paths
 grove ls               # JSON list of this repo's workspaces
 ```
 
-Set `GROVE_DEBUG=1` to enable verbose loguru output on stderr. On a first
-run this includes one `initialized <path>` line per directory Grove
-creates, so you can see exactly what landed where.
+Set `GROVE_DEBUG=1` for verbose loguru output on stderr, with one
+`initialized <path>` line per directory created on first run.
 
 ## Next steps
 
-- [TUI tour](use-tui.md) walks through every screen, keybinding, and modal.
-- [Project setup](configure-project.md) explains the per-repo `.grove/config.json`.
-- [Custom agents](configure-agents.md) covers wiring Aider, Cursor, or any shell command.
-- [Daily workflow](use-workflow.md) covers create, attach, pause, resume, kill.
-- [Agent activity and sessions](features-activity.md) shows the whole fleet on one wall and replays past sessions.
-- [Web dashboard](use-webapp.md) opens the fleet in the browser or on your phone, with create, steer, and full lifecycle.
-- [MCP server](use-mcp.md) exposes the fleet to MCP-capable agents (needs the `grove[mcp]` or `grove[all]` extra, not `grove[daemon]`).
+- [TUI tour](use-tui.md), every screen and keybinding.
+- [Project setup](configure-project.md), the per-repo `.grove/config.json`.
+- [Custom agents](configure-agents.md), wiring Aider, Cursor, or any command.
+- [Daily workflow](use-workflow.md), create, attach, pause, resume, kill.
+- [Agent activity and sessions](features-activity.md), the fleet on one wall, replayed.
+- [Web dashboard](use-webapp.md), the fleet in the browser or your phone.
+- [MCP server](use-mcp.md), for MCP agents (needs `grove[mcp]` or `grove[all]`, not `grove[daemon]`).
