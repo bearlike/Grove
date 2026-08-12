@@ -11,6 +11,7 @@ from typing import Any, ClassVar
 import pytest
 
 from grove.core import tmux as tmux_mod
+from grove.core.agents.base import AgentVersionProbe
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.codex import CodexAdapter
 from grove.core.config import GroveConfig
@@ -124,6 +125,26 @@ def _offline_codex_models(monkeypatch: pytest.MonkeyPatch) -> None:
         "grove.core.agents.codex._probe_codex_models",
         lambda binary: catalog,
     )
+
+
+@pytest.fixture(autouse=True)
+def _offline_tool_versions(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """No test may shell out to a real ``claude``/``codex`` for its version.
+
+    Every launch stamps the agent's reported version onto the trace resource, so
+    an unpatched suite would run a real subprocess on each ``create()`` — the
+    same discipline as ``_offline_codex_models``. The memo is process-lifetime
+    by design, which makes it test state as well: cleared on both sides so a
+    case that DOES exercise the probe cannot inherit or leak a cached answer.
+    """
+    AgentVersionProbe.clear_cache()
+    monkeypatch.setattr(
+        AgentVersionProbe,
+        "probe",
+        classmethod(lambda cls, argv: None),
+    )
+    yield
+    AgentVersionProbe.clear_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -290,6 +311,30 @@ def _isolated_agent_hook_paths(
     # WRITE — a test ticket recorded in the developer's live handover log would
     # then suppress a real pickup, silently and permanently.
     monkeypatch.setattr("grove.core.paths.user_handover_path", lambda: base / "handovers.json")
+    # The usage cache is the same shape again: `usage.enabled` defaults True and
+    # the indexer resolves this through raw `platformdirs`, so any test that
+    # builds a `UsageService` without injecting a path would index the
+    # developer's REAL host transcripts into their live state dir — slow, and it
+    # makes a metrics assertion depend on whose laptop ran the suite.
+    monkeypatch.setattr("grove.core.paths.usage_db_path", lambda: base / "usage.sqlite3")
+    # The quota ledger is the usage cache's durable sibling and is reached the
+    # same way — any `UsageService`/`QuotaCollector` built without an injected
+    # path writes it. Unlike the cache it is not disposable: a test writing a
+    # fixture cool-off into the developer's live ledger would suppress a real
+    # quota read for as long as that cool-off lasts.
+    monkeypatch.setattr("grove.core.paths.quota_state_path", lambda: base / "quota-state.json")
+    # Historical telemetry checkpoints are durable production state: a test
+    # must never suppress a later real export by writing a fixture trace id.
+    monkeypatch.setattr(
+        "grove.core.paths.telemetry_ledger_path",
+        lambda: base / "telemetry-exports.sqlite3",
+    )
+    # The session turn-count cache is reached by every `SessionCatalog()` built
+    # without an injected cache — which is every daemon and TUI test that lists
+    # sessions — and it is a WRITE path: an unredirected fill would count the
+    # developer's real transcripts into their live state dir, and a fixture
+    # session id counted there would then answer a later real scan.
+    monkeypatch.setattr("grove.core.paths.session_turns_path", lambda: base / "session-turns.json")
 
 
 @pytest.fixture(autouse=True)

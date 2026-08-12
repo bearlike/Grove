@@ -19,11 +19,30 @@ other axes, so a workspace deep in its task reads as vividly as an active one.
 use — because a converged task is settled rather than intense, and a finished
 workspace should recede from a fleet view rather than compete with live work.
 
-**Amber and red are deliberately unused.** They mean "wants the human" and
-"something failed" on the agent axis, and a phase means neither — an agent in
-``verifying`` is not asking for anything. Reusing them would make the two
-palettes contradict each other on the same card, which is precisely what having
-one canonical map per axis exists to prevent.
+**Amber and red are deliberately unused IN THE RAMP.** They mean "wants the
+human" and "something failed" on the agent axis, and a phase means neither —
+an agent in ``verifying`` is not asking for anything. Reusing them as a
+*seventh rung* would make the two palettes contradict each other on the same
+card, which is precisely what having one canonical map per axis exists to
+prevent.
+
+**``blocked`` is the one claim on this axis that genuinely does mean "wants
+the human" — and that is answered by an OVERRIDE, not a rung.** ``PhaseClaim.
+blocked`` (``grove.core.phase``) is a flag beside the phase, not a seventh
+member of :data:`~grove.core.phase.PHASE_ORDER` — a stuck task still has a
+position on the ramp, which is the number a reader wants most (see that
+field's own docstring). The color has to follow the same shape: a client
+still renders the ramp hue for progress and separately swaps in
+:data:`DARK_BLOCKED_HEX` — the SAME amber ``agent_palette`` already spends on
+"wants the human" — as a badge, border, or dot laid over the ramp colour,
+never replacing it in :data:`DARK_PHASE_HEX`. That dict is typed
+``dict[TaskPhase, str]``; ``blocked`` is not a ``TaskPhase`` and adding it as
+a key would make every reader either special-case one entry or silently
+accept a value the type never promised. Two palettes agreeing on what amber
+means is the same coherence the ramp itself protects — the reconciliation is
+real, not a contradiction: amber stays reserved for "wants the human"
+everywhere, and here it rides ON TOP of the ramp instead of standing in for
+one of its rungs.
 """
 
 from __future__ import annotations
@@ -50,3 +69,10 @@ DARK_PHASE_HEX: Final[dict[TaskPhase, str]] = {
     "delivering": _DARK_DELIVERING,
     "done": _DARK_DONE,
 }
+
+DARK_BLOCKED_HEX: Final = "#b8860b"  # warning amber — the SAME atom
+# ``agent_palette.DARK_AGENT_STATE_HEX`` spends on WAITING/BLOCKED, so the two
+# axes cannot render "wants the human" as two different colours. A SEPARATE
+# constant, deliberately not a seventh entry in ``DARK_PHASE_HEX`` — see the
+# module docstring for why the ramp's dict is not the right shape for a value
+# that overrides one of its rungs rather than sitting beside them.

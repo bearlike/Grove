@@ -300,9 +300,11 @@ def test_proxy_env_disabled_yields_nothing() -> None:
 
 
 def test_proxy_env_points_each_kind_at_the_proxy() -> None:
+    # An explicit empty env, because the derivation yields to an ambient gateway
+    # and a developer who runs one would otherwise fail this on their own box.
     cfg = ProxyConfig(enabled=True, host="127.0.0.1", port=9999)
-    assert cfg.proxy_env("claude_code") == {"ANTHROPIC_BASE_URL": "http://127.0.0.1:9999"}
-    assert cfg.proxy_env("codex") == {"OPENAI_BASE_URL": "http://127.0.0.1:9999"}
+    assert cfg.proxy_env("claude_code", {}) == {"ANTHROPIC_BASE_URL": "http://127.0.0.1:9999"}
+    assert cfg.proxy_env("codex", {}) == {"OPENAI_BASE_URL": "http://127.0.0.1:9999"}
 
 
 def test_proxy_env_empty_for_unconfigured_kind() -> None:

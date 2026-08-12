@@ -18,6 +18,7 @@ is why this stays module-local and not an autouse conftest fixture).
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Iterator
@@ -27,6 +28,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from grove.core import paths
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.config import GroveConfig
 from grove.core.process import LiveRuntime
@@ -263,6 +265,116 @@ def test_turns_falls_back_to_a_fleet_childs_own_thread(
     assert [t["user_text"] for t in body["turns"]] == ["Explore the bug"]
 
 
+def _write_multi_turn_transcript(claude_home: Path, sid: str, cwd: str, *, turns: int) -> None:
+    """One transcript whose N human prompts build N turns, oldest-first.
+
+    A turn's ordinal comes from a forward walk of the file, which is exactly
+    what makes an integer cursor sufficient — so the fixture has to be a real
+    multi-record transcript rather than a hand-built turn list."""
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(Path(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = ['{"type":"mode","mode":"normal"}']
+    for i in range(turns):
+        lines.append(
+            f'{{"type":"user","uuid":"h{i}","timestamp":"2026-06-09T08:0{i}:00.000Z",'
+            f'"isSidechain":false,"cwd":"{cwd}","gitBranch":"main",'
+            f'"message":{{"role":"user","content":"turn-{i}"}}}}'
+        )
+    (folder / f"{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_turns_after_turn_returns_the_tail_inclusive_and_says_it_was_incremental(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The cursor is INCLUSIVE of its own index: the tail turn is the one that
+    keeps growing while the agent works, so re-sending it is what stops a
+    half-finished turn freezing on screen."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=5)
+
+    body = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns", params={"after_turn": 3}
+    ).json()
+    assert [t["user_text"] for t in body["turns"]] == ["turn-3", "turn-4"]
+    assert body["incremental"] is True
+    assert body["first_turn_index"] == 3
+    assert body["total_turns"] == 5
+
+
+def test_turns_cursor_past_the_end_falls_back_to_the_whole_session(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The gap signal. A cursor the daemon cannot honour means the transcript
+    was replaced under the reader, so it answers WHOLE with
+    ``incremental: false`` and the client replaces rather than appends —
+    correctness over cheapness, exactly as ``_SseHub.can_replay`` does."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=3)
+
+    body = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns", params={"after_turn": 99}
+    ).json()
+    assert [t["user_text"] for t in body["turns"]] == ["turn-0", "turn-1", "turn-2"]
+    assert body["incremental"] is False
+    assert body["first_turn_index"] == 0
+    assert body["total_turns"] == 3
+
+
+def test_turns_whole_read_is_unchanged_and_never_claims_to_be_incremental(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The default is backward-compatible: no cursor, no window, and a client
+    that ignores the new fields sees exactly what it saw before."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=4)
+
+    body = client.get(f"/workspaces/a1/sessions/{MINTED_SID}/turns").json()
+    assert len(body["turns"]) == 4
+    assert body["incremental"] is False
+    assert body["first_turn_index"] == 0
+    assert body["total_turns"] == 4
+
+
+def test_turns_last_reports_where_its_window_starts(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """``last`` was already a silent truncation — it now says so, which is also
+    why it cannot combine with an ordinal cursor."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=5)
+
+    body = client.get(f"/workspaces/a1/sessions/{MINTED_SID}/turns", params={"last": 2}).json()
+    assert [t["user_text"] for t in body["turns"]] == ["turn-3", "turn-4"]
+    assert body["first_turn_index"] == 3
+    assert body["total_turns"] == 5
+    assert body["incremental"] is False
+
+
+def test_turns_cursor_exactly_at_the_end_is_an_empty_incremental_page(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """A client one off the end is UP TO DATE, not desynced — answering the
+    common "nothing happened" tick with the whole session would make it the
+    most expensive request on the route."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=3)
+
+    body = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns", params={"after_turn": 3}
+    ).json()
+    assert body["turns"] == []
+    assert body["incremental"] is True
+    assert body["total_turns"] == 3
+
+
+def test_turns_refuses_last_and_after_turn_together(client: TestClient) -> None:
+    resp = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns", params={"last": 2, "after_turn": 1}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_turn_window"
+
+
 def test_turns_bogus_id_404s_even_with_a_fleet_child_present(
     client: TestClient, claude_home: Path, tmp_state_dir: Path
 ) -> None:
@@ -369,14 +481,35 @@ def test_host_sessions_are_metadata_only_and_say_so_with_nulls(
     client: TestClient, tmp_state_dir: Path
 ) -> None:
     """The host scan never parses a transcript, so the parse-derived fields are
-    null rather than zero — and the transcript path still never crosses."""
+    null rather than zero — and the transcript path still never crosses.
+    ``size_bytes`` is the one exception: it rides the same ``stat()`` call the
+    scan already makes for ``mtime``, so it is a real number even here."""
     row = next(s for s in client.get("/sessions").json() if s["session_id"] == MINTED_SID)
     assert row["activity"] is None
-    assert row["size_bytes"] is None
+    assert row["size_bytes"] > 0
     assert row["first_prompt"] is None
     assert row["workspace_branch"] is None  # the host scan annotates a workspace, not its branch
     assert row["git_branch"] == "main"  # ...but the SESSION's own branch is a free head read
     assert "transcript_path" not in row
+
+
+def test_host_sessions_answer_uncounted_and_count_in_the_background(
+    client: TestClient, tmp_state_dir: Path
+) -> None:
+    """The listing must never wait on the count. On a cold cache every row
+    reports ``turn_count: null`` (the em dash, not a zero) and the request
+    itself triggers the pass that fills the durable cache for the next one."""
+    del tmp_state_dir
+    rows = client.get("/sessions").json()
+    assert [r["turn_count"] for r in rows] == [None, None, None]
+
+    counts_file = paths.session_turns_path()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not counts_file.exists():
+        time.sleep(0.02)
+    assert counts_file.exists(), "the listing never scheduled a count"
+    counted = json.loads(counts_file.read_text(encoding="utf-8"))["sessions"]
+    assert counted[f"claude_code\t{MINTED_SID}"]["turns"] == 1
 
 
 def test_host_sessions_places_a_session_with_no_enclosing_repo(

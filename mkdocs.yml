@@ -99,6 +99,7 @@ theme:
     "Containerized Agents": lucide:container
     "Branch Provenance": lucide:shield-check
     "Agent Activity & Sessions": lucide:activity
+    "Telemetry & Tracing": lucide:waypoints
     "Push Notifications": lucide:bell
     "Peek Rail": lucide:eye
     "Status Semantics": lucide:circle-dot
@@ -154,6 +155,7 @@ exclude_docs: |
   _glossary.md
   hooks/
   design-system.md
+  AGENTS.md
   CLAUDE.md
 
 plugins:
@@ -209,6 +211,7 @@ nav:
           - Branch Provenance: features-branch-provenance.md
           - Ticket Providers: features-ticket-providers.md
           - Agent Activity & Sessions: features-activity.md
+          - Telemetry & Tracing: features-telemetry.md
           - Push Notifications: features-notifications.md
           - Peek Rail: features-peek.md
           - Status Semantics: features-status.md

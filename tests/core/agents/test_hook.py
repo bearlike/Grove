@@ -17,6 +17,7 @@ from grove.core.agents.hook import (
     ClaudeHook,
     HookRecord,
     PendingQuestion,
+    SubagentHookRecord,
     run_hook_from_stdin,
 )
 from grove.core.agents.model import AgentActivityState
@@ -690,3 +691,264 @@ def test_drain_ignores_a_partially_written_payload(tmp_path: Path) -> None:
 
     assert ClaudeHook.drain(sidecar_dir=tmp_path) == 0
     assert (spool / "1.tmp").exists()
+
+
+# ─── sub-agent fleet: keyed by (session_id, agent_id), never the main sidecar ─
+
+
+def _subagent_event(event: str, agent_id: str = "a-1", **extra: object) -> dict:
+    return {
+        "hook_event_name": event,
+        "session_id": "s",
+        "agent_id": agent_id,
+        "agent_type": "general-purpose",
+        **extra,
+    }
+
+
+def test_subagent_event_never_touches_the_main_thread_sidecar(tmp_path: Path) -> None:
+    """The bug this whole record type exists to close: before the split, a
+    sub-agent's PreToolUse was keyed identically to the main thread's and
+    silently overwrote the top-level session's pushed status while the
+    sub-agent ran."""
+    # A settled main-thread state first (Stop → WAITING).
+    ClaudeHook.record_event(_event("Stop"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW)
+    main_before = ClaudeHook.read("s", sidecar_dir=tmp_path)
+    assert main_before is not None and main_before.state is AgentActivityState.WAITING
+
+    # A sub-agent PreToolUse under the SAME session_id must not flip it.
+    ClaudeHook.record_event(
+        _subagent_event("PreToolUse", tool_name="Bash"),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    main_after = ClaudeHook.read("s", sidecar_dir=tmp_path)
+    assert main_after is not None
+    assert main_after.state is AgentActivityState.WAITING
+    assert main_after.event == "Stop"
+
+
+def test_record_event_returns_none_for_a_subagent_scoped_payload(tmp_path: Path) -> None:
+    """`record_event`'s return is `HookRecord | None` — a sub-agent event is
+    written through the OTHER seam (`list_subagents`/`read_subagent`)."""
+    rec = ClaudeHook.record_event(
+        _subagent_event("SubagentStart"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW
+    )
+    assert rec is None
+
+
+def test_subagent_start_creates_a_record_and_pins_started_at(tmp_path: Path) -> None:
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStart"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW
+    )
+
+    rec = ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path)
+    assert rec is not None
+    assert rec.session_id == "s"
+    assert rec.agent_id == "a-1"
+    assert rec.agent_type == "general-purpose"
+    assert rec.state is AgentActivityState.WORKING
+    assert rec.started_at == NOW
+    assert rec.last_event_at == NOW
+    assert rec.current_tool is None
+
+
+def test_subagent_pretooluse_sets_current_tool_and_posttooluse_clears_it(
+    tmp_path: Path,
+) -> None:
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStart"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW
+    )
+    ClaudeHook.record_event(
+        _subagent_event("PreToolUse", tool_name="Bash"),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    running = ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path)
+    assert running is not None
+    assert running.state is AgentActivityState.WORKING
+    assert running.current_tool == "Bash"
+    # `started_at` is carried forward from the SubagentStart write, not reset.
+    assert running.started_at == NOW
+
+    ClaudeHook.record_event(
+        _subagent_event("PostToolUse", tool_name="Bash"),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW + timedelta(seconds=2),
+    )
+    resolved = ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path)
+    assert resolved is not None
+    assert resolved.current_tool is None
+    assert resolved.state is AgentActivityState.WORKING  # still running, between calls
+
+
+def test_subagent_stop_settles_to_waiting_and_captures_the_final_message(
+    tmp_path: Path,
+) -> None:
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStart"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW
+    )
+    ClaudeHook.record_event(
+        _subagent_event(
+            "SubagentStop",
+            last_assistant_message="Found the bug in _blend and fixed it.",
+        ),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW + timedelta(seconds=30),
+    )
+
+    rec = ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path)
+    assert rec is not None
+    assert rec.state is AgentActivityState.WAITING
+    assert rec.last_message == "Found the bug in _blend and fixed it."
+    assert rec.current_tool is None
+
+
+def test_subagent_stop_message_is_capped(tmp_path: Path) -> None:
+    long_message = "x" * 1000
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStop", last_assistant_message=long_message),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW,
+    )
+    rec = ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path)
+    assert rec is not None
+    assert rec.last_message is not None
+    assert len(rec.last_message) <= 500
+
+
+def test_subagent_notification_maps_to_blocked(tmp_path: Path) -> None:
+    ClaudeHook.record_event(
+        _subagent_event("Notification"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW
+    )
+    rec = ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path)
+    assert rec is not None and rec.state is AgentActivityState.BLOCKED
+
+
+def test_subagent_unmapped_event_is_ignored(tmp_path: Path) -> None:
+    """Defensive: an event this map doesn't recognize (a main-thread-only
+    event that should never carry an `agent_id`) writes nothing."""
+    ClaudeHook.record_event(
+        _subagent_event("UserPromptSubmit"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW
+    )
+    assert ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path) is None
+
+
+def test_read_subagent_missing_returns_none(tmp_path: Path) -> None:
+    assert ClaudeHook.read_subagent("s", "nope", sidecar_dir=tmp_path) is None
+
+
+def test_list_subagents_returns_every_agent_oldest_started_first(tmp_path: Path) -> None:
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStart", agent_id="a-2"),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW + timedelta(seconds=5),
+    )
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStart", agent_id="a-1"),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW,
+    )
+
+    records = ClaudeHook.list_subagents("s", sidecar_dir=tmp_path)
+
+    assert [r.agent_id for r in records] == ["a-1", "a-2"]
+    assert all(r.session_id == "s" for r in records)
+
+
+def test_list_subagents_is_scoped_to_one_session(tmp_path: Path) -> None:
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStart"), sidecar_dir=tmp_path, tmux_pane=None, now=NOW
+    )
+    ClaudeHook.record_event(
+        {
+            "hook_event_name": "SubagentStart",
+            "session_id": "other-session",
+            "agent_id": "a-1",
+            "agent_type": "general-purpose",
+        },
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW,
+    )
+
+    assert len(ClaudeHook.list_subagents("s", sidecar_dir=tmp_path)) == 1
+    assert len(ClaudeHook.list_subagents("other-session", sidecar_dir=tmp_path)) == 1
+
+
+def test_list_subagents_with_no_fleet_is_empty(tmp_path: Path) -> None:
+    """The overwhelming common case: a session that never spawned a
+    sub-agent costs one missing-directory stat."""
+    assert ClaudeHook.list_subagents("s", sidecar_dir=tmp_path) == ()
+
+
+def test_list_subagents_drops_a_malformed_entry(tmp_path: Path) -> None:
+    ClaudeHook.record_event(
+        _subagent_event("SubagentStart", agent_id="a-1"),
+        sidecar_dir=tmp_path,
+        tmux_pane=None,
+        now=NOW,
+    )
+    bad_dir = tmp_path / "subagents" / "s"
+    (bad_dir / "a-2.json").write_text("{not json", encoding="utf-8")
+
+    records = ClaudeHook.list_subagents("s", sidecar_dir=tmp_path)
+
+    assert [r.agent_id for r in records] == ["a-1"]
+
+
+def test_subagent_hook_record_from_json_rejects_naive_timestamp() -> None:
+    assert (
+        SubagentHookRecord.from_json(
+            {
+                "session_id": "s",
+                "agent_id": "a-1",
+                "agent_type": None,
+                "state": "working",
+                "event": "SubagentStart",
+                "started_at": "2026-06-01T12:00:00",  # no offset → naive
+                "last_event_at": "2026-06-01T12:00:00",
+            }
+        )
+        is None
+    )
+
+
+def test_subagent_hook_record_round_trips_through_json() -> None:
+    rec = SubagentHookRecord(
+        session_id="s",
+        agent_id="a-1",
+        agent_type="general-purpose",
+        state=AgentActivityState.WORKING,
+        event="PreToolUse",
+        started_at=NOW,
+        last_event_at=NOW + timedelta(seconds=1),
+        current_tool="Bash",
+        last_message=None,
+    )
+    assert SubagentHookRecord.from_json(rec.to_json()) == rec
+
+
+def test_drain_folds_a_spooled_subagent_payload_into_its_own_sidecar(tmp_path: Path) -> None:
+    """The container arm: a containerized sub-agent's hook can only spool, and
+    the fold routes it through the SAME `record_event` a direct host write
+    would use — no second sub-agent shape to keep in step."""
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    spool.mkdir(parents=True)
+    _spool(spool, _subagent_event("SubagentStart"), at=NOW)
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+
+    rec = ClaudeHook.read_subagent("s", "a-1", sidecar_dir=tmp_path)
+    assert rec is not None
+    assert rec.state is AgentActivityState.WORKING
+    assert rec.started_at == NOW

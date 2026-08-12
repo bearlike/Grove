@@ -69,6 +69,19 @@ switch; all three produce the same `Notification`, so channels stay dumb.
 - First observation of a session **seeds silently** (state *and* open-question
   ids), or every already-finished workspace and every already-open question
   buzzes on daemon restart.
+- **…but "unseen session" is the wrong test for that, and using it cost every
+  brand-new workspace its first question push.** The storm is a property of the
+  BROKER (it restarted), not of a session — and a session opened by `create` is
+  unseen for exactly the same reason a pre-restart one is. So an agent that read
+  its task and immediately asked something seeded silently and never fired,
+  which is the case the human most needs. `_is_cold` gates the question seed on
+  a broker **warm-up window** opened at the first fold; after it, an unseen
+  session is genuinely new and its open questions are owed. **A window is right
+  here even though the dedupe next door refuses one**: dedupe is exact because
+  "same question id" is exact, whereas a restart burst has no exact marker in
+  the data and is inherently a span of startup time. Generalizable: when a guard
+  defends against a lifecycle event, key it on that lifecycle, not on a proxy
+  that merely correlates with it.
 - A state edge is **debounced per workspace** (a WAITING→WORKING→WAITING tool
   round-trip must ring once, not twice).
 - A question is **deduped by question id and deliberately NOT debounced.** Time
@@ -159,6 +172,61 @@ Consequence for any harness driving the broker: a scripted
 `WORKING → BLOCKED → WAITING → ERROR` sequence produces **2** pushes, not 4, and
 that is correct. Interleave the working state between episodes or the harness
 will "lose" notifications that were never owed.
+
+## WAITING is not "done" — the quiet-window push
+
+**The spam was one specific edge, found from the code, not guessed:**
+`_state_edge`'s rising edge into WAITING (`_DEFAULT_NOTIFY_ON` includes
+`"waiting"`), which fires once per attention episode already — the complaint
+"a push on every turn" is what that edge is SUPPOSED to do when a session
+genuinely alternates WORKING↔WAITING every debounce window, because a
+transcript's WAITING means only "the top-level turn stopped generating," not
+"the task is finished." An async Task/Agent spawn, an in-session hook fleet
+worker, or a queued follow-up message can all still be running behind it.
+
+**Grove already computed three "still working" signals before this feature
+existed, and none needed a new subsystem:** `AgentActivity.active_subagents`
+(transcript-derived, an Agent/Task `tool_use` spawned but not yet returned),
+`WorkspaceActivity.fleet` (the hook's live per-agent push, sees a worker before
+its own transcript file exists), and `WorkspaceActivity.queue` (the harness's
+own steer queue, `WorkspaceQueueView`'s live count). `NotificationBroker._is_busy`
+is their OR; while true, WAITING is fed to the edge detector AS WORKING
+(`_effective_state`), so the rising edge simply hasn't happened — no second
+notion of "state" exists anywhere else to keep in sync.
+
+**None of the three can see a backgrounded shell command**
+(`Bash ... run_in_background`): the tool call's own result returns
+immediately, so there is no open call left to count. `cfg.waiting_quiet_minutes`
+(default 15) is the user's own proposed fallback for exactly that gap — once
+every known tracker agrees nothing is left, the push is *parked*
+(`_pending_quiet`) rather than fired, and only dispatches once that much real
+wall-clock time has passed with **nothing un-settling it** (a resumed
+WORKING, a BLOCKED/ERROR, or a fresh question all cancel the parked entry —
+see the cancellation clause in `_state_edge` and the pop in `_question_edge`).
+`waiting_quiet_minutes: 0` disables the wait and restores instant-fire, with
+the busy-gate still applied — it is a genuinely independent knob, not a
+special case of the other.
+
+**The three idempotence properties all fall out of the existing cold-seed
+rule, not new bookkeeping:** `_last_state[session_id]` is `None` on the very
+first post-restart observation regardless of the session's real state, and
+`_is_rising_edge` refuses to fire (or queue) when `previous is None` — so a
+workspace already WAITING/settled before the broker (re)started can never
+enter `_pending_quiet` from that first observation, no matter how long it had
+already been quiet. Only a genuine transition seen AFTER the broker came up
+can queue one, which is also what makes "fires once" hold: the entry is
+popped on dispatch and only a fresh WORKING→settled cycle re-arms it.
+
+**The delayed dispatch needed a real timer, and that is the one place this
+diverges from `evaluate`'s purity contract.** `evaluate()` only runs when a
+delta arrives, and the whole point of the quiet window is to catch a
+workspace that produces **no further deltas at all** — nothing on the bus can
+ever wake the broker to check one. `due_quiet(now=...)` stays pure (mirrors
+`evaluate`, testable with a fake clock, called from `_state_edge`'s memory
+mutation without spawning anything); the one genuinely new I/O is
+`bind()`'s self-rescheduling `Timer`, armed lazily by `_on_delta` only while
+`_pending_quiet` is non-empty and disarmed by `_quiet_tick` the moment it
+drains — an idle fleet costs one dict check per delta and no thread at all.
 
 ## Gotify: the facts worth not re-deriving
 

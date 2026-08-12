@@ -9,6 +9,8 @@ tests pin, is the client SDK wrapper that lets the MCP tier reach it at all.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from grove.client import BackendConfig, GroveClient
@@ -137,3 +139,65 @@ async def test_get_activity_carries_the_phase_and_agent_axes() -> None:
     assert (row.todo.completed, row.todo.total) == (3, 4)
     assert row.needs_attention is True
     assert row.sessions[0].activity.state.value == "waiting"
+
+
+# ─── set_phase's blocked/ticket payload shaping ─────────────────────────────
+#
+# ``GroveClient.set_phase`` wraps ``POST /workspaces/{id}/phase``, the same
+# route ``get_activity``'s ``phase`` rides for reads. These pin the write
+# side's request shaping: ``blocked``/``ticket`` are new, optional, and must
+# be omitted from the payload at their defaults so an older daemon that has
+# never heard of either field keeps decoding the request.
+
+_PHASE_BODY: dict[str, object] = {
+    "phase": "implementing",
+    "note": "waiting on design review",
+    "updated_at": "2026-08-11T00:00:00Z",
+    "index": 2,
+    "total": 6,
+}
+
+
+async def test_set_phase_omits_blocked_and_ticket_at_their_defaults() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_PHASE_BODY)
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        await client.set_phase("ws-1", "implementing")
+    finally:
+        await client.close()
+
+    assert captured[0].method == "POST"
+    assert captured[0].url.path == "/workspaces/ws-1/phase"
+    assert json.loads(captured[0].content) == {"phase": "implementing"}
+
+
+async def test_set_phase_threads_blocked_and_ticket_when_given() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_PHASE_BODY)
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        await client.set_phase(
+            "ws-1",
+            "implementing",
+            "waiting on design review",
+            blocked=True,
+            ticket="gitea:498",
+        )
+    finally:
+        await client.close()
+
+    assert json.loads(captured[0].content) == {
+        "phase": "implementing",
+        "note": "waiting on design review",
+        "blocked": True,
+        "ticket": "gitea:498",
+    }

@@ -77,6 +77,23 @@ class TicketRef(BaseModel):
     """True when this ref was inferred from a branch that matched more than one
     provider/key. A deterministic single match leaves it False."""
 
+    @property
+    def key(self) -> str:
+        """This ref's stable identity as one string — ``"gitea:498"``.
+
+        The SINGLE composer of that string, because several surfaces now need
+        to agree on it: the per-ticket task-phase claims an agent writes into
+        its phase file key on it (``grove.core.phase.TicketClaim``), the sticky
+        publisher picks its per-target phase by it, and the webapp joins the two
+        halves it already holds by it.
+
+        ``(provider, id)`` and not ``kind``, matching what ``attach_ticket``
+        deduplicates on — re-attaching an issue as a pull request corrects the
+        kind of the SAME row, so folding kind in here would silently orphan
+        every claim already made about it.
+        """
+        return f"{self.provider}:{self.id}"
+
 
 class TicketSelector(BaseModel):
     """Minimal "which ticket" envelope — the create input and attach body.

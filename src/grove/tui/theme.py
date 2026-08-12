@@ -32,7 +32,7 @@ from textual.theme import Theme
 from grove.core import InitStatus, WorkspaceStatus
 from grove.core.agents import AgentActivityState
 from grove.core.contracts.agent_palette import DARK_AGENT_STATE_HEX
-from grove.core.contracts.phase_palette import DARK_PHASE_HEX
+from grove.core.contracts.phase_palette import DARK_BLOCKED_HEX, DARK_PHASE_HEX
 from grove.core.contracts.runtime_palette import DARK_RUNTIME_HEX
 from grove.core.contracts.status_palette import DARK_STATUS_HEX
 from grove.core.errors import ConfigError
@@ -184,6 +184,15 @@ _LIGHT_PHASE_VERIFYING: Final = "#3f6212"  # lime-800
 _LIGHT_PHASE_DELIVERING: Final = "#365314"  # lime-900
 _LIGHT_PHASE_DONE: Final = _LIGHT_FG_MUTED  # settled; same atom as _LIGHT_STATUS_OFFLINE
 
+# `blocked` is a flag beside a phase claim, not a `TaskPhase` member (see
+# contracts.phase_palette / `_status.blocked_color`), so it is not part of the
+# ramp above and needs its own single-color light-side atom. Reuses the
+# existing warning amber rather than minting a new hue: "blocked" is the same
+# "wants the human" semantic the agent-state WAITING/BLOCKED glyphs and the
+# ORPHANED status already carry — composing an existing atom instead of
+# inventing one, same discipline `init_status_color`/`pr_status_color` follow.
+_LIGHT_PHASE_BLOCKED: Final = _LIGHT_WARNING
+
 # Runtime palette (light side). The dark side is the canonical cross-client
 # contract in ``grove.core.contracts.runtime_palette``; the light side is
 # TUI-only, same as the agent-state and phase light palettes above, and reuses
@@ -323,6 +332,18 @@ PHASE_HEX: Final[dict[bool, dict[TaskPhase, str]]] = {
         "delivering": _LIGHT_PHASE_DELIVERING,
         "done": _LIGHT_PHASE_DONE,
     },
+}
+
+# Blocked-flag hex, keyed by the active theme's `dark` flag. NOT nested by
+# `TaskPhase` — `blocked` is a flag beside a phase, not a phase itself (see
+# `PHASE_HEX`'s docstring and `contracts.phase_palette`), so wedging it into
+# that dict would misrepresent it as a seventh ramp member. Dark side comes
+# from the canonical wire contract; the light side is TUI-only, reusing the
+# existing warning amber atom (see `_LIGHT_PHASE_BLOCKED` above). Consumed by
+# `_status.blocked_color`.
+BLOCKED_HEX: Final[dict[bool, str]] = {
+    True: DARK_BLOCKED_HEX,
+    False: _LIGHT_PHASE_BLOCKED,
 }
 
 # Runtime hex, keyed by the active theme's `dark` flag. Dark side comes from the

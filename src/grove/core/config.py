@@ -16,6 +16,7 @@ import json
 import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import urlparse
@@ -25,10 +26,20 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from pydantic.fields import FieldInfo
 
 from grove.core import paths
-from grove.core.errors import ConfigError
+from grove.core.errors import ConfigError, EnvSourceError
 
-_FROZEN = ConfigDict(extra="forbid", validate_default=True, frozen=True)
-_MUTABLE = ConfigDict(extra="forbid", validate_default=True)
+# `use_attribute_docstrings` is what PUBLISHES the prose under each field. Every
+# field below carries a docstring written as behaviour, and `schema_to_md.py`
+# prints a field's `description` verbatim onto the public reference page — but
+# Pydantic exports an attribute docstring only when this is on, so without it the
+# generated table renders a Description column that is empty for every field. The
+# prose was always there; nothing warned that none of it was reaching the page.
+# Consequence worth stating: these docstrings are PUBLISHED COPY, so they are
+# covered by the same no-bare-`#<n>` guard the class docstrings already have.
+_FROZEN = ConfigDict(
+    extra="forbid", validate_default=True, frozen=True, use_attribute_docstrings=True
+)
+_MUTABLE = ConfigDict(extra="forbid", validate_default=True, use_attribute_docstrings=True)
 
 
 # ─── nested submodels ───────────────────────────────────────────────────────
@@ -559,8 +570,15 @@ class EgressConfig(BaseModel):
     that carries the weight: it bounds where a token can be *sent*. The list is
     **derived, not restated** — the planner (``core.container_policy``) unions
     the agent plane for the workspace's kind, the package plane, the repo's own
-    git remotes and the Grove plane, so normal dev work needs zero config.
-    ``allow`` is purely additive on top.
+    git remotes, the Grove plane and the telemetry endpoint's host, so normal
+    dev work needs zero config. ``allow`` is purely additive on top.
+
+    The telemetry entry has no field of its own for the same reason the git
+    remotes do not: the destination is already stated once, as the host the
+    ``telemetry`` section resolves, and a second place to write it is a second
+    place for it to be wrong. A self-hosted LAN endpoint is therefore covered
+    by default — which matters because a firewalled OTLP export fails as
+    silence, not as an error.
 
     Documented ceilings, carried from the reference implementation this follows:
     UDP/53 stays open (DNS tunneling is not defended against) and name-based
@@ -1175,8 +1193,17 @@ class IssueOpsConfig(BaseModel):
     tracker's own assignee filter by people who never open Grove. Off by default:
     it writes to somebody else's tracker. Assigning needs repo write, which
     commenting does not; where the token cannot assign, the refusal is logged
-    naming the ticket and never fails the workspace. Grove never unassigns on
-    completion — the assignment IS the record of who did the work."""
+    naming the ticket and never fails the workspace.
+
+    Assignment is an OUTPUT of Grove working a ticket and never an input: it is
+    reconciled from the live fleet, and nothing here starts work. Turning this on
+    cannot cause a workspace to be created — that is ``pickup_enabled``, a
+    separate opt-in.
+
+    The assignment is RELEASED when the workspace holding the ticket ends, so the
+    board says who is working an issue now rather than who once did. Only
+    assignments this daemon made are released — a ticket assigned to the bot by
+    hand is left alone, and every other assignee is always untouched."""
 
     pickup_enabled: bool = False
     """The assignee AS the inbound work queue: the daemon polls for open issues
@@ -1333,6 +1360,8 @@ class NotificationsConfig(BaseModel):
 
     - ``on`` — a debounced rising edge into an agent state that wants the human:
       ``waiting`` (turn finished), ``blocked`` (awaiting input), ``error``.
+      ``waiting`` additionally waits out ``waiting_quiet_minutes`` before it
+      pushes — see that field.
     - ``on_question`` — the agent posted a question. Deduped by question id, not
       debounced: a second question inside the quiet window is a second thing the
       human must answer, and it is the one push that must never be dropped.
@@ -1362,6 +1391,20 @@ class NotificationsConfig(BaseModel):
     episode, not one per WAITING↔WORKING tool round-trip. Questions are exempt
     (they dedupe by id instead)."""
 
+    waiting_quiet_minutes: float = Field(default=15.0, ge=0)
+    """How long a session must stay genuinely settled before a ``waiting`` push
+    fires — the honest fallback for what "turn ended" cannot promise on its own.
+    A WAITING transcript state means the top-level turn stopped generating, not
+    that the task is done: Grove already tracks the in-session sub-agent count
+    (``active_subagents``), the hook's live sub-agent fleet, and the harness's
+    own steer queue, and a WAITING edge is held back while any of those is
+    nonzero. None of them can see an arbitrary backgrounded shell command
+    (``Bash ... run_in_background``) — Claude's tool call returns immediately and
+    Grove gets no close event to watch for — so once every known tracker agrees
+    nothing is left, the push still waits this long with nothing new observed
+    before it fires, which is the proxy for the rest. ``0`` fires the instant the
+    known trackers agree nothing is left, with no wait — the old behaviour."""
+
     deep_link_base_url: str = "http://localhost:3000"
     """Where a notification's tap lands: ``{base}/w/{id}``, the webapp's workspace
     route — where you can read the transcript *and answer the question*. Defaults
@@ -1390,7 +1433,163 @@ class NotificationsConfig(BaseModel):
         return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
-class TelemetryConfig(BaseModel):
+_TELEMETRY_ENV_PREFIXES = ("OTEL_", "LANGFUSE_", "CLAUDE_CODE_")
+"""Which variable names a telemetry env source may contribute to a launch.
+
+A prefix allow-list rather than the whole file, because the file is a
+credential store and an injected value is visible in the agent pane's
+scrollback and in ``ps``. These three cover the OTel SDK's own vocabulary,
+LangFuse's native trio, and the one runtime whose telemetry switches are
+env-driven.
+"""
+
+
+ContentOwner = Literal["external", "grove"]
+"""Who emits a session's prompt/response CONTENT to the tracing backend.
+
+``external`` — the harness's own baseline emitter does (a Claude Code ``Stop``
+hook, a tool's tracing plugin). ``grove`` — Grove reads the transcript and
+emits the content itself, for a harness that has no baseline emitter.
+
+A closed pair rather than a bare string because it drives a branch, and both
+wrong answers are silent: two owners duplicate every turn under two trace
+trees, none loses the content entirely.
+"""
+
+DEFAULT_CONTENT_OWNER: ContentOwner = "external"
+"""Content belongs to the harness's own emitter unless config says otherwise.
+
+The default falls this way because the baseline emitter must not depend on
+Grove being installed, running, or healthy — that independence is the whole
+point of leaving it in place, and it only holds if Grove stays out of its way
+by DEFAULT rather than by successful detection.
+"""
+
+
+_OTEL_EXPORT_ENV: tuple[str, ...] = (
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    *(
+        f"OTEL_EXPORTER_OTLP_{signal}_{knob}"
+        for signal in ("TRACES", "METRICS", "LOGS")
+        for knob in ("ENDPOINT", "HEADERS", "PROTOCOL")
+    ),
+    *(f"OTEL_{signal}_EXPORTER" for signal in ("TRACES", "METRICS", "LOGS")),
+)
+"""The OpenTelemetry exporter vocabulary: which exporter runs, and where it sends.
+
+Enumerated rather than matched by prefix, because a prefix cannot separate
+"where this stream goes" from the identity Grove stamps alongside it
+(``OTEL_RESOURCE_ATTRIBUTES``) or from a trace context handed in
+(``TRACEPARENT``) — both of which an agent may legitimately carry.
+"""
+
+
+_OWNED_CONTENT_ENV: dict[str, str] = {"OTEL_TRACES_EXPORTER": "none"}
+"""What a Grove-owned-content launch forces on top of its reservation.
+
+``none`` rather than clearing the variable: the OTel SDK's own default for an
+unset exporter is ``otlp``, so silence would re-enable exactly the second,
+inverted trace tree that naming Grove as the content owner exists to end.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryReservation:
+    """One launch's resolution of Grove's claim on the agent's telemetry env.
+
+    Pure data produced by :meth:`TelemetryConfig.reserve` and applied at the
+    launch boundary, so "who owns this variable" is decided once, off any I/O,
+    and the same answer feeds the composed environment and the log line that
+    announces it.
+    """
+
+    env: dict[str, str]
+    """Reserved variables Grove sets — the values that survive the launch merge."""
+
+    unset: tuple[str, ...]
+    """Reserved variables Grove does not set, so the launch must carry none."""
+
+    displaced: tuple[str, ...]
+    """Reserved variables whose already-configured value this launch replaces.
+    NAMES only — a telemetry value can be a credential, so the record of what
+    was taken over stays safe to log."""
+
+    def apply(self, env: Mapping[str, str]) -> dict[str, str]:
+        """`env` with the reservation enforced — the one place the claim bites.
+
+        Both halves matter and neither is expressible as a merge: a reserved
+        name Grove does not set is REMOVED (an agent-supplied exporter is not
+        merely outranked, it is gone), and a reserved name Grove does set wins
+        over every other layer, including ``agents[].env``, which outranks
+        Grove everywhere else in the launch environment.
+        """
+        dropped = set(self.unset)
+        return {**{key: value for key, value in env.items() if key not in dropped}, **self.env}
+
+
+TelemetryContent = Literal["none", "messages", "all"]
+"""How much normalized transcript content an explicit backfill may export."""
+
+
+class TelemetryBackfillConfig(BaseModel):
+    """Explicit historical-export consent and profile selection.
+
+    Empty by default: usage discovery may index every reachable transcript,
+    while an external telemetry write must name the exact provider roots it is
+    allowed to read and export. Values use the same config-dir roots as agent
+    profiles (for example ``~/.codex``), keeping one profile vocabulary.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    profiles: dict[AgentKind, tuple[str, ...]] = Field(default_factory=dict)
+    content: TelemetryContent = "none"
+
+
+class TelemetryReceiverConfig(BaseModel):
+    """The daemon's own OTLP/HTTP endpoint for a harness's native exporter.
+
+    Grove's other telemetry tiers describe a session from the outside — a
+    frozen launch-time identity stamp and a replayed transcript. This is the
+    one tier that can carry what only the harness's own exporter knows: Claude
+    Code's beta ``llm_request`` span, for instance, is the sole place
+    time-to-first-token appears at all — no transcript records it. Off by
+    default, because mounting an HTTP endpoint on the daemon is a decision an
+    operator makes deliberately; it is not a side effect of turning on the
+    rest of this section.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    """Mount the receiver on the daemon. With this off, the daemon serves no
+    OTLP endpoint and every other field here is inert."""
+
+    path: str = "/otlp"
+    """Where the receiver is mounted under the daemon's own address. Point a
+    harness's ``OTEL_EXPORTER_OTLP_ENDPOINT`` (or a signal-specific
+    ``_TRACES_ENDPOINT``) at this path to feed it."""
+
+    queue_capacity: int = 256
+    """Export batches the receiver holds before it starts shedding.
+
+    Sized in batches, not spans, because a batch is the unit a sender retries.
+    A burst beyond this capacity is dropped and logged rather than queued
+    without bound — an unbounded queue would let a telemetry spike take the
+    daemon down with it."""
+
+    workers: int = 2
+    """Threads that transform accepted batches off the daemon's event loop.
+
+    The work is CPU-bound protobuf walking, so more workers smooth latency
+    rather than raise throughput; they exist to keep this work off the loop
+    that also serves every dashboard and SSE stream, not to parallelize it."""
+
+
+class TelemetryConfig(EnvSourceConfig):
     """LangFuse credentials + OpenTelemetry passthrough knobs.
 
     Secret-free like every other integration submodel (the ``mewbo.api_key_env``
@@ -1398,18 +1597,45 @@ class TelemetryConfig(BaseModel):
     literals, so committed config stays publishable — the actual host/keys live
     only in the consuming process's environment. Off by default (mechanism, not
     policy); a deployment opts in by setting ``enabled: true`` and pointing the
-    three ``*_env`` fields at whatever names its host actually exports (exact
-    key names per environment are TBD — this holds regardless of what a given
-    host calls them).
+    three ``*_env`` fields at whatever names its host actually exports.
+
+    **Where those three values come from is the inherited
+    :class:`EnvSourceConfig` question, and for telemetry it is usually the
+    answer.** Grove's own process is the exporter here, and the process that
+    launches agents is typically a long-lived daemon started by a service
+    manager: it read its environment once, at exec, and nothing exported in a
+    shell afterwards can reach it. So a deployment that only exports the keys
+    interactively gets a config that says ``enabled: true`` and exports
+    nothing — silently. Point ``telemetry.env_file`` at a dotenv holding the
+    three variables (``~/.config/grove/langfuse.env`` is the conventional
+    place) and every launch re-reads it, including after a key rotation::
+
+        {"telemetry": {"enabled": true, "env_file": "~/.config/grove/langfuse.env"}}
+
+    Set that in your user config or ``.grove/config.local.json``: a committed
+    layer may only name a path inside the repository, and may not run an
+    ``env_command`` at all (:class:`CommittedEnvSource`).
     """
 
     model_config = _FROZEN
 
+    SECTION: ClassVar[str] = "telemetry"
+
     enabled: bool = False
+
+    backfill: TelemetryBackfillConfig = Field(default_factory=TelemetryBackfillConfig)
+
+    receiver: TelemetryReceiverConfig = Field(default_factory=TelemetryReceiverConfig)
+    """The daemon's own OTLP/HTTP ingest endpoint — independent of ``enabled``
+    above, which gates Grove's own *export*. A harness may export directly to
+    the receiver with this section otherwise off."""
 
     host_env: str = "LANGFUSE_HOST"
     """NAME of the env var holding the Langfuse host (e.g. a self-hosted or
-    ``https://cloud.langfuse.com`` URL) — never the URL itself."""
+    ``https://cloud.langfuse.com`` URL) — never the URL itself. The default is
+    Langfuse's own documented variable name; a deployment whose secret store
+    exports something else (``LANGFUSE_BASE_URL`` is a common alternative)
+    names that here rather than renaming the variable."""
 
     public_key_env: str = "LANGFUSE_PUBLIC_KEY"
     """NAME of the env var holding the Langfuse public key."""
@@ -1426,15 +1652,221 @@ class TelemetryConfig(BaseModel):
     no instrumentation to feed, so both are excluded by default; set explicitly
     to opt in."""
 
-    def derive_env(self, env: Mapping[str, str]) -> dict[str, str]:
+    reserved_env: tuple[str, ...] = _OTEL_EXPORT_ENV
+    """Environment variables Grove OWNS for every agent process it launches.
+
+    Grove composes an agent's launch environment, so it already decides whether
+    that agent exports at all. These names make the decision total: for a
+    runtime in ``passthrough_kinds``, each one is either set by Grove or carried
+    by nobody, and a value arriving from anywhere else — ``agents[].env``, or
+    the environment Grove itself was started with — does not reach the agent.
+    It is replaced rather than honoured, and every replaced NAME is logged at
+    the launch that replaced it, so the change is never silent.
+
+    **A workspace's telemetry destination is configured through Grove**, in this
+    section: ``env_file`` / ``env_command`` may name any of these variables and
+    whatever they carry stands, which is how a deployment points its workspaces
+    at its own collector. Pointing the agent's own exporter somewhere Grove does
+    not control is what this ends — one tap per workspace, so a trace tree does
+    not arrive twice under two unrelated roots.
+
+    The default is the OpenTelemetry exporter vocabulary: which exporter runs
+    per signal, and where it sends. Grove's identity stamp
+    (``OTEL_RESOURCE_ATTRIBUTES``) and an inbound trace context are deliberately
+    absent — they say who the agent is, not where its telemetry goes. Narrow the
+    tuple to hand a name back to the agent; empty it to reserve nothing."""
+
+    content_owner: dict[AgentKind, ContentOwner] = Field(default_factory=dict)
+    """Which side emits each runtime's prompt/response CONTENT — per agent kind.
+
+    **Exactly one owner per session, and it is chosen HERE.** Grove always emits
+    the context (workspace, branch, ticket, agent identity); content is the half
+    two producers can both reach, because a harness's own baseline emitter and
+    Grove read the very same transcript. Two owners means every turn appears
+    twice under two unrelated trace trees; no owner means the words are simply
+    absent. Neither shows up as an error anywhere.
+
+    Keyed by agent kind because the harnesses genuinely differ — one ships a
+    baseline emitter today, another may never have one — so a single global
+    switch could only ever be right for one of them. A kind that is not named
+    here resolves to ``external``, which is what keeps that baseline emitter
+    working when Grove is absent or has crashed. Name a kind ``grove`` only
+    where nothing else emits content for it::
+
+        {"telemetry": {"content_owner": {"codex": "grove"}}}
+
+    Deliberately NOT inferred. Grove cannot see another process's hook or plugin
+    without probing across a boundary it does not own, and such a probe is wrong
+    in both directions — a false positive drops all content, a false negative
+    doubles it. Configuration is the one answer that is auditable, so
+    ``grove doctor`` renders what this RESOLVES to rather than what it detects.
+
+    **This and ``reserved_env`` are one policy, not two knobs.** Naming a kind
+    ``grove`` says Grove's replay IS that runtime's trace, so the launch also
+    stops switching the runtime's own exporter on and forces its trace exporter
+    off — otherwise the same session arrives twice, once as Grove's tree and
+    once as the harness's inverted one, and the second carries no content a
+    traces-only backend can read. Move a kind back to ``external`` to hand its
+    own exporter back.
+    """
+
+    def content_owner_for(self, kind: AgentKind) -> ContentOwner:
+        """Who owns this runtime's content — the single answer, pure.
+
+        The one seam a content emitter gates on, so "am I allowed to emit this"
+        is asked in exactly one vocabulary no matter which producer is asking.
+        Unnamed kinds resolve to :data:`DEFAULT_CONTENT_OWNER`; a map without a
+        default would push "and what if it says nothing" into every caller,
+        which is where the two owners would drift apart.
+        """
+        return self.content_owner.get(kind, DEFAULT_CONTENT_OWNER)
+
+    def owns_content(self, kind: AgentKind) -> bool:
+        """Does GROVE emit this runtime's content — the reservation's own read.
+
+        A predicate rather than a comparison at each call site, because two
+        places act on the answer (the launch stops enabling the runtime's native
+        exporter, and :meth:`reserve` forces its trace exporter off) and one of
+        them drifting is exactly the "two knobs that contradict each other" this
+        exists to prevent.
+        """
+        return self.content_owner_for(kind) == "grove"
+
+    def reserves(self, kind: AgentKind) -> bool:
+        """Is Grove the tap for this runtime's launches?
+
+        Only for a kind Grove actually derives telemetry env for: with the
+        section disabled, or a runtime left out of ``passthrough_kinds``, Grove
+        exports nothing on that agent's behalf and taking its variables away
+        would leave it unable to export at all — a reservation that delivers
+        silence instead of ownership.
+        """
+        return self.enabled and kind in self.passthrough_kinds
+
+    def reserve(
+        self, kind: AgentKind, *, grove: Mapping[str, str], claimed: Mapping[str, str]
+    ) -> TelemetryReservation:
+        """Resolve Grove's claim on one launch's telemetry env — pure.
+
+        `grove` is everything Grove itself derived for this launch (this
+        section's :meth:`derive_env` plus the runtime's own exporter switch);
+        `claimed` is every value that would otherwise have been in force — the
+        agent's ``env`` over the environment Grove is running under. Both are
+        supplied by the caller, so the decision is testable without a process
+        environment, and the loud part (the log) happens at that boundary.
+
+        The rule that changes here is precedence: everywhere else in a launch
+        ``agents[].env`` is the most specific layer and wins, and for these
+        names it does not — "explicit wins" cannot survive a reservation, since
+        the value being reserved is precisely the one an agent would otherwise
+        set for itself.
+        """
+        if not self.reserves(kind):
+            return TelemetryReservation(env={}, unset=(), displaced=())
+        env = {name: grove[name] for name in self.reserved_env if grove.get(name)}
+        if self.owns_content(kind):
+            env.update(
+                {
+                    name: value
+                    for name, value in _OWNED_CONTENT_ENV.items()
+                    if name in self.reserved_env
+                }
+            )
+        return TelemetryReservation(
+            env=env,
+            unset=tuple(name for name in self.reserved_env if name not in env),
+            displaced=tuple(
+                name
+                for name in self.reserved_env
+                if claimed.get(name) and claimed[name] != env.get(name)
+            ),
+        )
+
+    def reserved_unset(self, kind: AgentKind, env: Mapping[str, str]) -> tuple[str, ...]:
+        """Reserved names a launch must CLEAR out of the environment it inherits.
+
+        The other half of :meth:`TelemetryReservation.apply`, which can only
+        correct the environment Grove composes: an agent's process also inherits
+        whatever the pane carries, and an endpoint that leaks in that way points
+        the agent at a backend as effectively as one written in config. Read off
+        the ALREADY-RESERVED env, so the two halves cannot disagree about which
+        names Grove ended up setting.
+        """
+        if not self.reserves(kind):
+            return ()
+        return tuple(name for name in self.reserved_env if name not in env)
+
+    def _source_names(self) -> tuple[tuple[str, str], ...]:
+        """``(derived var, configured source-var NAME)`` for the canonical three.
+
+        One table, three readers (the derivation, its warning, and
+        :meth:`unresolved`), so "which name feeds which output" cannot drift
+        between what Grove exports and what it reports as missing.
+        """
+        return (
+            ("LANGFUSE_HOST", self.host_env),
+            ("LANGFUSE_PUBLIC_KEY", self.public_key_env),
+            ("LANGFUSE_SECRET_KEY", self.secret_key_env),
+        )
+
+    def unresolved(self, derived: Mapping[str, str]) -> tuple[str, ...]:
+        """Which configured variable NAMES produced nothing in a :meth:`derive_env`.
+
+        Pure, and the inverse of the derivation rather than a second copy of it:
+        a name is unresolved exactly when the value it feeds is absent from the
+        result. Names only — a credential never crosses this boundary — which is
+        what makes the answer safe to log and to render in ``grove doctor``.
+        """
+        return tuple(name for key, name in self._source_names() if key not in derived)
+
+    def _source_env(self, repo_root: Path | None) -> Mapping[str, str]:
+        """This section's configured ``env_file`` / ``env_command``, read NOW.
+
+        Best-effort by contract: this runs on the launch path, where telemetry is
+        a convenience and a workspace that starts untraced is enormously better
+        than one that does not start. A failed resolution is therefore WARNED and
+        treated as empty rather than raised — the opposite call from the
+        container arm, whose credentials are what the workspace is for.
+
+        The import is call-time-local because ``env_source`` imports this module;
+        the cheap path (no source configured, the default) never reaches it.
+        """
+        if not (self.env_file or self.env_command):
+            return {}
+        from grove.core.env_source import EnvSource  # noqa: PLC0415
+
+        try:
+            return EnvSource.resolve(self, repo_root=repo_root or Path.cwd()).values
+        except EnvSourceError as exc:
+            logger.warning(
+                "telemetry: env source unusable, falling back to the process env: {}", exc
+            )
+            return {}
+
+    def derive_env(
+        self, env: Mapping[str, str], *, repo_root: Path | None = None
+    ) -> dict[str, str]:
         """Derive the launch-env vars from the canonical three, read out of `env`.
 
-        Pure function over a caller-supplied mapping — never `os.environ`
-        directly — so it stays testable and composes with the launch
-        boundary's own env resolution (`LaunchSpec.env`); the actual
-        `os.environ` read happens at that boundary, not here. Returns BOTH
-        derivable shapes at once and lets the launch boundary pick per
-        `passthrough_kinds`:
+        The caller supplies the base mapping — never `os.environ` read here —
+        so this composes with the launch boundary's own env resolution
+        (`LaunchSpec.env`). On top of it sits this section's configured env
+        source (:meth:`_source_env`), which wins: an operator who points
+        ``telemetry.env_file`` at a dotenv is saying "read them from here", and
+        the value baked into a daemon's environment at exec is precisely the one
+        that cannot be updated. `repo_root` is what a repo-relative `env_file`
+        resolves against; without one a relative path can only mean the
+        process's own cwd.
+
+        **An enabled-but-unresolved config warns, once per call, naming the
+        variables that failed** — never their values. Silence here is the defect
+        this loudness exists to close: telemetry that derives nothing produces no
+        endpoint, so the agent's exporter is never switched on and every span is
+        dropped, with the config still reading ``enabled: true``. Nothing raises:
+        this is called while composing a launch.
+
+        Returns BOTH derivable shapes at once and lets the launch boundary pick
+        per `passthrough_kinds`:
 
         1. the native Langfuse SDK trio (`LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY`
            / `LANGFUSE_SECRET_KEY`) — for a runtime whose own code reads these
@@ -1446,33 +1878,60 @@ class TelemetryConfig(BaseModel):
            at call time and never stored — only the three source values are
            config.
 
-        A name that resolves to nothing in `env` is silently omitted (a
-        partial credential set derives whatever it can); the OTEL pair needs
-        all three source values, so it's only emitted when all resolve.
-        Disabled (`enabled=False`) always derives nothing.
+        A name that resolves to nothing is omitted (a partial credential set
+        derives whatever it can); the OTEL pair needs all three source values,
+        so it's only emitted when all resolve. Disabled (`enabled=False`)
+        always derives nothing, and warns nothing — opting out is not a fault.
         """
         if not self.enabled:
             return {}
 
-        host = env.get(self.host_env)
-        public_key = env.get(self.public_key_env)
-        secret_key = env.get(self.secret_key_env)
+        source = self._source_env(repo_root)
+        lookup = {**env, **source}
 
-        derived: dict[str, str] = {}
-        if host:
-            derived["LANGFUSE_HOST"] = host
-        if public_key:
-            derived["LANGFUSE_PUBLIC_KEY"] = public_key
-        if secret_key:
-            derived["LANGFUSE_SECRET_KEY"] = secret_key
+        # Everything telemetry-shaped the operator put in their OWN env source
+        # rides through verbatim and wins over anything derived below. This is
+        # what makes "the export works the same however the agent was started"
+        # achievable at all: a deployment that has already proved a working
+        # pipeline — a collector endpoint, a protocol, which exporters are on,
+        # which content knobs are set — hands Grove that exact configuration
+        # instead of Grove inventing a parallel one that has to be kept in
+        # agreement by hand. Grove derives only what the source did not say.
+        #
+        # Scoped to the telemetry prefixes rather than passing the file through
+        # wholesale: an injected value lands in the pane's scrollback and in
+        # `ps` for the same uid, so a credential that happens to share the file
+        # must not reach an agent that had no use for it.
+        passthrough = {
+            key: value
+            for key, value in source.items()
+            if key.startswith(_TELEMETRY_ENV_PREFIXES) and value
+        }
+        derived = {key: lookup[name] for key, name in self._source_names() if lookup.get(name)}
 
-        if host and public_key and secret_key:
+        missing = self.unresolved(derived)
+        if missing:
+            logger.warning(
+                "telemetry is enabled but {} carry no value, so nothing is exported — "
+                "set them in the environment Grove itself runs in, or point "
+                "telemetry.env_file at a dotenv holding them",
+                ", ".join(f"'{name}'" for name in missing),
+            )
+
+        if not missing:
+            public_key = derived["LANGFUSE_PUBLIC_KEY"]
+            secret_key = derived["LANGFUSE_SECRET_KEY"]
+            host = derived["LANGFUSE_HOST"]
             token = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
             derived["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{host.rstrip('/')}/api/public/otel"
             derived["OTEL_EXPORTER_OTLP_HEADERS"] = (
                 f"Authorization=Basic {token},x-langfuse-ingestion-version=4"
             )
-        return derived
+        # Passthrough last: a derived endpoint is Grove's best guess at where
+        # this Langfuse lives, while a named one is where the operator's own
+        # traces demonstrably arrive — including a collector in front of it,
+        # which Grove cannot infer from credentials.
+        return {**derived, **passthrough}
 
 
 def _default_proxy_upstreams() -> dict[AgentKind, str]:
@@ -1537,10 +1996,10 @@ class ProxyConfig(BaseModel):
     """Truncation cap (bytes) applied to a captured request body when
     ``log_bodies`` is set — bounds the telemetry payload."""
 
-    def proxy_env(self, kind: AgentKind) -> dict[str, str]:
+    def proxy_env(self, kind: AgentKind, env: Mapping[str, str] | None = None) -> dict[str, str]:
         """Derive the launch-env that points a ``kind`` agent at the proxy.
 
-        The proxy sibling of ``TelemetryConfig.derive_env``: pure, returns the
+        The proxy sibling of ``TelemetryConfig.derive_env``: returns the
         ``{env_var_name: proxy_url}`` the launch boundary merges into an agent's
         env so its provider client dials the loopback proxy instead of the real
         upstream (Claude honors ``ANTHROPIC_BASE_URL``; Codex its
@@ -1548,13 +2007,314 @@ class ProxyConfig(BaseModel):
         ``base_url_env`` entry, derives nothing. The proxy URL is the same
         ``host``/``port`` for every kind — a deployment fronting multiple
         providers on distinct ports overrides at the orchestration seam.
+
+        **Grove's proxy and an existing gateway are mutually exclusive, and the
+        collision is resolved in the gateway's favour, loudly.** That variable is
+        not Grove's to claim: a deployment that already routes provider traffic
+        through its own gateway declares that by exporting the very name this
+        would set, and quietly overwriting it moves every request onto a
+        different route with nothing said — an invisible change to where
+        credentials are sent and to how the account is billed. So an inherited
+        value is left in place and warned about, naming the variable but never
+        its value (a base URL may carry userinfo). Pick one: unset the ambient
+        variable, or leave ``proxy.enabled`` false.
+
+        *env* is the environment the agent will actually launch with; omitted, it
+        is the process's own — the launch boundary composes on top of
+        ``os.environ``, so that is the ambient declaration this has to see.
         """
         if not self.enabled:
             return {}
         env_name = self.base_url_env.get(kind)
         if not env_name:
             return {}
-        return {env_name: f"http://{self.host}:{self.port}"}
+        proxy_url = f"http://{self.host}:{self.port}"
+        inherited = (env if env is not None else os.environ).get(env_name, "").strip()
+        if inherited and inherited != proxy_url:
+            logger.warning(
+                "proxy.enabled is set, but '{}' already points {} at a gateway of its own — "
+                "leaving it untouched and forwarding nothing through Grove's proxy. Unset "
+                "that variable to use Grove's proxy, or set proxy.enabled to false.",
+                env_name,
+                kind,
+            )
+            return {}
+        return {env_name: proxy_url}
+
+
+class ModelPriceConfig(BaseModel):
+    """What one model's tokens cost, per million tokens.
+
+    Prices are yours to state because no price list Grove could ship stays
+    correct: providers reprice, gateways mark up, and a stale built-in table
+    would produce confident wrong money. A model with no entry here reports its
+    cost as unknown rather than as zero.
+    """
+
+    model_config = _FROZEN
+
+    input: float = 0.0
+    """Price per million fresh (uncached) input tokens."""
+
+    output: float = 0.0
+    """Price per million output tokens."""
+
+    cache_read: float = 0.0
+    """Price per million tokens served from a warm prompt cache — typically a
+    small fraction of ``input``, which is why the audit never folds the two."""
+
+    cache_write: float = 0.0
+    """Price per million tokens written into the prompt cache, usually charged
+    at a premium over ``input``."""
+
+
+class UsagePricingConfig(BaseModel):
+    """Model prices used to estimate cost from token counts.
+
+    An estimate is never presented as billed cash: a subscription session's
+    token cost is hypothetical, and the wire says so. Where a provider reports
+    its own per-request cost, that figure wins and these prices are unused.
+    """
+
+    model_config = _FROZEN
+
+    currency: str = "USD"
+    """ISO 4217 code the prices below are quoted in."""
+
+    models: dict[str, ModelPriceConfig] = Field(default_factory=dict)
+    """Model id (as the tool reports it) to its price. Matched on exact id
+    first, then on the longest configured id that prefixes it, so a dated
+    release inherits its family's price without a new entry per snapshot."""
+
+
+class UsageQuotaConfig(BaseModel):
+    """How subscription windows and billing posture are collected per account.
+
+    Grove reads each tool's OWN credential store at refresh time and calls the
+    endpoint that credential selects. It never copies a secret into Grove's
+    config or database, never refreshes or rewrites a provider credential, and
+    never sends usage anywhere but that provider. A collection failure degrades
+    the one account it belongs to and never affects launching an agent.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = True
+    """Collect quota for the explicitly selected ``profiles`` below."""
+
+    profiles: dict[
+        Literal["claude_code", "codex"], tuple[Annotated[str, Field(min_length=1)], ...]
+    ] = Field(default_factory=dict)
+    """Subscription profiles whose quota may be collected and displayed.
+
+    Empty is the safe default: Grove still indexes activity from every profile,
+    but shows no subscription quota until the operator lists roots under their
+    provider. The provider-keyed map cascades naturally and a higher layer can
+    clear one provider with an empty list. Duplicate or symlinked roots collapse
+    to one account id, so one subscription is never shown twice. Credentials
+    are read in place and never copied into config or the usage database.
+    """
+
+    ttl_seconds: int = Field(default=900, ge=30)
+    """How long a good reading is served before a provider whose read costs a
+    request is asked again.
+
+    Every Grove process on this host shares one probe ledger, so a dashboard, a
+    terminal UI and a `grove usage` run inside one window together cost one
+    request rather than three. Fifteen minutes still samples a five-hour window
+    twenty times and a weekly one hundreds of times, while pages are opened far
+    more often than either moves. A provider whose quota is a file its own tool
+    already wrote is not governed by this at all: there is no budget to protect
+    there, and holding its answer back would only make it older."""
+
+    retry_floor_seconds: int = Field(default=120, ge=10)
+    """Wait after the FIRST auth or rate-limit failure before retrying that
+    account, doubling with each further failure. Last-good data keeps rendering,
+    marked stale, in the meantime. A provider that sends its own ``Retry-After``
+    is obeyed instead whenever it asks for longer."""
+
+    retry_max_seconds: int = Field(default=3600, ge=60)
+    """Ceiling on that doubling. A limit nobody has lifted is not worth asking
+    about more than once an hour, and a fixed floor against one is still a
+    request every floor, forever — which is what a rate limiter reads as
+    continuing to knock."""
+
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    """Bound on each credential read and each provider request."""
+
+    labels: dict[str, str] = Field(default_factory=dict)
+    """Account id to display name, so an operator can tell two profiles apart
+    without Grove ever storing an email address."""
+
+    window_seconds: dict[str, int] = Field(default_factory=dict)
+    """Window label to its length in seconds, for providers that publish a reset
+    instant but never say how long the window is.
+
+    A burn rate needs a window START, and a start is only derivable from a reset
+    plus a duration. Anthropic's usage endpoint reports the reset and no
+    duration, so without this every Claude window reads `unknown` however much
+    of it has been spent. Empty by default and consulted ONLY where the provider
+    said nothing: Grove will not assert a boundary on a provider's behalf,
+    because these have moved before and a guessed denominator produces a
+    confident projection off a number nobody published. Naming one here is you
+    asserting it, which is a different thing from Grove assuming it.
+    """
+
+    burn_tight_percent: float = Field(default=85.0, gt=0)
+    """Projected usage at reset, as a percentage of the window, above which a
+    window is called `tight` rather than on track. Grove extrapolates the pace
+    so far to the window's own reset and compares it here; a lower number asks
+    to be warned earlier. No provider is contacted to work this out."""
+
+    burn_over_percent: float = Field(default=100.0, gt=0)
+    """Projected usage at reset above which a window is called `over` — on
+    course to exhaust before it resets. Held apart from `burn_tight_percent` so
+    "spending faster than I meant to" and "will run out" stay two verdicts, and
+    settable above 100 for a workload that treats the limit as advisory."""
+
+    @model_validator(mode="after")
+    def _burn_thresholds_are_ordered(self) -> UsageQuotaConfig:
+        """`tight` must not sit above `over`, or the band between them is unreachable."""
+        if self.burn_tight_percent > self.burn_over_percent:
+            raise ValueError("usage.quota.burn_tight_percent must not exceed burn_over_percent")
+        return self
+
+
+# --- shell-command attribution (usage.commands) ----------------------------
+class UsageCommandsConfig(BaseModel):
+    """How a shell tool call's time is attributed to the command that led it.
+
+    A `Bash` call carries a whole shell line, so the audit records the leading
+    top-level executable and reports *time in shell calls led by X* — never
+    *time spent in X*, which no measurement here can support. These knobs
+    control how that executable's name is folded before it is ranked.
+    """
+
+    model_config = _FROZEN
+
+    basename: bool = True
+    """Fold an absolute path to its final component, so `/usr/bin/git` and
+    `git` are one row rather than two spellings of one tool."""
+
+    version_suffix_pattern: str = r"(?<=[A-Za-z])\d+(?:\.\d+)+$"
+    """Trailing version fragment stripped from an executable's name, so
+    `python3.12` ranks as `python`. Deliberately requires a DOT: a bare
+    trailing digit run is part of the name far more often than it is a version
+    (`base64`, `bzip2`, `sha256sum`), and stripping it invents tools that do
+    not exist. Set to something that matches nothing to disable."""
+
+    aliases: dict[str, str] = Field(
+        default_factory=lambda: {
+            "egrep": "grep",
+            "fgrep": "grep",
+            "python2": "python",
+            "python3": "python",
+            "pip3": "pip",
+        }
+    )
+    """Executable names folded onto one row. The defaults fold only spellings
+    of the SAME program.
+
+    Three collapses a reader often expects are deliberately absent, because
+    each would hide the cost it exists to reveal. `npm`/`npx` and `rg`/`grep`
+    are different programs with different performance. And `uv run python …`
+    is credited to `uv`, not `python`, because uv's own dependency resolution
+    is real time the invocation spent — folding it onto the interpreter
+    reports that overhead as if the code had been running."""
+
+    censored_at_ms: int = Field(default=600_000, ge=0)
+    """A measured duration at or above this is reported as CENSORED rather
+    than as cost. Real durations cluster tightly just above 600 s because that
+    is the harness's own default timeout ceiling: the number says when the tool
+    gave up, not how long the command needed. `0` disables the flag."""
+
+    @model_validator(mode="after")
+    def _version_suffix_compiles(self) -> UsageCommandsConfig:
+        """Reject a bad pattern at load, not at the first indexed command.
+
+        This value is consumed deep inside a refresh; an `re.error` raised
+        there degrades the whole usage engine to a 501 that names a regex.
+        """
+        try:
+            re.compile(self.version_suffix_pattern)
+        except re.error as exc:
+            raise ValueError(
+                f"usage.commands.version_suffix_pattern is not a valid regex: {exc}"
+            ) from exc
+        return self
+
+
+# --- end shell-command attribution -----------------------------------------
+
+
+class UsageInsightsConfig(BaseModel):
+    """Thresholds for the deterministic audit detectors.
+
+    Defaults are conservative: a detector would rather stay silent than rank a
+    normal working pattern as a problem. Every one of these is config because a
+    threshold baked into code is policy nobody can disagree with.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = True
+
+    min_occurrences: int = Field(default=3, ge=2)
+    """How many times a pattern must recur before it is reported at all."""
+
+    retry_window_seconds: int = Field(default=300, ge=1)
+    """Repeats of the same failing call within this window count as one retry
+    loop rather than as independent failures."""
+
+    edit_churn_edits: int = Field(default=4, ge=2)
+    """Mutations to one file inside a session before it is called churn."""
+
+    slow_operation_ms: int = Field(default=60_000, ge=1)
+    """A generation or tool call above this duration is a slow-operation
+    candidate — reported only where the evidence supports a real duration."""
+
+    concentration_share: float = Field(default=0.5, gt=0, le=1)
+    """Share of tokens or active time one project, account or model must hold
+    before concentration is worth naming."""
+
+
+class UsageConfig(BaseModel):
+    """The historical usage audit — indexing, pricing, quota and insights.
+
+    Reads the agent transcripts Grove can already reach and projects them into a
+    private local cache so historical questions answer quickly. The cache holds
+    metrics and metadata only: no prompt, response, reasoning, tool-result body
+    or credential is ever written to it. It is derived, so deleting it is always
+    safe and rebuilds on the next refresh.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = True
+
+    retention_days: int | None = None
+    """Drop indexed events older than this on refresh. ``null`` keeps
+    everything — the transcripts are the source of truth either way."""
+
+    max_sessions_per_page: int = Field(default=100, ge=1, le=1000)
+    """Upper bound on one page of the session audit table."""
+
+    max_breakdown_rows: int = Field(default=50, ge=1, le=500)
+    """Rows returned per breakdown dimension before the long tail is dropped.
+    The response says when it truncated, so a capped list is never mistaken for
+    a complete one."""
+
+    busy_timeout_ms: int = Field(default=5000, ge=0)
+    """How long a writer waits on SQLite's lock before ``database is locked``.
+    Up to three processes can write ``usage.sqlite3`` — the daemon, the TUI's
+    Usage screen and ``grove usage backfill`` — and SQLite's own default is 0,
+    which raises on the first genuine cross-process collision instead of
+    waiting. ``0`` restores that immediate-raise default."""
+
+    pricing: UsagePricingConfig = Field(default_factory=UsagePricingConfig)
+    quota: UsageQuotaConfig = Field(default_factory=UsageQuotaConfig)
+    insights: UsageInsightsConfig = Field(default_factory=UsageInsightsConfig)
+    commands: UsageCommandsConfig = Field(default_factory=UsageCommandsConfig)
 
 
 class UIConfig(BaseModel):
@@ -1695,6 +2455,7 @@ class ExclusiveGroups:
         "init_script": InitScriptConfig.EXCLUSIVE_FIELDS,
         ContainerConfig.SECTION: ContainerConfig.EXCLUSIVE_FIELDS,
         TicketsConfig.SECTION: TicketsConfig.EXCLUSIVE_FIELDS,
+        TelemetryConfig.SECTION: TelemetryConfig.EXCLUSIVE_FIELDS,
     }
 
     @classmethod
@@ -1876,7 +2637,11 @@ class CommittedEnvSource:
     new consumer inherits the boundary instead of re-arguing it.
     """
 
-    SECTIONS: ClassVar[tuple[str, ...]] = (ContainerConfig.SECTION, TicketsConfig.SECTION)
+    SECTIONS: ClassVar[tuple[str, ...]] = (
+        ContainerConfig.SECTION,
+        TicketsConfig.SECTION,
+        TelemetryConfig.SECTION,
+    )
     COMMAND_FIELD: ClassVar[str] = "env_command"
     FILE_FIELD: ClassVar[str] = "env_file"
 
@@ -2140,6 +2905,7 @@ class GroveConfig(BaseModel):
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
+    usage: UsageConfig = Field(default_factory=UsageConfig)
 
     def find_agent(self, name: str) -> AgentSpec | None:
         for spec in self.agents:

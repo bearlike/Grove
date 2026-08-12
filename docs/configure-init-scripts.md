@@ -16,8 +16,9 @@ cache. An init script prepares it before the agent spawns.
 ## Skip it for one create
 
 - `enabled` is the config switch for every workspace. `grove create --no-init`
-  and the dashboard's "Skip init script" checkbox turn it off for one
-  workspace with no config edit, recording SKIPPED like `enabled: false`.
+  turns it off for one workspace with no config edit, recording SKIPPED like
+  `enabled: false`. The web dashboard's create dialog has no equivalent
+  toggle today; use the CLI or edit the cascade for a one-off skip there.
 - A root workspace runs in your real repo root, where a fresh-worktree script
   can do the wrong thing, so picking Root checks the box for you.
 - The choice is never stored or re-applied on resume or respawn.

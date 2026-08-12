@@ -1,153 +1,165 @@
 "use client";
 
-import { Suspense, use } from "react";
-import dynamic from "next/dynamic";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { ArrowLeft, GitBranch } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { MetaRow } from "@/components/shared/meta";
-import { RelativeTime } from "@/components/shared/relative-time";
-import { catalogRowLabel, relativeCwd } from "@/lib/grove/session-catalog";
-import { useCatalogTurns } from "@/lib/grove/hooks";
-import type { SessionSummaryView } from "@/lib/grove/types";
+import { AssistantRuntimeProvider } from "@assistant-ui/react";
+import { useParams, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-// Streamdown is a ~460 kB async chunk reached only through the transcript —
-// keep the dynamic boundary on the leaf, exactly as `AgentWorkspace` does.
-const ReadOnlyTranscript = dynamic(
-  () => import("@/components/chat/read-only-transcript").then((m) => m.ReadOnlyTranscript),
-  { ssr: false, loading: () => <Skeleton className="h-full min-h-[20rem] w-full" /> },
-);
+import { EmptyState, EmptyStateGreeting } from "@/components/elements/empty-state";
+import { ErrorState } from "@/components/elements/error-state";
+import { duration } from "@/components/grove/duration";
+import { Explain } from "@/components/grove/glossary";
+import { ShellHeader } from "@/components/grove/shell/shell-header";
+import { GroveDataParts } from "@/components/grove/workspace/data-parts";
+import { Thread, type ThreadComponents } from "@/components/grove/workspace/thread";
+import { GROVE_THREAD_COMPONENTS } from "@/components/grove/workspace/tool-call-part";
+import { TranscriptSkeleton } from "@/components/grove/workspace/transcript-skeleton";
+import { Badge } from "@/components/ui/badge";
+import type { DurationView } from "@/lib/grove/api";
+import { useCatalogTurns } from "@/lib/grove/hooks";
+import { sessionTitle, useReadOnlyTranscript } from "@/lib/grove/runtime";
 
 /**
- * `/sessions/[id]?kind=&cwd=` — one catalog session's conversation, READ-ONLY.
+ * `GROVE_THREAD_COMPONENTS` with the vendored "new chat" welcome suppressed.
  *
- * The identity is a TRIPLE, not an id: most sessions on a host were never
- * launched by Grove, so there is no workspace to resolve through, and the daemon
- * resolves them by `(kind, cwd, session_id)` instead — which is also exactly
- * what an adapter needs to read a transcript. `cwd` therefore rides the query
- * string verbatim, byte-for-byte as the listing row reported it: the adapters
- * match a RECORDED cwd by string, so any normalization here would 404.
- *
- * Read-only is the whole contract, expressed structurally: this page renders no
- * composer, no interrupt, no lifecycle verbs, and no session-identity popover.
- * There is generally nothing running to steer — and where there IS a live Grove
- * workspace, `/w/[id]` is the surface that owns steering it.
- *
- * Its own back link (rather than the shell header's `back` arrow) because the
- * destination differs: back goes to `/sessions`, not to `/`.
- *
- * Test seams: `session-detail`, `session-detail-back`, `session-detail-title`,
- * `session-detail-error`.
+ * Same fix as `components/grove/workspace/transcript.tsx`, needed here for
+ * the same reason: `Thread`'s welcome reads assistant-ui's internal runtime
+ * state, which syncs from the external store's `messages` prop via an effect
+ * rather than synchronously, and visibly lags on a large transcript. `Thread`
+ * only mounts below once `isEmpty` (derived straight from `transcript.data`,
+ * never from the runtime) is already known false, so the vendored welcome
+ * would never be honest here — it always loses the race to real data this
+ * page already has.
  */
-export default function CatalogSessionPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+const SUPPRESSED_WELCOME_COMPONENTS: ThreadComponents = {
+  ...GROVE_THREAD_COMPONENTS,
+  Welcome: () => null,
+};
+
+/**
+ * An archived catalog session: the SAME transcript the workspace renders, with
+ * nothing to steer.
+ *
+ * It renders `Thread` and `GroveDataParts` — the workspace's own two pieces —
+ * rather than a stripped-down copy. A private `MessagePrimitive.Parts` with no
+ * `components` prop used to live here, and every part assistant-ui has no
+ * native renderer for (tool calls, file edits, todo lists, reasoning,
+ * questions, status notes) fell through to plain text: an archived session read
+ * as a wall of raw strings while the same turns rendered properly one route
+ * away. One transcript renderer is the fix; a second one is the bug.
+ *
+ * WHAT LEGITIMATELY DIFFERS, and how each is expressed:
+ *   - Read-only. `useReadOnlyTranscript` sets the runtime's own `isDisabled`
+ *     capability, so the composer is structurally absent rather than hidden.
+ *     No workspace id is faked to get there.
+ *   - No work panel, no lifecycle, no phase, no live question. All of those are
+ *     keyed to a workspace this route does not have; a question that WAS asked
+ *     still renders, in its historical form, because `GroveDataParts` maps it
+ *     to `HistoricalQuestion` rather than to the interactive card.
+ *   - Coordinates. `kind` and `cwd` ride the query string and can be absent —
+ *     ~2% of transcripts never recorded a cwd — so `MissingCoordinate` is a
+ *     real state, not a defensive branch.
+ *
+ */
+export default function SessionPage(): React.ReactNode {
+  // `useSearchParams` needs a Suspense boundary or the route's static prerender
+  // fails the build — the same wrapper `app/login/page.tsx` carries, for the
+  // same reason. The coordinates it reads are the session's IDENTITY here, so
+  // there is no rendering anything above it while they are unknown.
   return (
-    // `useSearchParams` needs a Suspense boundary for the route's static
-    // prerender to succeed — the same pattern the rail and the login page use.
-    <Suspense fallback={<DetailSkeleton />}>
-      <CatalogSessionView sessionId={id} />
+    <Suspense fallback={<TranscriptSkeleton />}>
+      <SessionView />
     </Suspense>
   );
 }
 
-function CatalogSessionView({ sessionId }: { sessionId: string }) {
-  const searchParams = useSearchParams();
-  const kind = searchParams.get("kind");
-  const cwd = searchParams.get("cwd");
-  const { data, isLoading, isError, error } = useCatalogTurns(sessionId, kind, cwd);
+function SessionView(): React.ReactNode {
+  const params = useParams<{ id: string }>();
+  const search = useSearchParams();
+  const sessionId = params.id ?? null;
+  const kind = search.get("kind");
+  const cwd = search.get("cwd");
+  const transcript = useCatalogTurns(sessionId, kind, cwd);
+  const { runtime, isEmpty } = useReadOnlyTranscript(transcript.data?.turns);
+  const title = transcript.data ? sessionTitle(transcript.data.session) : sessionId ?? "Session";
 
   return (
-    <div
-      data-testid="session-detail"
-      className="flex h-[calc(100dvh-3.25rem)] min-h-0 min-w-0 flex-col"
-    >
-      <div className="flex items-center gap-2 px-3 py-2 sm:px-4">
-        <Button asChild variant="ghost" size="icon-sm" aria-label="Back to sessions">
-          <Link href="/sessions" data-testid="session-detail-back">
-            <ArrowLeft />
-          </Link>
-        </Button>
-        <SessionHeading session={data?.session ?? null} fallbackId={sessionId} />
-      </div>
-
-      {/* A coordinate we cannot form is a distinct failure from one the daemon
-          rejected — say which, so the reader knows whether to go back or retry. */}
-      {(!kind || !cwd) && (
-        <p
-          data-testid="session-detail-error"
-          role="alert"
-          className="mx-3 rounded-md bg-muted/40 px-3 py-2 text-sm text-muted-foreground sm:mx-4"
-        >
-          This link is missing the session&apos;s location, so its transcript cannot be
-          resolved. Open it again from the sessions list.
-        </p>
-      )}
-
-      {isError && (
-        <p
-          data-testid="session-detail-error"
-          role="alert"
-          className="mx-3 rounded-md bg-muted/40 px-3 py-2 text-sm text-muted-foreground sm:mx-4"
-        >
-          Could not read this transcript: {(error as Error).message}
-        </p>
-      )}
-
-      {isLoading && kind && cwd && <DetailSkeleton />}
-
-      {data && <ReadOnlyTranscript turns={data.turns} />}
-    </div>
+    <>
+      <ShellHeader
+        title={title}
+        actions={
+          transcript.data ? (
+            <SessionDurationBadges duration={transcript.data.session.duration} />
+          ) : undefined
+        }
+      />
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="session-page">
+        {kind === null || cwd === null ? <MissingCoordinate /> : null}
+        {kind !== null && cwd !== null && transcript.isLoading ? <TranscriptSkeleton /> : null}
+        {transcript.error ? <ErrorState className="m-4" title="Couldn’t load transcript" detail={transcript.error.message} retrying={transcript.isFetching} onRetry={() => void transcript.refetch()} /> : null}
+        {!transcript.isLoading && !transcript.error && isEmpty ? <EmptyTranscript /> : null}
+        {!transcript.isLoading && !transcript.error && !isEmpty ? (
+          <AssistantRuntimeProvider runtime={runtime}>
+            <GroveDataParts />
+            {/* The same wrapper the workspace pane gives the thread: `Thread`'s
+                root is `h-full`, so it needs a flex child with a bounded height
+                to resolve against. Width and inset are the thread's own
+                (`THREAD_WIDTH` / `THREAD_INSET`) — this route sets neither, so
+                it inherits the shared column edge by construction. */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="transcript">
+              {/* The workspace pane's overrides, verbatim: one transcript
+                  renderer is the fix, a second one is the bug (above).
+                  `isEmpty` is always false in this branch (see above), so
+                  this always picks the suppressed welcome — spelled as a
+                  ternary anyway so it stays correct if that branch shape
+                  ever changes. */}
+              <Thread
+                components={isEmpty ? GROVE_THREAD_COMPONENTS : SUPPRESSED_WELCOME_COMPONENTS}
+              />
+            </div>
+          </AssistantRuntimeProvider>
+        ) : null}
+      </main>
+    </>
   );
 }
 
-/** The session's identity line. Reads only what the drill-in response carries;
- *  a catalog session has no parsed title, so the label falls back through
- *  workspace title → branch → id, the same rule the listing row uses. */
-function SessionHeading({
-  session,
-  fallbackId,
+/**
+ * The same two figures the session tables show, spelled out here because this
+ * page is the one place a reader opens deliberately to look at ONE session.
+ *
+ * Rendered unconditionally once the session is loaded — even while the
+ * backend that fills `duration` is still landing and every row reads
+ * `not measured` — so the missing-data state looks like a deliberate "not
+ * measured yet" rather than a chip that silently failed to appear. Never
+ * merged into one figure: Wall clock (the union of the session's active
+ * intervals) and Compute (the same intervals summed across every sub-agent)
+ * answer different questions, see `components/grove/duration.ts`.
+ */
+function SessionDurationBadges({
+  duration: sessionDuration,
 }: {
-  session: SessionSummaryView | null;
-  fallbackId: string;
-}) {
-  const label = session ? catalogRowLabel(session) : fallbackId;
-  const subdir = session ? relativeCwd(session) : null;
-  const branch = session?.git_branch && session.git_branch !== label ? session.git_branch : null;
-
+  duration: DurationView | null | undefined;
+}): React.ReactNode {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      <h1 data-testid="session-detail-title" className="truncate text-sm font-semibold">
-        {label}
-      </h1>
-      <MetaRow className="flex-nowrap text-[11px] leading-4">
-        {session?.project?.repo_name && (
-          <span className="shrink-0 truncate">{session.project.repo_name}</span>
-        )}
-        {session && <span className="shrink-0 font-mono">{session.adapter_kind}</span>}
-        {branch && (
-          <span className="inline-flex min-w-0 items-center gap-1">
-            <GitBranch
-              aria-hidden
-              className="size-3 shrink-0"
-              style={{ color: "var(--ref-branch)" }}
-            />
-            <span className="min-w-0 truncate font-mono">{branch}</span>
-          </span>
-        )}
-        {subdir && <span className="min-w-0 truncate font-mono">{subdir}</span>}
-        {session && <RelativeTime iso={session.modified_at} />}
-      </MetaRow>
-    </div>
+    <>
+      {/* The one-line definition behind each word is the shared glossary
+          entry (`components/grove/glossary.tsx`), not a `title` attribute —
+          same vocabulary as the session tables. */}
+      <Badge variant="outline">
+        <Explain term="clock_time">Wall clock</Explain> {duration(sessionDuration?.active_ms)}
+      </Badge>
+      <Badge variant="outline">
+        <Explain term="compute_time">Compute</Explain>{" "}
+        {duration(sessionDuration?.execution_ms)}
+      </Badge>
+    </>
   );
 }
 
-function DetailSkeleton() {
-  return (
-    <div className="flex flex-1 flex-col gap-3 p-4">
-      <Skeleton className="h-10 w-64" />
-      <Skeleton className="min-h-[24rem] flex-1" />
-    </div>
-  );
+function MissingCoordinate(): React.ReactNode {
+  return <ErrorState className="m-4" title="Transcript unavailable" detail="This session did not record a location, so Grove cannot open it." retrying={false} onRetry={() => undefined} />;
+}
+
+function EmptyTranscript(): React.ReactNode {
+  return <EmptyState className="mx-auto my-auto"><EmptyStateGreeting>No messages recorded</EmptyStateGreeting></EmptyState>;
 }

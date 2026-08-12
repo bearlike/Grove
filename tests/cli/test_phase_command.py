@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from grove.core.phase import PHASE_ORDER, PhaseReport
+from grove.core.phase import PHASE_ORDER, PhaseReport, TicketClaim
 from grove.core.workspace import BranchProvenance, Placement, WorkspaceState, WorkspaceStatus
 from grove.tui.cli import app
 from grove.tui.cli_workspace import _emit_phase
@@ -122,6 +122,41 @@ def test_phase_note_without_a_phase_is_rejected(runner: CliRunner, project: Path
     assert "--note only applies when setting a phase" in result.output
 
 
+def test_phase_ticket_without_a_phase_is_rejected(runner: CliRunner, project: Path) -> None:
+    del project
+    _create(runner)
+
+    result = runner.invoke(app, ["phase", "--ticket", "gitea:42"])
+    assert result.exit_code == 1
+    assert "--ticket only applies when setting a phase" in result.output
+
+
+def test_phase_blocked_without_a_phase_is_rejected(runner: CliRunner, project: Path) -> None:
+    del project
+    _create(runner)
+
+    result = runner.invoke(app, ["phase", "--blocked"])
+    assert result.exit_code == 1
+    assert "--blocked only applies when setting a phase" in result.output
+
+
+def test_phase_blocked_flag_sets_and_renders(runner: CliRunner, project: Path) -> None:
+    """`--blocked` is a flag beside the phase, not a replacement — the phase
+    word must still read cleanly, with "(blocked)" appended."""
+    del project
+    ws_id = _create(runner)
+
+    result = runner.invoke(app, ["phase", ws_id[:8], "implementing", "--blocked"])
+    assert result.exit_code == 0, result.output
+    assert "phase: implementing" in result.output
+    assert "(blocked)" in result.output
+
+    # Persisted: a second `grove phase` (show mode) sees it.
+    shown = runner.invoke(app, ["phase", ws_id[:8]])
+    assert shown.exit_code == 0, shown.output
+    assert "(blocked)" in shown.output
+
+
 # ─── showing a phase ────────────────────────────────────────────────────────
 
 
@@ -194,3 +229,56 @@ def test_emit_phase_with_report(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert "phase: implementing" in out
     assert "note:  wiring it up" in out
     assert "age:" in out
+
+
+def test_emit_phase_blocked_appends_a_note_beside_the_phase(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Blocked is a flag beside the phase, never a replacement for it — the
+    reader must still see where it stopped."""
+    report = PhaseReport(phase="verifying", note=None, updated_at=datetime.now(UTC), blocked=True)
+    _emit_phase(_state("abc123", tmp_path), report)
+    out = capsys.readouterr().out
+    assert "phase: verifying" in out
+    assert "(blocked)" in out
+
+
+def test_emit_phase_unblocked_omits_the_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report = PhaseReport(phase="verifying", note=None, updated_at=datetime.now(UTC), blocked=False)
+    _emit_phase(_state("abc123", tmp_path), report)
+    out = capsys.readouterr().out
+    assert "(blocked)" not in out
+
+
+def test_emit_phase_lists_per_ticket_breakdown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """After the workspace's own claim, every attached ticket's own claim
+    renders on its own line, reusing `_phase_summary` rather than a second
+    hand-rolled format."""
+    report = PhaseReport(
+        phase="implementing",
+        note=None,
+        updated_at=datetime.now(UTC),
+        tickets=(
+            TicketClaim(ticket="gitea:42", phase="verifying", note="tests green"),
+            TicketClaim(ticket="github:7", phase="scoping", blocked=True),
+        ),
+    )
+    _emit_phase(_state("abc123", tmp_path), report)
+    out = capsys.readouterr().out
+    assert "ticket gitea:42: verifying" in out
+    assert "note:  tests green" in out
+    assert "ticket github:7: scoping" in out
+    assert "(blocked)" in out
+
+
+def test_emit_phase_with_no_tickets_prints_no_breakdown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report = PhaseReport(phase="implementing", note=None, updated_at=datetime.now(UTC))
+    _emit_phase(_state("abc123", tmp_path), report)
+    out = capsys.readouterr().out
+    assert "ticket " not in out

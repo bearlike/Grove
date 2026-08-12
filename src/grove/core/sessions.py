@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import contextlib
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from loguru import logger
 
 from grove.core import paths as core_paths
 from grove.core import process as process_module
@@ -36,12 +38,16 @@ from grove.core.agents import (
 )
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook
+from grove.core.contracts.usage import DurationView
 from grove.core.errors import GroveError
 from grove.core.git import GitRepo, detect_root
 from grove.core.manager import WorkspaceManager, build
 from grove.core.process import LiveRuntime
+from grove.core.session_duration import duration_of
+from grove.core.turn_count import TurnCountCache
 
 if TYPE_CHECKING:
+    from grove.core.agents.base import AgentAdapter
     from grove.core.registry import RepoRegistry
     from grove.core.workspace import WorkspaceState
 
@@ -58,6 +64,14 @@ class SessionListing:
     Grove doesn't manage (a hand-made worktree, or the repo root with no ROOT
     workspace). ``provenance`` is ``grove_launched`` only when the id matches
     a workspace's minted ``agent_session_id``.
+
+    ``duration`` is the wall clock and the compute total (see
+    :func:`~grove.core.session_duration.duration_of`), derived here from the
+    message spine because this scope is already parsing the transcript.
+    ``None`` means the spine could not be read at all — never *no work*, which
+    is a ``DurationView`` whose own fields are null. It is the same number
+    :class:`CatalogEntry` reads out of the durable cache, from the same
+    function, so the two scopes cannot disagree about one session.
     """
 
     summary: SessionSummary
@@ -65,6 +79,7 @@ class SessionListing:
     workspace_id: str | None = None
     workspace_title: str | None = None
     workspace_branch: str | None = None
+    duration: DurationView | None = None
 
 
 class SessionExplorer:
@@ -210,6 +225,7 @@ class SessionExplorer:
                                 workspace_id=state.id if state else None,
                                 workspace_title=state.title if state else None,
                                 workspace_branch=state.branch if state else None,
+                                duration=self._duration(adapter, root, summary.session_id),
                             )
                         )
 
@@ -398,10 +414,41 @@ class SessionExplorer:
                             workspace_id=state.id,
                             workspace_title=state.title,
                             workspace_branch=state.branch,
+                            duration=self._duration(adapter, cwd, summary.session_id),
                         )
                     )
         listings.sort(key=lambda ls: ls.summary.modified_at or _EPOCH, reverse=True)
         return tuple(listings)
+
+    @staticmethod
+    def _duration(adapter: AgentAdapter, cwd: Path, session_id: str) -> DurationView | None:
+        """This session's two clocks, from the spine the listing is already parsing.
+
+        Project scope pays for its own measurement rather than reading the
+        catalog's durable cache, for the same reason ``turn_count`` does: the
+        parse is happening here anyway, and a cache filled only when somebody
+        browses the HOST-wide list would leave this column empty for a user who
+        never opens it. Both roads run :func:`duration_of` over
+        ``adapter.read_messages``, so the number is the same one either way.
+
+        ``read_messages`` covers the main transcript AND every sub-agent file
+        (that union is the whole point — the compute total is a fleet's), which
+        is a different fold key from the one ``list_sessions`` used for the
+        summary, so the first call per transcript VERSION pays a parse and every
+        later one is a ``stat`` against the adapter's memo. Best-effort by
+        contract: a browse row must degrade to an unmeasured column, never raise
+        out of a listing.
+        """
+        try:
+            return duration_of(adapter.read_messages(cwd, session_id))
+        except Exception as exc:
+            logger.debug(
+                "session duration unavailable for {} {}: {}",
+                adapter.kind,
+                session_id,
+                type(exc).__name__,
+            )
+            return None
 
     def resolve(self, ref: str) -> SessionListing:
         """The unique session whose id matches ``ref`` exactly or by prefix.
@@ -619,6 +666,15 @@ class CatalogEntry:
     ``live`` is a HONEST cwd-level signal, never a fabricated 1:1
     pid-to-session binding — see :meth:`SessionCatalog.fold_liveness`, the
     pure function that sets it.
+
+    ``turn_count`` and ``duration`` are ``None`` until the durable fact cache
+    has parsed this session's transcript at its CURRENT fingerprint — the scan
+    itself parses nothing. ``None`` therefore means *not measured yet* (or,
+    permanently, *no cwd to read it under*), never *zero*: a session that
+    genuinely had no turn reports ``0``, and one that did no measurable work
+    reports a ``DurationView`` whose own fields are null. Both come from the
+    same parse and are stored together, so a row can never carry one without the
+    other. See :class:`~grove.core.turn_count.TurnCountCache`.
     """
 
     ref: SessionRef
@@ -627,6 +683,8 @@ class CatalogEntry:
     workspace_id: str | None = None
     workspace_title: str | None = None
     live: bool = False
+    turn_count: int | None = None
+    duration: DurationView | None = None
 
 
 class SessionCatalog:
@@ -653,15 +711,20 @@ class SessionCatalog:
     unioned across every known repo instead of one.
     """
 
-    def __init__(self, registry: RepoRegistry) -> None:
+    def __init__(
+        self, registry: RepoRegistry, *, turn_counts: TurnCountCache | None = None
+    ) -> None:
         self._registry = registry
+        self._turn_counts = turn_counts or TurnCountCache()
 
     def scan(self, *, limit: int | None = None) -> tuple[CatalogEntry, ...]:
         """Every discoverable session, newest-first by transcript mtime.
 
         Metadata only — never a full parse: ``discover_all()`` is built
-        entirely from each adapter's bounded head reads. ``limit`` caps the
-        result AFTER sorting, for a fast first paint on a large host.
+        entirely from each adapter's bounded head reads, plus a LOOKUP in the
+        durable turn-count cache (one file read and one ``stat`` per remembered
+        row, still no parse). ``limit`` caps the result AFTER sorting, for a
+        fast first paint on a large host.
         """
         minted, by_cwd, eff_kind = self._workspace_maps()
         known_resolved = set(self._registry.known_roots())  # already resolved
@@ -707,8 +770,41 @@ class SessionCatalog:
         entries = list(
             self.fold_liveness(entries, process_module.list_agent_runtimes(), now=time.time())
         )
+        # One cache read for the whole scan, carrying every parse-derived fact
+        # at once. A row the cache cannot answer at this transcript's CURRENT
+        # fingerprint stays None on all of them — the honest "not measured",
+        # filled later by `count_turns` off the request path.
+        facts = self._turn_counts.facts_for([e.ref for e in entries])
+        measured: list[CatalogEntry] = []
+        for entry in entries:
+            known = facts.get((entry.ref.adapter_kind, entry.ref.session_id))
+            if known is None:
+                measured.append(entry)
+                continue
+            measured.append(replace(entry, turn_count=known.turns, duration=known.duration))
+        entries = measured
         entries.sort(key=lambda e: e.ref.mtime, reverse=True)
         return tuple(entries[:limit]) if limit is not None else tuple(entries)
+
+    def count_turns(
+        self, entries: Sequence[CatalogEntry], *, stop: Callable[[], bool] | None = None
+    ) -> int:
+        """Parse and durably cache every parse-derived fact ``scan`` left null.
+
+        Named for the count it shipped with, because the daemon schedules it by
+        that name; it fills the turn count AND the durations, from one parse per
+        changed session, into one file. A second background pass per column
+        would re-walk the same transcripts on its own schedule and could
+        disagree with this one about what "current" means.
+
+        BLOCKING and unbounded — a cold host is tens of seconds of transcript
+        parsing — so a caller runs it on a background worker and never inside a
+        request; ``stop`` lets a shutdown end the pass between sessions. Takes
+        the whole scan (not just the unmeasured rows) because the set is also
+        what prunes vanished sessions out of the file. Returns how many sessions
+        it measured, so a caller can log a cold pass without inspecting the file.
+        """
+        return self._turn_counts.fill([e.ref for e in entries], stop=stop)
 
     @staticmethod
     def fold_liveness(

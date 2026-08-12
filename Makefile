@@ -48,15 +48,26 @@ check: lint test  ## Run lint + unit tests (no integration)
 
 # ─── docs ───────────────────────────────────────────────────────────────────
 
-.PHONY: docs-schema docs-screenshots docs-webapp-screenshots docs-mockups docs-images docs docs-build
+.PHONY: docs-schema docs-screenshots docs-webapp-screenshots docs-frame-webapp-screenshots docs-mockups docs-images docs docs-build
 docs-schema:  ## Regenerate docs/grove.schema.json from the Pydantic model
 	$(UV) run grove config schema --stdout > docs/grove.schema.json
 
 docs-screenshots:  ## Regenerate the TUI SVG screenshots from the live TUI
 	$(UV) run python -m tools.screenshots.capture
 
+# The desktop shots, and only those. Framing is not idempotent — a second
+# pass frames the frame — so the set is named rather than globbed, and it is
+# chained onto the capture that produces it so the two cannot drift apart.
+# `webapp-home-mobile.png` is deliberately absent: it feeds the phone mockup,
+# which supplies its own device shell.
+FRAMED_SHOTS := $(addprefix docs/img/screenshots/,webapp-home.png webapp-workspace.png webapp-usage.png webapp-usage-detail.png webapp-pair-device.png webapp-pair-code.png)
+
 docs-webapp-screenshots: webapp-build  ## Regenerate the web dashboard PNG screenshots (needs webapp/.next)
 	$(UV) run python -m tools.screenshots.webapp_capture
+	$(MAKE) docs-frame-webapp-screenshots
+
+docs-frame-webapp-screenshots:  ## Composite the webapp screenshots onto a consistent 16:9 framed window
+	$(UV) run --group dev python -m tools.screenshots.frame $(FRAMED_SHOTS)
 
 docs-mockups:  ## Composite the landing-page device mockups from the latest screenshots
 	$(UV) run python -m tools.screenshots.mockups
@@ -104,26 +115,34 @@ release-check: lint test build uvx-smoke  ## Full pre-release gauntlet
 	@echo
 	@echo "release-check OK — wheel + sdist in $(DIST)/"
 
-# ─── webapp (Next.js read-only dashboard) ───────────────────────────────────
+# ─── webapp (assistant-ui-native front end) ─────────────────────────────────
 #
 # webapp/ is a Node project with its own package.json. These targets are
 # convenience wrappers — see webapp/CLAUDE.md for the full engineering
 # contract. Default GROVE_DAEMON_URL points at the daemon defaults below.
+# It needs Node >= 22 (Next 16), which is often newer than the shell default —
+# hence its own WEBAPP_NPM_BIN rather than assuming the shell's npm resolves
+# to a new enough Node.
 
 WEBAPP_DIR ?= $(CURDIR)/webapp
+WEBAPP_NPM_BIN ?= $(NPM_BIN)
+WEBAPP_NODE_BIN_DIR := $(if $(WEBAPP_NPM_BIN),$(dir $(WEBAPP_NPM_BIN)),)
 
-.PHONY: webapp-install webapp-build webapp-dev webapp-test
+.PHONY: webapp-install webapp-build webapp-dev webapp-test webapp-gate
 webapp-install:  ## Install webapp Node deps (npm ci)
-	cd $(WEBAPP_DIR) && npm ci
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) ci
 
 webapp-build: webapp-install  ## Build webapp for production (required before `systemd` w/ webapp)
-	cd $(WEBAPP_DIR) && npm run build
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) run build
 
 webapp-dev:  ## Run webapp dev server (LAN-reachable on :3000)
-	cd $(WEBAPP_DIR) && npm run dev
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) run dev
 
 webapp-test:  ## Run webapp unit + component tests
-	cd $(WEBAPP_DIR) && npm test
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) test
+
+webapp-gate:  ## Run webapp's full gate (typecheck, registry drift, styling, tests)
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) run gate
 
 # ─── systemd (Linux user-scope) ─────────────────────────────────────────────
 #
@@ -198,7 +217,7 @@ _systemd-precheck:
 	fi
 	@echo "✓ grove: $(GROVE_BIN)"
 	@if [ -n "$(WITH_WEBAPP)" ]; then \
-	  if [ -z "$(NPM_BIN)" ]; then \
+	  if [ -z "$(WEBAPP_NPM_BIN)" ]; then \
 	    echo "✗ npm not on PATH (required for WITH_WEBAPP=1)." >&2; exit 1; \
 	  fi; \
 	  if [ ! -d "$(WEBAPP_DIR)" ]; then \
@@ -207,7 +226,13 @@ _systemd-precheck:
 	  if [ ! -d "$(WEBAPP_DIR)/.next" ]; then \
 	    echo "⚠  $(WEBAPP_DIR)/.next not found — run 'make webapp-build' before 'make systemd-enable'."; \
 	  fi; \
-	  echo "✓ npm: $(NPM_BIN)"; \
+	  major=$$("$(WEBAPP_NODE_BIN_DIR)node" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo ""); \
+	  if [ -z "$$major" ]; then \
+	    echo "⚠  could not probe Node next to $(WEBAPP_NPM_BIN) — webapp needs Node >= 22 (Next 16)."; \
+	  elif [ "$$major" -lt 22 ]; then \
+	    echo "✗ webapp needs Node >= 22 (Next 16); $(WEBAPP_NPM_BIN) is Node $$major. Set WEBAPP_NPM_BIN=<path to a Node 22+ npm>." >&2; exit 1; \
+	  fi; \
+	  echo "✓ npm: $(WEBAPP_NPM_BIN)"; \
 	  echo "✓ webapp dir: $(WEBAPP_DIR)"; \
 	fi
 	@if [ -n "$(WITH_MCP)" ]; then \
@@ -228,8 +253,8 @@ _SED_SUBST := sed \
 	-e 's,@DAEMON_HOST@,$(DAEMON_HOST),g' \
 	-e 's,@DAEMON_PORT@,$(DAEMON_PORT),g' \
 	-e 's,@WEBAPP_DIR@,$(WEBAPP_DIR),g' \
-	-e 's,@NPM_BIN@,$(NPM_BIN),g' \
-	-e 's,@NODE_BIN_DIR@,$(NODE_BIN_DIR:/=),g' \
+	-e 's,@NPM_BIN@,$(WEBAPP_NPM_BIN),g' \
+	-e 's,@NODE_BIN_DIR@,$(WEBAPP_NODE_BIN_DIR:/=),g' \
 	-e 's,@WEBAPP_HOST@,$(WEBAPP_HOST),g' \
 	-e 's,@WEBAPP_PORT@,$(WEBAPP_PORT),g' \
 	-e 's,@MCP_BIN@,$(MCP_BIN),g' \

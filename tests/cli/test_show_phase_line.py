@@ -97,6 +97,26 @@ def test_emit_renders_the_position_but_not_the_note(
     assert "wiring the CLI verb" not in out
 
 
+def test_emit_renders_the_blocked_flag_beside_the_position(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`show`'s phase line reuses `_phase_summary`, so a blocked claim reads
+    exactly like `grove phase`'s own render — the flag rides beside the
+    phase, never replacing it."""
+    report = PhaseReport(
+        phase="implementing",
+        note="wiring the CLI verb",
+        updated_at=datetime.now(UTC),
+        blocked=True,
+    )
+    inspection = WorkspaceInspection(peek=_peek(tmp_path), primary=None, turns=(), phase=report)
+    inspection.emit()
+    out = capsys.readouterr().out
+
+    assert "implementing" in out
+    assert "(blocked)" in out
+
+
 def test_emit_with_no_phase_says_none_reported_not_blank(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -200,6 +200,12 @@ class JsonWorkspaceStore:
             init_status=InitStatus(init_status_raw) if init_status_raw else None,
             init_duration_ms=data.get("init_duration_ms"),
             init_log_path=data.get("init_log_path"),
+            # `.get()` — absent on every record written before the creation
+            # anchor existed. None is the honest answer for those: the commit
+            # they started from was never observed and cannot be recovered, so
+            # the "since created" reads fall back to `base_branch` rather than
+            # inventing a baseline.
+            base_commit=data.get("base_commit"),
             branch_provenance=BranchProvenance(
                 data.get("branch_provenance", BranchProvenance.GROVE_CREATED.value)
             ),

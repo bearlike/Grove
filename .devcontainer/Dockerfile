@@ -84,4 +84,34 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN mkdir -p /caches/uv /caches/npm /caches/playwright \
     && chown -R vscode:vscode /caches
 
+# --- Simple Secrets Manager (ssm / ssm-cli) ---
+#
+# An agent may be launched through `ssm run`, so an image without it on PATH
+# boots that agent straight into exit 127. Tier 0 because it is toolchain, not
+# project state.
+#
+# All three UV_* paths are load-bearing, because this installs as root and the
+# agent runs as `vscode`:
+#   BIN_DIR     — uv's default (~/.local/bin) is NOT on a non-login shell's
+#                 PATH, and the agent pane runs `sh -c`, so a default install
+#                 is present and still unfindable (exit 127).
+#   TOOL_DIR    — the shim is a symlink INTO the tool venv; left at the default
+#                 it points inside /root and the agent gets exit 126.
+#   PYTHON_...  — the venv's interpreter is likewise fetched under /root by
+#                 default, so the venv resolves to an unreadable python.
+# `a+rX` then grants traverse/read without marking data files executable. The
+# python dir exists only when uv had to FETCH an interpreter, so the loop skips
+# what is absent rather than failing the build on an image that ships one.
+#
+# The null keyring backend is needed at RUNTIME, not just for this build: a
+# container has no secret service and keyring's search for one hangs a headless
+# client. Credentials come from SSM_BASE_URL/SSM_TOKEN in the environment,
+# which Grove already injects — nothing is baked into the image.
+ENV PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+RUN UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+    UV_TOOL_DIR=/opt/uv-tools \
+    UV_TOOL_BIN_DIR=/usr/local/bin \
+    uv tool install git+https://github.com/bearlike/Simple-Secrets-Manager.git \
+    && for d in /opt/uv-python /opt/uv-tools; do [ -d "$d" ] && chmod -R a+rX "$d"; done
+
 USER vscode

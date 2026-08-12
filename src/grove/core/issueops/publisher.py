@@ -2,8 +2,16 @@
 
 ``TicketStatusPublisher`` mirrors a workspace's progress onto every ticket it
 names — typically the issue AND the pull request that resolves it — as ONE sticky
-comment per thread, rebuilt from live state on every update and identical on every
-thread (a reader of either wants the same answer: how far along, what remains).
+comment per thread, rebuilt from live state on every update.
+
+Almost everything in that body answers for the workspace and so reads the same on
+every thread: the agent state, the branch, the commit, the checklist, the
+cross-links. **The phase does not.** An agent reports a claim per attached ticket
+(``grove.core.phase.TicketClaim``), so the issue can be delivering while the pull
+request that resolves it is blocked — which is exactly the question a reader of
+*that* thread is asking. So :meth:`TicketStatusPublisher.render` takes a ``focus``
+(one ``TicketRef.key``) and every phase-derived element resolves against it, while
+the rest of the body stays workspace-wide.
 
 It is the activity bus's third subscriber, alongside ``_SseHub`` and
 ``NotificationBroker`` — but it deliberately does NOT ride the notification
@@ -55,9 +63,15 @@ from grove.core.activity import DashboardDelta, WorkspaceActivity
 from grove.core.agents import AgentActivityState, TodoItem, TodoList
 from grove.core.contracts.phase_palette import DARK_PHASE_HEX
 from grove.core.contracts.tickets import TicketKind, TicketProviderName
-from grove.core.errors import GroveError, TicketCommentsUnsupported, TicketProviderError
+from grove.core.errors import (
+    GroveError,
+    TicketBodyUnsupported,
+    TicketCommentsUnsupported,
+    TicketProviderError,
+)
+from grove.core.issueops.footer import footer_needs_update, render_footer, splice_footer
 from grove.core.issueops.marker import SIGNATURE_MARKER, STICKY_MARKER
-from grove.core.phase import PHASE_ORDER, PhaseReport
+from grove.core.phase import PHASE_ORDER, PhaseClaim, PhaseReport
 from grove.core.tickets.provider import TicketProvider
 from grove.core.workspace import CommitSummary
 
@@ -101,6 +115,15 @@ HolderResolver = Callable[[str, "Sequence[TicketRef]"], bool]
 # spends the reader's click. ``False`` renders the id as plain text plus a
 # statement that it is out of reach.
 TranscriptProbe = Callable[[str, str, str], bool]
+# Assign the Grove account to one ticket NOW — ``(repo_root, provider, id)``.
+# Injected rather than imported for the reason every other resolver here is: the
+# publisher must not learn about the poller, and the poller owns the ONE
+# ownership memo that decides what may later be released. A publisher that
+# assigned directly would make an assignment that memo never saw, and the
+# release sweep only releases what it holds — so the ticket would stay assigned
+# forever, which is exactly the leak the release was built to close. ``None``
+# (no assigner wired) means assignment stays the poll's job alone.
+TicketAssigner = Callable[[str, TicketProviderName, str, TicketKind], bool]
 
 # One publish target's stable identity — (provider name, ticket id). The sticky
 # comment id is remembered under this, so a workspace mirroring onto an issue and
@@ -295,11 +318,18 @@ class PublishSnapshot:
 
     Built from one ``WorkspaceActivity`` row plus the separately-resolved todo and
     phase, so :meth:`TicketStatusPublisher.render` is a total function of this
-    dataclass and fully unit-testable. ``terminal`` swaps the live status body for
-    a final summary (outcome + branch + link), after which the publisher stops.
-    ``phase`` is ``None`` whenever the agent has never written a phase file — that
-    absence renders as nothing, never a placeholder line (an agent that doesn't
-    report phase looks exactly as it did before this axis existed).
+    dataclass (plus its ``focus``) and fully unit-testable. ``terminal`` swaps the
+    live status body for a final summary (outcome + branch + link), after which
+    the publisher stops.
+
+    ``phase`` is the WHOLE report — the workspace's own claim plus every
+    per-ticket claim beside it — and the snapshot deliberately does not pre-pick
+    one. WHICH claim a body answers with depends on the thread it is going to,
+    which is ``render``'s ``focus``, so one snapshot serves every target and the
+    choice stays in the signature rather than baked into the data. ``None`` means
+    the agent has never written a phase file; that absence renders as nothing,
+    never a placeholder line (an agent that doesn't report phase looks exactly as
+    it did before this axis existed).
 
     ``tickets`` is the workspace's whole ref list — the same refs routing turns
     into publish targets, ENRICHED at dispatch so each carries the ``title`` its
@@ -382,6 +412,26 @@ class _Target:
 
     provider: TicketProvider
     ticket_id: str
+    ticket_key: str
+    """This target's ``TicketRef.key`` — the ``focus`` its body is rendered for.
+
+    Carried from the ref rather than recomposed from ``(provider, ticket_id)``
+    right here, because that string is the join between two independently
+    written things — the agent's phase-file entries and this render — and
+    ``TicketRef.key`` is its single composer. A second spelling of it would
+    silently pick no claim at all, which renders as *not reported* and looks
+    exactly like an agent that never reported.
+    """
+
+    kind: TicketKind = "issue"
+    """Which browser path this thread lives at, and it exists ONLY for that.
+
+    Comment I/O genuinely does not need it — both forges answer
+    ``/issues/{id}/comments`` for a pull request too, which is why the rest of
+    this class is kind-blind. A LINK does need it: a forge serves the issue path
+    for a PR by 303-REDIRECTING to the pulls path, so an anchor built on the
+    wrong one navigates instead of scrolling, defeating the point of an anchor.
+    """
 
     @property
     def key(self) -> _TargetKey:
@@ -437,6 +487,7 @@ class TicketStatusPublisher:
         task_resolver: TaskResolver | None = None,
         holder_resolver: HolderResolver | None = None,
         transcript_probe: TranscriptProbe | None = None,
+        assigner: TicketAssigner | None = None,
         clock: Callable[[], datetime] | None = None,
         terminal_states: frozenset[AgentActivityState] = frozenset(),
     ) -> None:
@@ -446,6 +497,7 @@ class TicketStatusPublisher:
         self._task_resolver = task_resolver
         self._holder_resolver = holder_resolver
         self._transcript_probe = transcript_probe
+        self._assigner = assigner
         self._window = timedelta(seconds=config.update_window_seconds)
         self._deep_link_base = config.deep_link_base_url.rstrip("/")
         # Mechanism, not policy: which agent states end the sticky comment is a
@@ -473,6 +525,7 @@ class TicketStatusPublisher:
         *,
         registry: RepoRegistry | None,
         transcript_probe: TranscriptProbe | None = None,
+        assigner: TicketAssigner | None = None,
     ) -> TicketStatusPublisher | None:
         """Build a publisher from config, or ``None`` when issue-ops is disabled.
 
@@ -538,6 +591,7 @@ class TicketStatusPublisher:
             task_resolver=task_resolver,
             holder_resolver=holder_resolver,
             transcript_probe=transcript_probe,
+            assigner=assigner,
         )
 
     # ─── the finale's two extra reads (both terminal-only, both best-effort) ──
@@ -764,11 +818,15 @@ class TicketStatusPublisher:
     # ─── side effects (dispatch worker / inline) ─────────────────────────────
 
     def dispatch(self, job: _FlushJob) -> None:
-        """Resolve every target, build the snapshot once, and mirror it onto each.
+        """Resolve every target, build the snapshot once, and render it PER target.
 
-        One render, N writes: :meth:`render` is a pure full rebuild and the body a
-        reader wants is the same on an issue and on the PR that resolves it, so
-        rendering per target would only pay the cost twice for identical bytes.
+        One snapshot, N renders, N writes. Everything expensive — the todo, the
+        phase, the task text, the enrichment — is resolved once, because it is
+        the same for every thread; only :meth:`render` runs per target, and it is
+        a pure CPU pass over data already in hand. It has to: an agent's phase
+        claim is per ticket, so the issue's comment and the PR's comment answer
+        the same question with different words.
+
         The whole body is best-effort: no eligible target or an unresolved todo
         skips quietly, and each target's forge round-trip is guarded on its own, so
         one broken thread degrades exactly one comment and never re-raises into the
@@ -789,14 +847,123 @@ class TicketStatusPublisher:
             task=task,
             tickets=tickets,
             # Repo-level links come from the first eligible target's provider:
-            # every target is a tracker for THIS repo, and one body goes to all
-            # of them, so the choice must be deterministic rather than per-target.
+            # every target is a tracker for THIS repo and the branch is the same
+            # branch on every thread, so the choice must be deterministic rather
+            # than per-target. Only the phase varies per target (see ``focus``).
             links=targets[0].provider,
             terminal=job.terminal,
         )
-        body = self.render(snapshot)
         for target in targets:
-            self._publish(ws.id, target, body)
+            body = self.render(snapshot, focus=target.ticket_key)
+            comment_id = self._publish(ws.id, target, body)
+            # The same edge, three writes: the comment says how the work is
+            # going, the assignee says WHO is working it, and the footer gives a
+            # reader of the description a way back to both. They ride one
+            # dispatch because they answer one question and share one trigger —
+            # a workspace deterministically holding this ticket right now.
+            self._mark_owned(ws.repo_root, target)
+            self._sync_footer(job.row, target, comment_id)
+
+    def set_assigner(self, assigner: TicketAssigner) -> None:
+        """Wire the edge-triggered assignment seam after construction.
+
+        A setter rather than a constructor argument because of who holds what:
+        the publisher and the poller are both built by the daemon, the poller
+        second (it needs no bus), and the publisher must not import it. This
+        keeps the dependency one-directional and injected, like every other
+        resolver here.
+        """
+        self._assigner = assigner
+
+    def _sync_footer(self, row: WorkspaceActivity, target: _Target, comment_id: str | None) -> None:
+        """Upsert the badge footer into this target's own description. Best-effort.
+
+        Rebuilt from live state on every publish, exactly like the comment body,
+        and for a reason the comment does not have: a ticket can MOVE between
+        workspaces. Deriving both destinations from whoever holds the ticket at
+        this moment is what makes the handoff self-correcting — the next publish
+        by the new holder rewrites the badges, with no teardown hook to miss and
+        no stored link to go stale. :func:`footer_needs_update` then makes the
+        steady state free, so re-deriving every flush costs one string compare
+        rather than a request.
+
+        Swallowed like every other write here: a footer is decoration on somebody
+        else's description and is never worth failing the status update.
+        """
+        provider = target.provider
+        if not provider.can_edit_body:
+            return
+        base = self._deep_link_base
+        footer = render_footer(
+            workspace_url=f"{base}/w/{row.state.id}" if base else None,
+            status_url=self._comment_anchor(target, comment_id),
+        )
+        try:
+            body = provider.read_body(target.ticket_id)
+            if not footer_needs_update(body, footer):
+                return
+            provider.update_body(target.ticket_id, splice_footer(body, footer))
+        except (TicketProviderError, TicketBodyUnsupported) as exc:
+            logger.debug("issueops footer update failed for {}: {}", target.key, exc)
+
+    @staticmethod
+    def _comment_anchor(target: _Target, comment_id: str | None) -> str | None:
+        """``//<host>/<path>#issuecomment-<id>``, or ``None`` with nothing to point at.
+
+        **The scheme is dropped so the anchor inherits the READER's own.** A
+        tracker configured over ``http://`` and browsed over ``https://`` makes
+        an absolute link CROSS-ORIGIN, and a cross-origin fragment is a full
+        page load rather than a scroll — the round trip both rules below exist
+        to remove, reintroduced by the half of the URL nobody looks at. A
+        protocol-relative url is same-origin whichever scheme the reader is on,
+        and the sanitizer passes it through verbatim (verified on a live
+        render).
+
+        **The path must be the one the reader is already on, or the anchor
+        navigates instead of scrolling.** A forge serves the issue path for a
+        pull request by *303-redirecting* to the pulls path, so a PR footer
+        built on ``/issues/<n>`` sends the reader on a round trip back to the
+        page they were already looking at. Hence the one place in this module
+        that branches on ``kind``.
+
+        **A bare ``#issuecomment-<id>`` fragment is NOT the fix, however
+        obvious it looks.** Gitea's comment sanitizer rewrites a relative
+        fragment to ``#user-content-issuecomment-<id>``, and no element with
+        that id exists on the page — the real comment anchor is
+        ``issuecomment-<id>``. Verified against a live render and a live page:
+        the bare form silently scrolls nowhere, which is worse than the round
+        trip it was meant to remove. A root-relative path fails a third way:
+        the renderer prefixes the repo context, so ``/owner/repo/issues/<n>``
+        renders as ``/owner/repo/owner/repo/issues/<n>``. The host and the path
+        both stay; only the scheme goes.
+        """
+        root = target.provider.web_root
+        context = target.provider.context
+        if not (root and context and comment_id):
+            return None
+        segment = "pulls" if target.kind == "pull_request" else "issues"
+        authority = root.split("//", 1)[-1]  # already protocol-relative, or has no scheme at all
+        return f"//{authority}/{context}/{segment}/{target.ticket_id}#issuecomment-{comment_id}"
+
+    def _mark_owned(self, repo_root: str, target: _Target) -> None:
+        """Assign the Grove account to this target, best-effort and edge-triggered.
+
+        Routed through the injected assigner rather than ``provider.assign_self``
+        so the ownership memo that governs RELEASE sees every assignment Grove
+        makes — see :data:`TicketAssigner`. Swallowed like every other write on
+        this path: an assignment is never worth failing the status update it
+        accompanies.
+
+        The target's ``kind`` is passed rather than filtered here: which kinds
+        are assignable is the assignee queue's rule, and a second copy of it at
+        this call site is how the two came to disagree in the first place.
+        """
+        if self._assigner is None:
+            return
+        try:
+            self._assigner(repo_root, target.provider.name, target.ticket_id, target.kind)
+        except Exception as exc:  # best-effort, exactly like the publish above
+            logger.debug("issueops assign-on-publish failed for {}: {}", target.key, exc)
 
     def _route(self, repo_root: str, refs: Sequence[TicketRef]) -> list[_Target]:
         """Every ticket ref whose provider can ACTUALLY carry a comment.
@@ -821,7 +988,7 @@ class TicketStatusPublisher:
             provider = self._provider_resolver(repo_root, ref.provider)
             if provider is None or not provider.can_comment:
                 continue
-            target = _Target(provider=provider, ticket_id=ref.id)
+            target = _Target(provider=provider, ticket_id=ref.id, ticket_key=ref.key, kind=ref.kind)
             targets.setdefault(target.key, target)
         return list(targets.values())
 
@@ -894,7 +1061,7 @@ class TicketStatusPublisher:
             self._tickets[key] = (now, fresh)
         return fresh
 
-    def _publish(self, workspace_id: str, target: _Target, body: str) -> None:
+    def _publish(self, workspace_id: str, target: _Target, body: str) -> str | None:
         """Edit one target's sticky comment in place, or post it once (found-or-created).
 
         Sticky discipline, per target: reuse that target's known comment id; on a
@@ -905,6 +1072,11 @@ class TicketStatusPublisher:
         marker read also fails, duplicate the comment) — so the next flush re-scans
         exactly the thread that broke, which also recreates a comment a human
         deleted (the marker scan finds nothing → post).
+
+        Returns the resolved comment id so the caller can build an anchor link to
+        this very comment, or ``None`` when the write failed and there is
+        therefore no comment to point at — a link that lands nowhere is worse
+        than no link, so the footer must be able to tell those apart.
         """
         comment_id = self._comment_id(workspace_id, target.key)
         if comment_id is None:
@@ -919,8 +1091,9 @@ class TicketStatusPublisher:
                 "issueops publish failed workspace={} target={}: {}", workspace_id, target.key, exc
             )
             self._forget_comment_id(workspace_id, target.key)
-            return
+            return None
         self._store_comment_id(workspace_id, target.key, comment_id)
+        return comment_id
 
     def _recover_comment_id(self, provider: TicketProvider, ticket_id: str) -> str | None:
         """Cold-start recovery: the first thread comment carrying the STICKY marker.
@@ -944,19 +1117,51 @@ class TicketStatusPublisher:
     # ─── pure render ─────────────────────────────────────────────────────────
 
     @classmethod
-    def render(cls, snapshot: PublishSnapshot) -> str:
+    def render(cls, snapshot: PublishSnapshot, *, focus: str | None = None) -> str:
         """Rebuild the whole comment body from ``snapshot`` — a pure function, no I/O.
 
         Never a diff-patch of the prior body (the sticky-comment rule): the forge
         holds the last render, we always replace it wholesale. A terminal snapshot
         swaps the live status + checklist for a final summary.
+
+        ``focus`` is the ``TicketRef.key`` of the thread this body is going to,
+        and it selects the phase claim — nothing else. It is an ARGUMENT rather
+        than state on the publisher deliberately: this stays a total function of
+        its inputs, so a per-target body is still reproducible from a snapshot
+        plus one string, which is what makes the whole render testable with no
+        I/O and no fixture.
         """
+        claim = cls._claim_for(snapshot, focus)
         if snapshot.terminal:
-            return cls._render_terminal(snapshot)
-        return cls._render_live(snapshot)
+            return cls._render_terminal(snapshot, claim)
+        return cls._render_live(snapshot, claim)
+
+    @staticmethod
+    def _claim_for(s: PublishSnapshot, focus: str | None) -> PhaseClaim | None:
+        """The claim this thread's body answers with — the ticket's, else the workspace's.
+
+        Two distinct absences, and only one of them falls back. A ticket the
+        agent made no claim about inherits the WORKSPACE's own claim, because
+        that is still an honest statement about the work this thread is
+        tracking: an agent reporting one phase for a job that happens to name
+        three tickets is the ordinary case, and withholding it from two of them
+        would make per-ticket reporting a *downgrade* for everyone who does not
+        use it.
+
+        But a workspace with no claim at all renders NOTHING — never
+        :data:`PHASE_ORDER`'s first member. "Has not reported" and "is scoping"
+        are the two facts this whole axis exists to keep apart, and defaulting
+        the one to the other here would destroy that distinction on the surface
+        a human actually triages from.
+        """
+        if s.phase is None:
+            return None
+        if focus is None:
+            return s.phase
+        return s.phase.for_ticket(focus) or s.phase
 
     @classmethod
-    def _render_live(cls, s: PublishSnapshot) -> str:
+    def _render_live(cls, s: PublishSnapshot, claim: PhaseClaim | None) -> str:
         """Heading, the at-a-glance table, then four named sections. In that order.
 
         The whole body is one hierarchy: an ``##`` heading that answers "what
@@ -975,8 +1180,8 @@ class TicketStatusPublisher:
         lines = [f"## {glyph} Grove — {label}", "", f"**{cls._cell(s.title)}**"]
         # No Status row: the heading already answers it, and the loudest signal
         # in the comment should be stated once.
-        lines += cls._summary_table(s, stamp="Updated")
-        lines += cls._progress_section(s)
+        lines += cls._summary_table(s, claim, stamp="Updated")
+        lines += cls._progress_section(claim)
         lines += cls._activity_section(s)
         lines += cls._checklist_section(s)
         lines += cls._sessions_section(s)
@@ -985,7 +1190,7 @@ class TicketStatusPublisher:
         return "\n".join(lines)
 
     @classmethod
-    def _render_terminal(cls, s: PublishSnapshot) -> str:
+    def _render_terminal(cls, s: PublishSnapshot, claim: PhaseClaim | None) -> str:
         """The finale — the same hierarchy, minus what is now moot.
 
         It keeps the heading, the table, Progress and Tracking, and drops the
@@ -1002,8 +1207,8 @@ class TicketStatusPublisher:
         handover = cls._handover_line(s)
         if handover:
             lines += ["", handover]
-        lines += cls._summary_table(s, stamp="Concluded", final_state=f"{glyph} {label}")
-        lines += cls._progress_section(s)
+        lines += cls._summary_table(s, claim, stamp="Concluded", final_state=f"{glyph} {label}")
+        lines += cls._progress_section(claim)
         lines += cls._sessions_section(s)
         lines += cls._tracking_section(s)
         lines += ["", cls._footer()]
@@ -1013,7 +1218,12 @@ class TicketStatusPublisher:
 
     @classmethod
     def _summary_table(
-        cls, s: PublishSnapshot, *, stamp: str, final_state: str | None = None
+        cls,
+        s: PublishSnapshot,
+        claim: PhaseClaim | None,
+        *,
+        stamp: str,
+        final_state: str | None = None,
     ) -> list[str]:
         """Every scalar the comment knows, one row each, each row led by its icon.
 
@@ -1036,8 +1246,8 @@ class TicketStatusPublisher:
         rows: list[tuple[str, str, str]] = []
         if final_state is not None:
             rows.append((_ICON_STATE, "Final state", final_state))
-        if s.phase is not None:
-            rows.append((_ICON_PHASE, "Phase", cls._phase_caption(s.phase)))
+        if claim is not None:
+            rows.append((_ICON_PHASE, "Phase", cls._phase_caption(claim)))
         if s.todo is not None and s.todo.items:
             done = sum(1 for item in s.todo.items if item.status == "completed")
             rows.append((_ICON_CHECKLIST, "Checklist", f"{done} of {len(s.todo.items)} done"))
@@ -1137,7 +1347,7 @@ class TicketStatusPublisher:
         return ["", tag, f"<summary>{icon} {title}</summary>", "", *body, "", "</details>"]
 
     @classmethod
-    def _progress_section(cls, s: PublishSnapshot) -> list[str]:
+    def _progress_section(cls, claim: PhaseClaim | None) -> list[str]:
         """The phase diagram and the agent's note. Open — it is the point of the comment.
 
         **A workspace that has reported no phase renders NOTHING here — not an
@@ -1150,13 +1360,21 @@ class TicketStatusPublisher:
         The note rides here as a blockquote rather than in the table's phase
         row, and it is the only place it appears: it is prose up to 200
         characters, which wrecks a table column but reads well under the chart
-        it explains.
+        it explains. When the claim is BLOCKED that blockquote leads with the
+        flag, so the sentence a reader lands on is "stuck, and here is why" —
+        the note is where the agent puts the reason, and this is the one place
+        in the body with room to print it whole.
         """
-        if s.phase is None:
+        if claim is None:
             return []
-        body = [cls._phase_diagram(s.phase)]
-        if s.phase.note:
-            body += ["", f"> {cls._plain_task(s.phase.note)}"]
+        body = [cls._phase_diagram(claim)]
+        reason = cls._plain_task(claim.note)
+        if claim.blocked:
+            body += ["", f"> {_STATE_GLYPH[AgentActivityState.BLOCKED]} **Blocked**"]
+            if reason:
+                body[-1] += f" — {reason}"
+        elif reason:
+            body += ["", f"> {reason}"]
         return cls._section(_ICON_PHASE, "Progress", body, open_=True)
 
     @classmethod
@@ -1218,7 +1436,7 @@ class TicketStatusPublisher:
     # ─── the phase diagram ───────────────────────────────────────────────────
 
     @classmethod
-    def _phase_diagram(cls, report: PhaseReport) -> str:
+    def _phase_diagram(cls, claim: PhaseClaim) -> str:
         """The six phases as a horizontal mermaid flowchart, done → now → remaining.
 
         Verified rendering rather than assumed: GitHub documents ```` ```mermaid ````
@@ -1250,9 +1468,16 @@ class TicketStatusPublisher:
         work actually stopped except through a ring. So the current node takes
         :data:`_ACTIVE_FILL_AT_DONE` there — still a palette member, still dark
         ink, and the ring stays on top of it.
+
+        **A blocked claim keeps its position and takes the blocked GLYPH on its
+        node, never a fill of its own.** The chart's colours encode one thing —
+        where on the ramp this is — and blocked is orthogonal to that; painting
+        it would say "this phase" where the fact is "this phase, stuck". The
+        glyph is :data:`_STATE_GLYPH`'s own ``BLOCKED`` entry rather than a new
+        one, so the comment keeps a single vocabulary for a single concept.
         """
         done_fill = DARK_PHASE_HEX["done"]
-        now_fill = DARK_PHASE_HEX[report.phase]
+        now_fill = DARK_PHASE_HEX[claim.phase]
         if now_fill == done_fill:
             # Keyed on the COLLISION, not on ``phase == "done"``: it is the fill
             # sameness that costs the reader, so a palette that later moves
@@ -1267,15 +1492,18 @@ class TicketStatusPublisher:
             f"  classDef todo fill:{todo_fill},stroke:{todo_fill},color:{_NODE_INK}",
         ]
         for index, phase in enumerate(PHASE_ORDER):
-            if index < report.index:
+            if index < claim.index:
                 node_class = "done"
-            elif index == report.index:
+            elif index == claim.index:
                 node_class = "now"
             else:
                 node_class = "todo"
             label = _PHASE_LABEL.get(phase, phase)
-            if node_class == "now" and report.note:
-                label = f"{label}<br>{cls._mermaid_label(report.note)}"
+            if node_class == "now":
+                if claim.blocked:
+                    label = f"{_STATE_GLYPH[AgentActivityState.BLOCKED]} {label}"
+                if claim.note:
+                    label = f"{label}<br>{cls._mermaid_label(claim.note)}"
             lines.append(f'  p{index}["{label}"]:::{node_class}')
         lines.append("  " + " --> ".join(f"p{i}" for i in range(len(PHASE_ORDER))))
         lines.append("```")
@@ -1369,12 +1597,16 @@ class TicketStatusPublisher:
     def _tracking_section(cls, s: PublishSnapshot) -> list[str]:
         """Every ticket this workspace names, then the way back into Grove.
 
-        This is the cross-link the multi-target design deferred: the body is
-        identical on every thread, so naming all the refs is what lets a reader
+        This is the cross-link the multi-target design deferred: this block is
+        the same on every thread, so naming all the refs is what lets a reader
         on the issue see the PR that resolves it, and a reader on the PR see the
         issue it closes. Issues sort ahead of pull requests (a stable sort, so
         the engine's own order survives within each kind) because that is the
         order the work happened in.
+
+        It stays whole-list even though the phase above it is now per-target:
+        the point of the block is precisely the SIBLINGS, so scoping it to the
+        thread it sits on would leave exactly nothing.
 
         Each entry is one prose line ENDING in its reference, so the eye lands on
         the link: a ticket's own title says what it is far better than a ``Kind``
@@ -1421,7 +1653,7 @@ class TicketStatusPublisher:
         return f"- {title} — #{ref.id}" if title else f"- #{ref.id}"
 
     @staticmethod
-    def _phase_caption(report: PhaseReport) -> str:
+    def _phase_caption(claim: PhaseClaim) -> str:
         """The compact progress render — deliberately the densest line in the comment.
 
         A human skimming a ticket learns more from "Verifying, 4 of 6" than from a
@@ -1437,10 +1669,21 @@ class TicketStatusPublisher:
         a table cell that long wrecks the column; it renders once, as a blockquote
         under the diagram it explains. "4 of 6" rather than "(4/6)" so it counts
         the same way the Checklist row beside it does.
+
+        **``blocked`` renders BESIDE the phase name, never instead of it.** It is
+        a flag orthogonal to the position, and the two together are the answer:
+        "Verifying, blocked" says where the work got stuck, which is the whole
+        reason the flag exists rather than being a seventh phase. Replacing the
+        name would throw away the more actionable half — ``scoping, blocked`` is
+        a ticket nobody can start, ``verifying, blocked`` is work that is nearly
+        done and wants one decision — and would leave the position counter
+        beside it saying something the label contradicts.
         """
-        label = _PHASE_LABEL.get(report.phase, report.phase)
-        dots = "".join("●" if i <= report.index else "○" for i in range(len(PHASE_ORDER)))
-        return f"{dots} {label} · {report.index + 1} of {len(PHASE_ORDER)}"
+        label = _PHASE_LABEL.get(claim.phase, claim.phase)
+        if claim.blocked:
+            label = f"{_STATE_GLYPH[AgentActivityState.BLOCKED]} {label}, blocked"
+        dots = "".join("●" if i <= claim.index else "○" for i in range(len(PHASE_ORDER)))
+        return f"{dots} {label} · {claim.index + 1} of {len(PHASE_ORDER)}"
 
     @staticmethod
     def _checklist_line(item: TodoItem) -> str:
@@ -1485,7 +1728,7 @@ class TicketStatusPublisher:
             # repository the branch link points into — falling back to the repo
             # directory's name for a tracker that fronts no repo at all.
             repo_label=links.context or Path(ws.repo_root).name or ws.repo_root,
-            branch=ws.branch,
+            branch=row.live_branch,
             agent_name=ws.agent_name,
             agent_kind=ws.agent_kind,
             state=primary.state if primary is not None else AgentActivityState.UNKNOWN,
@@ -1499,7 +1742,7 @@ class TicketStatusPublisher:
             terminal=terminal,
             occurred_at=self._clock(),
             tickets=tickets,
-            branch_url=links.branch_url(ws.branch),
+            branch_url=links.branch_url(row.live_branch),
             commit_url=links.commit_url(commit.sha) if commit is not None else None,
             sessions=self._session_links(row),
             # Only the finale asks who else holds the ticket: while this
@@ -1544,7 +1787,22 @@ class TicketStatusPublisher:
         up by the next flush any other change causes, or immediately by
         ``@grove status``. Bounded and stated rather than silent: unlike
         ``phase``, whose absence here was invisible, this one has a name and a
-        remedy."""
+        remedy.
+
+        **The REF LIST is here, and its absence was the "attach publishes
+        nothing" bug.** Attaching a ticket changes what this comment is *for* —
+        it adds a whole new target thread — while moving none of the members
+        above, all of which are by-products of the agent working. So a freshly
+        attached ticket got no comment at all until something unrelated happened
+        to move the key, measured at ~16 minutes on a live workspace and
+        unbounded in principle: a workspace attached to and then left alone
+        publishes nothing, forever. It reads as "issue-ops is broken" rather than
+        as a delay, which is why it cost a whole investigation. Only
+        ``(provider, id)`` — the target identity — because that is what routing
+        turns on; the enrichment those refs later acquire is a dispatch-time
+        forge read and belongs no more here than the ticket status does. Refs
+        change rarely, so this costs no PATCH storm and no I/O: the list is
+        already on the row."""
         ws = row.state
         primary = row.primary
         phase = row.phase
@@ -1553,7 +1811,10 @@ class TicketStatusPublisher:
             primary.current_task if primary is not None else None,
             primary.tool_calls if primary is not None else 0,
             primary.assistant_replies if primary is not None else 0,
-            ws.branch,
+            # The LIVE branch, not the recorded one: a create-time snapshot never
+            # moves, so keying on it meant a branch switch — and every commit on
+            # the branch the agent actually works — scheduled no publish at all.
+            row.live_branch,
             row.recent_commits[0].sha if row.recent_commits else None,
             # The phase must be here even though the poll's own fingerprint
             # already carries it: that one feeds the SSE stream, this one alone
@@ -1566,12 +1827,31 @@ class TicketStatusPublisher:
             # quiet cases the axis exists for — "reported, then stopped", and "a
             # human corrected it from outside".
             #
-            # Only (phase, note), never the whole report: ``updated_at`` is the
-            # phase file's mtime, so an agent rewriting an identical phase would
-            # move this key and buy a redundant PATCH against a forge that
+            # Only the claim's own fields, never the whole report: ``updated_at``
+            # is the phase file's mtime, so an agent rewriting an identical phase
+            # would move this key and buy a redundant PATCH against a forge that
             # rate-limits same-comment edits.
             phase.phase if phase is not None else None,
             phase.note if phase is not None else None,
+            phase.blocked if phase is not None else False,
+            # The PER-TICKET claims, for the same reason one level down — and it
+            # is the same reason, not a similar one. A per-ticket claim is
+            # written by the agent editing one entry in its phase file, which
+            # moves no tool call, no reply, no commit and not even the
+            # workspace's own claim. Leave them out and a ticket reported as
+            # blocked is invisible on its own thread until something unrelated
+            # happens, which is the *third* time this key's members have been
+            # audited for exactly that omission (phase, then ``ticket_refs``).
+            # Whole claims rather than a count or a digest: what the body renders
+            # per target is (phase, note, blocked) per ticket, so that is what
+            # decides whether a PATCH would change anything. ``PhaseReport``
+            # sorts them by key, so the tuple is stable and an unchanged file
+            # cannot re-emit on mapping order.
+            tuple((t.ticket, t.phase, t.note, t.blocked) for t in phase.tickets)
+            if phase is not None
+            else (),
+            # Attaching a ticket adds a TARGET, which no other member reflects.
+            tuple((r.provider, r.id) for r in ws.ticket_refs),
         )
 
     # ─── comment-id memory (lock-guarded) ────────────────────────────────────

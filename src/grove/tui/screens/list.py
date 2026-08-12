@@ -61,6 +61,7 @@ from grove.core import (
 from grove.core.activity import ActivityService
 from grove.core.agents import AgentActivity, SessionTurn
 from grove.core.tmux import ContainerAttach, fit_window_to_client
+from grove.core.usage import UsageService
 from grove.core.workspace import LIVE_STATUSES, Placement, ProvisionProgress
 from grove.tui._status import ACTIVE_PULSE_FRAMES
 from grove.tui.keys import (
@@ -77,6 +78,7 @@ from grove.tui.screens.message import SendMessageScreen
 from grove.tui.screens.project_picker import ProjectPickerScreen, RepoChoice
 from grove.tui.screens.remap_session import RemapSessionScreen
 from grove.tui.screens.sessions import SessionsScreen
+from grove.tui.screens.usage import UsageScreen
 from grove.tui.widgets.filter_bar import FilterBar
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
 from grove.tui.widgets.list import WorkspaceList
@@ -409,6 +411,11 @@ class WorkspaceListScreen(Screen[None]):
         leaks a timer.
         """
         self.app.push_screen(DashboardScreen(self._manager))
+
+    def action_open_usage(self) -> None:
+        """Open the host-wide historical usage audit without starting a timer."""
+        service = UsageService(cfg=self._manager.config, registry=self._registry)
+        self.app.push_screen(UsageScreen(service=service))
 
     def action_switch_project(self) -> None:
         """Open the project switcher: re-point this screen at another repo.

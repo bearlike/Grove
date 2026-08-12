@@ -1,154 +1,65 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthOk, resolveAuth } from "@/lib/auth/with-auth";
 import { COOKIE_NAME, sharedCookieStore } from "@/lib/auth/cookie-store";
+import { isAuthOk, resolveAuth } from "@/lib/auth/with-auth";
 
-const DAEMON = process.env.GROVE_DAEMON_URL ?? "http://127.0.0.1:7421";
-
-// SSE is a long-lived response that must not be buffered or statically
-// optimized — force the Node runtime + dynamic rendering for the whole route.
+const daemonUrl = process.env.GROVE_DAEMON_URL ?? "http://127.0.0.1:7421";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+type Context = { params: Promise<{ path: string[] }> };
 
-/**
- * Which GET paths are SSE event-streams that must be piped, not buffered:
- * the cross-project activity stream (`/events`) and the focused live-pane
- * stream (`/workspaces/{id}/pane/stream`). Both push `text/event-stream`,
- * so both ride `proxyStream`; everything else buffers through `proxy`.
- */
-function isEventStreamPath(path: string[]): boolean {
-  if (path.length === 1 && path[0] === "events") return true;
-  return (
-    path.length === 4 &&
-    path[0] === "workspaces" &&
-    path[2] === "pane" &&
-    path[3] === "stream"
-  );
+export async function GET(request: NextRequest, context: Context): Promise<Response> {
+  const { path } = await context.params;
+  return isEventStream(path) ? proxyStream(request, path) : proxy(request, path);
+}
+export async function POST(request: NextRequest, context: Context): Promise<Response> { return proxyParams(request, context); }
+export async function DELETE(request: NextRequest, context: Context): Promise<Response> { return proxyParams(request, context); }
+export async function PATCH(request: NextRequest, context: Context): Promise<Response> { return proxyParams(request, context); }
+
+async function proxyParams(request: NextRequest, context: Context): Promise<Response> {
+  return proxy(request, (await context.params).path);
 }
 
-/**
- * Stream an SSE endpoint straight through from the daemon (SSE pass-through).
- *
- * The browser's cookie-auth `EventSource` hits this BFF; we inject the daemon
- * bearer server-side (the token never reaches the browser) and pipe
- * `upstream.body` untouched. `req.signal` is forwarded so a browser disconnect
- * aborts the upstream fetch (no `ResponseAborted` leak), and the proxy headers
- * (`no-transform`, `X-Accel-Buffering: no`) stop any intermediary from buffering
- * the event stream.
- */
-async function proxyStream(req: NextRequest, path: string[]): Promise<Response> {
-  const auth = await resolveAuth(req);
-  if (!isAuthOk(auth)) return auth;
+function isEventStream(path: string[]): boolean {
+  return (path.length === 1 && path[0] === "events") || (path.length === 4 && path[0] === "workspaces" && path[2] === "pane" && path[3] === "stream");
+}
 
-  const upstream = `${DAEMON}/${path.join("/")}${req.nextUrl.search}`;
+async function proxyStream(request: NextRequest, path: string[]): Promise<Response> {
+  const auth = await resolveAuth(request);
+  if (!isAuthOk(auth)) return auth;
   try {
-    const res = await fetch(upstream, {
-      method: "GET",
-      headers: {
-        accept: "text/event-stream",
-        authorization: `Bearer ${auth.daemonToken}`,
-        // Forward the browser's resume cursor so the daemon can replay missed
-        // deltas instead of re-sending a full snapshot.
-        ...(req.headers.get("last-event-id")
-          ? { "last-event-id": req.headers.get("last-event-id") as string }
-          : {}),
-      },
+    const response = await fetch(upstreamUrl(path, request), {
+      headers: { accept: "text/event-stream", authorization: `Bearer ${auth.daemonToken}`, ...(request.headers.get("last-event-id") ? { "last-event-id": request.headers.get("last-event-id")! } : {}) },
       cache: "no-store",
-      signal: req.signal,
+      signal: request.signal,
     });
-    if (!res.ok || !res.body) {
-      return NextResponse.json(
-        { detail: { error: "daemon_error", message: `stream upstream ${res.status}` } },
-        { status: res.status || 502 },
-      );
-    }
-    return new Response(res.body, {
-      status: 200,
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        "x-accel-buffering": "no",
-        connection: "keep-alive",
-      },
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { detail: { error: "daemon_unreachable", message: String(err) } },
-      { status: 502 },
-    );
-  }
+    if (!response.ok || !response.body) return daemonError(response.status, `stream upstream ${response.status}`);
+    return new Response(response.body, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", "x-accel-buffering": "no", connection: "keep-alive" } });
+  } catch (error: unknown) { return daemonUnreachable(error); }
 }
 
-async function proxy(req: NextRequest, path: string[]) {
-  const auth = await resolveAuth(req);
+async function proxy(request: NextRequest, path: string[]): Promise<Response> {
+  const auth = await resolveAuth(request);
   if (!isAuthOk(auth)) return auth;
-
-  const search = req.nextUrl.search;
-  const upstream = `${DAEMON}/${path.join("/")}${search}`;
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${auth.daemonToken}`,
-  };
-  const init: RequestInit = {
-    method: req.method,
-    headers,
-    cache: "no-store",
-  };
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    init.body = await req.text();
-    headers["content-type"] = req.headers.get("content-type") ?? "application/json";
+  const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${auth.daemonToken}` };
+  const init: RequestInit = { method: request.method, headers, cache: "no-store" };
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    init.body = await request.text();
+    headers["content-type"] = request.headers.get("content-type") ?? "application/json";
   }
   try {
-    const res = await fetch(upstream, init);
-    const body = await res.text();
-    // A bodyless status (the steering endpoints reply 204) must re-wrap with
-    // null — `new Response("", { status: 204 })` throws, and the catch below
-    // would mislabel the daemon's success as daemon_unreachable.
-    const bodyAllowed = res.status !== 204 && res.status !== 205 && res.status !== 304;
-    // If the daemon revoked the session out from under us, clear our cookie
-    // so the browser falls back to /login on its next page nav.
-    const out = new NextResponse(bodyAllowed ? body : null, {
-      status: res.status,
-      headers: {
-        "content-type": res.headers.get("content-type") ?? "application/json",
-      },
-    });
-    if (res.status === 401) {
-      // Daemon says the token is bad — drop the local cookie too.
-      const cookieId = req.cookies.get(COOKIE_NAME)?.value;
-      if (cookieId) {
-        await sharedCookieStore().revoke(cookieId);
-      }
-      out.cookies.delete(COOKIE_NAME);
-    }
-    return out;
-  } catch (err) {
-    return NextResponse.json(
-      { detail: { error: "daemon_unreachable", message: String(err) } },
-      { status: 502 },
-    );
-  }
+    const response = await fetch(upstreamUrl(path, request), init);
+    const output = new NextResponse([204, 205, 304].includes(response.status) ? null : await response.text(), { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } });
+    if (response.status === 401) await clearInvalidCookie(request, output);
+    return output;
+  } catch (error: unknown) { return daemonUnreachable(error); }
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
-  const { path } = await ctx.params;
-  // SSE event-streams (activity + focused pane) are piped, not buffered.
-  if (isEventStreamPath(path)) {
-    return proxyStream(req, path);
-  }
-  return proxy(req, path);
-}
+function upstreamUrl(path: string[], request: NextRequest): string { return `${daemonUrl}/${path.join("/")}${request.nextUrl.search}`; }
+function daemonError(status: number, message: string): NextResponse { return NextResponse.json({ detail: { error: "daemon_error", message } }, { status: status || 502 }); }
+function daemonUnreachable(error: unknown): NextResponse { return NextResponse.json({ detail: { error: "daemon_unreachable", message: String(error) } }, { status: 502 }); }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
-  const { path } = await ctx.params;
-  return proxy(req, path);
-}
-
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
-  const { path } = await ctx.params;
-  return proxy(req, path);
-}
-
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
-  const { path } = await ctx.params;
-  return proxy(req, path);
+async function clearInvalidCookie(request: NextRequest, response: NextResponse): Promise<void> {
+  const cookieId = request.cookies.get(COOKIE_NAME)?.value;
+  if (cookieId) await sharedCookieStore().revoke(cookieId);
+  response.cookies.delete(COOKIE_NAME);
 }

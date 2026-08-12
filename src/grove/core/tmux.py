@@ -370,18 +370,18 @@ def build_workspace_layout(
 ) -> None:
     """Set up windows inside an existing session: shell + agent.
 
-    Window 0 is renamed to the configured shell name; a new window is added
-    for the agent, `command` is sent into it, and that window is selected so
-    it's frontmost on attach.
+    Window 0 is renamed to the configured shell name; a new window atomically
+    launches the agent command as its window shell, and that window is selected
+    so it's frontmost on attach.
 
-    `shell_command` (empty by default) is typed into window 0 after the rename.
-    Empty leaves it exactly as it always was — an interactive host shell rooted
-    at `worktree` — which is the right and only answer for a host workspace. A
-    CONTAINER runtime passes the command that crosses into its namespace,
-    because a host shell beside a container the user believes they are
-    inside is worse than no shell window: the worktree it shows may not be the
-    view the agent has. Mechanism only — this module never decides *what* that
-    command is, exactly as it never composes the agent's decoration.
+    `shell_command` (empty by default) replaces window 0's pane after the agent
+    window exists. Empty leaves it exactly as it always was — an interactive
+    host shell rooted at `worktree` — which is the right and only answer for a
+    host workspace. A CONTAINER runtime passes the command that crosses into
+    its namespace, because a host shell beside a container the user believes
+    they are inside is worse than no shell window: the worktree it shows may
+    not be the view the agent has. Mechanism only — this module never decides
+    *what* that command is, exactly as it never composes the agent's decoration.
 
     Takes the launch as structured primitives — not an ``AgentSpec`` — because
     it sits below the ``LaunchBackend`` seam: the manager composes an
@@ -412,15 +412,11 @@ def build_workspace_layout(
     except Exception as exc:
         logger.warning("rename window failed: {}", exc)
 
-    if shell_command:
-        shell_pane = first.active_pane
-        if shell_pane is None:
-            # Best-effort, unlike the agent window's own missing-pane raise: the
-            # workspace is perfectly usable with a plain host shell here, so a
-            # tmux that cannot hand us window 0's pane must not fail a create.
-            logger.warning("shell window has no pane; leaving it a host shell")
-        else:
-            shell_pane.send_keys(shell_command, enter=True)
+    if decoration:
+        command = " ".join([command, *(shlex.quote(token) for token in decoration)])
+    # The caller owns the verbatim exit recorder, and it must follow decoration.
+    command += exit_suffix
+    window_shell = _agent_window_shell(command, env=env, env_unset=env_unset)
 
     # Add agent window
     try:
@@ -428,6 +424,7 @@ def build_workspace_layout(
             window_name=cfg.tmux.agent_window_name,
             start_directory=str(worktree),
             attach=False,
+            window_shell=window_shell,
         )
     except Exception as exc:
         raise TmuxError(f"failed to create agent window: {exc}") from exc
@@ -436,30 +433,42 @@ def build_workspace_layout(
     if pane is None:
         raise TmuxError("agent window has no pane")
 
-    # Make the pane's profile hermetic BEFORE the command inherits the ambient
-    # value: unset the leaked vars first, then export agent-specific env — so we
-    # need no agent stdout sniffing or external env-injection. Unset-before-export
-    # means a key in both `env_unset` and `env` ends up exported.
-    for key in env_unset:
-        pane.send_keys(f"unset {key}", enter=True, suppress_history=True)
-    for key, value in (env or {}).items():
-        pane.send_keys(f"export {key}={_shell_quote(value)}", enter=True, suppress_history=True)
-
-    if decoration:
-        command = " ".join([command, *(shlex.quote(token) for token in decoration)])
-    # Appended verbatim, AFTER the decoration, and never composed here:
-    # this module is mechanism, and the caller owns what the shell should do
-    # when the agent finally exits — today, record `$?` so a dead agent is
-    # distinguishable from a quiet one. It has to land after the decoration,
-    # which is the one thing the caller cannot do for itself: `command` and
-    # `decoration` are joined right here.
-    command += exit_suffix
-    pane.send_keys(command, enter=True)
+    if shell_command:
+        shell_pane = first.active_pane
+        if shell_pane is None:
+            # Best-effort, unlike the agent window's own missing-pane raise: the
+            # workspace is perfectly usable with a plain host shell here, so a
+            # tmux that cannot hand us window 0's pane must not fail a create.
+            logger.warning("shell window has no pane; leaving it a host shell")
+        else:
+            # Create the agent window first so a short-lived bridge command
+            # cannot close window zero and take the whole session with it.
+            shell_pane.cmd("respawn-pane", "-k", shell_command)
 
     try:
-        agent_window.select_window()
+        agent_window.select()
     except Exception as exc:
         logger.debug("could not select agent window: {}", exc)
+
+
+def _agent_window_shell(
+    command: str,
+    *,
+    env: Mapping[str, str] | None,
+    env_unset: Sequence[str],
+) -> str:
+    """Launch atomically through the user's login-interactive shell.
+
+    Environment statements precede the agent, and a final interactive shell
+    keeps the window attachable after it exits. This preserves ordinary shell
+    startup while avoiding key injection into a prompt that is not ready yet.
+    """
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    statements = [*(f"unset {key}" for key in env_unset)]
+    statements.extend(f"export {key}={_shell_quote(value)}" for key, value in (env or {}).items())
+    statements.extend((command, f"exec {shlex.quote(shell)} -l"))
+    script = "; ".join(statements)
+    return f"{shlex.quote(shell)} -lic {shlex.quote(script)}"
 
 
 def run_init_script(

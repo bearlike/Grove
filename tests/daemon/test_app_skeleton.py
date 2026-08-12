@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from grove import __version__ as GROVE_VERSION
+from grove.core.config import GroveConfig
 from grove.core.release import ReleaseChecker
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon import build_app
@@ -57,6 +58,42 @@ def test_whoami_returns_daemon_identity(daemon_client: TestClient) -> None:
     # keeps the default checker from reaching GitHub.
     assert body["latest_version"] is None
     assert body["update_available"] is False
+    # telemetry is disabled in daemon_test_config(), so no Langfuse button.
+    assert body["langfuse_host"] is None
+
+
+def test_whoami_surfaces_langfuse_host_when_fully_configured(
+    tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The host reaches the wire only once the whole credential trio resolves.
+
+    Mirrors the exact resolution `grove doctor`'s telemetry check uses
+    (`derive_env` + `unresolved`) — see `_resolve_langfuse_host` in
+    `grove.daemon.app`.
+    """
+    monkeypatch.setenv("LANGFUSE_HOST", "https://example.invalid")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    cfg = GroveConfig.model_validate({"auth": {"enabled": False}, "telemetry": {"enabled": True}})
+    app = build_app(cfg=cfg, store=JsonWorkspaceStore())
+    with TestClient(app) as client:
+        body = client.get("/whoami").json()
+    assert body["langfuse_host"] == "https://example.invalid"
+
+
+def test_whoami_omits_langfuse_host_when_credentials_are_partial(
+    tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host with no matching keys must never reach the wire — that button
+    would open Langfuse for a deployment that never actually exports there."""
+    monkeypatch.setenv("LANGFUSE_HOST", "https://example.invalid")
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    cfg = GroveConfig.model_validate({"auth": {"enabled": False}, "telemetry": {"enabled": True}})
+    app = build_app(cfg=cfg, store=JsonWorkspaceStore())
+    with TestClient(app) as client:
+        body = client.get("/whoami").json()
+    assert body["langfuse_host"] is None
 
 
 def test_whoami_surfaces_a_newer_release(tmp_state_dir: Path) -> None:

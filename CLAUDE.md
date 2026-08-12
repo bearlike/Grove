@@ -31,12 +31,14 @@ When you own a tracker issue end-to-end, drive it to a merged PR on this loop. B
 | `src/grove/core/agents/` | tool-agnostic agent introspection (adapters) | [agents/CLAUDE.md](src/grove/core/agents/CLAUDE.md) |
 | `src/grove/core/tickets/` | branch-aware ticket providers (Gitea/GitHub/Linear) | [tickets/CLAUDE.md](src/grove/core/tickets/CLAUDE.md) |
 | `src/grove/core/issueops/` | issue-comment events → workspace actions (command grammar + routing) | [issueops/CLAUDE.md](src/grove/core/issueops/CLAUDE.md) |
+| `src/grove/core/telemetry/` | OpenTelemetry gateway: one vocabulary, three tiers, OTLP ingest | [telemetry/CLAUDE.md](src/grove/core/telemetry/CLAUDE.md) |
 | `src/grove/core/notifications/` | push notifications on workspace edges (broker + channels) | [notifications/CLAUDE.md](src/grove/core/notifications/CLAUDE.md) |
+| `src/grove/core/usage/` | historical audit: tokens, time, cost, quota (derived SQLite cache) | [usage/CLAUDE.md](src/grove/core/usage/CLAUDE.md) |
 | `src/grove/daemon/` | loopback FastAPI daemon (multi-repo, SSE) | [daemon/CLAUDE.md](src/grove/daemon/CLAUDE.md) |
 | `src/grove/client/` | transport-agnostic attach (local PTY / SSH) | [client/CLAUDE.md](src/grove/client/CLAUDE.md) |
 | `src/grove/mcp/` | MCP server (stdio tools over the client SDK) | [mcp/CLAUDE.md](src/grove/mcp/CLAUDE.md) |
-| `src/grove/tui/` | Textual terminal UI | [tui/CLAUDE.md](src/grove/tui/CLAUDE.md) + [design-system.md](docs/design-system.md) |
-| `webapp/` | Next.js dashboard (drives lifecycle + steering; the `/sessions` browser is structurally read-only) | [webapp/CLAUDE.md](webapp/CLAUDE.md) |
+| `src/grove/tui/` | Textual terminal UI | [tui/CLAUDE.md](src/grove/tui/CLAUDE.md) + the **TUI** visual contract [docs/design-system.md](docs/design-system.md) |
+| `webapp/` | assistant-ui-native web dashboard (fleet, workspace transcript + work panel, usage, host-wide session catalog); owns no bespoke components | [webapp/CLAUDE.md](webapp/CLAUDE.md) + the **web** visual contract [webapp/design-system.md](webapp/design-system.md) |
 | `docs/` | published mkdocs site | [docs/CLAUDE.md](docs/CLAUDE.md) |
 | `packaging/` | systemd-user service units + clean-install smoke | [packaging/CLAUDE.md](packaging/CLAUDE.md) |
 | `tests/` | pytest suite + CI/lint gotchas | [tests/CLAUDE.md](tests/CLAUDE.md) |
@@ -45,6 +47,8 @@ When you own a tracker issue end-to-end, drive it to a merged PR on this loop. B
 
 **Read the deepest file that applies before editing there, and write each lesson in the file that owns it** — promote one up a level only when it becomes genuinely cross-cutting. This root carries only cross-cutting principles, structure, and process lessons; it never restates a nested file's content. Every nested file opens with a `> ↑ parent · root` backlink and every parent lists its children — maintain both links whenever you add, move, or rename a file.
 
+**The two `design-system.md` files are nodes in this tree, not documentation beside it.** Each is the *prescriptive* half of the surface guide above it — the guide says how the code is built, the design system says what it may look like — so a visual decision is folded there and nowhere else, and each is reachable by backlink from its owner. **They are PRISTINE by policy: reconcile an existing rule before adding one, and a decision that does not generalize past its one call site belongs in a code comment instead.** The two are never merged: a terminal and a browser share vocabulary (status, agent state, runtime) but not a single token, and the shared vocabulary lives in `core/contracts/` where a drift test can hold it.
+
 ```
 /CLAUDE.md  (this file — principles · structure · process lessons)
 ├─ src/grove/core/CLAUDE.md
@@ -52,12 +56,15 @@ When you own a tracker issue end-to-end, drive it to a merged PR on this loop. B
 │  ├─ src/grove/core/agents/CLAUDE.md
 │  ├─ src/grove/core/tickets/CLAUDE.md
 │  ├─ src/grove/core/issueops/CLAUDE.md
-│  └─ src/grove/core/notifications/CLAUDE.md
+│  ├─ src/grove/core/telemetry/CLAUDE.md
+│  ├─ src/grove/core/notifications/CLAUDE.md
+│  └─ src/grove/core/usage/CLAUDE.md
+│     └─ src/grove/core/usage/quota/CLAUDE.md
 ├─ src/grove/daemon/CLAUDE.md
 ├─ src/grove/client/CLAUDE.md
 ├─ src/grove/mcp/CLAUDE.md
-├─ src/grove/tui/CLAUDE.md      (+ docs/design-system.md = the visual contract)
-├─ webapp/CLAUDE.md
+├─ src/grove/tui/CLAUDE.md      (+ docs/design-system.md   = the TUI's visual contract)
+├─ webapp/CLAUDE.md             (+ webapp/design-system.md = the web visual contract)
 ├─ docs/CLAUDE.md
 ├─ packaging/CLAUDE.md
 └─ tests/CLAUDE.md
@@ -114,5 +121,6 @@ Grove is one event loop (daemon), one UI thread (TUI), and a lot of slow blockin
 - **Give each concurrent agent its own worktree AND a file-ownership list.** One checkout cannot hold six branches — a fleet told to `git checkout -b` in a shared tree produces interleaved commits on whichever branch happened to be current. Isolation alone is not enough: name the files each agent owns, forbid the rest, and require it to REPORT any unavoidable touch outside its list with exact lines. When a shared file does conflict, the resolution is usually the UNION of both intents, not either side whole — taking one side silently reverts the other's fix.
 - **A delegated agent can FINISH the work and stall on reporting — read its artifacts before you nudge it.** Nudging costs a full context replay and changes nothing; `git -C <worktree> log/status/diff` answers in one call. Under a saturated fleet a slow suite is the HOST, not a hang — and a run killed by memory pressure exits 144, which is not a test failure and must not be reported as one. Corollary for the integrator: **gate the branch yourself rather than waiting to be told it is green.**
 - **The working tree can advance under you mid-session.** If the Edit "modified since read" guard fires, re-read the file and re-derive the edit against current content — never force it.
-- **`src/grove/skills/` is published twice, and the copy users install is the one in the separate plugin-marketplace repo.** `grove skills install` writes from this tree, but everyone who installs the plugin gets the marketplace copy — so a skill edited only here is live for us and stale for them, silently and indefinitely. **Edit both in one change and `diff` them before committing**; the plugin side also needs its `plugin.json` + root `marketplace.json` version bumped in lockstep and its hand-maintained README updated. A skill's frontmatter `name` must equal its `skills/<name>/` directory name.
+- **A green gate on every agent's territory says nothing about the seam between them — look at the assembled surface.** Four agents each shipped a passing `typecheck`/`lint`/`test` on disjoint directories, and the composed page still had one page positioning itself `absolute inset-0` against a `relative` ancestor that belonged to *another* agent's shell, painting the page title over the sidebar brand. No unit test can see that, because the bug is in a relationship neither agent owns. The same pass caught a requirement I had scoped too narrowly — one agent flattened the list I named and left the identical grouping on the surface I forgot to name. **Budget a pass through the real, built, deployed UI as its own step**, and treat "the a11y tree's bounding boxes disagree with the layout you intended" as the cheapest way to find it: `complementary [box=0,0,260,…]` next to content `[box=0,0,1600,…]` is the whole diagnosis.
+- **`src/grove/skills/` has ONE copy, and publishing it is still a second action.** The marketplace repo vendors nothing: its `grove` entry is a `git-subdir` source pointing at this repo's `src/grove`, so editing a skill here IS editing the published skill. What the marketplace still owns is the **version**, and an install pins a commit — so a skill improved here reaches nobody until that entry's `version` is bumped, silently and indefinitely. **The failure mode survived the fix that removed the duplication**, which is why it is worth restating rather than deleting: the old rule ("edit both copies, `diff` them") is now wrong in its remedy and would send you hunting for a file that does not exist. Check the `source` block before believing either version of this rule — that is the fact both readings hang on. A skill's frontmatter `name` must equal its `skills/<name>/` directory name.
 - **A skill or guide that documents a tool surface goes stale the moment the surface grows, and nothing fails when it does.** No test, gate or type checker reads prose, so the only detector is a periodic audit against the real definitions — the Typer commands and MCP registration tuples themselves, never a README. **Never write a count you would have to maintain**; point at the enumeration that is the census instead.

@@ -22,6 +22,8 @@ from grove.core.agents import (
     SessionTurn,
     TodoItem,
     TodoList,
+    TodoStatus,
+    ToolCall,
 )
 from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView, SessionTurnView
 from grove.core.sessions import CatalogEntry, ProjectContext, SessionListing
@@ -74,6 +76,30 @@ def test_summary_view_flattens_listing_and_omits_the_transcript_path() -> None:
     assert view.live is False
 
 
+def test_listing_view_carries_the_turn_count_the_listing_parse_already_produced() -> None:
+    """Project scope pays a full parse, so the count is free and exact — and it
+    is the SAME number the nested activity reports, hoisted to the one field a
+    client reads at either scope."""
+    listing = SessionListing(
+        summary=replace(
+            _summary(),
+            activity=AgentActivity(state=AgentActivityState.WAITING, human_turns=7),
+        ),
+        provenance="fs_discovered",
+    )
+    view = SessionSummaryView.from_listing(listing)
+    assert view.turn_count == 7
+    assert view.activity is not None
+    assert view.turn_count == view.activity.human_turns
+
+
+def test_listing_view_reports_a_genuinely_turnless_session_as_zero_not_null() -> None:
+    """The null/zero split is the whole contract: a parsed session that has had
+    no human turn is a measured ``0``, and only an unparsed scope is ``None``."""
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    assert SessionSummaryView.from_listing(listing).turn_count == 0
+
+
 def _catalog_entry(*, cwd: str | None = "/home/someone/project", **over: object) -> CatalogEntry:
     fields: dict[str, object] = {
         "ref": SessionRef(
@@ -105,6 +131,9 @@ def test_catalog_view_reports_unparsed_fields_as_null_not_zero() -> None:
     assert view.session_id == SID
     assert view.activity is None
     assert view.size_bytes is None
+    # A turn count needs the whole transcript; the head read cannot bound it,
+    # and both cheap shortcuts were measured wrong (see `from_catalog`).
+    assert view.turn_count is None
     assert view.title is None
     assert view.first_prompt is None
     assert view.workspace_branch is None
@@ -144,6 +173,15 @@ def test_catalog_view_maps_a_failed_stat_to_no_timestamp() -> None:
         replace(entry, ref=replace(entry.ref, mtime=0.0)),
     )
     assert view.modified_at is None
+
+
+def test_catalog_view_reads_size_bytes_off_the_ref_rather_than_hardcoding_null() -> None:
+    """Unlike ``activity``/``turn_count``, ``size_bytes`` rides the SAME
+    ``stat()`` call every filesystem adapter already makes for ``mtime`` — a
+    filled ``SessionRef.size_bytes`` must reach the wire, not be nulled out."""
+    entry = _catalog_entry()
+    view = SessionSummaryView.from_catalog(replace(entry, ref=replace(entry.ref, size_bytes=4096)))
+    assert view.size_bytes == 4096
 
 
 def test_summary_view_primary_false_for_a_discovered_session() -> None:
@@ -286,6 +324,112 @@ def test_todo_entry_serializes_the_structured_list() -> None:
     assert plain.todo is None  # only the todo role carries the payload
 
 
+# ─── superseded todo boards: only the newest survives the projection ─────────
+
+
+def _todo_entry(*items: tuple[str, TodoStatus], text: str = "todo") -> DigestEntry:
+    return DigestEntry(
+        role="todo",
+        text=text,
+        todo=TodoList(items=tuple(TodoItem(content=c, status=s) for c, s in items)),
+    )
+
+
+def test_only_the_newest_todo_board_survives_a_multi_turn_window() -> None:
+    """A todo write is a full-list rewrite, so of three boards spread across
+    three turns only the last is current — the earlier two keep their entry
+    (role + text, i.e. position) but lose the expensive `.todo` payload."""
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    detail = SessionDetailView.from_listing_turns(
+        listing,
+        (
+            SessionTurn(user_text="plan", entries=(_todo_entry(("a", "pending"), text="1"),)),
+            SessionTurn(user_text="work", entries=(DigestEntry(role="assistant", text="ok"),)),
+            SessionTurn(user_text="update", entries=(_todo_entry(("a", "completed"), text="2"),)),
+            SessionTurn(user_text="finish", entries=(_todo_entry(("b", "pending"), text="3"),)),
+        ),
+    )
+    first, third, fourth = detail.turns[0], detail.turns[2], detail.turns[3]
+    assert first.entries[0].role == "todo"
+    assert first.entries[0].text == "1"  # entry position/text survive
+    assert first.entries[0].todo is None  # payload is gone
+    assert third.entries[0].todo is None
+    assert fourth.entries[0].todo is not None  # the newest board is untouched
+    assert [i.content for i in fourth.entries[0].todo.items] == ["b"]
+
+
+def test_newest_of_several_todo_writes_within_one_turn_survives() -> None:
+    """A task board driving agent can emit many full-rewrite snapshots inside a
+    single turn (measured: 53 on a real session) — the LAST one in entry order
+    is current, not the first."""
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    detail = SessionDetailView.from_listing_turns(
+        listing,
+        (
+            SessionTurn(
+                user_text="drive the board",
+                entries=(
+                    _todo_entry(("a", "pending"), text="1"),
+                    _todo_entry(("a", "in_progress"), text="2"),
+                    _todo_entry(("a", "completed"), text="3"),
+                ),
+            ),
+        ),
+    )
+    e1, e2, e3 = detail.turns[0].entries
+    assert e1.todo is None and e2.todo is None
+    assert e3.todo is not None
+    assert e3.text == "3"
+
+
+def test_a_session_with_no_todo_entries_is_returned_unchanged() -> None:
+    """No todo role anywhere in the window means the projection is a no-op —
+    same objects back, not a defensive copy."""
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    turns = (SessionTurn(user_text="hi", entries=(DigestEntry(role="assistant", text="hello"),)),)
+    detail = SessionDetailView.from_listing_turns(listing, turns)
+    assert detail.turns[0].entries[0].role == "assistant"
+    assert detail.turns[0].entries[0].todo is None
+
+
+def test_a_cleared_final_board_still_reads_as_cleared() -> None:
+    """An agent that empties its board writes an empty todo list — the newest
+    entry is picked by POSITION, never by "is it non-empty", so the empty
+    board is not silently displaced by an earlier, larger one."""
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    detail = SessionDetailView.from_listing_turns(
+        listing,
+        (
+            SessionTurn(
+                user_text="plan", entries=(_todo_entry(("a", "pending"), text="has items"),)
+            ),
+            SessionTurn(
+                user_text="done",
+                entries=(DigestEntry(role="todo", text="cleared", todo=TodoList()),),
+            ),
+        ),
+    )
+    stale, cleared = detail.turns[0].entries[0], detail.turns[1].entries[0]
+    assert stale.todo is None
+    assert cleared.todo is not None
+    assert cleared.todo.items == []
+
+
+def test_todo_projection_also_applies_to_the_catalog_drill_in() -> None:
+    """`from_catalog_turns` is the host-wide sibling of `from_listing_turns` and
+    must apply the identical projection — a separate call site, same rule."""
+    entry = _catalog_entry()
+    detail = SessionDetailView.from_catalog_turns(
+        entry,
+        (
+            SessionTurn(user_text="plan", entries=(_todo_entry(("a", "pending"), text="1"),)),
+            SessionTurn(user_text="update", entries=(_todo_entry(("a", "completed"), text="2"),)),
+        ),
+    )
+    assert detail.turns[0].entries[0].todo is None
+    assert detail.turns[1].entries[0].todo is not None
+
+
 def test_detail_view_composes_session_and_turns() -> None:
     listing = SessionListing(summary=_summary(), provenance="fs_discovered")
     detail = SessionDetailView.from_listing_turns(
@@ -296,3 +440,102 @@ def test_detail_view_composes_session_and_turns() -> None:
     assert detail.session.workspace_id is None
     assert [t.user_text for t in detail.turns] == ["hi"]
     assert detail.turns[0].entries[0].role == "assistant"
+
+
+# ─── ToolCallView: the bound is STATED, and running is a value ────────────────
+
+
+def _tool_detail(entry: DigestEntry) -> SessionDetailView:
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    return SessionDetailView.from_listing_turns(
+        listing, (SessionTurn(user_text="go", entries=(entry,)),)
+    )
+
+
+def test_tool_view_carries_request_response_duration_and_status() -> None:
+    entry = DigestEntry(
+        role="tool",
+        text="Bash",
+        tool=ToolCall(
+            name="Bash",
+            tool_use_id="t1",
+            status="ok",
+            input={"command": "pytest -q"},
+            result="2 passed",
+            duration_ms=3500,
+        ),
+    )
+    view = _tool_detail(entry).turns[0].entries[0].tool
+    assert view is not None
+    assert (view.name, view.tool_use_id, view.status) == ("Bash", "t1", "ok")
+    assert view.input == {"command": "pytest -q"}
+    assert (view.result, view.duration_ms) == ("2 passed", 3500)
+    assert (view.input_truncated, view.result_truncated) == (False, False)
+
+
+def test_a_running_call_is_a_status_not_a_missing_result() -> None:
+    """The whole reason ``status`` exists: a client picks a spinner over a check
+    from it. ``result: null`` cannot do that job — a settled call that returned
+    nothing looks identical."""
+    entry = DigestEntry(
+        role="tool",
+        text="Bash",
+        tool=ToolCall(name="Bash", tool_use_id="t1", status="running", input={"command": "sleep"}),
+    )
+    running = _tool_detail(entry).turns[0].entries[0].tool
+    settled = (
+        _tool_detail(
+            replace(entry, tool=replace(entry.tool, status="ok"))  # type: ignore[arg-type]
+        )
+        .turns[0]
+        .entries[0]
+        .tool
+    )
+    assert running is not None and settled is not None
+    assert (running.status, running.result) == ("running", None)
+    assert (settled.status, settled.result) == ("ok", None)
+
+
+def test_a_capped_body_says_so_rather_than_relying_on_the_ellipsis() -> None:
+    """A tool result is a chat line's size class only by accident, and an
+    ellipsis inside a command's own output is indistinguishable from output the
+    tool produced — so this is the one payload whose bound is an explicit flag."""
+    entry = DigestEntry(
+        role="tool",
+        text="Bash",
+        tool=ToolCall(
+            name="Bash",
+            tool_use_id="t1",
+            status="ok",
+            input={"script": "x" * 20_000, "quiet": True, "argv": ["y" * 20_000]},
+            result="z" * 20_000,
+        ),
+    )
+    view = _tool_detail(entry).turns[0].entries[0].tool
+    assert view is not None
+    assert view.result_truncated is True
+    assert view.result is not None and len(view.result) == 16_000
+    assert view.input_truncated is True
+    assert view.input is not None
+    # The bound is applied THROUGH the structure — a client still reads fields,
+    # and a non-string value is never rewritten.
+    assert len(view.input["script"]) == 16_000
+    assert len(view.input["argv"][0]) == 16_000
+    assert view.input["quiet"] is True
+
+
+def test_a_structured_card_carries_the_tool_call_too() -> None:
+    entry = DigestEntry(
+        role="file_edit",
+        text="Edit /x/a.py",
+        file_edit=FileEdit(path="/home/someone/project/a.py", old_text="a", new_text="b"),
+        tool=ToolCall(name="Edit", tool_use_id="t1", status="running"),
+    )
+    view = _tool_detail(entry).turns[0].entries[0]
+    assert view.file_edit is not None
+    assert view.tool is not None and view.tool.status == "running"
+
+
+def test_an_entry_that_is_not_a_tool_call_has_no_tool_payload() -> None:
+    view = _tool_detail(DigestEntry(role="assistant", text="thinking out loud")).turns[0].entries[0]
+    assert view.tool is None

@@ -256,10 +256,14 @@ __marimo__/
 /webapp/test-results
 /webapp/tests/e2e/.auth
 /webapp/.env.local
-# The Python `lib/` rule above (distutils build) sweeps up the webapp's
-# source `lib/` directory. Negate it explicitly so source TS files are
+# The Python `lib/` rule above (distutils build) sweeps up the webapps'
+# source `lib/` directories. Negate them explicitly so source TS files are
 # tracked. The Python build artifacts that the original rule targets
-# never live under `/webapp/` anyway.
+# never live under a webapp anyway.
+#
+# This one bites silently: `git add webapp/lib/...` refuses, and a bare
+# `git add webapp` simply skips the tree, so a whole data layer can look
+# committed and not be. Any new front-end app needs its own negation here.
 !/webapp/lib
 !/webapp/lib/**
 
@@ -276,3 +280,10 @@ src/grove/core/data/devcontainer-lock.json
 
 # Playwright MCP scratch (browser console/page dumps from agent sessions)
 /.playwright-mcp/
+
+# Codex's per-repo config. It names the MCP gateway hosts and bearer-token
+# variables of whoever set it up, which is host-private and has no business in
+# a tree that mirrors to a public remote. Keep your own at `.codex/` locally.
+# Note the trade-off: a Grove workspace is a git worktree and sees only
+# committed files, so an ignored config does NOT propagate into worktrees.
+/.codex/

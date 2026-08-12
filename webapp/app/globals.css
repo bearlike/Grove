@@ -1,440 +1,629 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "tw-shimmer";
 
-/*
- * Streamdown (the chat panel's markdown renderer) emits Tailwind utility
- * classes from inside its dist bundle — never from our TSX — so v4's
- * import-graph scan can't see them. Without this @source, chat markdown
- * (headings, tables, code blocks) silently renders unstyled. The JS stays
- * lazy (next/dynamic chunk); only the utility CSS lands in the global sheet.
- * Glob (not a single file): streamdown ships its syntax-highlighter and
- * mermaid renderer as separate lazy chunks (dist/chunk-*.js,
- * dist/highlighted-body-*.js, dist/mermaid-*.js), each with its own classes.
- */
-@source "../node_modules/streamdown/dist/**/*.js";
+@custom-variant dark (&:is(.dark *));
 
-/*
- * assistant-ui (the chat transcript's headless substrate) ships its own
- * Tailwind utility classes — `tw-shimmer` streaming caret, composer chrome,
- * the `aui-*` layout hooks — from inside its dist bundles, never from our
- * TSX, so v4's import-graph scan can't see them (the same node_modules trap
- * as streamdown above). Glob both the primitives package and its streamdown
- * text renderer so those classes land in the global sheet.
- */
-@source "../node_modules/@assistant-ui/react/dist/**/*.js";
-@source "../node_modules/@assistant-ui/react-streamdown/dist/**/*.js";
-
-/*
- * Tailwind v4 theme bridge: maps the shadcn-style HSL CSS vars below into
- * Tailwind utility classes (bg-background, text-foreground, border-border,
- * ring-ring, bg-card, etc.). Without this block the color utilities
- * compile to nothing and every "bg-card" / "border-border" silently
- * no-ops. The variables themselves are still consumed directly via
- * `hsl(var(--…))` in @layer base so legacy callers keep working.
- */
 @theme inline {
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  /* Chrome surface (header + left rail + status bar) — one shared tone so the
-     persistent chrome reads as a single frame around the content canvas. */
-  --color-sidebar: hsl(var(--sidebar));
-  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
-  --color-sidebar-border: hsl(var(--sidebar-border));
-  /* Elevated surface above card (raised wells, the composer hero). */
-  --color-elevated: hsl(var(--elevated));
-  /* Code well (fenced/inline code background) — distinct from --muted so a
-     code block reads as its own surface, not a footer strip. */
-  --color-code: hsl(var(--code));
-  --color-code-well: hsl(var(--code-well));
-  /* Terracotta is split three ways so every use clears AA (design-direction.md
-     §4.4): --primary stays the brand MARK (logo, dark-mode ring) and is never
-     a text-bearing fill — white-on-#d97757 is only 3.12:1. --primary-fg is
-     terracotta AS TEXT (the `you` speaker label, links). --primary-strong is
-     the deepened CTA FILL for send/create buttons (white label 4.8:1 AA). */
-  --color-primary-fg: hsl(var(--primary-fg));
-  --color-primary-strong: hsl(var(--primary-strong));
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-xl: calc(var(--radius) + 4px);
-
-  /*
-   * Type scale (design-direction.md §4.3) — named tiers for tokens whose
-   * size/line-height/tracking don't already match a Tailwind default
-   * (text-xs/sm/base/lg/xl). "Body/control" and "dense rail/meta row" both
-   * spec 14px/1.45 — that's within rounding of the stock `text-sm` line-height
-   * (1.4286), so they deliberately reuse it rather than mint a near-duplicate
-   * token. Consumed by later phases (rail/chat/work-panel restyles); not
-   * applied to any component in this pass.
-   */
-  --text-page-title: 1.25rem; /* 20px route/section titles */
-  --text-page-title--line-height: 1.3;
-  --text-card-title: 1rem; /* 16px card/dialog titles */
-  --text-card-title--line-height: 1.4;
-  --text-prose: 1rem; /* 16px chat prose — the surface read for minutes */
-  --text-prose--line-height: 1.6;
-  --text-caption: 0.8125rem; /* 13px caption/label/secondary meta */
-  --text-caption--line-height: 1.4;
-  --text-code: 0.8125rem; /* 13px code/mono, git-ref values */
-  --text-code--line-height: 1.5;
-  --text-micro: 0.6875rem; /* 11px uppercase state-section micro-labels */
-  --text-micro--line-height: 1.3;
-
-  --tracking-page-title: -0.01em;
-  --tracking-card-title: -0.005em;
-  --tracking-micro: 0.04em; /* the ONLY uppercase-tracking use per §4.3 */
-
   /*
    * Typography. Geist Sans/Mono are wired via next/font in app/fonts.ts and
-   * exposed as --font-geist-sans / --font-geist-mono on <html>. --font-terminal
-   * resolves to the JetBrains Mono Nerd Font (--font-jetbrains-nerd) when
-   * present, else falls back to Geist Mono — so terminal surfaces opt in via
-   * the `font-terminal` utility without dragging the Nerd Font into UI chrome.
+   * exposed as --font-geist-sans / --font-geist-mono on <html>.
+   *
+   * --font-terminal resolves to the JetBrains Mono Nerd Font when a subtree
+   * carries `JetBrainsMonoNerd.variable`, and degrades to Geist Mono where it
+   * does not. That is what keeps the Nerd Font's 1 MB of icon glyphs on
+   * terminal surfaces — which need its powerline and private-use ranges to
+   * render an agent TUI honestly — and out of app chrome.
    */
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --font-terminal: var(--font-jetbrains-nerd), var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-terminal:
+    var(--font-jetbrains-nerd), var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    monospace;
 
-  --animate-grove-pulse: grove-pulse 1s steps(2, end) infinite;
+  /*
+   * THE TYPE RAMP. Seven steps, every one of them a decision — see
+   * `design-system.md` for which step each role takes.
+   *
+   * These OVERRIDE Tailwind's default scale rather than adding a parallel one,
+   * and that is the whole mechanism. `components/{assistant-ui,elements,ui}`
+   * are vendored verbatim and speak only `text-sm` / `text-xs`; a new
+   * `text-body` token could never reach them, so the only lever that resizes
+   * this app end to end is the value behind the class they already use.
+   *
+   * The ROOT font size stays 16px deliberately. Tailwind v4 derives spacing
+   * from rem too, so shrinking the root would shrink every gutter, control
+   * height and touch target with the type — a proportional zoom-out, not a
+   * density change. Type moves; geometry does not.
+   *
+   * 12px is the floor and nothing here goes under it. WCAG sets no minimum
+   * size, so the honest constraint is the one we can hold: every step is rem,
+   * so browser zoom and user font settings still scale it, and every step is
+   * legible against all three content tiers below (measured: worst pairing is
+   * `content-tertiary` at 4.83:1 in light, above the 4.5:1 AA floor).
+   *
+   * Measured on the running app 2026-08-11: 98% of this app's text was
+   * `text-sm` (14px) or `text-xs` (12px), so those two steps are what "the base
+   * size" actually means here. `text-sm` comes down 14 → 13 and `text-base`
+   * comes down 16 → 14.
+   */
+  --text-xs: 0.75rem; /* 12px — unchanged: the floor */
+  --text-xs--line-height: 1rem; /* 16px */
+  --text-sm: 0.8125rem; /* 13px — was 14px. The default UI body. */
+  --text-sm--line-height: 1.125rem; /* 18px */
+  --text-base: 0.875rem; /* 14px — was 16px. Prose you read, not scan. */
+  --text-base--line-height: 1.3125rem; /* 21px */
+  --text-lg: 1rem; /* 16px — was 18px */
+  --text-lg--line-height: 1.375rem; /* 22px */
+  --text-xl: 1.125rem; /* 18px — was 20px */
+  --text-xl--line-height: 1.5rem; /* 24px */
+  --text-2xl: 1.25rem; /* 20px — was 24px */
+  --text-2xl--line-height: 1.625rem; /* 26px */
+  --text-3xl: 1.5rem; /* 24px — was 30px */
+  --text-3xl--line-height: 1.875rem; /* 30px */
 
-  @keyframes grove-pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50%      { opacity: 0.55; transform: scale(1.18); }
+  /*
+   * THE NEUTRAL CONTENT RAMP — three tiers, so a surface can rank its text
+   * without spending a colour on it.
+   *
+   * shadcn ships two usable neutrals (`--foreground`, `--muted-foreground`) and
+   * nothing between them. Measured on `/usage` 2026-08-11: 814 text-bearing
+   * elements resolved to exactly three colours, and one of those
+   * (`--card-foreground`, 102 elements) is visually indistinguishable from
+   * `--foreground`. So the app had TWO tiers for three jobs, which is why
+   * supporting text either shouted alongside the title or dropped straight to
+   * metadata grey.
+   *
+   * primary aliases `--foreground` and tertiary aliases `--muted-foreground` on
+   * purpose: every `text-muted-foreground` already in the tree is correct as
+   * tertiary, so adopting this ramp is a rename, never a re-pick.
+   */
+  --color-content-primary: var(--content-primary);
+  --color-content-secondary: var(--content-secondary);
+  --color-content-tertiary: var(--content-tertiary);
+
+  /*
+   * THE SURFACE LADDER — four rungs, with the PAGE as a datum rather than a
+   * floor. See `design-system.md` §4.3 for the tuple each rung must compose;
+   * these tokens are only the lightness half of it.
+   *
+   * Containment reads in BOTH directions: a card rises off the page, a code
+   * well or a terminal RECESSES below it. The app had no vocabulary for
+   * "below" at all, which is why every inset region reached for `bg-muted`.
+   *
+   * FOUR RUNGS, NOT SEVEN. Adjacent steps are 0.055–0.070 OKLCH L, which is
+   * roughly 3–5× the just-noticeable difference under ideal viewing and is the
+   * margin chosen to survive a dim panel at reduced brightness. Seven rungs
+   * inside the same range could not hold that separation.
+   *
+   * ADDED, not RECORDed: shadcn ships `--background`, `--card` and `--popover`
+   * as three names that in LIGHT MODE are all the identical pure white
+   * (measured: 1.00:1 between `--background` and `--card`). That is three names
+   * for one surface and no way down at all, so there was nothing here to record.
+   */
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-base: var(--surface-base);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  /* The redundant boundary carrier. A rung is never identified by fill alone. */
+  --color-surface-edge: var(--surface-edge);
+  /*
+   * The edge of anything INTERACTIVE, held at >= 3:1 against every rung.
+   * WCAG 1.4.11 scopes non-text contrast to what identifies a COMPONENT or its
+   * STATE — a control's edge, a focus ring, a selected mark. It does not reach
+   * a card's decorative edge, and chasing 3:1 between adjacent container fills
+   * would produce a checkerboard rather than a calmer app.
+   */
+  --color-edge-control: var(--edge-control);
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+
+  /*
+   * MERGED — the one ticket state the semantic set cannot express.
+   *
+   * shadcn ships `destructive` and Grove added `success`; between them they
+   * cover failed and healthy, which is every state most surfaces have. A forge
+   * has a third: a pull request that was CLOSED BY LANDING is not a failure and
+   * not an open success, and every tracker a developer has ever used draws it
+   * purple. Reusing `destructive` would say a merge failed and reusing
+   * `success` would make merged and open indistinguishable at a glance, which
+   * is the one comparison this card exists for.
+   *
+   * There is deliberately no `--merged-foreground`: this is a MARK colour, not
+   * a fill. Nothing paints a purple surface, so nothing needs a legible colour
+   * on top of one, and a token pair that is half unused is a token to delete.
+   * Draft needs no token at all — it is the absence of activity, which
+   * `--content-tertiary` already means.
+   */
+  --color-merged: var(--merged);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  @keyframes collapsible-down {
+  from {
+    height: 0;
+    }
+  to {
+    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+  }
+  @keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+  to {
+    height: 0;
+    }
+  }
+}
+
+:root {
+  --radius: 0.625rem;
+  /* THE FLIP. These four shadcn tokens now READ the ladder instead of holding
+     their own values, which is what puts every surface in the app on a named
+     rung without touching a single component. `--card` and `--popover` were
+     both the same pure white as `--background` here — measured 1.00:1, three
+     names for one surface — so a hairline border was the only thing separating
+     a dialog from the page behind it. */
+  --background: var(--surface-base);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: var(--surface-raised);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: var(--surface-overlay);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  /* Grove's clay, not shadcn's near-black neutral. `--primary` is what every
+     `default` badge, focus ring and primary button resolves to, so leaving it
+     achromatic meant the brand hue existed in exactly one place (the mark) and
+     the product itself had no colour language at all: an `active` workspace and
+     a resting one differed by a shade of grey. Solved against `--primary-
+     foreground` at 4.54:1. */
+  --primary: oklch(0.58 0.145 45);
+  --primary-foreground: oklch(0.985 0 0);
+  /* The third state `--success`/`--destructive` could not express: work that is
+     under way. §4.1 rightly refused an amber with no state table behind it, so
+     this one arrives WITH its gate written down — it is spent on exactly one
+     axis, progress that has started and not finished (a todo in flight, a phase
+     mid-ramp), and never as decoration. 4.51:1 on its own foreground. */
+  --warning: oklch(0.55 0.14 75);
+  --warning-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  /* RETUNED from shadcn's 0.552, and retuned HERE rather than on
+     `--content-tertiary`, which aliases it.
+
+     The ladder cannot land without this: at 0.552 the metadata tier reads
+     4.83:1 on today's pure-white page but only 4.36:1 once `--background`
+     becomes `--surface-base`, and 3.58:1 in a sunken well — both below the
+     4.5:1 AA floor. 0.495 is the measured fix, giving 4.56 / 5.55 / 6.15
+     across sunken / base / raised.
+
+     Moving the ALIAS TARGET rather than the tier token is what keeps §2's
+     "adoption is a rename, never a re-pick" true. Retuning only
+     `--content-tertiary` would have split the app in two for the length of the
+     migration — 12 call sites dark, 142 still on the old value — and it is
+     that alias property that makes tier deltas safe to land ahead of the
+     ladder. Dark mode is untouched: it already clears the floor on every rung
+     (7.45:1 on base), and the two themes are designed independently. */
+  --muted-foreground: oklch(0.495 0.016 286);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  /* Control edges and focus rings leave the decorative border behind and take
+     the 3:1 non-text token. `--border` stays where it is on purpose: WCAG
+     1.4.11 scopes its floor to what identifies a COMPONENT or its STATE, so a
+     decorative container edge is allowed to be quiet and a control's is not. */
+  --input: var(--edge-control);
+  --ring: var(--edge-control);
+  /* The three-tier neutral ramp. Primary and tertiary alias shadcn's existing
+     pair so nothing has to be re-picked; only the middle step is new.
+     Measured against --background: 19.90:1, 9.21:1, 6.15:1 — three clearly
+     separated ranks, all above the 4.5:1 AA floor for normal text. Tertiary
+     reads 6.15 rather than shadcn's 4.83 because its alias target was retuned
+     above to survive the datum moving off white; see the note there. */
+  --content-primary: var(--foreground);
+  --content-secondary: oklch(0.4 0.012 285.9);
+  --content-tertiary: var(--muted-foreground);
+  /*
+   * The ladder, LIGHT. Designed independently of dark, not inverted from it.
+   *
+   * Above white there is no headroom, so light buys its upward room by pushing
+   * the DATUM off pure white and spending what is left on `raised`. Three fills
+   * is the most this theme can hold: 0.10 of usable range at 0.05 a step, so
+   * `overlay` gets no step and leans on the modal scrim instead. That is the
+   * documented light-mode asymmetry rather than an oversight, and it is why
+   * `--card` being the SAME white as `--background` was never survivable — a
+   * hairline was the only thing separating a card from the page behind it.
+   */
+  /*
+   * 0.90 / 0.95 / 1.00 is the ONLY light configuration that clears the 0.05
+   * floor on both steps, and it is pinned from both ends rather than chosen.
+   *
+   * White is the ceiling, so `raised` cannot move up. And `sunken` cannot move
+   * down: tertiary text reads 4.56:1 on 0.900 and 4.49:1 on 0.895, so half a
+   * hundredth lower puts the metadata tier under AA. That leaves exactly 0.10
+   * of range for two steps, which is why both sit exactly ON the floor instead
+   * of comfortably above it — the light ladder is squeezed between a physical
+   * ceiling and a legal floor, and this is the tightest it can legally be.
+   *
+   * `base` came down from 0.965 for that reason: at 0.965 the base→raised step
+   * was 0.035, so a card sat on its page separated by a hairline border alone.
+   */
+  --surface-sunken: oklch(0.9 0.004 286);
+  --surface-base: oklch(0.95 0.004 286);
+  --surface-raised: oklch(1 0 0);
+  /* NO STEP LEFT, and this one is carried by something else. A modal already
+     draws a full-screen scrim over everything beneath it, which is a far
+     stronger separator than any tint could be; spending the last of the range
+     here would have cost the card/page step that a user actually looks at. */
+  --surface-overlay: oklch(1 0 0);
+  --surface-edge: oklch(0.87 0.006 286);
+  /* SOLVED AGAINST `sunken`, NOT `base`. The previous 0.64 was derived as "the
+     lightest value still clearing 3:1 on `base`, and it clears every lighter
+     rung by more" — true, and it silently skipped the one rung that is DARKER
+     than the datum. On `sunken` it measures 2.50:1, under the non-text floor,
+     which matters because `sunken` is exactly where controls sit: terminals,
+     diff wells, code blocks, inset lists.
+
+     0.594 is the lightest value clearing 3:1 against the DARKEST light rung:
+     3.00 / 3.66 / 4.05 on sunken / base / raised. One token still covers the
+     ladder; it just has to be solved from the bottom.
+
+     Note the mirror in dark, which is why neither theme's value can be derived
+     from the other's: there the edge is lighter than every rung, so the worst
+     case is the LIGHTEST one (`overlay`), and 0.56 clears it at 3.08:1. */
+  --edge-control: oklch(0.594 0.008 286);
+  /* Grove's one addition to the shadcn palette: a semantic green for measured
+     progress and healthy quota. shadcn ships `destructive` but no positive
+     counterpart, so without this every "good" signal reaches for a raw palette
+     colour — which is exactly what lint:styling forbids in components/grove. */
+  --success: oklch(0.58 0.14 155);
+  --success-foreground: oklch(0.985 0 0);
+  /* Merged. Solved against `sunken`, the DARKEST rung in this theme and so the
+     worst case for a dark mark — 4.24:1 there, 5.71:1 on the card it actually
+     renders on. It sits in the same lightness band as its siblings (success
+     0.58, destructive 0.577) on purpose: a state colour two steps darker than
+     the others reads as a different system rather than a third member of one.
+     Like both siblings in light mode it clears the 3:1 non-text floor but not
+     AA-normal, which is why it is only ever a GLYPH here and the word beside
+     it carries the meaning. */
+  --merged: oklch(0.54 0.24 295);
+  /* The activity heatmap's five-step ramp, empty → busiest, landing exactly on
+     --success so the calendar and the headline figure read as one signal.
+     It lives here rather than in the component because a colour scale is theme
+     data — dark mode needs a different ramp and a component cannot say that.
+     `heat-graph` takes the scale as CSS colour values, so these are consumed as
+     `var(--heat-N)` strings, never as utility classes. */
+  --heat-0: oklch(0.94 0.004 286.32);
+  --heat-1: oklch(0.88 0.05 155);
+  --heat-2: oklch(0.78 0.09 155);
+  --heat-3: oklch(0.68 0.12 155);
+  --heat-4: oklch(0.58 0.14 155);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-primary: oklch(0.21 0.006 285.885);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.967 0.001 286.375);
+  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --sidebar-ring: oklch(0.705 0.015 286.067);
+}
+
+.dark {
+  /* The same flip, onto dark's OWN ladder — the rung values below are designed
+     independently and are not the light ones inverted. Dark had real headroom
+     in both directions, so unlike light it never needed a foreground retune to
+     survive this: every tier already clears AA on all four rungs, down to 5.46
+     for tertiary on `overlay`. `--card` and `--popover` were the same 0.21
+     here too, so a dialog over a card had no tonal step at all; now they are
+     0.225 and 0.285. */
+  --background: var(--surface-base);
+  --foreground: oklch(0.985 0 0);
+  --card: var(--surface-raised);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: var(--surface-overlay);
+  --popover-foreground: oklch(0.985 0 0);
+  /* Clay again, lifted for the dark ground — see the light-mode note. The old
+     value was chroma 0.004, which is achromatic: every `default` badge on the
+     dark rail rendered as a white pill. 5.44:1 on its own foreground. */
+  --primary: oklch(0.66 0.13 45);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --warning: oklch(0.72 0.16 75);
+  --warning-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  /* The biggest single accessibility gain in this commit, and it was invisible
+     to the audit because it is not a solid colour: dark `--input` was a 15%
+     white ALPHA edge, which composites to 1.49–1.62:1 over these rungs. A
+     contrast table that lists colours never measured it. Opaque now, at
+     3.08–4.42:1 depending on the rung. */
+  --input: var(--edge-control);
+  --ring: var(--edge-control);
+  /* Only the middle step is restated: primary and tertiary alias --foreground
+     and --muted-foreground, which this block already redefines. Measured
+     against the dark --background: 19.06:1, 12.34:1, 7.59:1. */
+  --content-secondary: oklch(0.845 0.01 286);
+  /*
+   * The ladder, DARK. Every step clears the 0.05 floor (0.055 / 0.070 / 0.060)
+   * because dark mode has headroom in both directions and does not need shadow
+   * to carry elevation — which is why `surface-raised`'s shadow resolves to
+   * `none` here while the tonal step does the lifting.
+   *
+   * The same OKLCH delta buys LESS WCAG contrast near black: `sunken → base` is
+   * 0.055 L and only 1.05:1, where a comparable step in light mode reaches
+   * 1.21:1. Never treat a lightness delta as if it were a contrast ratio.
+   */
+  --surface-sunken: oklch(0.1 0.005 286);
+  --surface-base: oklch(0.155 0.005 286);
+  --surface-raised: oklch(0.225 0.006 286);
+  --surface-overlay: oklch(0.285 0.006 286);
+  --surface-edge: oklch(0.32 0.008 286);
+  /* L 0.56 is the darkest value still clearing 3:1 on `overlay`, the lightest
+     rung in this theme — so it clears the darker rungs by more. */
+  --edge-control: oklch(0.56 0.008 286);
+  --success: oklch(0.7 0.17 162.48);
+  --success-foreground: oklch(0.21 0.006 285.885);
+  /* Merged, solved from the opposite end: here the mark is LIGHTER than every
+     rung, so the worst case is the lightest one (`overlay`) at 5.49:1 — which
+     clears AA-normal, unlike its light-mode counterpart. The two values cannot
+     be derived from each other; the same nominal step lands on a different rung
+     in each theme. */
+  --merged: oklch(0.72 0.16 295);
+  --heat-0: oklch(0.274 0.006 286.033);
+  --heat-1: oklch(0.38 0.06 162.48);
+  --heat-2: oklch(0.5 0.1 162.48);
+  --heat-3: oklch(0.6 0.14 162.48);
+  --heat-4: oklch(0.7 0.17 162.48);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.21 0.006 285.885);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.274 0.006 286.033);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.552 0.016 285.938);
+}
+
+/*
+ * The shell's content panel: the inset surface every page renders inside.
+ *
+ * It lives here rather than on the element because `components/grove/**` may
+ * not carry a radius — the LOOK is the theme's, the layout is the component's.
+ *
+ * Deliberately NOT a `Card`. assistant-ui's shell draws this surface with a
+ * radius and nothing else: measured on the base demo, `bg-background
+ * rounded-lg overflow-hidden` with NO border and NO shadow. The hierarchy is
+ * the tint step against the `bg-muted/30` layer the rail and the gutter share,
+ * and that step reverses with the theme — the panel is lighter than the gutter
+ * in light mode and DARKER in dark mode, which is what makes it read as depth
+ * rather than as a colour. `bg-card` is the wrong token for exactly that
+ * reason: it is lighter than `--background` in dark mode, so a `Card` here
+ * would invert the cue and add two borders' worth of chrome the demo has none
+ * of.
+ */
+/*
+ * The content panel is the `base` rung — the DATUM — and the four layers a user
+ * sees now sit on the four rungs the ladder always had names for:
+ *
+ *     rail + gutter   sunken     the plane everything else rises off
+ *     shell panel     base       the page itself
+ *     card            raised     something sitting ON the page
+ *     dialog          overlay    floating over all of it
+ *
+ * It was briefly `raised`, which is the mistake worth remembering: that put the
+ * PANEL and every CARD on the same rung, so all fourteen usage cards computed
+ * the identical white as the surface behind them and were separated by a
+ * hairline alone. The instinct that caused it was sound — the panel does rise
+ * off the gutter — but a four-layer stack cannot be built by promoting things
+ * one at a time. **Assign the whole stack at once, from the bottom.**
+ *
+ * Still no border and no shadow, deviating from the `raised` tuple
+ * deliberately: those were measured off the assistant-ui base demo and
+ * reviewed, and the tint step carries this boundary on its own.
+ */
+@utility shell-panel {
+  background-color: var(--surface-base);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/*
+ * Elevation for anything that FLOATS OVER content rather than sitting in flow.
+ *
+ * The plan card is the case that forced it: it rides in the thread's viewport
+ * footer with the transcript scrolling behind, and `--card` is the same white as
+ * `--background` in light mode — so with only a hairline border it read as text
+ * on text, which is the "flat is undesigned" failure exactly.
+ *
+ * The values are the vendored composer's own shadow, deliberately. The plan card
+ * sits directly on top of the composer, and two elevated things touching each
+ * other must be lit the same way or they read as two systems.
+ *
+ * NO SHADOW IN DARK MODE, and that is not a cop-out. `--card` is *lighter* than
+ * `--background` in dark, so the tonal step already does the lifting; a dark
+ * shadow under it would only muddy the edge. Same reversal the shell panel
+ * relies on — elevation is a relationship between layers, not a fixed colour.
+ */
+@utility surface-raised {
+  box-shadow:
+    0 4px 16px -8px rgb(0 0 0 / 0.08),
+    0 1px 2px rgb(0 0 0 / 0.04);
+  @variant dark {
+    box-shadow: none;
+  }
+}
+
+/*
+ * Markdown tables can have an intrinsic minimum wider than the reading column.
+ * Without their own scroll owner, that width propagates through the transcript's
+ * overflow-visible ancestors and makes the viewport itself scroll sideways.
+ */
+.aui-md-table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/*
+ * Scroll-edge scrims: content dissolving into the surface at a boundary.
+ *
+ * A GRADIENT AND NOT A BOX-SHADOW, deliberately. The job is making the header
+ * above and the composer below readable while a transcript passes beneath them
+ * — a scrim actually fades what is underneath, where a box-shadow only draws a
+ * lip at the edge and leaves the text behind it at full contrast. It fades to
+ * `--background` because that is the surface these sit on, so the effect is
+ * content dissolving into the page rather than a grey band laid over it.
+ *
+ * These are painted only while the scroller is away from that edge — a scrim
+ * over a transcript already at its top hides nothing and is pure decoration.
+ * The condition lives in `workspace/scroll-edges.ts`.
+ */
+@utility scroll-edge-top {
+  background-image: linear-gradient(to bottom, var(--background), transparent);
+}
+
+@utility scroll-edge-bottom {
+  background-image: linear-gradient(to top, var(--background), transparent);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
   }
 
   /*
-   * design-direction.md §5 + brand.md §4-5. Two TEMPORAL uses of terracotta
-   * the system sanctions — both decay to nothing within ~1s so neither
-   * becomes a steady-state fill (terracotta scarcity holds).
+   * Anything clickable looks clickable — design-system.md §5 and §10.
    *
-   * grove-shimmer — the loading-skeleton sweep: a ~5%-opacity terracotta band
-   * translated across the muted base, the ONLY place terracotta *moves* across a
-   * whole surface. Applied motion-safe only (a static muted block under
-   * prefers-reduced-motion). The element carries a 200%-wide background-image so
-   * the band sweeps fully off both edges.
+   * A DELIBERATE DEPARTURE FROM THE VENDORED LAYER, which is why it is stated
+   * here rather than fixed per call site. Tailwind v4 dropped its Preflight
+   * `cursor: pointer` on buttons, and shadcn followed, so the assistant-ui
+   * reference demo has the same arrow cursor over its own controls — this is
+   * not a gap against the reference, it is a place our rule is stricter than
+   * theirs. That makes it exactly the kind of override the design system
+   * exists to sanction ONCE: `components/grove/**` may not carry it (a
+   * per-button `cursor-pointer` is a look Grove code is inventing, and it is
+   * forgotten the first time someone adds a control), and the vendored files
+   * may not be edited at all.
    *
-   * grove-ring — the one-shot "just landed" ring on a freshly-created card/row.
-   * An INSET ring (drawn inside the border-box) so an `overflow-hidden` card
-   * doesn't clip it; `forwards` holds it transparent after the single pass so it
-   * never persists. See components/shared/landing-ring.tsx for the mount gate.
+   * Scoped to enabled controls only: a disabled control is not clickable, and
+   * the vendored `disabled:` variants already say so visually.
    */
-  --animate-grove-shimmer: grove-shimmer 1.5s ease-in-out infinite;
-  --animate-grove-ring: grove-ring 800ms ease-out forwards;
-
-  @keyframes grove-shimmer {
-    0%   { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  label[for],
+  summary {
+    @apply cursor-pointer;
   }
 
-  @keyframes grove-ring {
-    from { box-shadow: inset 0 0 0 2px hsl(var(--primary) / 0.55); }
-    to   { box-shadow: inset 0 0 0 2px hsl(var(--primary) / 0); }
+  /*
+   * Thin, overlay-style scrollbars, reproduced from assistant-ui's own app CSS
+   * (verified against the compiled stylesheet the base demo serves).
+   *
+   * Grove shipped the browser default — a full-width track with stepper arrows
+   * — because nothing here ever set these. It is global and unscoped on
+   * purpose: a scroll container is created by the rail, every bounded card
+   * list, the transcript viewport and the terminal, and any per-surface opt-in
+   * would leave whichever one nobody remembered looking like the old app.
+   *
+   * The `@supports` branch is the Firefox path: Firefox implements
+   * `scrollbar-width`/`scrollbar-color` and NOT the `::-webkit-scrollbar`
+   * pseudo-elements, so the two treatments must never both apply — a browser
+   * that has the pseudo-elements would otherwise reserve Firefox's `thin`
+   * gutter as well.
+   *
+   * The thumb is transparent until the scroller is hovered, which is why the
+   * track needs no fill: there is nothing to see when nothing is pointing at
+   * it.
+   */
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+    :hover {
+      scrollbar-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent) transparent;
+    }
   }
-}
-
-/*
- * Tailwind v4 reverted the v3 default that gave every element a
- * border-color of currentColor. We want shadcn's behavior — bare
- * `border` utilities pick up the theme border — so put it back.
- */
-@layer base {
-  *,
-  ::after,
-  ::before,
-  ::backdrop,
-  ::file-selector-button {
-    border-color: hsl(var(--border));
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
   }
-}
-
-/*
- * Global scrollbar rule (design-direction.md §4.7) — ONE app-wide mechanism,
- * the standard CSS properties, not `::-webkit-scrollbar` pseudo-elements and
- * not a `ScrollArea` wrapper per surface. `scrollbar-width/-color` is
- * Baseline (Safari since Dec 2024; Firefox/Chromium long-standing),
- * theme-aware via --scrollbar-thumb, and reserves no gutter by default — the
- * bar only appears where content overflows. Do NOT add `::-webkit-scrollbar`
- * anywhere: current Chrome deprioritizes it in favor of the standard props,
- * and setting one force-renders a classic always-visible bar, killing the
- * native macOS overlay auto-hide this rule relies on. This also themes
- * assistant-ui's Thread.Viewport for free (it ships bare `overflow-y-scroll`,
- * no scrollbar CSS of its own).
- */
-@layer base {
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: var(--scrollbar-thumb) transparent;
+  ::-webkit-scrollbar-track {
+    background: transparent;
   }
-}
-
-/*
- * Icon stroke seam (design-direction.md §4.5) — lucide-react has no theme
- * provider, so a single global CSS rule is the one seam for an app-wide
- * stroke width. lucide-react's Icon component always sets class="lucide" as
- * the FIRST class on every icon it renders (verified in
- * node_modules/lucide-react/dist/esm/Icon.js), so this reaches every icon
- * regardless of per-instance className. 1.75 (lucide's default is 2) is the
- * measured Linear/Notion register — 1.5 goes wispy at Grove's 14px dense rows
- * rendered in --muted-foreground at exactly-AA contrast.
- */
-@layer base {
-  svg.lucide {
-    stroke-width: 1.75;
+  ::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+  }
+  :hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  }
+  ::-webkit-scrollbar-thumb:active {
+    background-color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 
-@layer base {
-  :root {
-    /* Light theme — warm-neutral off-white (design-direction.md §4.4). Hue
-       ~40-48 (barely-warm, low chroma) holds across the whole neutral ramp so
-       there's no muddy warmth, matching the detuned dark theme's temperature
-       and harmonizing with the terracotta accent instead of fighting it.
-       Lightness steps stay wide for legible elevation. Every text pair here
-       is WCAG-computed, not eyeballed — see tests/unit/contrast.test.ts (the
-       enforcement seam) and design-direction.md §4.4 for the full matrix.
-       Semantic --status/--agent/--ref vars below are mirrored from Python and
-       intentionally left untouched — never move a hex there without also
-       moving it in the Python source. */
-    --background: 48 33% 97%; /* #faf9f5 */
-    --foreground: 45 8% 10%; /* #1b1a17 — 16.4:1 on canvas (AAA) */
-    --card: 0 0% 100%;
-    --card-foreground: 45 8% 10%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 45 8% 10%;
-    --elevated: 0 0% 100%;
-    --primary: 15 63% 60%; /* #d97757 brand mark ONLY — not a text-bearing fill, see --primary-strong */
-    --primary-foreground: 0 0% 100%; /* white — pairs with --primary-strong fills, never bare --primary */
-    --secondary: 44 26% 92%;
-    --secondary-foreground: 45 8% 10%;
-    --muted: 44 26% 92%; /* #efece4 */
-    --muted-foreground: 40 9% 38%; /* #6b6559 — 5.6:1 worst-case (AA, incl. 12-13px meta) */
-    --accent: 44 26% 92%;
-    --accent-foreground: 45 8% 10%;
-    --destructive: 0 72% 46%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 42 21% 88%; /* #e6e2d9 — decorative hairline, WCAG-exempt (identity = fill + ring, not the line) */
-    --input: 42 21% 88%;
-    --ring: 15 59% 46%; /* #b95230 — deepened for 4.5:1 as a focus ring on white */
-    --radius: 0.5rem;
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
-    /* Code well (fenced/inline code) — a distinct surface from --muted so a
-       code block doesn't read as a footer strip. */
-    --code: 43 10% 14%; /* #26241f — 13.6:1 on --code-well */
-    --code-well: 47 27% 94%; /* #f3f1ea, = --sidebar tone */
-
-    /* Terracotta as TEXT and as a CTA fill are separate tokens from the brand
-       mark (see --primary above and the --color-primary-* comment in @theme
-       inline) — each is tuned to clear AA in its own role. */
-    --primary-fg: 17 71% 41%; /* #b4491f — terracotta AS TEXT (`you` label, links), 5.2:1 */
-    --primary-strong: 15 59% 46%; /* #b95230 — send/create CTA fill; white label 4.8:1 */
-    --scrollbar-thumb: rgba(0, 0, 0, 0.2);
-
-    /* Composer floating-plane shadow — the ONE sanctioned transcript shadow,
-       and LIGHT-mode only (a var, not the `dark:` variant, since Grove themes
-       by flipping CSS vars in :root/.dark, not by the OS media query). On dark
-       it is `none` (the no-shadow-on-dark rule holds; the surface ladder carries
-       depth); on light a subtle lift reads the steer composer as a floating
-       input plane (assistant-ui's template floating-plane exception). */
-    --composer-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.06), 0 1px 3px 0 rgb(0 0 0 / 0.08);
-
-    /* Chrome (header · rail · status bar) — slightly off the canvas so the
-       persistent frame is legible without contrasting fills. */
-    --sidebar: 47 27% 94%; /* #f3f1ea */
-    --sidebar-foreground: 45 8% 10%;
-    --sidebar-border: 42 21% 88%;
-
-    /* Status — light mode (mirrors STATUS_HEX_LIGHT in lib/grove/status-tokens.ts). */
-    --status-active: #4d7c0f;
-    --status-active-tint: #84cc16;
-    --status-running: #4d7c0f;
-    --status-idle: #1d4ed8;
-    /* PROVISIONING aliases IDLE on both themes (see status_palette.py): a
-       container being built is alive, not yet ready — never the muted gray
-       OFFLINE wears, whose advertised remedy would destroy the build. */
-    --status-provisioning: #1d4ed8;
-    --status-offline: #52525b;
-    --status-paused: #52525b;
-    --status-orphaned: #92400e;
-    --status-error: #991b1b;
-
-    /* Agent activity — light (mirrors AGENT_STATE_HEX_LIGHT; a separate axis
-       from workspace status: what the agent is doing, not what the workspace is). */
-    --agent-starting: #2563eb;
-    --agent-working: #65a30d;
-    --agent-waiting: #b45309;
-    --agent-blocked: #b45309;
-    --agent-idle: #71717a;
-    --agent-error: #b91c1c;
-    --agent-unknown: #71717a;
-
-    /* Refs */
-    --ref-branch: #0f766e;
-    --ref-add: #15803d;
-    --ref-remove: #b91c1c;
-    --ref-info: #1d4ed8;
-
-    /* Runtime — light (mirrors RUNTIME_HEX_LIGHT; the isolation axis, marked
-       in BOTH states unlike placement — see runtime-tokens.ts). Reuses the
-       muted/info atoms rather than minting a hue. */
-    --runtime-host: #71717a;
-    --runtime-container: #1d4ed8;
-
-    /* Task phase — light (client-tuned SEQUENTIAL ramp, see PHASE_HEX_LIGHT
-       in lib/grove/status-tokens.ts for the derivation). `verifying` matches
-       --status-active exactly — both are the brand-lime peak. */
-    --phase-scoping: #a3e635;
-    --phase-planning: #84cc16;
-    --phase-implementing: #65a30d;
-    --phase-verifying: #4d7c0f;
-    --phase-delivering: #3f6212;
-    --phase-done: #52525b;
-  }
-
-  .dark {
-    /* Dark theme — "space black", DETUNED (design-direction.md §4.4, ruling
-       1.3). Keeps the deep, dark-first space-black identity but holds the
-       neutral hue near-neutral/barely-warm (~45-60, chroma unchanged) — a
-       cool-blue hue would fight the warm terracotta accent. The lightness ladder
-       still climbs the same way: canvas → chrome → card → elevated → muted →
-       border, legible without borrowing chroma. `--primary` terracotta is
-       unchanged (#d97757, brand mark). Every text pair is WCAG-computed — see
-       tests/unit/contrast.test.ts and design-direction.md §4.4. Semantic
-       --status/--agent/--ref vars below stay canonical (Python-mirrored) and
-       are untouched by this hue shift. */
-    --background: 45 10% 8%; /* #171613 */
-    --foreground: 51 28% 95%; /* #f6f5ef — 16.6:1 on canvas (AAA) */
-    --card: 60 4% 13%; /* #232320 */
-    --card-foreground: 51 28% 95%;
-    --popover: 60 4% 13%;
-    --popover-foreground: 51 28% 95%;
-    --elevated: 48 6% 16%; /* #2b2a26 */
-    --primary: 15 63% 60%; /* #d97757 brand mark ONLY — not a text-bearing fill, see --primary-strong */
-    --primary-foreground: 0 0% 100%; /* white — pairs with --primary-strong fills, never bare --primary */
-    --secondary: 48 6% 17%;
-    --secondary-foreground: 51 28% 95%;
-    --muted: 48 6% 17%; /* #2f2e2a */
-    --muted-foreground: 43 8% 66%; /* #b0aca2 — 6.0:1 worst-case (AA, incl. 12-13px meta) */
-    --accent: 48 6% 17%;
-    --accent-foreground: 51 28% 95%;
-    --destructive: 0 68% 58%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 40 9% 20%; /* #38352f — decorative hairline, WCAG-exempt (identity = fill + ring, not the line) */
-    --input: 40 9% 20%;
-    --ring: 15 63% 60%; /* #d97757 — 5.9:1 focus ring on canvas */
-
-    /* Code well (fenced/inline code) — a distinct surface from --muted so a
-       code block doesn't read as a footer strip. */
-    --code: 48 19% 89%; /* #e9e7df — 13.1:1 on --code-well */
-    --code-well: 45 7% 12%; /* #201f1c */
-
-    /* Terracotta as TEXT and as a CTA fill are separate tokens from the brand
-       mark (see --primary above and the --color-primary-* comment in @theme
-       inline) — each is tuned to clear AA in its own role. */
-    --primary-fg: 15 65% 65%; /* #e08a6e — terracotta AS TEXT (`you` label, links), 6.0:1 */
-    --primary-strong: 15 59% 46%; /* #b95230 — send/create CTA fill; white label 4.8:1 */
-    --scrollbar-thumb: rgba(255, 255, 255, 0.18);
-
-    /* No shadow on dark surfaces — depth is the surface ladder (see the light
-       :root `--composer-shadow` note). */
-    --composer-shadow: none;
-
-    /* Chrome (header · rail · status bar) — one tone between canvas and card so
-       the persistent frame is unified and distinct from the content well. */
-    --sidebar: 48 10% 10%; /* #1c1b17 */
-    --sidebar-foreground: 51 28% 95%;
-    --sidebar-border: 40 9% 20%;
-
-    /* Status — dark mode (canonical from grove/core/contracts/status_palette.py). */
-    --status-active: #84cc16;
-    --status-active-tint: #bef264;
-    --status-running: #84cc16;
-    --status-idle: #c2dcf7;
-    --status-provisioning: #c2dcf7;
-    --status-offline: #96938c;
-    --status-paused: #96938c;
-    --status-orphaned: #b8860b;
-    --status-error: #e64c4c;
-
-    /* Agent activity — dark (canonical from grove/core/contracts/agent_palette.py). */
-    --agent-starting: #c2dcf7;
-    --agent-working: #84cc16;
-    --agent-waiting: #b8860b;
-    --agent-blocked: #b8860b;
-    --agent-idle: #96938c;
-    --agent-error: #e64c4c;
-    --agent-unknown: #96938c;
-
-    /* Refs */
-    --ref-branch: #26a69a;
-    --ref-add: #99d199;
-    --ref-remove: #e66666;
-    --ref-info: #c2dcf7;
-
-    /* Runtime — dark (canonical from grove/core/contracts/runtime_palette.py). */
-    --runtime-host: #96938c;
-    --runtime-container: #c2dcf7;
-
-    /* Task phase — dark (canonical from grove/core/contracts/phase_palette.py).
-       A single-hue SEQUENTIAL ramp, not six categorical hues — see that
-       module's docstring. `done` deliberately leaves the ramp for the shared
-       neutral gray. */
-    --phase-scoping: #e4f7c0;
-    --phase-planning: #cbeb8a;
-    --phase-implementing: #a8dd47;
-    --phase-verifying: #84cc16;
-    --phase-delivering: #5f9c0f;
-    --phase-done: #96938c;
-  }
-
-  html {
-    scroll-behavior: smooth;
-  }
-
-  body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
-    font-feature-settings: "rlig" 1, "calt" 1;
-    /* Geist reads a touch tight at dashboard density; 0.01em restores air. */
-    letter-spacing: 0.01em;
-    overflow-x: hidden;
-  }
-
-  /* Make selection contrast loud regardless of theme. */
-  ::selection {
-    background-color: hsl(var(--primary) / 0.25);
-    color: hsl(var(--foreground));
-  }
-}
-
-/*
- * Visually-hidden helper for screen-reader-only content (labels, skip
- * targets). Mirrors the WCAG-recommended technique.
- */
-@utility sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border-width: 0;
-}
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

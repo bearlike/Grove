@@ -1,6 +1,6 @@
 ---
 name: working-in-grove
-description: Use when you are the coding agent running INSIDE a Grove workspace — a git worktree Grove created for one task, on the host or in a container. Triggers on: reporting or updating your task phase or progress, GROVE_PHASE_FILE or .grove/phase.json, `grove phase`, grove_set_workspace_phase, keeping an attached issue or PR up to date, being asked how far along you are, or noticing you are in a worktree with a phase file. Covers the six phase names and when to write each, that your phase, note, todo checklist and activity line are PUBLISHED onto every attached ticket as a live comment, keeping several attached tickets current at once, and attaching the pull request you opened so the work is seen to land.
+description: Use when you are the coding agent running INSIDE a Grove workspace — a git worktree Grove created for one task, on the host or in a container. Triggers on: reporting or updating your task phase or progress, GROVE_PHASE_FILE or .grove/phase.json, `grove phase`, grove_set_workspace_phase, keeping an attached issue or PR up to date, being asked how far along you are, or noticing you are in a worktree with a phase file. Covers the six phase names and when to write each, that your phase, note, todo checklist and activity line are PUBLISHED onto every attached ticket as a live comment, giving each attached ticket its own phase plus a `blocked` flag for work you cannot finish, and attaching the pull request you opened so the work is seen to land.
 ---
 
 # Working inside a Grove workspace
@@ -88,24 +88,34 @@ is the answer.
 ## Keeping several tickets current at once
 
 A workspace often carries more than one ticket — a cluster of related issues, or
-an issue plus the PR that closes it. **One report updates all of them.** Grove
-publishes the same body to every attached ref, so you never report per ticket and
-you never need to know how many are attached.
+an issue plus the PR that closes it. Each one now carries its own phase. Grove
+seeds it for you: at launch, and again the moment a ticket is attached, it writes
+that ticket an entry in your phase file at `scoping`, keyed `"<provider>:<id>"`.
+Open the file and the key is already there — you edit it, you never compose one.
 
-What that means in practice:
+```json
+{
+  "phase": "implementing",
+  "tickets": {
+    "gitea:498": {"phase": "verifying", "note": "gates green"},
+    "gitea:499": {"phase": "planning", "note": "needs 498 merged"}
+  }
+}
+```
 
-- **Your phase describes the WORKSPACE, not one ticket.** If you are verifying
-  issue A while issue B is untouched, the honest report is still `verifying` —
-  the checklist is what says where each ticket stands.
-- **So the checklist carries the per-ticket detail.** Name the ticket in the todo
-  item (`#473 — bound the payload`) and readers on every attached issue can see
-  which parts are theirs. This is the only place per-ticket progress exists.
-- **Attach a ticket the moment you learn it belongs to you**, not at the end.
-  Nothing is published for a ref that is not attached, so a ticket attached late
-  has no history on its own thread.
-- **Finishing one ticket is a checklist edit, not a phase change.** Do not report
-  `done` because one of five is finished; `done` means the workspace has nothing
-  left.
+- **The top-level `phase` is your own claim about the workspace as a whole**,
+  reported exactly as described above — it never averages or rolls up what is
+  underneath it.
+- **Each ticket's `phase` is that ticket's own claim**, independent of the
+  workspace's and of every other ticket's. If you are verifying issue A while
+  issue B is untouched, that is `verifying` on `498` and `scoping` still on `499`
+  — not one shared answer for both.
+- **Overwrite the whole document each time, `tickets` included.** Changing one
+  entry means writing every key, changed or not — the same rule as the top level.
+- **Finishing one ticket moves its own entry to `done`, not the workspace's.**
+  Report the workspace `done` only once nothing is left on any of them.
+- **Attach a ticket the moment you learn it belongs to you.** Nothing is seeded,
+  and nothing published, for a ref that is not attached yet.
 
 ## The six phases
 
@@ -121,9 +131,23 @@ converge on `done`.
 | `delivering` | Committing, pushing, opening or updating the pull request, writing the handoff |
 | `done` | Handed off. Nothing is left for you to do on this task |
 
-There is no `blocked` and no `failed`. Grove already tracks those on a separate
-axis, and an agent stuck on a question is still inside some phase. Report the
-phase you are in and let Grove report the trouble.
+There is no `failed` phase, and phase alone no longer says everything about
+trouble either — see the next section.
+
+## Report blocked work
+
+Set `"blocked": true` beside a phase — the workspace's own, or one ticket's —
+when there is no way for you to finish it and it is not done. Report the phase
+you actually reached: `verifying` plus blocked says the change is written and you
+cannot get it tested; `scoping` plus blocked says you cannot even read the
+ticket. Say why in the note.
+
+This is a different `blocked` from the one the agent-activity axis already
+reports. That one means you are waiting on a human right now, and it clears the
+moment they answer — Grove infers it from your transcript, you never set it.
+This one is a claim about the work itself: given what you know, it cannot be
+finished, and answering a question does not by itself unblock it. Report both
+when both are true.
 
 ## Report at transitions, not on a timer
 
@@ -174,18 +198,16 @@ grove tickets attach https://example.com/acme/widgets/pull/17
 ```
 
 You never name the tracker. Grove infers the provider and whether the ref is an
-issue or a pull request from the shape of what you pass, and it accepts a full
-URL, `#42`, `42`, or `owner/repo#42`. It works out which workspace you are in
-from the current directory. Attaching twice is a no op rather than a duplicate.
+issue or a pull request from the shape of what you pass — a full URL, `#42`,
+`42`, or `owner/repo#42` — and works out which workspace you are in from the
+current directory. Attaching twice is a no op rather than a duplicate.
 
-This is worth the one call because of what it gives the person watching. The
-attached PR is how they learn your work landed, since Grove reads a merged pull
-request as `merged` where the issues endpoint would only say closed. Without the
-link they have your branch name and a guess.
-
-Attaching is a local link and it fetches nothing. It is also not a substitute for
-however your project wants issues referenced in PR text, which is a separate
-question with its own rules. Follow the repo's convention there.
+This is worth the one call: it is how the person watching learns your work
+landed, since Grove reads a merged pull request as `merged` where the issues
+endpoint would only say closed. It is a local link that fetches nothing, and it
+is not a substitute for however your project wants issues referenced in PR
+text — a separate question with its own rules. Follow the repo's convention
+there.
 
 If you are inside a container you have no `grove` command, so skip this and say
 in your handoff that the PR is open. Whoever is orchestrating attaches it from
@@ -198,12 +220,17 @@ host.
 
 ```bash
 grove phase implementing --note "wiring the JSON parser"
+grove phase verifying --ticket gitea:498 --note "gates green"
+grove phase planning --ticket gitea:499 --blocked --note "needs 498 merged"
 ```
 
 The command works out which workspace you are in from the current directory, so
-it takes no id. Over MCP the equivalents are `grove_set_workspace_phase` and
-`grove_get_workspace_phase`, and `grove_get_workspace_todo` reads back the
-checklist Grove already tracks for you.
+it takes no id. Add `--ticket` to target one ticket's entry instead of the
+top-level phase, and `--blocked` to set the flag alongside whichever phase you
+pass. Over MCP the equivalent is `grove_set_workspace_phase`, with the same
+`ticket` and `blocked` parameters, plus `grove_get_workspace_phase` and
+`grove_get_workspace_todo`, which reads back the checklist Grove already tracks
+for you.
 
 Reach for these when they are there. Fall back to the file the moment either one
 is missing, and treat that as ordinary rather than as a problem to report. A

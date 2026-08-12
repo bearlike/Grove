@@ -66,8 +66,11 @@ Four things about phase are easy to get wrong.
 - **Backwards is a correct report.** An agent that discovers in `verifying` that
   its design was wrong should say `planning` again. Grove never enforces forward
   motion, and an honest reversal is worth more than a phase that only climbs.
-- **There is no `blocked` and no `error` phase.** Both already live on the
-  activity axis, and an agent stuck on a question is still inside some phase.
+- **There is still no `error` phase — that lives on the activity axis.** An
+  agent can flag `blocked: true` beside a phase instead, meaning it has no way
+  to finish that piece of work; it still names the phase it actually reached.
+  This is not the activity axis's own `blocked`, which means waiting on a human
+  right now and clears the moment they answer.
 - **Grove renders no staleness verdict.** Three hours in `implementing` is a
   long task, not a stale report. Whether the agent is alive is what the other
   two axes answer. The timestamp is the file's own mtime, so hold your own
@@ -156,15 +159,23 @@ one who can report a phase. Two consequences for you as the orchestrator:
   progress in it, and Grove will not invent one — a missing phase renders as
   nothing rather than as `scoping`. This is the single most common reason a
   status comment looks empty.
-- **Attach every ticket the workspace owns, up front.** One report publishes to
-  all of them, but only to the ones attached, so a ticket linked late carries no
-  history on its own thread.
+- **Attach every ticket the workspace owns, up front.** Attaching is also what
+  seeds an entry of its own for that ticket, at `scoping` — so a ticket linked
+  late starts with no history and no phase until the agent's next report.
 
-You can correct a report from outside with `grove phase <ref> <phase>` or
-`grove_set_workspace_phase` — for when an agent has stopped reporting or has
-plainly mis-stated where it is. Use it to fix the record, not to drive it: a
-phase you set is your claim about someone else's work, and the next thing the
-agent writes overwrites it.
+Each attached ticket now carries its own phase, seeded the moment it is
+attached and updated independently of the workspace's own — an agent verifying
+one issue while another sits untouched reports exactly that, rather than one
+shared answer for both. `blocked: true` sits beside a phase, on the workspace's
+own claim or on any one ticket's, and means the agent has no way to finish that
+piece of work — distinct from the activity axis's own `blocked`, which means
+waiting on a human right now and clears the moment they answer.
+
+You can correct a report from outside with `grove phase <ref> <phase> [--ticket
+<ticket-ref>] [--blocked]` or `grove_set_workspace_phase` — for when an agent
+has stopped reporting or has plainly mis-stated where it is. Use it to fix the
+record, not to drive it: a phase you set is your claim about someone else's
+work, and the next thing the agent writes overwrites it.
 
 Before you create a second workspace for a ticket, ask whether one already
 exists. Over MCP, `grove_list_workspaces` narrows by `ticket_provider` plus
@@ -203,7 +214,7 @@ registers a repo you are not currently standing in.
 | `grove show [<ref>]` | One workspace's git, agent, transcript and live pane state |
 | `grove fleet` | Every workspace on the host, as JSON |
 | `grove message <ref> <text>` | Steer a running agent |
-| `grove phase [<ref>] [<phase>] [--note <text>]` | Read a phase, or set one from outside |
+| `grove phase [<ref>] [<phase>] [--ticket <ticket-ref>] [--blocked] [--note <text>]` | Read a phase, or set one — the workspace's own or one ticket's — from outside |
 | `grove tickets attach\|list\|detach <ref> [--workspace <id>]` | Issue and pull request links |
 | `grove tickets handover <ref>`, `grove tickets owned`, `grove tickets handback <ref>` | Hand an issue to the fleet by assigning it, list what the fleet holds, give one back |
 | `grove pause\|resume\|respawn\|kill <ref>` | Lifecycle |
@@ -251,8 +262,9 @@ tool wants, so start there.
   without it. Destructive tools never guess.
 - `grove_send_workspace_message` that times out means delivery is unknown rather
   than failed. Peek before you resend, or the agent gets the message twice.
-- `grove_set_workspace_phase` is for correcting an agent's report from outside.
-  The agent's own channel is a file, described below.
+- `grove_set_workspace_phase` is for correcting an agent's report from outside,
+  with `ticket` and `blocked` parameters mirroring the CLI's `--ticket` and
+  `--blocked`. The agent's own channel is a file, described below.
 - A server started with `--read-only` withholds every mutating tool by not
   registering it, because a tool an agent can see is a tool it will try to call.
 - `grove_peek_workspace` caps its pane snapshot, and a trailing ellipsis is the

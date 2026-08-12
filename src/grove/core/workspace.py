@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from grove.core.config import AgentKind, GroveConfig, expand_template
 from grove.core.errors import WorkspaceStateError
@@ -411,6 +411,18 @@ class WorkspaceState:
     init_status: InitStatus | None = None
     init_duration_ms: int | None = None
     init_log_path: str | None = None
+    # The commit this workspace started from, recorded once at create. THE
+    # anchor for every "since the workspace was created" read: `base_branch` is
+    # a moving target (and for a ROOT workspace it is the workspace's own
+    # branch, so every range derived from it collapses to empty no matter how
+    # much work was done). Captured from the plan's own start point — the base
+    # ref for a new branch, the upstream for a tracking branch, the branch's own
+    # tip for an attached one, live HEAD for root — before any side effect, so
+    # it is the one moment the answer is knowable without guessing. None for
+    # every record written before this field existed and for a repo with no
+    # commits at all; absent must read as absent, so every consumer degrades to
+    # its previous behavior rather than fabricating a baseline.
+    base_commit: str | None = None
     # How the branch came to be associated with this workspace. Drives the
     # kill-modal default. Defaults to GROVE_CREATED so legacy on-disk records
     # written before this field existed load without migration — historical
@@ -557,6 +569,28 @@ class WorkspaceState:
         }
 
     @property
+    def diff_base(self) -> str:
+        """The revision the COMMITTED "since created" reads measure from.
+
+        One definition for the three callers that share the question — the
+        commit log, the line stats on the peek rail, and the same stats on the
+        activity stream — so they cannot drift on which anchor they used.
+
+        The recorded ``base_commit`` when there is one, because "since the
+        workspace was created" is anchored in TIME: the base branch moving on
+        afterwards must not change what this workspace is credited with, and a
+        range derived from a live branch name silently re-answers the question
+        on every read. The fallback to ``base_branch`` is the honest
+        degradation for a record written before the anchor existed — the
+        historical behavior exactly, including its root-placement blind spot.
+
+        Deliberately NOT read by ``ahead_behind``: "behind" asks how far the
+        base BRANCH has moved since, which a frozen commit can only ever
+        answer zero.
+        """
+        return self.base_commit or self.base_branch
+
+    @property
     def grove_owns_branch(self) -> bool:
         """Grove created this branch, so a Grove teardown may delete it.
 
@@ -632,6 +666,27 @@ class WorkspaceState:
         recorded = Path(ctx.agent_cwd)
         return (recorded, *(cwd for cwd in self.scan_cwds if cwd != recorded))
 
+    @property
+    def telemetry_session_id(self) -> str:
+        """The id every emitter must key this run's traces by.
+
+        Grove and the agent trace independently and never share a trace id, so a
+        Langfuse *session* is the only thing that reassembles one run — and it
+        reassembles only what agrees on this value. The agent's half is stamped
+        into `OTEL_RESOURCE_ATTRIBUTES` at launch and frozen there for the life
+        of the process, so this is what that stamp said, not a better answer
+        learned later: a spine that keys by anything else publishes a second,
+        half-empty session beside the real one.
+
+        Prefer the harness's own session id, which is what its native exporters
+        and its transcript exporter already use (`claude_code` takes a
+        `--session-id` Grove mints, so all three agree). Fall back to the tmux
+        session for a harness that mints its own id and offers no way to supply
+        one (`codex`), where Grove's own identity is the only value that exists
+        at the moment the stamp has to be written.
+        """
+        return self.agent_session_id or self.tmux_session
+
     def adopts_session(
         self, born_at: datetime | None, *, live_here_at: datetime | None = None
     ) -> bool:
@@ -679,17 +734,44 @@ class WorkspaceState:
         return ts >= self.created_at
 
 
+CommitScope = Literal["since_fork_point", "since_created_at"]
+"""Which question a commit LIST answered, carried on each of its rows.
+
+``since_fork_point`` is the confident answer: ``git log <base_commit>..<branch>``,
+measured from the commit recorded at create. ``since_created_at`` is the
+degraded one — with no recorded anchor the range is re-expressed as a TIME
+window (``git log --since=<created_at> <branch>``), which answers a different
+but well-posed question ("what landed on this branch while this workspace
+existed") and therefore **errs HIGH**: a commit somebody else pushed to the
+branch inside that window is included, which on a ROOT workspace sharing the
+user's live branch is an ordinary occurrence rather than a corner case.
+
+A separate field for the same reason ``WorkspaceDiff.available`` is separate
+from an empty patch: a degraded answer indistinguishable from a confident one
+is read as confident. ``None`` is the third honest value and never a stand-in
+for either — ``recent_commits`` walks branch history with no anchor at all, so
+labelling its rows with either scope would be a claim nobody made.
+"""
+
+
 @dataclass(slots=True, frozen=True)
 class CommitSummary:
     """One commit row, as the peek pane wants to render it.
 
     `committed_at` is a timezone-aware datetime; humanizing to "2 minutes ago"
     is the client's job — keeping policy out of the engine.
+
+    `scope` says which question the list this row came from answered; it
+    describes the RANGE, not the commit, and every row of one list carries the
+    same value. It defaults to None (no anchoring question asked) so records
+    and call sites written before it existed stay honest rather than inheriting
+    a claim.
     """
 
     sha: str  # short (8 chars)
     subject: str
     committed_at: datetime
+    scope: CommitScope | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -711,6 +793,42 @@ class WorkspacePeek:
     recent_commits: tuple[CommitSummary, ...]
     agent_snapshot: str | None
     snapshot_taken_at: datetime | None
+
+
+DiffUnavailable = Literal["worktree_missing", "not_a_repo", "git_failed"]
+"""Why no patch could be produced. Never used to mean "no changes"."""
+
+
+@dataclass(slots=True, frozen=True)
+class WorkspaceDiff:
+    """The worktree's uncommitted changes as ONE raw unified patch.
+
+    ``patch`` is exactly what git emitted, concatenated across files and never
+    parsed — the renderer on the other end already understands the format, so a
+    structured shape here would be a second model of it maintained on both
+    sides of the wire forever.
+
+    **``available`` is a separate field from an empty ``patch`` on purpose.**
+    "git cannot answer here" (no repo, a paused workspace whose worktree is
+    gone) and "this workspace has no uncommitted changes" are different facts a
+    reader acts on differently — helper text against an empty state — and one
+    field answering both makes the degraded answer indistinguishable from the
+    confident one. ``reason`` is set if and only if ``available`` is False.
+
+    ``truncated`` says the cap cut the patch. The cut is always at a whole-file
+    boundary, so what is returned is always a VALID patch a parser can read —
+    a half-file tail would break the renderer rather than merely shortening it.
+    """
+
+    patch: str
+    files: int
+    truncated: bool
+    available: bool = True
+    reason: DiffUnavailable | None = None
+
+    @classmethod
+    def unavailable(cls, reason: DiffUnavailable) -> WorkspaceDiff:
+        return cls(patch="", files=0, truncated=False, available=False, reason=reason)
 
 
 # ─── identity ────────────────────────────────────────────────────────────────

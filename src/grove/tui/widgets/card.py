@@ -62,11 +62,13 @@ from grove.core.contracts.tickets import TicketRef
 from grove.core.phase import PHASE_ORDER, PhaseReport
 from grove.core.workspace import Placement
 from grove.tui._status import (
+    BLOCKED_GLYPH,
     PR_GLYPH,
     active_pulse,
     agent_state_color,
     agent_state_glyph,
     agent_state_label,
+    blocked_color,
     chrome_color,
     init_status_color,
     phase_color,
@@ -271,11 +273,17 @@ class WorkspaceCard(ListItem):
 def _append_phase_segment(
     text: Text, phase: PhaseReport | None, *, muted_hex: str, dark: bool
 ) -> None:
-    """Append the `· <glyph> <label> N/M` task-phase segment, or nothing.
+    """Append the `· <glyph> <label> N/M [‼]` task-phase segment, or nothing.
 
     `N/M` (1-based) rides alongside the glyph/color ramp so progress reads as
     a number too, not just a hue — cheap given `PhaseReport.index` is already
     computed. `phase=None` (no report yet) is the default and appends nothing.
+
+    `blocked` is a FLAG beside the phase, not a replacement for it: appended
+    as a trailing `‼` in its own hue (`blocked_color`) so the reader still sees
+    *where it stopped* (the phase glyph/label/progress, untouched) alongside
+    *that it stopped* — collapsing the two into one badge would lose the first
+    fact. Absent by default, same convention as the phase segment itself.
     """
     if phase is None:
         return
@@ -286,6 +294,8 @@ def _append_phase_segment(
         f"{phase_glyph(phase.phase)} {phase_label(phase.phase)} {progress}",
         style=f"bold {phase_color(phase.phase, dark=dark)}",
     )
+    if phase.blocked:
+        text.append(f" {BLOCKED_GLYPH}", style=f"bold {blocked_color(dark=dark)}")
 
 
 def _append_runtime_warning_segments(
@@ -454,7 +464,9 @@ def _render_card(
       orthogonal to both status and agent state: how far through the task
       the agent SAYS it is (reported, not derived — see `grove.core.phase`).
       `None` (no phase ever reported) renders nothing — same absence
-      convention as agent state and the `root` tag.
+      convention as agent state and the `root` tag. A blocked claim appends
+      a trailing `‼` in `blocked_color` beside (never instead of) the phase
+      — see `_append_phase_segment`.
     * **status label** — bold + `status_color`. Matches the line-1 glyph
       so the same color reads twice — reinforces the lifecycle cue. A
       PROVISIONING row appends its elapsed wait in the same hue (`◍

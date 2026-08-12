@@ -13,8 +13,10 @@ from pathlib import Path
 from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
+    AgentMessage,
     FinalResult,
     OrderedDigest,
+    QueuedMessage,
     SessionControls,
     SessionRef,
     SessionSummary,
@@ -29,6 +31,12 @@ class GenericAdapter:
     kind = "generic"
     remote = False
     resumable = False
+    # No queue: a busy shell prompt buffers keystrokes in the terminal and
+    # records nothing, so there is nothing Grove could read.
+    reports_queue = False
+    # `read_messages` is empty by construction, so there is no tool result to
+    # carry a flag — a third distinct reason for `False`, not a degradation.
+    reports_tool_errors = False
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         del session_id, resume
@@ -52,6 +60,13 @@ class GenericAdapter:
         del command
         return ()
 
+    def tool_version(self, command: str) -> str | None:
+        # A generic command is a shell or an unknown tool: there is no version
+        # flag Grove can assume, and probing an arbitrary binary with
+        # ``--version`` is exactly the guessing the provider boundary forbids.
+        del command
+        return None
+
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         del cwd, session_id
         return []
@@ -73,6 +88,12 @@ class GenericAdapter:
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
         del cwd
         return []
+
+    def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
+        # A bare shell records no conversation, so there is no spine to read —
+        # the honest empty answer a content consumer acts on (it emits nothing).
+        del cwd, session_id
+        return ()
 
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None
@@ -97,6 +118,12 @@ class GenericAdapter:
         # No transcript format to project a todo/checklist state from.
         del cwd, session_id
         return None
+
+    def pending_queue(self, cwd: Path, session_id: str) -> tuple[QueuedMessage, ...]:
+        # A bare shell has no queue: text typed at a busy prompt is buffered by
+        # the terminal, and nothing records it. An ANSWER, not a debt.
+        del cwd, session_id
+        return ()
 
     def latest_task(self, cwd: Path, session_id: str) -> str | None:
         # No transcript format to read a task text from.

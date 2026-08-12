@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 from grove.core.config import GiteaTicketConfig, GitHubTicketConfig, LinearTicketConfig
-from grove.core.errors import TicketAssigneesUnsupported
+from grove.core.errors import TicketAssigneesUnsupported, TicketBodyUnsupported
 from grove.core.tickets.gitea import GiteaProvider
 from grove.core.tickets.github import GitHubProvider
 from grove.core.tickets.linear import LinearProvider
@@ -77,6 +77,60 @@ def test_linear_refuses_assignment_with_the_typed_error() -> None:
         provider.assign_self("ENG-1")
 
 
+@pytest.mark.parametrize("cls", [GiteaProvider, GitHubProvider, LinearProvider])
+def test_body_supported_agrees_with_what_the_class_overrides(
+    cls: type[HttpTicketProvider],
+) -> None:
+    """The same drift guard the other two capabilities carry, for the third."""
+    overrides = cls.update_body is not HttpTicketProvider.update_body
+    assert cls.body_supported is overrides
+
+
+def test_can_edit_body_is_capability_and_credential() -> None:
+    tokenless = GiteaProvider(GiteaTicketConfig(enabled=True, owner="o", repo="r"), env={})
+    tokened = GiteaProvider(_GITEA_CFG, env=_ENV)
+    linear = LinearProvider(LinearTicketConfig(enabled=True, token_env="L"), env={"L": "tok"})
+    assert tokenless.can_edit_body is False  # enabled and capable, no credential
+    assert tokened.can_edit_body is True
+    assert linear.can_edit_body is False  # credentialed, no capability
+
+
+def test_linear_refuses_a_body_write_with_the_typed_error() -> None:
+    """A body write is its own capability, so it gets its own typed refusal.
+
+    Rewriting a description edits what a HUMAN wrote, which is a strictly larger
+    claim than adding a comment beside it — so a caller must be able to tell this
+    refusal from the comment one rather than inferring it.
+    """
+    provider = LinearProvider(LinearTicketConfig(enabled=True, token_env="L"), env={"L": "tok"})
+    with pytest.raises(TicketBodyUnsupported):
+        provider.update_body("ENG-1", "text")
+
+
+def test_gitea_body_round_trip_reads_then_patches() -> None:
+    wire = _Wire(
+        {
+            "/api/v1/repos/o/r/issues/42": {"number": 42, "state": "open", "body": "the original"},
+        }
+    )
+    provider = GiteaProvider(_GITEA_CFG, env=_ENV, transport=wire.transport())
+    assert provider.read_body("42") == "the original"
+    provider.update_body("42", "the original\n\nfooter")
+    assert wire.seen[-1] == (
+        "PATCH",
+        "/api/v1/repos/o/r/issues/42",
+        {"body": "the original\n\nfooter"},
+    )
+
+
+def test_github_body_round_trip_reads_then_patches() -> None:
+    wire = _Wire({"/repos/o/r/issues/42": {"number": 42, "state": "open", "body": "the original"}})
+    provider = GitHubProvider(_GITHUB_CFG, env=_ENV, transport=wire.transport())
+    assert provider.read_body("42") == "the original"
+    provider.update_body("42", "next")
+    assert wire.seen[-1] == ("PATCH", "/repos/o/r/issues/42", {"body": "next"})
+
+
 # ─── Gitea: read-modify-write, and the humans must survive it ──────────────
 
 
@@ -92,13 +146,18 @@ def test_gitea_assign_preserves_the_existing_human_assignee() -> None:
             },
         }
     )
-    GiteaProvider(_GITEA_CFG, env=_ENV, transport=wire.transport()).assign_self("42")
+    assert GiteaProvider(_GITEA_CFG, env=_ENV, transport=wire.transport()).assign_self("42")
     patches = [b for m, _, b in wire.seen if m == "PATCH"]
     assert patches == [{"assignees": ["alice", "grove-ai"]}]
 
 
 def test_gitea_assign_when_already_assigned_sends_no_patch_at_all() -> None:
-    """Idempotent at the WIRE, not merely in effect — a repeated tick is free."""
+    """Idempotent at the WIRE, not merely in effect — a repeated tick is free.
+
+    The same unchanged-list branch is what makes the return value honest: no
+    PATCH means this call did not assign the ticket, which is what stops a
+    caller claiming — and later releasing — an assignment it did not make.
+    """
     wire = _Wire(
         {
             "/api/v1/user": {"login": "grove-ai"},
@@ -109,7 +168,7 @@ def test_gitea_assign_when_already_assigned_sends_no_patch_at_all() -> None:
             },
         }
     )
-    GiteaProvider(_GITEA_CFG, env=_ENV, transport=wire.transport()).assign_self("42")
+    assert not GiteaProvider(_GITEA_CFG, env=_ENV, transport=wire.transport()).assign_self("42")
     assert [m for m, _, _ in wire.seen] == ["GET", "GET"]  # viewer, issue — no PATCH
 
 
@@ -129,15 +188,41 @@ def test_gitea_unassign_removes_only_the_bot() -> None:
     assert patches == [{"assignees": ["alice"]}]
 
 
-# ─── GitHub: one additive round-trip, no read ──────────────────────────────
+# ─── GitHub: the additive sub-resource, plus a read that answers "who did it" ─
 
 
 def test_github_assign_posts_to_the_additive_subresource() -> None:
-    wire = _Wire({"/user": {"login": "grove-ai"}, "/repos/o/r/issues/42/assignees": {}})
-    GitHubProvider(_GITHUB_CFG, env=_ENV, transport=wire.transport()).assign_self("42")
+    wire = _Wire(
+        {
+            "/user": {"login": "grove-ai"},
+            "/repos/o/r/issues/42": {"number": 42, "state": "open", "assignees": []},
+            "/repos/o/r/issues/42/assignees": {},
+        }
+    )
+    assert GitHubProvider(_GITHUB_CFG, env=_ENV, transport=wire.transport()).assign_self("42")
     assert wire.seen[-1] == ("POST", "/repos/o/r/issues/42/assignees", {"assignees": ["grove-ai"]})
-    # No issue GET: the sub-resource is additive, so there is nothing to merge.
-    assert not any(path == "/repos/o/r/issues/42" for _, path, _ in wire.seen)
+
+
+def test_github_assign_reports_false_when_the_login_is_already_there() -> None:
+    """The read exists ONLY to answer this, and the answer gates a later unassign.
+
+    GitHub's sub-resource is additive, so the POST alone would succeed
+    identically whether or not a human had already assigned the bot — and a
+    caller that read that as "I assigned it" would later unassign somebody
+    else's decision. The extra GET buys exactly that distinction.
+    """
+    wire = _Wire(
+        {
+            "/user": {"login": "grove-ai"},
+            "/repos/o/r/issues/42": {
+                "number": 42,
+                "state": "open",
+                "assignees": [{"login": "grove-ai"}],
+            },
+        }
+    )
+    assert not GitHubProvider(_GITHUB_CFG, env=_ENV, transport=wire.transport()).assign_self("42")
+    assert not any(method == "POST" for method, _, _ in wire.seen)
 
 
 def test_github_unassign_deletes_from_the_same_subresource() -> None:

@@ -24,6 +24,10 @@ systemd-user service units for the Grove daemon and the optional webapp, plus th
 
 **Follow the established shape: ship a `.in` template, add a `_systemd-install-<name>` recipe, gate inclusion via a Make-level `$(if $(WITH_<NAME>),...)` conditional.** Never gate with a shell `if`/`fi` inside a recipe — multi-line shell heredocs inside Make `define` blocks fail in subtle ways.
 
+**`grove-webapp.service.in` describes the one assistant-ui front end; there is no longer a second front end to parameterize over.** An earlier migration ran two front ends side by side (`webapp` + `webapp2`) behind independent `WITH_WEBAPP`/`WITH_WEBAPP2` gates and a template rendered through a two-unit `_render_webapp` Make function; once the old front end was deleted and `webapp2` renamed to `webapp`, that indirection had exactly one caller left, so it was folded back into the same `_SED_SUBST` used by every other unit. If a second webapp-shaped unit is ever needed again, reach for that pattern (a small `sed`-generating Make function taking the differing fields as `$(1)`, `$(2)`, ... — see git history around the webapp2 retirement) rather than copying the template by hand.
+
+**webapp needs Node >= 22 (Next 16) and carries its own `WEBAPP_NPM_BIN` (defaults to `NPM_BIN`).** The shell default is frequently older than what Next 16 requires, so the webapp toolchain is resolved independently rather than assuming the ambient `npm` is new enough. The precheck *fails* on a Node it can probe and finds too old, and only *warns* when it cannot probe at all, so a fixture path in a test does not turn into a hard error.
+
 ## Testing
 
 **Tests assert against `make systemd-print`, never the live filesystem.** `tests/test_systemd_packaging.py` invokes the print target and asserts placeholder substitution plus the `Wants=` invariant. **Never write to `~/.config/systemd/user` from a test.** See [tests](../tests/CLAUDE.md) for the print-target testing rule.

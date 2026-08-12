@@ -109,6 +109,36 @@ DEFAULT_SIDECAR_MAX_AGE_SECONDS: Final = 300
 # sidecar-write side is unaffected).
 _SUBAGENT_EVENTS: Final[tuple[str, ...]] = ("SubagentStart", "SubagentStop")
 
+# Every hook event fired from INSIDE a sub-agent extends the SAME base payload
+# every top-level event does, carrying `agent_id`/`agent_type` alongside it
+# (Claude Code 2.1.227+; `SubagentStart`/`SubagentStop` declare both required,
+# every other event populates them too). That is the whole seam: `record_event`
+# below routes on `agent_id`'s presence rather than needing a second capture
+# mechanism. This is the SUB-AGENT's own state map — deliberately separate from
+# `_STATE_BY_EVENT`, which governs the MAIN thread's sidecar and must never see
+# these entries (a sub-agent's `PreToolUse` is not evidence about what the main
+# thread is doing). `Stop` is REWRITTEN to `SubagentStop` inside a sub-agent
+# (Claude Code's own behavior), so a sub-agent's terminal event always arrives
+# under that name — `Stop` itself never carries an `agent_id`.
+_SUBAGENT_STATE_BY_EVENT: Final[dict[str, AgentActivityState]] = {
+    "SubagentStart": AgentActivityState.WORKING,
+    "PreToolUse": AgentActivityState.WORKING,
+    "PostToolUse": AgentActivityState.WORKING,
+    "Notification": AgentActivityState.BLOCKED,
+    "SubagentStop": AgentActivityState.WAITING,
+}
+
+# The sub-agent sidecar tree is a CHILD of the top-level session's own sidecar
+# dir (`<sidecar_dir>/subagents/<session_id>/<agent_id>.json`) — same reasoning
+# as `agent_hook_spool_dir`: every caller already threads `sidecar_dir` through,
+# so no second path needs plumbing to every read site.
+_SUBAGENT_SIDECAR_DIR: Final = "subagents"
+
+# Cap on a sub-agent's captured final message (`SubagentStop`'s
+# `last_assistant_message`) — the same discipline `AgentActivity.current_task`
+# applies on the ~1 Hz path, so one verbose sub-agent can't balloon its sidecar.
+_LAST_MESSAGE_CAP: Final = 500
+
 # The three sub-kinds Claude Code's ``Notification`` event covers: a tool
 # permission ask, the "still there?" idle nudge, and the general
 # needs-your-input case. `state_for` keys off the bare event name regardless
@@ -293,6 +323,90 @@ class HookRecord:
         return True
 
 
+@dataclass(slots=True, frozen=True)
+class SubagentHookRecord:
+    """One sub-agent's pushed status — the hook's LIVE view, before any
+    sidechain transcript has necessarily been flushed to disk.
+
+    Keyed by ``(session_id, agent_id)`` rather than ``session_id`` alone: a
+    top-level session fanning out several sub-agents at once emits several of
+    these, one per agent, and none of them may overwrite the top-level
+    session's own :class:`HookRecord` sidecar (the bug this whole record type
+    exists to close — before it, a sub-agent's ``PreToolUse``/``PostToolUse``
+    was keyed the same as the main thread's and silently corrupted the
+    top-level push status while the sub-agent ran).
+
+    ``current_tool`` is the name of a ``PreToolUse`` this sub-agent has not yet
+    resolved with its OWN ``PostToolUse`` — the identical "unresolved means
+    in-flight" rule :func:`grove.core.agents.model.tool_outcomes` applies to a
+    finished transcript, read here directly off the live push instead of a
+    transcript tail. ``state`` only ever settles to WAITING on an explicit
+    ``SubagentStop`` (never inferred from silence): a real sub-agent measured
+    113s with no sidecar growth mid-tool-call, so quiet must never read as
+    finished.
+    """
+
+    session_id: str
+    agent_id: str
+    agent_type: str | None
+    state: AgentActivityState
+    event: str
+    started_at: datetime
+    last_event_at: datetime
+    # The tool a PreToolUse started and no PostToolUse has yet resolved, or
+    # ``None`` between calls (or before the first one). Not carried forward
+    # across a resolving PostToolUse — it is a snapshot of "right now", not a
+    # running log.
+    current_tool: str | None = None
+    # SubagentStop's `last_assistant_message`, truncated. `None` until the
+    # sub-agent actually stops (never a placeholder while it runs).
+    last_message: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "agent_id": self.agent_id,
+            "agent_type": self.agent_type,
+            "state": self.state.value,
+            "event": self.event,
+            "started_at": self.started_at.isoformat(),
+            "last_event_at": self.last_event_at.isoformat(),
+            "current_tool": self.current_tool,
+            "last_message": self.last_message,
+        }
+
+    @classmethod
+    def from_json(cls, data: object) -> SubagentHookRecord | None:
+        """Parse a sub-agent sidecar; ``None`` on anything malformed (best-effort)."""
+        if not isinstance(data, dict):
+            return None
+        try:
+            started_at = datetime.fromisoformat(str(data["started_at"]))
+            last_event_at = datetime.fromisoformat(str(data["last_event_at"]))
+            state = AgentActivityState(data["state"])
+        except (KeyError, ValueError, TypeError):
+            return None
+        if started_at.tzinfo is None or last_event_at.tzinfo is None:
+            return None  # aware-only, same rule as HookRecord.ts
+        session_id = data.get("session_id")
+        agent_id = data.get("agent_id")
+        if not (isinstance(session_id, str) and session_id) or not (
+            isinstance(agent_id, str) and agent_id
+        ):
+            return None
+        return cls(
+            session_id=session_id,
+            agent_id=agent_id,
+            agent_type=_opt_str(data.get("agent_type")),
+            state=state,
+            event=str(data.get("event", "")),
+            started_at=started_at,
+            last_event_at=last_event_at,
+            current_tool=_opt_str(data.get("current_tool")),
+            last_message=_opt_str(data.get("last_message")),
+        )
+
+
 class ClaudeHook:
     """Pure event→state mapping plus the sidecar read/write/install mechanism."""
 
@@ -435,7 +549,9 @@ class ClaudeHook:
         :meth:`record_event` — the SAME fold a host hook performs — so a
         containerized session's status, its ask-time question capture and its
         clear rules are the ones this module already defines, not a second
-        approximation of them.
+        approximation of them. `record_event` itself routes a spooled payload
+        to the sub-agent sidecar when it carries an `agent_id`, exactly as a
+        direct host write would — the drain has no separate sub-agent branch.
 
         **Ordering and time both come from the spool file's mtime.** The
         pending-question machine is a state machine over the prior sidecar, so
@@ -511,15 +627,39 @@ class ClaudeHook:
         tmux_pane: str | None,
         now: datetime,
     ) -> HookRecord | None:
-        """Turn one hook payload into a sidecar write. ``None`` if the event is ignored.
+        """Turn one hook payload into a sidecar write. ``None`` if the event is
+        ignored OR the payload is sub-agent-scoped (see below).
 
-        Best-effort: a malformed payload or unwritable dir is logged and swallowed
-        — a hook must never break the agent it instruments.
+        Keyed by ``(session_id, agent_id)``: every event carries `agent_id`
+        whenever it fired from inside a sub-agent, and its presence is the
+        WHOLE dispatch — routed to :meth:`_record_subagent_event`, which
+        writes that agent's OWN sidecar and never touches this session's
+        main-thread one. Before this split, a sub-agent's `PreToolUse` was
+        keyed identically to the main thread's and silently overwrote the
+        top-level session's pushed status while the sub-agent ran. A
+        main-thread event (no `agent_id`) is unaffected — same shape as
+        before.
+
+        Best-effort: a malformed payload or unwritable dir is logged and
+        swallowed — a hook must never break the agent it instruments.
         """
         event = str(payload.get("hook_event_name", ""))
         session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        agent_id = _opt_str(payload.get("agent_id"))
+        if agent_id is not None:
+            cls._record_subagent_event(
+                payload,
+                event,
+                session_id=session_id,
+                agent_id=agent_id,
+                sidecar_dir=sidecar_dir,
+                now=now,
+            )
+            return None
         state = cls.state_for(event, payload)
-        if state is None or not isinstance(session_id, str) or not session_id:
+        if state is None:
             return None
         record = HookRecord(
             session_id=session_id,
@@ -534,6 +674,62 @@ class ClaudeHook:
             ),
         )
         cls.write(record, sidecar_dir=sidecar_dir)
+        return record
+
+    @classmethod
+    def _record_subagent_event(
+        cls,
+        payload: dict[str, Any],
+        event: str,
+        *,
+        session_id: str,
+        agent_id: str,
+        sidecar_dir: Path,
+        now: datetime,
+    ) -> SubagentHookRecord | None:
+        """The ``(session_id, agent_id)``-keyed half of :meth:`record_event`.
+
+        Mirrors the main-thread shape (state map → sidecar write) but against
+        :data:`_SUBAGENT_STATE_BY_EVENT` and this agent's OWN sidecar file, so
+        a sub-agent's tool calls can never corrupt the top-level session's
+        pushed status. ``started_at`` and ``current_tool`` are read-modify-write
+        against the PRIOR record for this same agent — `started_at` is stamped
+        once (at `SubagentStart`, or at whatever event this agent's sidecar
+        first sees, degrading gracefully if that event was ever missed) and
+        held; `current_tool` is cleared on `PostToolUse` and carried forward on
+        every event that isn't itself a tool boundary. ``None`` for an event
+        this map doesn't recognize (defensive — a main-thread-only event
+        should never carry an `agent_id`, but a future Claude Code release is
+        not this module's to predict).
+        """
+        state = _SUBAGENT_STATE_BY_EVENT.get(event)
+        if state is None:
+            return None
+        prior = cls._read_subagent(session_id, agent_id, sidecar_dir=sidecar_dir)
+        started_at = prior.started_at if prior is not None else now
+        if event == "PreToolUse":
+            current_tool = _opt_str(payload.get("tool_name"))
+        elif event == "PostToolUse":
+            current_tool = None
+        else:
+            current_tool = prior.current_tool if prior is not None else None
+        last_message = prior.last_message if prior is not None else None
+        if event == "SubagentStop":
+            pushed = _opt_str(payload.get("last_assistant_message"))
+            if pushed is not None:
+                last_message = _truncate_message(pushed)
+        record = SubagentHookRecord(
+            session_id=session_id,
+            agent_id=agent_id,
+            agent_type=_opt_str(payload.get("agent_type")),
+            state=state,
+            event=event,
+            started_at=started_at,
+            last_event_at=now,
+            current_tool=current_tool,
+            last_message=last_message,
+        )
+        cls._write_subagent(record, sidecar_dir=sidecar_dir)
         return record
 
     @classmethod
@@ -597,6 +793,32 @@ class ClaudeHook:
             os.replace(tmp, target)
         except OSError as exc:
             logger.debug("could not write agent sidecar for {}: {}", record.session_id, exc)
+
+    @staticmethod
+    def _subagent_sidecar_path(session_id: str, agent_id: str, *, sidecar_dir: Path) -> Path:
+        """Where one sub-agent's own sidecar lives — a directory PER top-level
+        session, one file per agent, so :meth:`list_subagents` is a single
+        directory listing with no index to build or invalidate."""
+        return sidecar_dir / _SUBAGENT_SIDECAR_DIR / session_id / f"{agent_id}.json"
+
+    @classmethod
+    def _write_subagent(cls, record: SubagentHookRecord, *, sidecar_dir: Path) -> None:
+        """Atomically write one sub-agent's sidecar. Best-effort (never raises)."""
+        try:
+            target = cls._subagent_sidecar_path(
+                record.session_id, record.agent_id, sidecar_dir=sidecar_dir
+            )
+            paths.ensure_dir(target.parent)
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(record.to_json()), encoding="utf-8")
+            os.replace(tmp, target)
+        except OSError as exc:
+            logger.debug(
+                "could not write sub-agent sidecar for {}/{}: {}",
+                record.session_id,
+                record.agent_id,
+                exc,
+            )
 
     @classmethod
     def adopts(
@@ -701,6 +923,67 @@ class ClaudeHook:
         if not isinstance(data, dict):
             return None
         return HookRecord.from_json(data)
+
+    @classmethod
+    def read_subagent(
+        cls, session_id: str, agent_id: str, *, sidecar_dir: Path
+    ) -> SubagentHookRecord | None:
+        """One sub-agent's pushed status, or ``None`` if missing/malformed.
+
+        Drains the spool first, exactly like :meth:`read` — a containerized
+        sub-agent's hook can only spool its raw payload (see
+        :meth:`spool_script`), and this is one of the seams that must fold it
+        before answering.
+        """
+        cls.drain(sidecar_dir=sidecar_dir)
+        return cls._read_subagent(session_id, agent_id, sidecar_dir=sidecar_dir)
+
+    @classmethod
+    def _read_subagent(
+        cls, session_id: str, agent_id: str, *, sidecar_dir: Path
+    ) -> SubagentHookRecord | None:
+        """The bare per-agent sidecar read, without draining. See :meth:`read_subagent`."""
+        path = cls._subagent_sidecar_path(session_id, agent_id, sidecar_dir=sidecar_dir)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug("could not read sub-agent sidecar {}: {}", path, exc)
+            return None
+        return SubagentHookRecord.from_json(data)
+
+    @classmethod
+    def list_subagents(
+        cls, session_id: str, *, sidecar_dir: Path
+    ) -> tuple[SubagentHookRecord, ...]:
+        """Every sub-agent this session has pushed status for, oldest-started first.
+
+        A directory listing plus one small read per entry — no index, no
+        transcript parse, no discovery scan. Drains the spool ONCE for the
+        whole session (not once per entry), so a containerized fleet's whole
+        backlog folds in one pass. Best-effort: a malformed entry is skipped,
+        never raised; a session with no sub-agents (the overwhelming common
+        case) costs one missing-directory stat.
+        """
+        cls.drain(sidecar_dir=sidecar_dir)
+        directory = sidecar_dir / _SUBAGENT_SIDECAR_DIR / session_id
+        try:
+            found = sorted(directory.glob("*.json"))
+        except OSError:
+            return ()
+        out: list[SubagentHookRecord] = []
+        for path in found:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.debug("could not read sub-agent sidecar {}: {}", path, exc)
+                continue
+            record = SubagentHookRecord.from_json(data)
+            if record is not None:
+                out.append(record)
+        out.sort(key=lambda r: r.started_at)
+        return tuple(out)
 
     @staticmethod
     def ensure_ingest_token() -> str:
@@ -865,3 +1148,12 @@ def _emit_brief(payload: dict[str, Any]) -> None:
 
 def _opt_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _truncate_message(text: str, cap: int = _LAST_MESSAGE_CAP) -> str:
+    """Collapse whitespace and cap length, trailing ellipsis as the trim
+    signal — the same shape `claude_code.py`'s own `_truncate` uses, kept as a
+    small local copy rather than an import: `hook.py` is the hottest process
+    in the system and stays free of that module's dependency weight."""
+    text = " ".join(text.split())
+    return text if len(text) <= cap else text[: cap - 1].rstrip() + "…"

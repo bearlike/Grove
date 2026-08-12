@@ -8,15 +8,21 @@ serve any future client.
 Layout: the **workspace card** (a `Static`) carries the metadata (stats,
 agent session metrics, description, init failure, lifecycle affordances,
 recent commits) — its border stays in `$secondary` because metadata
-describes state, it doesn't *carry* attention. Below it, a **tabbed
-preview** (`TabbedContent`) holds two panes: the **transcript tab** (a
-digest of the primary session's recent turns, tool runs grouped — the
-rail never lists individual calls) and the **terminal tab** (the live
-tmux pane mirror). While the workspace is RUNNING the container gains
-the `-live` class and its border switches to `$primary` (the brand clay)
-so the eye can find "what's actually live" at a glance. With nothing to
-preview (not live, no recorded transcript) the container hides via
-`-hidden` and the workspace card carries the affordance.
+describes state, it doesn't *carry* attention. Below it, a bounded,
+internally-scrollable **tickets panel** lists every attached `TicketRef`
+one per line (hidden entirely when the workspace has none) — it lives
+apart from the workspace card specifically because that card is one
+`Static` with no scroll of its own, so an unbounded ticket count would
+otherwise push the stats/description/affordance/commits blocks off
+screen. Below that, a **tabbed preview** (`TabbedContent`) holds two
+panes: the **transcript tab** (a digest of the primary session's recent
+turns, tool runs grouped — the rail never lists individual calls) and
+the **terminal tab** (the live tmux pane mirror). While the workspace is
+RUNNING the container gains the `-live` class and its border switches to
+`$primary` (the brand clay) so the eye can find "what's actually live"
+at a glance. With nothing to preview (not live, no recorded transcript)
+the container hides via `-hidden` and the workspace card carries the
+affordance.
 
 Default-tab policy: transcript whenever turns exist for the selection,
 else terminal — re-derived per selection, but a tab the user picked by
@@ -89,6 +95,25 @@ class PeekRail(Vertical):
         height: auto;
         margin-bottom: 1;
     }
+    PeekRail #card-tickets {
+        height: auto;
+        max-height: 8;
+        margin-bottom: 1;
+        scrollbar-size-vertical: 1;
+    }
+    PeekRail #card-tickets.-hidden {
+        display: none;
+    }
+    /* One row per ticket, cropped rather than wrapped. `Text.no_wrap` is
+       NOT enough on its own: set as an attribute it is silently ignored on
+       the way through the render pipeline (measured — the same string wraps
+       with the attribute set and crops only when no-wrap is passed at print
+       time), so the panel wrapped every title onto a second line and halved
+       how many tickets fit. The style is the authority. */
+    PeekRail #tickets-body {
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
     PeekRail #peek-tabs {
         height: 1fr;
     }
@@ -127,6 +152,7 @@ class PeekRail(Vertical):
         self._workspace_text: str = self._EMPTY_PLACEHOLDER
         self._pane_text: str = ""
         self._transcript_text: str = ""
+        self._tickets_text: str = ""
         # Default-tab bookkeeping: which selection the current tab choice
         # belongs to, and whether the user picked the tab by hand for it.
         self._tab_wid: str | None = None
@@ -141,6 +167,13 @@ class PeekRail(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(self._EMPTY_PLACEHOLDER, id="card-workspace", classes="grove-card")
+        # Own bounded, scrollable panel — never inline in the summary card,
+        # which is one Static with no scroll of its own. Hidden by default
+        # (`-hidden`) until `_update_tickets` finds a workspace with any
+        # `ticket_refs`; the border title carries the count (`tickets N`),
+        # set dynamically there since it isn't known at compose time.
+        with VerticalScroll(id="card-tickets", classes="grove-card -hidden"):
+            yield Static("", id="tickets-body")
         with TabbedContent(id="peek-tabs", classes="grove-card -hidden"):
             # Scroll container so the newest exchange (the tail) stays
             # reachable when the digest outgrows the pane — same shape as
@@ -199,6 +232,7 @@ class PeekRail(Vertical):
 
         if peek is None:
             self._set_workspace(ws_card, self._EMPTY_PLACEHOLDER)
+            self._update_tickets([])
             self._hide_tabs()
             self.add_class("-empty")
             return
@@ -210,6 +244,7 @@ class PeekRail(Vertical):
                 peek, dark=self.app.current_theme.dark, agent=agent, provision=provision
             ),
         )
+        self._update_tickets(peek.state.ticket_refs)
         live = peek.state.status in LIVE_STATUSES
         # Progress only counts while the status still says PROVISIONING: the
         # stamps and the log outlive the build, so a settled workspace would
@@ -231,12 +266,14 @@ class PeekRail(Vertical):
     def body_text(self) -> str:
         """Last rendered body as plain text. Stable seam for tests.
 
-        Concatenates the workspace card, the transcript digest, and the
-        terminal pane so existing tests ("title in rail.body_text",
-        "frame-two in rail.body_text") work unchanged across the
-        structural split.
+        Concatenates the workspace card, the tickets panel, the transcript
+        digest, and the terminal pane so existing tests ("title in
+        rail.body_text", "frame-two in rail.body_text") work unchanged
+        across the structural split.
         """
         parts = [self._workspace_text]
+        if self._tickets_text:
+            parts.append(self._tickets_text)
         if self._transcript_text:
             parts.append(self._transcript_text)
         if self._pane_text:
@@ -265,6 +302,35 @@ class PeekRail(Vertical):
             return
         self._workspace_text = plain
         card.update(content)
+
+    def _update_tickets(self, refs: list[TicketRef]) -> None:
+        """Diff-guarded update of the tickets panel; hidden when `refs` is empty.
+
+        Tickets live here rather than inline in the workspace card because
+        that card is one `Static` with no scroll of its own — an unbounded
+        ticket count would otherwise push the stats/description/affordance/
+        commits blocks off screen (the defect this panel exists to fix).
+        `-hidden` on an empty selection keeps a ticketless workspace's rail
+        exactly as it was before this panel existed.
+        """
+        container = self.query_one("#card-tickets", VerticalScroll)
+        if not refs:
+            container.add_class("-hidden")
+            if self._tickets_text:
+                self._tickets_text = ""
+                self.query_one("#tickets-body", Static).update("")
+            return
+        container.remove_class("-hidden")
+        # One fixed plural noun regardless of count — the trailing number
+        # already disambiguates "tickets 1" from "tickets 3", so there's no
+        # singular-form branch to keep in sync with the other panel titles.
+        container.border_title = f"tickets {len(refs)}"
+        content = _render_tickets_panel(refs, dark=self.app.current_theme.dark)
+        plain = content.plain
+        if plain == self._tickets_text:
+            return
+        self._tickets_text = plain
+        self.query_one("#tickets-body", Static).update(content)
 
     def _update_transcript(self, turns: tuple[SessionTurn, ...]) -> None:
         card = self.query_one("#card-transcript", Static)
@@ -379,7 +445,10 @@ def _render_workspace(
     `WorkspaceCard`. The rail now carries only what the card cannot:
     live git counts, agent session metrics, init-failure log path,
     paused / offline / orphaned affordances with their action keys, and
-    recent commits.
+    recent commits. Associated tickets are rendered in their own panel
+    (`_render_tickets_panel`, wired by `PeekRail._update_tickets`), not
+    here — an unbounded ticket count would otherwise grow this single
+    `Static` past the rail's visible height with no way to scroll it.
 
     Typography here intentionally tiers content into three weights so the
     card reads at a glance:
@@ -398,7 +467,6 @@ def _render_workspace(
     text.append_text(_stats_line(peek, dark=dark))
     if agent is not None:
         text.append_text(_agent_line(agent, dark=dark))
-    text.append_text(_ticket_block(s.ticket_refs, dark=dark))
     text.append_text(_description_block(s))
     text.append_text(_affordance_block(s, dark=dark, provision=provision))
     text.append_text(_commits_block(peek.recent_commits, dark=dark))
@@ -523,8 +591,15 @@ def _agent_line(agent: AgentActivity, *, dark: bool) -> Text:
     return text
 
 
-def _ticket_block(refs: list[TicketRef], *, dark: bool) -> Text:
-    """Associated tickets — one line each, or nothing when there are none.
+def _render_tickets_panel(refs: list[TicketRef], *, dark: bool) -> Text:
+    """Tickets panel body — one line per ref, or nothing when there are none.
+
+    Lives in its own bounded, scrollable panel (`PeekRail._update_tickets`),
+    never inline in the summary card: that card is one `Static` with no
+    scroll of its own, so an unbounded ticket count used to push the stats,
+    description, affordance and commits blocks off screen. Each line
+    `no_wrap`s and `overflow="ellipsis"`s instead — a long title or a wide
+    fleet's worth of refs crops per-row rather than growing the panel.
 
     Each line leads with the same compact pill the row card shows
     (``ticket_pill``). An issue ref (``kind == "issue"``, the default)
@@ -535,18 +610,21 @@ def _ticket_block(refs: list[TicketRef], *, dark: bool) -> Text:
     "PR state is the single most informative token" rule the row card's
     `_append_ticket_segments` applies, carried onto the rail's read-deeply
     surface so the two never disagree about what a PR's color means. Title
-    (default fg, bold — the human-readable identity), ``assignee``, and
-    ``url`` render identically for both kinds. Absent fields are skipped,
-    never blank-filled — same convention as the agent line. Empty ``refs``
-    yields an empty ``Text`` so the rail ships no placeholder.
+    (default fg, bold — the human-readable identity), ``status`` and
+    ``assignee`` share the one-line budget with the pill; absent fields are
+    skipped, never blank-filled — same convention as the agent line.
+    ``url`` is deliberately dropped here: a full URL on every row was most
+    of the original bloat, and it isn't clickable in a terminal anyway.
+    Empty ``refs`` yields an empty ``Text`` so the panel stays hidden.
     """
     text = Text()
     if not refs:
         return text
     info_hex = ref_color("info", dark=dark)
     muted_hex = chrome_color("muted", dark=dark)
-    for ref in refs:
-        text.append("\n")
+    for i, ref in enumerate(refs):
+        if i:
+            text.append("\n")
         is_pr = ref.kind == "pull_request"
         pill_hex = pr_status_color(ref.status, dark=dark) if is_pr else info_hex
         if is_pr:
@@ -565,11 +643,8 @@ def _ticket_block(refs: list[TicketRef], *, dark: bool) -> Text:
             text.append("· ", style=muted_hex)
             text.append("assignee ", style=muted_hex)
             text.append(ref.assignee, style="bold")
-        if ref.url:
-            text.append("  ")
-            text.append("· ", style=muted_hex)
-            text.append(ref.url, style=muted_hex)
-        text.append("\n")
+    # Cropping is the panel's own `text-wrap: nowrap` / `text-overflow`
+    # style, not an attribute set here — see the comment on that rule.
     return text
 
 

@@ -68,7 +68,7 @@ Every workspace is reachable from all four.
     <iconify-icon icon="lucide:layout-panel-top" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Web dashboard</span>
-  <span class="ms-card__body">A prompt on the landing starts a workspace.</span>
+  <span class="ms-card__body">The whole fleet in one grid, from any device.</span>
 </a>
 <a class="ms-card" href="issue-ops/">
   <span class="ms-card__icon">

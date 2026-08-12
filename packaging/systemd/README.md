@@ -5,7 +5,7 @@ User-scope (`systemd --user`) unit files, installed via the repo `Makefile`.
 | Unit | Default | Purpose |
 |---|---|---|
 | `grove-daemon.service` | always installed by `make systemd` | runs `grove daemon serve` on `127.0.0.1:7421` |
-| `grove-webapp.service` | **opt-in** via `WITH_WEBAPP=1 make systemd` | runs `npm run start` for the Next.js dashboard, binds `0.0.0.0:3000` for LAN access |
+| `grove-webapp.service` | **opt-in** via `WITH_WEBAPP=1 make systemd` | runs `npm run start` for the assistant-ui front end, binds `0.0.0.0:3000` for LAN access |
 | `grove-mcp.service` | **opt-in** via `WITH_MCP=1 make systemd` | runs `grove-mcp` over Streamable HTTP on `127.0.0.1:7431` for long-lived MCP clients |
 
 ## Quick reference
@@ -51,7 +51,7 @@ Anything baked into the unit file is exposed as a Make variable:
 | `DAEMON_HOST` | `127.0.0.1` | daemon `--host` |
 | `DAEMON_PORT` | `7421` | daemon `--port`, webapp `GROVE_DAEMON_URL` |
 | `WEBAPP_DIR` | `<repo>/webapp` | webapp `WorkingDirectory` |
-| `NPM_BIN` | `command -v npm` | webapp ExecStart |
+| `WEBAPP_NPM_BIN` | `NPM_BIN` (`command -v npm`) | webapp ExecStart — needs a Node >= 22 npm (Next 16) |
 | `WEBAPP_HOST` | `0.0.0.0` | webapp `--hostname` (LAN reachable) |
 | `WEBAPP_PORT` | `3000` | webapp `--port` |
 | `MCP_BIN` | `command -v grove-mcp` | MCP ExecStart |
@@ -119,8 +119,8 @@ Lingering is host-level, set once, independent of these unit files.
 ## Architecture rationale
 
 - **systemd-user, not system-wide.** Same UID as the user's tmux server, same access to `~/.ssh`, `~/.grove`, git binary, no privilege escalation. The daemon is a personal tool, not infrastructure.
-- **Webapp opt-in.** Most users only need the TUI. Installing the webapp service by default would burn a port and run a Node process for users who never visit the dashboard.
-- **MCP opt-in, and loopback by default.** Most users get MCP the stdio way, spawned per connection with no unit involved. When you do run it as a service, `MCP_HOST` defaults to `127.0.0.1` — deliberately unlike `WEBAPP_HOST=0.0.0.0`. The dashboard is read-only; the MCP surface can create, kill, and message workspaces, so exposing it off-host is an explicit operator decision, taken behind a tunnel, VPN, or TLS-terminating proxy.
+- **Webapp opt-in.** Most users only need the TUI. Installing the webapp service by default would burn a port and run a Node process for users who never open the webapp.
+- **MCP opt-in, and loopback by default.** Most users get MCP the stdio way, spawned per connection with no unit involved. When you do run it as a service, `MCP_HOST` defaults to `127.0.0.1` — deliberately unlike `WEBAPP_HOST=0.0.0.0`. The webapp needs a human at a browser to do anything; the MCP surface is a machine-callable API that can create, kill, and message workspaces unattended, so exposing it off-host is a higher-stakes, explicit operator decision, taken behind a tunnel, VPN, or TLS-terminating proxy.
 - **No PATH bake on the MCP unit.** The daemon unit needs `Environment=PATH=` because it runs user-authored init scripts (issue #9). The MCP server only serves HTTP and proxies to the daemon — it shells out to nothing, so it inherits systemd's minimal environment without trouble.
 - **`Wants=` not `Requires=`.** Daemon failure doesn't tear the webapp down. The webapp's status bar already surfaces "daemon unreachable" — failing closed loses signal without buying anything.
 - **Production `npm run start`, not dev.** Dev mode runs hot-reload + telemetry overhead. For a host service you want the static-route, prebuilt bundle.

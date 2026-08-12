@@ -9,6 +9,7 @@ never write to ``~/.config/systemd/user`` from the test suite.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -105,6 +106,26 @@ def test_webapp_unit_passes_daemon_url_via_env() -> None:
     assert "Environment=GROVE_DAEMON_URL=http://127.0.0.1:7421" in out
     # Webapp listens on its own port, baked into the ExecStart line.
     assert "--port 3030" in out
+
+
+def test_webapp_unit_carries_its_own_node_toolchain() -> None:
+    """The webapp's npm is a SEPARATE knob from the daemon's, and must reach the
+    unit as both the ExecStart binary and a baked PATH.
+
+    Next 16 needs Node >= 22, which is routinely newer than the shell default
+    that `NPM_BIN` resolves. Under `systemd --user` nothing sources a shell, so
+    an ExecStart naming the right npm still runs it against whatever `node` the
+    bare PATH finds first — the unit has to carry the toolchain's bin directory
+    too, or the app starts under the wrong major and fails at import time.
+    """
+    out = _run_print(
+        with_webapp=True,
+        env_overrides={"WEBAPP_PORT": "3000", "WEBAPP_NPM_BIN": "/opt/node22/bin/npm"},
+    )
+    assert f"WorkingDirectory={REPO_ROOT / 'webapp'}" in out
+    assert "ExecStart=/opt/node22/bin/npm run start -- --hostname 0.0.0.0 --port 3000" in out
+    assert "Environment=PATH=/opt/node22/bin:" in out
+    assert "@WEBAPP_DESC@" not in out
 
 
 def test_webapp_unit_default_host_is_lan_reachable() -> None:
@@ -213,6 +234,11 @@ def test_mcp_unit_defaults_track_the_cli_defaults() -> None:
 
 
 def test_no_unsubstituted_placeholders_remain() -> None:
-    """No @TOKEN@ should survive in any rendered unit."""
+    """No ``@TOKEN@`` placeholder should survive in any rendered unit.
+
+    A real PATH may contain scoped package directories such as ``@openai``;
+    checking every at-sign confuses valid environment data with the template
+    marker this test is meant to catch.
+    """
     out = _run_print(with_webapp=True, with_mcp=True)
-    assert "@" not in out.replace("https://github.com/bearlike/Grove", ""), out
+    assert not re.search(r"@[A-Z][A-Z0-9_]*@", out), out

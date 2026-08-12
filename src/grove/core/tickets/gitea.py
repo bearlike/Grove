@@ -63,6 +63,7 @@ class GiteaProvider(NumberTicketProvider):
     builtin_prefixes: ClassVar[tuple[str, ...]] = ("gitea", "gtea")
     comments_supported: ClassVar[bool] = True
     assignees_supported: ClassVar[bool] = True
+    body_supported: ClassVar[bool] = True
     branch_view_segment: ClassVar[str] = "src/branch"
     viewer_path: ClassVar[str] = "/api/v1/user"
 
@@ -145,21 +146,39 @@ class GiteaProvider(NumberTicketProvider):
             comments=tuple(self.list_comments(ticket_id)),
         )
 
+    # ─── body read/write ────────────────────────────────────────────────────
+
+    def read_body(self, ticket_id: str) -> str:
+        owner, repo = self._scoped("read a ticket body")
+        payload = self._request("GET", f"/api/v1/repos/{owner}/{repo}/issues/{ticket_id}")
+        if not isinstance(payload, dict):
+            raise TicketProviderError(f"gitea returned an unexpected shape for issue {ticket_id}")
+        return str(payload.get("body") or "")
+
+    def update_body(self, ticket_id: str, body: str) -> None:
+        owner, repo = self._scoped("update a ticket body")
+        path = f"/api/v1/repos/{owner}/{repo}/issues/{ticket_id}"
+        self._request("PATCH", path, json_body={"body": body})
+
     # ─── assignee writes (read-modify-write; Gitea has no additive endpoint) ─
 
-    def assign_self(self, ticket_id: str) -> None:
-        self._rewrite_assignees(ticket_id, present=True)
+    def assign_self(self, ticket_id: str) -> bool:
+        return self._rewrite_assignees(ticket_id, present=True)
 
     def unassign_self(self, ticket_id: str) -> None:
         self._rewrite_assignees(ticket_id, present=False)
 
-    def _rewrite_assignees(self, ticket_id: str, *, present: bool) -> None:
+    def _rewrite_assignees(self, ticket_id: str, *, present: bool) -> bool:
         """PATCH the whole assignee list with the bot's login added or removed.
 
         The read is what keeps this additive: Gitea's ``assignees`` field
         replaces, so PATCHing ``[bot]`` blind would evict every human on the
         ticket. An unchanged list sends no PATCH at all, which is what makes a
         repeated assign free rather than merely harmless.
+
+        Returns whether a PATCH was actually sent — i.e. whether this call is
+        what changed the ticket, which the caller needs to tell "Grove assigned
+        this" from "it was already assigned".
         """
         owner, repo = self._scoped("change assignees")
         login = self.viewer_login()
@@ -169,8 +188,9 @@ class GiteaProvider(NumberTicketProvider):
             raise TicketProviderError(f"gitea returned an unexpected shape for issue {ticket_id}")
         wanted = self.with_login(self.assignee_logins(payload), login, present=present)
         if wanted is None:
-            return
+            return False
         self._request("PATCH", path, json_body={"assignees": wanted})
+        return True
 
     # ─── comment I/O ────────────────────────────────────────────────────────
 

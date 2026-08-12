@@ -275,7 +275,13 @@ class GroveTools:
         return await self._client.detach_ticket_by_ref(workspace_id, ref)
 
     async def set_workspace_phase(
-        self, workspace_id: str, phase: TaskPhase, note: str | None = None
+        self,
+        workspace_id: str,
+        phase: TaskPhase,
+        note: str | None = None,
+        *,
+        blocked: bool = False,
+        ticket: str | None = None,
     ) -> PhaseView:
         """Set or correct a workspace's task-phase claim from outside the
         agent — one of ``scoping``, ``planning``, ``implementing``,
@@ -285,8 +291,14 @@ class GroveTools:
         that reaches it in every runtime, including a container, and keyed
         per agent so co-resident agents never overwrite each other); use
         this tool to set or fix the claim as an outside operator instead.
-        ``note`` is an optional one-line detail, capped at 200 characters."""
-        return await self._client.set_phase(workspace_id, phase, note)
+        ``note`` is an optional one-line detail, capped at 200 characters.
+        ``ticket`` names one attached ticket to report against, e.g.
+        ``"gitea:498"`` — omit it to target the workspace's own claim.
+        ``blocked`` means you cannot finish this yourself; say why in
+        ``note``."""
+        return await self._client.set_phase(
+            workspace_id, phase, note, blocked=blocked, ticket=ticket
+        )
 
     async def pause_workspace(self, workspace_id: str, force: bool = False) -> WorkspaceStateView:
         """Pause a workspace: remove its worktree and tmux session but keep

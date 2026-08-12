@@ -200,6 +200,12 @@ class PickupEngine:
         because it is a standing state), and an actual rejection by the forge
         (warning, because it is almost always a missing permission a human can
         grant).
+
+        ``True`` means THIS call assigned the ticket, which is narrower than "the
+        ticket is now assigned" — an account a human already put there answers
+        ``False``. The caller records the difference to decide what it may later
+        release, so widening this to "is assigned" would hand Grove permission to
+        undo assignments it never made.
         """
         if not provider.can_assign:
             logger.debug(
@@ -211,7 +217,7 @@ class PickupEngine:
             )
             return False
         try:
-            provider.assign_self(ticket_id)
+            return provider.assign_self(ticket_id)
         except GroveError as exc:
             logger.warning(
                 "issue-ops could not assign {}#{} to the configured account — this needs "
@@ -221,6 +227,40 @@ class PickupEngine:
                 exc,
             )
             return False
+
+    def release_bot(self, provider: TicketProvider, ticket_id: str) -> bool:
+        """Take the bot's account back off the ticket. Best-effort, same discipline.
+
+        The counterpart to :meth:`assign_bot`, for when the workspace that
+        occasioned the assignment has ended. It is NOT :meth:`hand_back`, and the
+        difference is the marker: a hand-back is a human saying "Grove should not
+        have this", so it claims the durable marker to stop the poll re-taking the
+        ticket. This is Grove observing that its own work finished, which says
+        nothing about whether the ticket may be handed over again later.
+
+        Every human assignee is left alone — the provider's unassign removes only
+        :meth:`viewer_login`.
+        """
+        if not provider.can_assign:
+            return False
+        try:
+            provider.unassign_self(ticket_id)
+        except GroveError as exc:
+            # Worth a warning rather than a debug: the visible symptom is a board
+            # that keeps claiming Grove is working a ticket it has finished.
+            logger.warning(
+                "issue-ops could not unassign {}#{} after the workspace ended — the "
+                "ticket will keep reading as assigned to Grove: {}",
+                provider.name,
+                ticket_id,
+                exc,
+            )
+            return False
+        logger.info(
+            "issue-ops released {}#{} — the workspace holding it has ended",
+            provider.name,
+            ticket_id,
+        )
         return True
 
     # ─── shared resolution ──────────────────────────────────────────────────

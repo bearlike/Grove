@@ -1,285 +1,261 @@
 "use client";
 
-/**
- * Login / pairing page — the single browser-side surface for the
- * Bluetooth-style handshake. Composed entirely from shadcn primitives
- * (Card / Input / Button / Alert / Skeleton). Zero bespoke chrome.
- *
- * State machine:
- *   idle      → user types a label, clicks Pair → POST /api/auth/pair
- *   pairing   → display the code, poll /api/auth/pair/[id] every 2s
- *   approved  → cookie has been set server-side; redirect to ?next=
- *   denied    → toast + back to idle
- *   error     → surfaced via the inline Alert
- */
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { CircleAlertIcon } from "lucide-react";
 
+import { BrandMark } from "@/components/grove/brand-mark";
+import { GitHubIcon } from "@/components/icons/github";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Label } from "@/components/ui/label";
 
-type Phase =
+type PairingState =
   | { kind: "idle"; error?: string }
-  | { kind: "pairing"; challengeId: string; code: string }
+  | { kind: "pending"; challengeId: string; code: string }
   | { kind: "approved" }
-  | { kind: "error"; message: string };
+  | { kind: "denied"; error: string }
+  | { kind: "error"; error: string };
+type PairChallenge = { challenge_id: string; code: string };
+type PairStatus = { state: "pending" | "approved" | "consumed" | "denied" | "expired" };
 
-const POLL_MS = 2_000;
+const POLL_INTERVAL_MS = 2_000;
 
-function defaultLabel(): string {
-  if (typeof navigator === "undefined") return "Browser";
-  const ua = navigator.userAgent || "";
-  // Cheap heuristic — pretty enough as a default the user will probably
-  // accept. They can always overwrite the field.
-  if (/iPhone/.test(ua)) return "iPhone";
-  if (/iPad/.test(ua)) return "iPad";
-  if (/Android/.test(ua)) return "Android";
-  if (/Macintosh/.test(ua)) return "Mac";
-  if (/Windows/.test(ua)) return "Windows";
-  return "Browser";
+export default function LoginPage(): React.ReactNode {
+  return <Suspense><LoginForm /></Suspense>;
 }
 
-export default function LoginPage() {
-  // Next.js App Router prerenders pages by default, but useSearchParams
-  // forces a CSR bailout. Wrap the searchParams-using component in a
-  // Suspense boundary so the build-time prerender succeeds with a fallback
-  // and the real param resolution happens client-side.
-  return (
-    <Suspense fallback={null}>
-      <LoginPageInner />
-    </Suspense>
-  );
-}
-
-function LoginPageInner() {
+function LoginForm(): React.ReactNode {
   const router = useRouter();
-  const params = useSearchParams();
+  const search = useSearchParams();
   const next = useMemo(() => {
-    const candidate = params?.get("next");
-    if (!candidate) return "/";
-    // Defensive: only allow same-origin paths (no `//evil.com` open redirects).
-    if (!candidate.startsWith("/") || candidate.startsWith("//")) return "/";
-    return candidate;
-  }, [params]);
+    const candidate = search.get("next");
+    return candidate?.startsWith("/") && !candidate.startsWith("//") ? candidate : "/";
+  }, [search]);
+  const [label, setLabel] = useState("Browser");
+  const [state, setState] = useState<PairingState>({ kind: "idle" });
 
-  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
-  const [label, setLabel] = useState<string>("");
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Prefill the label on first paint (effect runs client-side only).
   useEffect(() => {
-    if (label === "") {
-      setLabel(defaultLabel());
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (state.kind !== "pending") return;
+    const timer = window.setInterval(() => void checkPairing(state.challengeId), POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [state]);
 
-  // Tear down the poll on unmount or phase change.
   useEffect(() => {
-    return () => {
-      if (pollTimer.current) clearInterval(pollTimer.current);
-      pollTimer.current = null;
-    };
-  }, []);
+    if (state.kind !== "approved") return;
+    const timer = window.setTimeout(() => router.replace(next), 300);
+    return () => window.clearTimeout(timer);
+  }, [next, router, state.kind]);
 
-  async function startPairing(): Promise<void> {
-    const trimmed = label.trim();
-    if (!trimmed) {
-      setPhase({ kind: "idle", error: "Please enter a device name." });
+  async function beginPairing(): Promise<void> {
+    const device = label.trim();
+    if (!device) {
+      setState({ kind: "idle", error: "Enter a device name to continue." });
       return;
     }
     try {
-      const res = await fetch("/api/auth/pair", {
+      const response = await fetch("/api/auth/pair", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ label: trimmed }),
+        body: JSON.stringify({ label: device }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const message = body?.detail?.message ?? `Pair request failed (${res.status})`;
-        setPhase({ kind: "error", message });
-        return;
-      }
-      const data = (await res.json()) as { challenge_id: string; code: string };
-      setPhase({ kind: "pairing", challengeId: data.challenge_id, code: data.code });
-      pollTimer.current = setInterval(() => void poll(data.challenge_id), POLL_MS);
-    } catch (err) {
-      setPhase({ kind: "error", message: `Network error: ${String(err)}` });
+      if (!response.ok) throw new Error(`Pairing request failed (${response.status}).`);
+      const challenge = await response.json() as PairChallenge;
+      setState({ kind: "pending", challengeId: challenge.challenge_id, code: challenge.code });
+    } catch (error: unknown) {
+      setState({ kind: "error", error: error instanceof Error ? error.message : "Could not start pairing." });
     }
   }
 
-  async function poll(challengeId: string): Promise<void> {
+  async function checkPairing(challengeId: string): Promise<void> {
     try {
-      const res = await fetch(`/api/auth/pair/${encodeURIComponent(challengeId)}`, {
-        method: "GET",
-        cache: "no-store",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const message = body?.detail?.message ?? `Pairing failed (${res.status})`;
-        if (pollTimer.current) clearInterval(pollTimer.current);
-        pollTimer.current = null;
-        setPhase({ kind: "error", message });
-        return;
-      }
-      const data = (await res.json()) as { state: string };
-      switch (data.state) {
-        case "consumed":
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          pollTimer.current = null;
-          setPhase({ kind: "approved" });
-          // Tiny delay so the success state is visible before redirect.
-          setTimeout(() => router.push(next), 400);
-          return;
-        case "denied":
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          pollTimer.current = null;
-          setPhase({ kind: "idle", error: "Pairing was denied." });
-          return;
-        case "expired":
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          pollTimer.current = null;
-          setPhase({ kind: "idle", error: "Code expired. Try again." });
-          return;
-        default:
-          // Pending / approved-but-not-yet-consumed: keep polling.
-          return;
-      }
-    } catch (err) {
-      if (pollTimer.current) clearInterval(pollTimer.current);
-      pollTimer.current = null;
-      setPhase({ kind: "error", message: `Network error: ${String(err)}` });
+      const response = await fetch(`/api/auth/pair/${encodeURIComponent(challengeId)}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`Pairing check failed (${response.status}).`);
+      const status = await response.json() as PairStatus;
+      if (status.state === "consumed") setState({ kind: "approved" });
+      if (status.state === "denied") setState({ kind: "denied", error: "Pairing was denied." });
+      if (status.state === "expired") setState({ kind: "denied", error: "The pairing code expired." });
+    } catch (error: unknown) {
+      setState({ kind: "error", error: error instanceof Error ? error.message : "Could not check pairing." });
     }
   }
 
-  function cancel(): void {
-    if (pollTimer.current) clearInterval(pollTimer.current);
-    pollTimer.current = null;
-    setPhase({ kind: "idle" });
-  }
-
+  const error = state.kind === "idle" ? state.error : state.kind === "denied" || state.kind === "error" ? state.error : undefined;
   return (
-    <main className="grid min-h-dvh place-items-center px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2rem,env(safe-area-inset-top))]">
-      <div className="flex w-full max-w-md flex-col items-center gap-8">
-        {/* First-impression brand moment (brand.md §5): the mark large + the ONE
-            display-scale wordmark the app allows, over generous whitespace —
-            carried by scale and space alone, no gradient / glow / shadow. */}
-        <div className="flex flex-col items-center gap-3 text-center">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/grove-logo.png" alt="" aria-hidden width={56} height={56} className="size-14" />
-          <h1 className="text-4xl font-semibold tracking-tight">Grove</h1>
-          <p className="max-w-xs text-sm text-muted-foreground">
-            Tend your agent worktrees like a forest.
-          </p>
-        </div>
+    <main
+      className="flex min-h-dvh flex-col items-center justify-center gap-6 p-6"
+      data-testid="login-page"
+    >
+      {/* The mark stands ALONE here, so it takes a `label` — the one place in
+          the app that does. Everywhere else it sits beside the word "Grove"
+          and a screen reader would say the name twice.
 
-        <Card className="w-full">
+          Above the card rather than inside its header: this is the product
+          identifying itself before the card asks for anything, which is what
+          makes the screen read as a front door instead of a form on a blank
+          page. `size-12` because it is the only thing above the fold competing
+          with the pairing code, and it must not win. */}
+      <BrandMark label="Grove" className="size-12" />
+
+      <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Pair this device</CardTitle>
-          <CardDescription>
-            {phase.kind === "pairing"
-              ? "Approve the code on the host running Grove."
-              : "Grant this browser access to the Grove dashboard."}
-          </CardDescription>
+          {/* `text-lg` states a size the vendored `CardTitle` does not: it ships
+              `leading-none font-semibold` with NO size class, so this inherited
+              the 16px browser root — measured — while the body around it reads
+              13px. The ramp puts `text-lg` at 16px too, so this changes no
+              pixels today; what it changes is that the size is now a decision
+              that tracks §1 instead of an accident that tracks the user agent. */}
+          <CardTitle className="text-lg">Pair this device</CardTitle>
+          <CardDescription>Approve this browser from the Grove host.</CardDescription>
         </CardHeader>
-        {/* Keyed by phase so each transition (pairing → approved …) cross-fades
-            in over 200ms instead of snapping — the very first motion on stage. */}
-        <CardContent
-          key={phase.kind}
-          className="motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200"
-        >
-          {phase.kind === "idle" && (
-            <div className="space-y-4">
-              <label className="block space-y-2">
-                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                  Device name
-                </span>
-                <Input
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void startPairing();
-                  }}
-                  placeholder="iPhone, Office Mac, …"
-                  autoFocus
-                />
-              </label>
-              {phase.error && (
-                <p
-                  className="rounded-md border border-[var(--status-error)] bg-[var(--status-error)]/10 px-3 py-2 text-sm text-[var(--status-error)]"
-                  role="alert"
-                >
-                  {phase.error}
-                </p>
-              )}
+        <CardContent className="flex flex-col gap-4">
+          {state.kind === "pending" ? (
+            <div className="flex flex-col items-center gap-3">
+              <p className="text-sm text-content-secondary">Enter this code on the Grove host.</p>
+              {/* The screen's subject, and the one thing on it that is a
+                  literal you retype — so mono, and the only `text-3xl` in the
+                  app. At 24px against a 16px title and 13px body it still reads
+                  as the subject after the ramp. */}
+              <output className="font-mono text-3xl">{state.code}</output>
+              <Waiting>Waiting for approval on the host…</Waiting>
             </div>
-          )}
-
-          {phase.kind === "pairing" && (
-            <div className="space-y-4 text-center">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                  Code
-                </p>
-                <p className="mt-2 select-all font-mono text-3xl font-semibold tracking-widest">
-                  {phase.code}
-                </p>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Open the Grove TUI on the host (or run{" "}
-                <code className="rounded bg-muted px-1 font-mono text-xs">
-                  grove auth pending
-                </code>
-                ) and approve the matching code.
-              </p>
-              <Skeleton className="mx-auto h-2 w-32" />
+          ) : state.kind === "approved" ? (
+            <div className="flex flex-col items-center gap-3">
+              <p className="text-sm text-content-secondary">Paired. Opening Grove…</p>
             </div>
-          )}
-
-          {phase.kind === "approved" && (
-            <div className="space-y-2 text-center">
-              <p className="text-sm font-medium">Paired. Redirecting…</p>
-              <Skeleton className="mx-auto h-2 w-32" />
+          ) : (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="device-label">Device name</Label>
+              <Input id="device-label" value={label} onChange={(event) => setLabel(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void beginPairing(); }} autoFocus />
+              {error && <PairingError>{error}</PairingError>}
             </div>
-          )}
-
-          {phase.kind === "error" && (
-            <p
-              className="rounded-md border border-[var(--status-error)] bg-[var(--status-error)]/10 px-3 py-2 text-sm text-[var(--status-error)]"
-              role="alert"
-            >
-              {phase.message}
-            </p>
           )}
         </CardContent>
         <CardFooter className="flex justify-end gap-2">
-          {phase.kind === "idle" && (
-            <Button onClick={() => void startPairing()} disabled={!label.trim()}>
-              Pair this device
-            </Button>
-          )}
-          {phase.kind === "pairing" && (
-            <Button onClick={cancel} variant="outline">
-              Cancel
-            </Button>
-          )}
-          {phase.kind === "error" && (
-            <Button onClick={() => setPhase({ kind: "idle" })} variant="outline">
-              Try again
-            </Button>
-          )}
+          {state.kind === "pending" && <Button variant="outline" onClick={() => setState({ kind: "idle" })}>Cancel</Button>}
+          {(state.kind === "idle" || state.kind === "denied" || state.kind === "error") && <Button onClick={() => void beginPairing()}>Pair this device</Button>}
         </CardFooter>
-        </Card>
-      </div>
+      </Card>
+
+      <LoginFooter />
     </main>
+  );
+}
+
+/**
+ * Who this is and what you are pairing WITH.
+ *
+ * THE VERSION IS THE DAEMON'S, READ LIVE, AND THAT IS THE WHOLE POINT. A number
+ * compiled into this bundle would describe the web front end, which can be a
+ * different release from the process on the other end of the socket — so it
+ * would answer a question nobody asked while looking exactly like the answer to
+ * the one they did. `/api/version` proxies the daemon's public `/healthz`; when
+ * that cannot be reached the line simply does not appear, because "no version"
+ * and "some version" are different claims and only one of them is honest here.
+ *
+ * The GitHub link is the only URL allowed on this screen. Grove is developed on
+ * a private forge and that address must never reach a shipped artifact.
+ */
+function LoginFooter(): React.ReactNode {
+  const version = useDaemonVersion();
+
+  return (
+    <footer
+      className="flex items-center gap-3 text-xs text-content-tertiary"
+      data-testid="login-footer"
+    >
+      <a
+        href="https://github.com/bearlike/Grove"
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1.5 underline-offset-2 hover:underline"
+      >
+        <GitHubIcon aria-hidden className="size-[1em]" />
+        GitHub
+      </a>
+      {version ? (
+        // Sans with `tabular-nums`: a version is a quantity you read, not a
+        // literal you retype, which is the same call the rail footer makes.
+        <span className="tabular-nums" data-testid="login-version">
+          Grove {version}
+        </span>
+      ) : null}
+    </footer>
+  );
+}
+
+/**
+ * The daemon's version, or `null` until (and unless) it answers.
+ *
+ * A plain `useEffect` fetch rather than react-query: this page mounts outside
+ * the app's `Providers`, and it is one request that never refetches — the daemon
+ * cannot change version under a login screen without restarting, which drops
+ * the page anyway.
+ */
+function useDaemonVersion(): string | null {
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/version", { cache: "no-store" });
+        if (!response.ok) return;
+        const body = (await response.json()) as { version?: unknown };
+        if (!cancelled && typeof body.version === "string") setVersion(body.version);
+      } catch {
+        // Silent by design: the footer's absence IS the degraded state, and a
+        // login screen must never lead with a diagnostic about itself.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return version;
+}
+
+/**
+ * What this screen is waiting for, said in words.
+ *
+ * It replaces a `Skeleton className="h-2 w-32"` — a 2px pulsing bar standing in
+ * for nothing. A skeleton is the shape of content that is about to arrive, and
+ * nothing is about to arrive here: we are polling while a HUMAN walks over to
+ * the host and types six characters. There is no shape to stand in for, so the
+ * honest primitive is a status line that names the thing being waited on.
+ *
+ * `role="status"` rather than silence, because the pairing code is already on
+ * screen and a reader who cannot see the pulse has no other cue that this
+ * screen is still live rather than stuck.
+ */
+function Waiting({ children }: { children: React.ReactNode }): React.ReactNode {
+  return (
+    <p role="status" className="text-xs text-content-tertiary">
+      {children}
+    </p>
+  );
+}
+
+/**
+ * A pairing attempt that failed, denied or expired.
+ *
+ * §10's shape: the SIGNAL is destructive-toned, the EXPLANATION stays neutral.
+ * This was a bare `<p role="alert">` inheriting the 16px root — the largest,
+ * loudest text on the screen after the code, and in the same colour as the
+ * instructions, so a rejection read like a caption.
+ *
+ * It carries no action of its own on purpose. Every state that reaches here
+ * renders the form underneath with "Pair this device" in the footer, which IS
+ * the one action that might fix it; a second button beside the message would be
+ * two doors to one room.
+ */
+function PairingError({ children }: { children: React.ReactNode }): React.ReactNode {
+  return (
+    <p role="alert" className="flex items-start gap-2 text-sm text-content-secondary">
+      <CircleAlertIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
+      <span>{children}</span>
+    </p>
   );
 }

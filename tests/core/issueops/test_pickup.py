@@ -62,6 +62,8 @@ class _FakeProvider:
         login: str = "grove-ai",
         list_error: Exception | None = None,
         assign_error: Exception | None = None,
+        unassign_error: Exception | None = None,
+        preassigned: bool = False,
     ) -> None:
         self.name: TicketProviderName = name
         self.configured = configured
@@ -72,6 +74,11 @@ class _FakeProvider:
         self._login = login
         self.list_error = list_error
         self.assign_error = assign_error
+        self.unassign_error = unassign_error
+        # Who is on the ticket. `preassigned` is a HUMAN having already assigned
+        # the bot before Grove ever looked — the case that separates "Grove
+        # assigned this" from "this is assigned".
+        self.assignees: set[str] = {login} if preassigned else set()
         self.assigned_calls: list[str] = []
         self.unassigned_calls: list[str] = []
         self.list_calls = 0
@@ -96,12 +103,26 @@ class _FakeProvider:
             raise self.list_error
         return list(self._assigned)
 
-    def assign_self(self, ticket_id: str) -> None:
+    def assign_self(self, ticket_id: str) -> bool:
+        """Additive and idempotent, reporting whether THIS call added the login.
+
+        The fake tracks a real assignee set rather than answering a fixed value,
+        because "already assigned" is the state the release rule turns on: a
+        double that always said "I assigned it" would let Grove claim — and then
+        release — a ticket a human had assigned.
+        """
         if self.assign_error is not None:
             raise self.assign_error
+        if self._login in self.assignees:
+            return False
+        self.assignees.add(self._login)
         self.assigned_calls.append(ticket_id)
+        return True
 
     def unassign_self(self, ticket_id: str) -> None:
+        if self.unassign_error is not None:
+            raise self.unassign_error
+        self.assignees.discard(self._login)
         self.unassigned_calls.append(ticket_id)
 
     def read_thread(self, ticket_id: str) -> TicketThread:
@@ -143,6 +164,10 @@ class _FakeManager:
     @property
     def config(self) -> GroveConfig:
         return self._cfg
+
+    @property
+    def repo_root(self) -> Path:
+        return ROOT
 
     @property
     def ticket_providers(self) -> _FakeProviders:
@@ -486,6 +511,36 @@ def test_a_pull_request_ref_is_never_assigned(tmp_path: Path) -> None:
     assert provider.assigned_calls == []
 
 
+def test_the_publish_edge_never_assigns_a_pull_request(tmp_path: Path) -> None:
+    """The edge seam must apply the issues-only rule the reconcile sweep applies.
+
+    `assign_now` is what the status publisher calls, and the publisher mirrors
+    onto EVERY ref it holds — the pull request included.
+    """
+    provider = _FakeProvider()
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    assert poller.assign_now(str(mgr.repo_root), "gitea", "7", "pull_request") is False
+    assert provider.assigned_calls == []
+
+
+def test_a_pull_request_assigned_on_the_edge_does_not_flap(tmp_path: Path) -> None:
+    """The defect this closes: an assign/unassign storm once per poll interval.
+
+    The edge seam assigned a pull request and recorded it as Grove-owned, while
+    the reconcile sweep skipped pull requests and so never counted it as live —
+    so the very next tick released it, and the next publish assigned it again,
+    forever, on somebody else's tracker.
+    """
+    provider = _FakeProvider()
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7", kind="pull_request")])]
+    poller.assign_now(str(mgr.repo_root), "gitea", "7", "pull_request")
+    poller.tick()
+    poller.tick()
+    assert provider.assigned_calls == []
+    assert provider.unassigned_calls == []
+
+
 def test_a_provider_that_cannot_assign_degrades_without_failing(tmp_path: Path) -> None:
     """A missing permission costs the assignment and nothing else."""
     provider = _FakeProvider(assignees_supported=False)
@@ -500,6 +555,126 @@ def test_a_forge_refusal_to_assign_is_swallowed(tmp_path: Path) -> None:
     provider = _FakeProvider(assign_error=TicketProviderError("403 write access required"))
     engine = PickupEngine(log=HandoverLog(tmp_path / "h.json"))
     assert engine.assign_bot(provider, "42") is False  # type: ignore[arg-type]
+
+
+# ─── releasing the assignment when the work ends ────────────────────────────
+
+
+def test_the_assignment_is_released_when_the_workspace_ends(tmp_path: Path) -> None:
+    """The board must say who is working a ticket NOW, not who once did."""
+    provider = _FakeProvider()
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
+    poller.tick()
+    assert provider.assigned_calls == ["7"]
+
+    mgr.states = []  # the workspace was killed — its record is gone
+    poller.tick()
+    assert provider.unassigned_calls == ["7"]
+
+
+def test_a_ticket_grove_never_assigned_is_never_released(tmp_path: Path) -> None:
+    """A human assigning the bot by hand must not have it undone on the next tick.
+
+    The memo is what separates the two: it holds only what THIS process assigned,
+    so anything else on the tracker is somebody else's decision.
+    """
+    provider = _FakeProvider()
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = []
+    poller.tick()
+    assert provider.unassigned_calls == []
+
+
+def test_an_assignment_a_human_already_made_is_never_released(tmp_path: Path) -> None:
+    """The regression that matters: reproduced against a real forge before it was fixed.
+
+    A human assigns the bot, then hands Grove the ticket. Grove's own assign is
+    idempotent, so it sends nothing and the finished state is identical to one
+    Grove created — which is exactly why "is it assigned" cannot stand in for
+    "did I assign it". Taking the first reading let the release strip assignees a
+    person had put there by hand, on live issues.
+    """
+    provider = _FakeProvider(preassigned=True)
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
+    poller.tick()
+    assert provider.assigned_calls == []  # already there — nothing to send
+
+    mgr.states = []  # the workspace ends
+    poller.tick()
+    assert provider.unassigned_calls == []
+    assert provider.assignees == {"grove-ai"}  # the human's decision survives
+
+
+def test_a_live_ticket_is_not_released_while_its_workspace_holds_it(tmp_path: Path) -> None:
+    provider = _FakeProvider()
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
+    poller.tick()
+    poller.tick()
+    assert provider.unassigned_calls == []
+
+
+def test_an_unreadable_repo_releases_nothing(tmp_path: Path) -> None:
+    """Failing to READ a repo is not the same fact as its workspaces having ended.
+
+    Treating the error as "no live workspaces" would unassign every ticket on
+    that repo over a transient config error — so the release skips a repo that
+    did not answer, and the assignment survives to be re-checked next tick.
+    """
+    provider = _FakeProvider()
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
+    poller.tick()
+
+    def _boom() -> list[_FakeState]:
+        raise GroveError("unreadable .grove/config.json")
+
+    mgr.list = _boom  # type: ignore[method-assign]
+    poller.tick()
+    assert provider.unassigned_calls == []
+
+
+def test_releasing_is_not_a_hand_back_and_keeps_no_marker(tmp_path: Path) -> None:
+    """Grove finishing is not a human saying "do not take this again"."""
+    provider = _FakeProvider()
+    poller, mgr, log = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
+    poller.tick()
+    mgr.states = []
+    poller.tick()
+    assert provider.unassigned_calls == ["7"]
+    assert log.contains(_key("7")) is False
+
+
+def test_a_provider_that_cannot_assign_releases_nothing(tmp_path: Path) -> None:
+    provider = _FakeProvider(assignees_supported=False)
+    engine = PickupEngine(log=HandoverLog(tmp_path / "h.json"))
+    assert engine.release_bot(provider, "42") is False  # type: ignore[arg-type]
+    assert provider.unassigned_calls == []
+
+
+def test_a_forge_refusal_to_release_is_swallowed(tmp_path: Path) -> None:
+    """A failed release costs one stale assignee, never the tick."""
+    provider = _FakeProvider(unassign_error=TicketProviderError("403 write access required"))
+    engine = PickupEngine(log=HandoverLog(tmp_path / "h.json"))
+    assert engine.release_bot(provider, "42") is False  # type: ignore[arg-type]
+
+
+def test_assignment_alone_never_creates_a_workspace(tmp_path: Path) -> None:
+    """Assignment is an OUTPUT of Grove working a ticket, never an input.
+
+    The whole point of the two flags being independent: a deployment that wants
+    board transparency must not thereby get an agent spawned by whatever appears
+    in the tracker's assignee field.
+    """
+    provider = _FakeProvider(assigned=[TicketRef(provider="gitea", id="99")])
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
+    plan = poller.tick()
+    assert mgr.creates == []
+    assert plan.take == ()
 
 
 # ─── the identity the poll runs as ──────────────────────────────────────────

@@ -33,7 +33,8 @@
 		"--privileged",
 		"--cpus=1.5",
 		"--memory=8g",
-		"--memory-swap=8g"
+		"--memory-swap=8g",
+		"--add-host=host.docker.internal:host-gateway"
 	],
 
 	"features": {

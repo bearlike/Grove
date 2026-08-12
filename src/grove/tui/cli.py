@@ -29,6 +29,7 @@ from grove.tui.cli_onboarding import (
 from grove.tui.cli_onboarding import register as register_onboarding_commands
 from grove.tui.cli_sessions import sessions_app
 from grove.tui.cli_shell import register as register_shell_commands
+from grove.tui.cli_usage import usage_app
 from grove.tui.cli_workspace import register as register_workspace_commands
 
 app = typer.Typer(
@@ -52,6 +53,7 @@ auth_app = typer.Typer(
 app.add_typer(auth_app, name="auth")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(doctor_app, name="doctor")
+app.add_typer(usage_app, name="usage")
 
 # Flat workspace verbs (`grove create` / `grove message`) — grafted on like
 # `ls`/`version` rather than nested under a `workspace` subgroup.

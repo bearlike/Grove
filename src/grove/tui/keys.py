@@ -20,6 +20,7 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
     ("r", "refresh", "Refresh"),
     ("n", "new_workspace", "New"),
     ("d", "open_dashboard", "Dashboard"),
+    ("u", "open_usage", "Usage"),
     ("P", "switch_project", "Project"),
     ("m", "send_message", "Message"),
     ("e", "edit_workspace", "Edit"),
@@ -34,7 +35,7 @@ DEFAULT_BINDINGS: Final[list[tuple[str, str, str]]] = [
     ("?", "help", "Help"),
 ]
 
-LIST_GLOBAL_FOOTER_KEYS: Final[tuple[str, ...]] = ("q", "n", "d", "P", "r", "/", "?")
+LIST_GLOBAL_FOOTER_KEYS: Final[tuple[str, ...]] = ("q", "n", "d", "u", "P", "r", "/", "?")
 # Order in the footer: attach (most common), message (steer without
 # attaching), edit (metadata), sessions (read-only history), remap (fix
 # session tracking — a recovery verb, sits with sessions), pause/resume

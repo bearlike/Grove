@@ -16,7 +16,7 @@ in-process state".
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -83,10 +83,19 @@ class AgentSession:
 AgentQuestionKind = Literal["single_select", "multi_select", "free_text", "confirm"]
 
 # The native tool names that *are* a question. Single source of truth: the
-# normalizer below recognizes exactly these, and the Claude status path reuses
-# the same set to flag an unanswered tail as BLOCKED. Adding a provider's
+# normalizer below recognizes exactly these, and both providers' status paths
+# reuse the same set to flag an unanswered tail as BLOCKED. Adding a provider's
 # question tool is one entry here.
-QUESTION_TOOL_NAMES: frozenset[str] = frozenset({"AskUserQuestion", "ExitPlanMode"})
+#
+# Claude Code asks through ``AskUserQuestion`` (a batch) / ``ExitPlanMode`` (a
+# plan confirm); Codex CLI asks through its own native ``request_user_input``
+# tool, whose payload is the SAME ``questions[]`` shape (verified on-host
+# against real rollouts, and against the schema in the codex-cli 0.147.0 binary
+# — see agents/CLAUDE.md). That is why the batch branch below keys off this set
+# rather than one literal name.
+QUESTION_TOOL_NAMES: frozenset[str] = frozenset(
+    {"AskUserQuestion", "ExitPlanMode", "request_user_input"}
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -103,8 +112,8 @@ class AgentQuestion:
     """A provider-neutral question an agent asked the user.
 
     The normalized target every adapter maps its native ask-the-human tool onto
-    (Claude Code's ``AskUserQuestion`` / ``ExitPlanMode``; a Codex MCP-bridged
-    equivalent). ``id`` is the stable per-question answer-back address and
+    (Claude Code's ``AskUserQuestion`` / ``ExitPlanMode``; Codex CLI's native
+    ``request_user_input``). ``id`` is the stable per-question answer-back address and
     ``group_id`` the native tool-call id a *batch* shares — the two together are
     what the "answer back" write-path (and the notifier) address, so
     they are part of the contract even though the MVP only renders. ``answered``
@@ -142,8 +151,20 @@ class AgentQuestion:
         boundary). Returns ``()`` for any non-question tool or a malformed payload
         — defensive like the rest of transcript parsing: a junk block is dropped,
         never raised, so it can't break the render loop. A batch
-        (``AskUserQuestion`` with N questions) yields N rows whose ``id`` encodes
-        the source position (``f"{call_id}#{i}"``), stable across re-parses.
+        (``AskUserQuestion`` / ``request_user_input`` with N questions) yields N
+        rows whose ``id`` encodes the source position (``f"{call_id}#{i}"``),
+        stable across re-parses.
+
+        Claude's ``AskUserQuestion`` and Codex's ``request_user_input`` carry the
+        SAME batch payload — ``questions[]`` of ``question`` / ``header`` /
+        ``options[{label, description}]`` — so one branch normalizes both.
+        Codex's per-question ``id`` (its answer-map key) is deliberately NOT
+        adopted as :attr:`id`: resolution here is group-level by contract, and a
+        positional id keeps one answer-back address shape across providers.
+        Codex emits no ``multiSelect`` key, so its questions normalize to
+        ``single_select`` — which is the truth, since the CLI itself rejects a
+        ``request_user_input`` question with no options and offers the free-form
+        answer as a client-side extra choice rather than a schema variant.
         """
         if tool_name == "ExitPlanMode":
             plan = raw_input.get("plan") if isinstance(raw_input, dict) else None
@@ -157,7 +178,7 @@ class AgentQuestion:
                     source_tool="ExitPlanMode",
                 ),
             )
-        if tool_name != "AskUserQuestion" or not isinstance(raw_input, dict):
+        if not cls.recognizes(tool_name) or not isinstance(raw_input, dict):
             return ()
         questions = raw_input.get("questions")
         if not isinstance(questions, list):
@@ -190,7 +211,7 @@ class AgentQuestion:
                     header=q.get("header") if isinstance(q.get("header"), str) else None,
                     options=options,
                     multiselect=multiselect,
-                    source_tool="AskUserQuestion",
+                    source_tool=tool_name,
                 )
             )
         return tuple(out)
@@ -586,7 +607,7 @@ class TaskBoard:
         order — a task is never dropped once created, only its fields move."""
         return TodoList(items=tuple(self._items[tid] for tid in self._order if tid in self._items))
 
-    def apply(self, name: str, block: ContentBlock, answered: Mapping[str, str | None]) -> bool:
+    def apply(self, name: str, block: ContentBlock, outcomes: Mapping[str, ToolOutcome]) -> bool:
         """Fold one ``TaskCreate``/``TaskUpdate`` tool-use block into this board.
 
         THE one create-vs-update dispatch every caller shares — the adapter's
@@ -594,10 +615,10 @@ class TaskBoard:
         ``latest_todo_from_messages`` projection both fold the identical
         transcript into a board and must not drift, so this lives on the board
         itself rather than duplicated (or left private to one caller).
-        ``answered`` is the tool_use_id → tool_result text map every caller
-        already builds pre-scanning the transcript (for question resolution);
-        it is where a ``TaskCreate``'s server-assigned id lives (see
-        :meth:`created_task_id`), never rebuilt here. Returns whether the board
+        ``outcomes`` is the tool_use_id → :class:`ToolOutcome` map
+        :func:`tool_outcomes` builds once per parse; it is where a
+        ``TaskCreate``'s server-assigned id lives (see :meth:`created_task_id`),
+        never rebuilt here. Returns whether the board
         actually changed — ``False`` (unreadable payload, unresolvable create
         id, update to an untracked id) tells the caller to fall back to a
         generic tool entry / skip the update instead of a no-op snapshot.
@@ -606,10 +627,68 @@ class TaskBoard:
         if not isinstance(raw_input, dict):
             return False
         if name == "TaskCreate":
-            task_id = self.created_task_id(answered.get(block.tool_use_id or ""))
+            outcome = outcomes.get(block.tool_use_id or "")
+            task_id = self.created_task_id(outcome.text if outcome else None)
             return task_id is not None and self.create(task_id, raw_input)
         task_id = raw_input.get("taskId")
         return isinstance(task_id, str) and bool(task_id) and self.update(task_id, raw_input)
+
+
+# How a compaction was triggered. Claude Code records this natively and
+# authoritatively (``compactMetadata.trigger``, exactly ``manual``/``auto`` over
+# 55 real boundaries on-host); Codex records NOTHING of the kind in any version
+# from 0.93.0 to 0.147.0, which is why the field is nullable rather than
+# defaulted — see :class:`CompactionBoundary`.
+CompactionTrigger = Literal["manual", "auto"]
+
+
+@dataclass(slots=True, frozen=True)
+class CompactionBoundary:
+    """The moment a harness replaced the conversation so far with a summary.
+
+    The structured sibling of :class:`FileEdit` / :class:`TodoList` /
+    :class:`AgentQuestion`, and the first one that is NOT derived from a tool
+    call: a compaction is something the harness did to the context, so it
+    arrives as its own native record rather than as an invocation. It rides the
+    transcript as ``DigestEntry(role="compaction", compaction=…)`` so a reader
+    sees where history was cut instead of a silent discontinuity — which,
+    without a marker, reads as an agent that inexplicably forgot.
+
+    Every field but ``summary`` is nullable, and each ``None`` is a different
+    honest absence rather than one shared "unknown":
+
+    * ``trigger`` — ``None`` means THIS HARNESS RECORDS NO TRIGGER, not that the
+      trigger was unreadable. Codex persists no such field anywhere, so manual
+      vs automatic is genuinely unknowable there and must render as absent; a
+      guess would be indistinguishable from Claude's measured value.
+    * ``dropped_tokens`` — tokens dropped BY THIS EVENT. It is a DELTA. Claude
+      reports a session-running total (``cumulativeDroppedTokens``), so the
+      adapter subtracts the previous boundary's total within the same file and
+      the FIRST boundary of a file has no predecessor to subtract, hence
+      ``None``. Carrying the raw total would silently inflate every later
+      boundary by the whole session's history.
+    * ``at`` — when the compaction happened, ``None`` for a record with no
+      readable timestamp.
+
+    ``summary`` is ``""`` (never ``None``) when the harness carries no readable
+    summary text: Codex encrypts the replacement history and writes an empty
+    ``payload.message`` on every one of 132 real records, so "no text here" is a
+    measured fact about the format rather than a parse failure.
+    """
+
+    trigger: CompactionTrigger | None
+    at: datetime | None
+    dropped_tokens: int | None
+    summary: str
+
+    def headline(self) -> str:
+        """The one-liner for ``DigestEntry.text`` — defined once so both adapters
+        (and any future one) label a compaction identically for a role-unaware
+        consumer. A harness with no trigger says only that it happened, because
+        naming a trigger it never recorded would be a guess."""
+        if self.trigger is None:
+            return "Context compacted"
+        return f"Context compacted ({'automatic' if self.trigger == 'auto' else 'manual'})"
 
 
 # ── The agentic-loop spine ───────────────────────────────────────────────────
@@ -625,9 +704,16 @@ class TaskBoard:
 # exactly one of these. ``tool`` is a tool-RESULT carrier (a turn-loop step whose
 # blocks resolve earlier tool calls, not a human turn); ``notification`` is an
 # out-of-band notice the agent received (a delivered background-task result).
+# ``compaction`` is the harness cutting the context out from under the loop —
+# an event with no content of its own, whose payload rides
+# :attr:`AgentMessage.compaction`. It is deliberately CONTENTLESS: every
+# consumer that reads a message for text (the trace exporter's chat parts, the
+# final-result scan) then skips it for free, so carrying the boundary on the
+# spine changes no existing projection, while the turn/digest renderers that DO
+# know the role place it in conversation order.
 # A native record that is not a loop message (stream metadata, machinery,
 # preamble) maps to no spine message at all — it is dropped, not carried.
-MessageRole = Literal["user", "assistant", "tool", "notification"]
+MessageRole = Literal["user", "assistant", "tool", "notification", "compaction"]
 
 # The content-block kinds a message carries, mirroring the provider's own block
 # vocabulary so the mapping stays a mechanical translation. ``thinking`` is
@@ -664,8 +750,8 @@ class ContentBlock:
     relevant fields — ``text`` / ``thinking`` → ``text``; ``tool_use`` →
     ``tool_name`` + ``tool_use_id`` (the call's id) + ``tool_input`` (its raw
     args, ``None`` when the call carried none); ``tool_result`` → ``tool_use_id``
-    (the call it resolves) + ``text`` + ``is_error``. A field irrelevant to the
-    block kind stays ``None`` / ``False``.
+    (the call it resolves) + ``text`` + ``is_error`` + ``duration_ms`` +
+    ``exit_code``. A field irrelevant to the block kind stays ``None`` / ``False``.
     """
 
     type: ContentBlockType
@@ -674,6 +760,26 @@ class ContentBlock:
     tool_use_id: str | None = None
     tool_input: dict[str, Any] | None = None
     is_error: bool = False
+    duration_ms: int | None = None
+    """The HARNESS'S OWN measured wall-clock time for this call, in milliseconds
+    — set only on a ``tool_result`` where the provider records one natively
+    (Codex ``exec_command``, from the paired ``event_msg`` ``exec_command_end``).
+    ``None`` for Claude (which records no per-call duration on the result at
+    all) and for a Codex tool_result the harness never paired one for — see
+    agents/CLAUDE.md for the CLI-version gate. Distinct from
+    :attr:`ToolCall.duration_ms`, which is ALWAYS derivable (message-timestamp
+    diff) and falls back to that derivation when this is ``None``; this field
+    exists so a more precise native measurement can override the derived one at
+    the one place both are visible."""
+    exit_code: int | None = None
+    """The process's real exit status — set only on a Codex ``exec_command``
+    ``tool_result`` from the same native ``exec_command_end`` record as
+    :attr:`duration_ms`. ``None`` for Claude and for every Codex tool_result
+    this harness never measured this way. Deliberately NOT folded into
+    ``is_error``: Codex's own claim of "no structural tool-error flag" was
+    scoped to ``function_call_output`` specifically and this is a genuinely
+    different record, but flipping ``ToolCall.status`` on it is a larger,
+    separate decision — see agents/CLAUDE.md."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -709,6 +815,29 @@ class AgentMessage:
     timestamp: datetime | None = None
     is_sidechain: bool = False
     thread_id: str | None = None
+    compaction: CompactionBoundary | None = None
+    """Set only on a ``compaction`` message — the boundary this event records.
+
+    It cannot be derived from ``content`` the way the tool-call payloads are,
+    because a compaction is not an invocation: there is no ``tool_use`` block to
+    normalize, so the payload has to be carried. ``content`` stays empty on
+    exactly these messages (see :data:`MessageRole`)."""
+
+    sent_at: datetime | None = None
+    """When a QUEUED message was submitted, which is not when it arrived.
+
+    ``timestamp`` is when the harness DELIVERED the message into the loop, and
+    that is the only instant the conversation's order can be built from. A
+    message the user typed while the agent was busy sits in the harness's queue
+    for as long as the agent takes — measured up to 42 s on real Claude
+    transcripts — so its submit instant sorts back among the assistant work that
+    answered the PREVIOUS prompt. Both facts are real and only one of them is an
+    ordering key, hence two fields rather than a choice.
+
+    ``None`` on every message that was not queued: the two instants coincide, so
+    a second copy of ``timestamp`` would only invite a reader to believe the
+    distinction was measured.
+    """
 
     def text(self) -> str:
         """The human-readable text of this message — its ``text`` blocks joined
@@ -719,6 +848,156 @@ class AgentMessage:
     def tool_names(self) -> tuple[str, ...]:
         """Names of the ``tool_use`` blocks this message carries, in order."""
         return tuple(b.tool_name for b in self.content if b.type == "tool_use" and b.tool_name)
+
+
+# Whether a tool call has come back, and how. ``running`` is a FIRST-CLASS state
+# rather than the absence of a result: a client picks a spinner over a checkmark
+# from it, and "the call is still in flight" must be distinguishable from "this
+# entry carries no tool metadata at all" (which is ``DigestEntry.tool is None``).
+ToolCallStatus = Literal["running", "ok", "error"]
+
+
+@dataclass(slots=True, frozen=True)
+class ToolOutcome:
+    """The ``tool_result`` that resolved one tool call — body, error flag, clock.
+
+    The value type of the call→result map every transcript projection already
+    built as ``dict[str, str | None]``. It carries two facts that map could not:
+    ``is_error`` (a failed tool is not a successful one with sad text) and
+    ``at``, the timestamp of the MESSAGE the result block rode in on — which is
+    the only end-of-call clock either provider records.
+    """
+
+    text: str | None = None
+    is_error: bool = False
+    at: datetime | None = None
+    duration_ms: int | None = None
+    exit_code: int | None = None
+
+
+def tool_outcomes(messages: Iterable[AgentMessage]) -> dict[str, ToolOutcome]:
+    """The ONE ``tool_use_id`` → :class:`ToolOutcome` pre-scan, shared by every
+    projection of the spine.
+
+    A ``tool_result`` is a FORWARD reference — it always lands after the call it
+    resolves, possibly turns later — so any consumer that needs a call's answer
+    has to build this map first. Both adapters' turn renderers, the todo
+    projection and (via :meth:`ToolCall.from_block`) the tool-call payload read
+    it, so "what resolved this call" is defined exactly once.
+
+    Membership, not truthiness, is the resolution test: a tool that returned
+    nothing is present with ``text=None``, and that is a RESOLVED call. Deliberately
+    NOT sidechain-filtered — a sub-agent's call resolves through its own result
+    wherever it landed. Last write wins for a repeated id, matching the
+    ``dict[str, str | None]`` scans this replaces.
+    """
+    out: dict[str, ToolOutcome] = {}
+    for message in messages:
+        for block in message.content:
+            if block.type == "tool_result" and block.tool_use_id:
+                out[block.tool_use_id] = ToolOutcome(
+                    text=block.text,
+                    is_error=block.is_error,
+                    at=message.timestamp,
+                    duration_ms=block.duration_ms,
+                    exit_code=block.exit_code,
+                )
+    return out
+
+
+@dataclass(slots=True, frozen=True)
+class ToolCall:
+    """One tool invocation as a renderer needs it: request, response, duration,
+    and whether it is still running — the provider-neutral sibling of
+    :class:`FileEdit` / :class:`TodoList` / :class:`AgentQuestion`, and the only
+    one of the four that is not tied to a particular tool's payload shape.
+
+    It rides EVERY entry a ``tool_use`` block produced (see
+    :class:`DigestEntry`), including the structured ones, because "how long did
+    this Edit take, and has it come back" is a question about the call rather
+    than about the diff.
+
+    ``status`` is decided at ONE place — :meth:`from_block` — off the single
+    fact both harnesses agree on: a call with no resolving ``tool_result`` /
+    ``function_call_output`` yet is IN FLIGHT. Codex writes its rollout
+    record-by-record as the turn runs, and Claude flushes the assistant message
+    carrying the ``tool_use`` before the result arrives, so the unresolved-call
+    shape means the same thing in both files and no adapter needs its own rule.
+
+    ``duration_ms`` pairs the call's own message timestamp with its result's,
+    the same pairing ``usage/_intervals`` reduces over — including the clamp to
+    zero, because the two endpoints are routinely written by two different
+    clocks and an end before its start is a clock artefact, not negative work.
+    ``None`` whenever either endpoint is missing (a running call, a provider
+    that stamped no time) — an unmeasurable duration is absent, never zero.
+    **A provider that measures the call itself wins over this derivation**:
+    when the resolving :class:`ToolOutcome` carries its own ``duration_ms``
+    (Codex ``exec_command``, from the paired native ``exec_command_end``
+    record — see agents/CLAUDE.md), that value is used instead of the
+    message-timestamp diff, because it is the harness's own wall-clock
+    measurement rather than a proxy that also bills message-write latency.
+
+    ``exit_code`` rides the same native measurement, purely informational: it
+    does NOT feed ``status`` (see agents/CLAUDE.md on why Codex's own claim of
+    "no structural tool-error flag" stays true for ``status`` even though this
+    field exists) — ``None`` unless the provider recorded one.
+    """
+
+    name: str
+    tool_use_id: str
+    status: ToolCallStatus
+    input: dict[str, Any] | None = None
+    result: str | None = None
+    duration_ms: int | None = None
+    exit_code: int | None = None
+
+    @classmethod
+    def from_block(
+        cls,
+        block: ContentBlock,
+        outcomes: Mapping[str, ToolOutcome],
+        *,
+        called_at: datetime | None = None,
+    ) -> ToolCall:
+        """Normalize one ``tool_use`` block plus its resolution into a call.
+
+        ``called_at`` is the timestamp of the message the block rode in on —
+        several parallel calls in one assistant message legitimately share it,
+        which is honest: they were issued together. Correlation is by
+        ``tool_use_id``, so concurrent calls never blur into each other; an
+        id-less block (neither harness emits one, but the spine allows it) can
+        never correlate and therefore reads ``running`` forever, exactly as an
+        unanswered call does.
+        """
+        call_id = block.tool_use_id or ""
+        outcome = outcomes.get(call_id)
+        if outcome is None:
+            return cls(
+                name=block.tool_name or "",
+                tool_use_id=call_id,
+                status="running",
+                input=block.tool_input,
+            )
+        return cls(
+            name=block.tool_name or "",
+            tool_use_id=call_id,
+            status="error" if outcome.is_error else "ok",
+            input=block.tool_input,
+            result=outcome.text,
+            duration_ms=(
+                outcome.duration_ms
+                if outcome.duration_ms is not None
+                else _elapsed_ms(called_at, outcome.at)
+            ),
+            exit_code=outcome.exit_code,
+        )
+
+
+def _elapsed_ms(start: datetime | None, end: datetime | None) -> int | None:
+    """Milliseconds between two transcript timestamps, clamped at zero."""
+    if start is None or end is None:
+        return None
+    return max(0, int((end - start).total_seconds() * 1000))
 
 
 @dataclass(slots=True, frozen=True)
@@ -807,11 +1086,7 @@ def latest_todo_from_messages(messages: tuple[AgentMessage, ...]) -> TodoList | 
     map: a ``TaskCreate`` in a sub-agent thread still resolves through its own
     ``tool_result`` wherever it landed.
     """
-    answered: dict[str, str | None] = {}
-    for message in messages:
-        for block in message.content:
-            if block.type == "tool_result" and block.tool_use_id:
-                answered[block.tool_use_id] = block.text
+    outcomes = tool_outcomes(messages)
 
     board = TaskBoard()
     latest: TodoList | None = None
@@ -826,7 +1101,7 @@ def latest_todo_from_messages(messages: tuple[AgentMessage, ...]) -> TodoList | 
                 todos = TodoList.from_tool_call(name, block.tool_input)
                 if todos:
                     latest = todos[0]
-            elif name in TASK_TOOL_NAMES and board.apply(name, block, answered):
+            elif name in TASK_TOOL_NAMES and board.apply(name, block, outcomes):
                 latest = board.snapshot()
     return latest
 
@@ -835,14 +1110,26 @@ def latest_todo_from_messages(messages: tuple[AgentMessage, ...]) -> TodoList | 
 class DigestEntry:
     """One line of an :class:`OrderedDigest`: a role tag plus a short summary.
 
-    ``question``/``file_edit``/``todo`` are populated *only* for their matching
-    role (``"question"`` / ``"file_edit"`` / ``"todo"``) — the structured payload
-    the transcript renderers (TUI + webapp) draw as a choice card, a diff card,
-    or a checklist card; for every other role all three are ``None`` and ``text``
-    carries the line. Each structured kind keeps ``text`` set to a sensible
-    one-liner (a question's prompt, an edit's ``f"{tool_name} {path}"``, a todo
-    list's progress ``summary``) so a role-unaware consumer (the
+    ``question``/``file_edit``/``todo``/``compaction`` are populated *only* for
+    their matching role (``"question"`` / ``"file_edit"`` / ``"todo"`` /
+    ``"compaction"``) — the structured payload the transcript renderers (TUI +
+    webapp) draw as a choice card, a diff card, a checklist card, or a
+    history-was-cut marker; for every other role all four are ``None`` and
+    ``text`` carries the line. Each structured kind keeps ``text`` set to a
+    sensible one-liner (a question's prompt, an edit's ``f"{tool_name} {path}"``,
+    a todo list's progress ``summary``, a boundary's
+    :meth:`CompactionBoundary.headline`) so a role-unaware consumer (the
     ``OrderedDigest`` LLM-interpreter seam) still reads something sensible.
+
+    ``tool`` is the ODD ONE OUT and deliberately so: it is set on EVERY entry a
+    ``tool_use`` block produced — the generic ``"tool"`` line *and* the three
+    structured cards above — because request, response, duration and
+    still-running are facts about the invocation, not about the payload one
+    particular tool happens to carry. That is what lets a renderer draw one
+    expander with a spinner-or-check for every tool call, whatever card sits
+    inside it. ``None`` means this entry did not come from a tool call at all,
+    or the provider surfaces no per-call detail (mewbo's remote timeline) —
+    never "still running", which is :attr:`ToolCall.status`'s job.
     """
 
     role: Literal[
@@ -855,11 +1142,14 @@ class DigestEntry:
         "question",
         "file_edit",
         "todo",
+        "compaction",
     ]
     text: str
     question: AgentQuestion | None = None
     file_edit: FileEdit | None = None
     todo: TodoList | None = None
+    tool: ToolCall | None = None
+    compaction: CompactionBoundary | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -879,6 +1169,28 @@ class OrderedDigest:
 
 
 @dataclass(slots=True, frozen=True)
+class QueuedMessage:
+    """One message a harness is holding until it can inject it.
+
+    In-process state, so a dataclass: the wire mirror is
+    ``contracts.sessions.QueuedMessageView``. Every field is READ from the
+    harness's own record — Grove does not own the queue and keeps no second one,
+    because the harness is what drains it and a Grove-side ledger would be a
+    second writer with no arbitration, drifting the moment somebody types
+    straight into the pane.
+    """
+
+    text: str
+    sent_at: datetime | None = None
+    """When it was SUBMITTED, never when it will be delivered. ``None`` when the
+    harness recorded no instant."""
+
+    position: int = 0
+    """Place in the queue as the harness currently reports it, 0 first — what it
+    says now, not a promise about delivery order."""
+
+
+@dataclass(slots=True, frozen=True)
 class SessionTurn:
     """One conversation turn: a human prompt plus everything until the next one.
 
@@ -886,11 +1198,17 @@ class SessionTurn:
     :class:`DigestEntry` rows (full text, not the digest's truncated form).
     ``user_text`` is empty for a leading continuation block — assistant records
     that precede any human turn in the file (a resumed/compacted session).
+
+    The turn carries two clocks and they answer different questions.
+    ``started_at`` is when the prompt reached the agent, which is what orders
+    the conversation; ``sent_at`` is when a QUEUED prompt was submitted, and it
+    is set only for those (see ``AgentMessage.sent_at``).
     """
 
     user_text: str
     started_at: datetime | None = None
     entries: tuple[DigestEntry, ...] = ()
+    sent_at: datetime | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -940,14 +1258,22 @@ class AgentActivity:
     # wired in the MVP — the field reserves the dashboard space so adding the
     # interpreter later needs no contract change (YAGNI: seam now, call later).
     interpreted_status: str | None = None
-    # The questions the agent is asking RIGHT NOW, captured live from the hook
-    # sidecar before Claude Code flushes them to the transcript. A single
-    # ``AskUserQuestion`` call carries up to four questions answered atomically,
+    # The questions the agent is asking RIGHT NOW. A single ``AskUserQuestion`` /
+    # ``request_user_input`` call carries several questions answered atomically,
     # so the whole group rides together, ordered as asked; empty when nothing is
-    # pending. Populated ONLY by the ``ActivityService`` sidecar seam (the
-    # transcript parser leaves it empty) — it carries the pending ask onto the
-    # live activity stream so a client can render an answer affordance the instant
-    # the question appears, instead of only after the terminal resolved it.
+    # pending. It carries the pending ask onto the live activity stream so a
+    # client can render an answer affordance the instant the question appears,
+    # instead of only after the terminal resolved it.
+    #
+    # WHICH SOURCE fills it is a property of the provider, not of this field, and
+    # the two providers sit at opposite ends: Claude Code flushes NOTHING to the
+    # transcript while a question is on screen, so only the ask-time hook sidecar
+    # can see one (the Claude parser leaves this empty and the ``ActivityService``
+    # fills it). Codex has no hook mechanism at all, but writes its rollout
+    # record-by-record as the turn runs — measured live on codex-cli 0.147.0 — so
+    # its unanswered ``request_user_input`` call is visible in the file and the
+    # CODEX PARSER fills this directly. The service prefers a sidecar capture and
+    # otherwise passes the parser's answer through.
     questions: tuple[AgentQuestion, ...] = ()
 
     @property
@@ -973,6 +1299,12 @@ class SessionRef:
     Claude transcripts whose head read never reveals a cwd, rather than the
     row being dropped. ``transcript_path`` is ``None`` for a remote-backed
     session (mewbo — no local file, mirroring ``SessionSummary``).
+
+    ``size_bytes`` rides the SAME ``stat()`` call every filesystem adapter
+    already makes for ``mtime`` — ``st_size`` sits on the same ``stat_result``
+    at zero extra I/O, so a filesystem adapter should always set it. ``None``
+    means either a remote-backed session (no local file to stat) or a stat
+    that failed (vanished file) — never fabricate a zero.
     """
 
     session_id: str
@@ -982,6 +1314,7 @@ class SessionRef:
     birth: datetime | None
     mtime: float
     git_branch: str | None = None
+    size_bytes: int | None = None
 
 
 @dataclass(slots=True, frozen=True)

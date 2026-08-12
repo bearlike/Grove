@@ -4,6 +4,13 @@
       "command": "grove-mcp",
       "args": []
     },
+    "grove-network": {
+      "type": "http",
+      "url": "http://host.docker.internal:7431/mcp",
+      "headers": {
+        "Authorization": "Bearer ${GROVE_MCP_TOKEN}"
+      }
+    },
     "playwright": {
       "command": "npx",
       "args": ["@playwright/mcp@latest"]

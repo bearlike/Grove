@@ -1,6 +1,6 @@
 [project]
 name = "grove"
-version = "0.0.6"
+version = "0.0.7"
 description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,6 +28,15 @@ dependencies = [
     "humanize>=4.9,<5",
     "loguru>=0.7,<1",
     "httpx>=0.28.1,<1",
+    # A real bash grammar, for attributing a shell tool call's time to the
+    # executable that led it. Pure Python, no extension module. Measured over
+    # 111,578 real commands: naive first-token attribution is ~31% correct and
+    # a careful `shlex` segmentation ~79% while never signalling failure, where
+    # bashlex is effectively 100% correct wherever it parses and raises
+    # loudly otherwise. `grove.core.usage._command` still imports it
+    # defensively and degrades to its own scan, so an older install keeps
+    # working rather than failing to import `grove.core`.
+    "bashlex>=0.18,<1",
 ]
 
 [project.optional-dependencies]
@@ -57,11 +66,24 @@ telemetry = [
     # imports these lazily so core stays importable without the extra.
     "opentelemetry-sdk>=1.27,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
+    # Otherwise arrives only transitively via opentelemetry-sdk; declared
+    # explicitly because tests/core/test_telemetry_semconv.py imports its
+    # `_incubating` GenAI attribute names directly to prove semconv.py's own
+    # literals haven't drifted. Capped on its own 0.xbN line rather than the
+    # 1.x line above: this package is the pre-stable convention distribution,
+    # and its `_incubating` path is expected to move.
+    "opentelemetry-semantic-conventions>=0.64b0,<1",
 ]
 all = [
     "grove[daemon]",
     "grove[client]",
     "grove[mcp]",
+    # `telemetry` is in here because leaving it out made `telemetry.enabled`
+    # a knob that could not work on a standard install: `grove.core.trace`
+    # imports the exporter lazily and degrades to a silent no-op, so a
+    # deployment that turned tracing on saw a healthy fleet exporting nothing
+    # and no error anywhere. The packages are small and inert while disabled.
+    "grove[telemetry]",
 ]
 
 [project.scripts]
@@ -101,6 +123,12 @@ dev = [
     "mcp>=1.2,<2",
     "opentelemetry-sdk>=1.27,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
+    # tools/screenshots/frame.py composites the doc screenshots onto a 16:9
+    # frame. It reads as a docs concern, but `tests/tools/screenshots/` imports
+    # it, so it belongs to whatever group the TEST job installs. Keeping it
+    # under `docs` is what forced the gates to sync that group at all. Never a
+    # runtime dependency: nothing under src/grove imports Pillow.
+    "Pillow>=11,<12",
 ]
 docs = [
     "mike",

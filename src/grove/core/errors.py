@@ -153,6 +153,17 @@ class TicketPullRequestsUnsupported(GroveError):
     """
 
 
+class TicketBodyUnsupported(GroveError):
+    """A provider was asked to read or rewrite a ticket description it cannot.
+
+    The fourth capability sibling of :class:`TicketCommentsUnsupported`, split
+    off for the reason the assignee one was: rewriting a description edits what
+    a *human* wrote, a strictly larger claim than adding a comment beside it, so
+    a deployment can hold one permission and not the other and must be able to
+    tell the two refusals apart.
+    """
+
+
 class TicketAssigneesUnsupported(GroveError):
     """A provider was asked to change assignees it has no concept of.
 
@@ -183,6 +194,26 @@ class TicketLinkAmbiguous(TicketLinkError):
     tickets. Ambiguity is an explicit typed outcome — never a silent pick of the
     first provider — so the caller re-asks with a qualified form (a full URL or
     ``owner/repo#42``). The message names every candidate provider.
+    """
+
+
+class TicketNotAttached(GroveError):
+    """A caller reported a task phase against a ticket the workspace does not hold.
+
+    The valid keys are exactly ``WorkspaceState.ticket_refs``, never free text.
+    A typo'd or stale key would otherwise record a per-ticket claim naming a
+    ticket nothing in the store ever attached — invisible to attach/detach and
+    to the sticky publisher that joins on the same key, so it would read as a
+    phase that simply never appears.
+
+    Loud, matching ``set_phase``'s own asymmetry with the best-effort
+    ``phase_for``: a caller that named a ticket is entitled to know it did not
+    land. The message carries the rejected key *and* every key the workspace
+    actually has, so the caller self-corrects without a second round trip.
+
+    The agent's own file channel is deliberately NOT held to this — an unknown
+    key there is dropped quietly, because the file is tolerant inward by
+    contract and a dropped entry must never cost the report it rode in with.
     """
 
 

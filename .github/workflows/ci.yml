@@ -26,8 +26,16 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+      # Name the one group this job needs. `--all-groups` reaches for metadata
+      # on every group's direct-URL requirement even when the group is then
+      # excluded, so it fetched the docs theme, which is pinned to a GitHub
+      # release asset with no index mirror to retry against. One refused stream
+      # there failed the whole install over a package `make lint` never runs.
+      # `--no-group docs` did NOT suppress it; dropping `--all-groups` does.
+      # `--frozen` then installs straight from uv.lock with no resolution step,
+      # so no URL metadata is needed at all.
       - name: Install
-        run: uv sync --all-groups
+        run: uv sync --frozen --group dev
       - name: Lint
         run: make lint
 
@@ -44,8 +52,10 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+      # `dev` only, for the reason given in the lint job. Pillow rides `dev`
+      # so `tests/tools/screenshots/` still resolves here.
       - name: Install
-        run: uv sync --all-groups
+        run: uv sync --frozen --group dev
       - name: Install tmux
         run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Unit + Pilot tests

@@ -15,7 +15,9 @@ itself is pure aggregation over the results.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import shutil
 import subprocess
 from typing import Literal
@@ -84,6 +86,8 @@ class HostPreflight:
             self._tmux(),
             self._container_tmux(),
             self._container_firewall(),
+            self._telemetry(),
+            self._telemetry_content_owner(),
             *self._agent_clis(),
         ]
 
@@ -305,6 +309,101 @@ class HostPreflight:
                 "image that ships no iptables of its own cannot start a workspace at "
                 f"container.egress.mode = '{self._cfg.container.egress.mode}' — install "
                 "iptables in that image, or set container.egress.mode = 'open'"
+            ),
+            required_for="optional",
+        )
+
+    def _telemetry(self) -> CheckResult:
+        """Enabled telemetry: do the credentials resolve, and is the exporter here?
+
+        The failure this row exists for is entirely silent everywhere else. A
+        config reading ``telemetry.enabled: true`` whose variables carry no value
+        derives no OTLP endpoint, so the agent's own exporter is never switched
+        on either — nothing errors, no workspace misbehaves, and every span is
+        simply lost. Same for a Grove installed without the ``telemetry`` extra:
+        the exporter import fails and tracing degrades to a no-op by design.
+        Doctor is where a fact nobody is told otherwise belongs.
+
+        ``optional`` by scope, and this one is not a close call (see
+        :data:`RequiredFor`): telemetry is observability *about* a workspace, so
+        a ``container``-scoped failure here would strip an agent of its isolation
+        over a missing dashboard.
+
+        This resolves for real — it reads the section's configured ``env_file`` /
+        ``env_command`` exactly as a launch does — so it reports the same answer
+        the launch will get rather than a plausible one. Only NAMES are rendered;
+        a resolved value never reaches the row.
+        """
+        cfg = self._cfg.telemetry
+        if not cfg.enabled:
+            return CheckResult(
+                name="telemetry",
+                ok=True,
+                detail="disabled (telemetry.enabled = false)",
+                required_for="optional",
+            )
+        missing = cfg.unresolved(cfg.derive_env(os.environ))
+        if missing:
+            return CheckResult(
+                name="telemetry",
+                ok=False,
+                detail=f"{', '.join(missing)} carry no value",
+                hint=(
+                    "export them in the environment Grove itself runs in, or set "
+                    "telemetry.env_file to a dotenv holding them (a service-managed "
+                    "daemon reads its environment once, at start)"
+                ),
+                required_for="optional",
+            )
+        if importlib.util.find_spec("opentelemetry.sdk") is None:
+            return CheckResult(
+                name="telemetry",
+                ok=False,
+                detail="credentials resolve, but 'opentelemetry' is not installed",
+                hint="reinstall Grove with the telemetry extra, e.g. `.[all,telemetry]`",
+                required_for="optional",
+            )
+        return CheckResult(
+            name="telemetry",
+            ok=True,
+            detail="credentials resolve; OTLP exporter installed",
+            required_for="optional",
+        )
+
+    def _telemetry_content_owner(self) -> CheckResult:
+        """Who emits each runtime's content, and what correlates it with Grove's.
+
+        Always ``ok`` — this reports a decision, not a dependency. There is no
+        such thing as a wrong answer to render here, only an answer nobody could
+        see: content ownership is invisible in every other surface, and both of
+        its failure modes (every turn traced twice, or no turn traced at all)
+        look like a working fleet until somebody opens the dashboard.
+
+        **Resolved, never probed.** The row prints what ``content_owner``
+        resolves to for each instrumented kind, and deliberately does not go
+        looking for a hook script or a plugin on disk — a probe that guesses
+        wrong silently drops or duplicates every word, so the ambiguity of "this
+        is what you configured" is the safer thing to show. Only the kinds
+        telemetry actually reaches are listed: an owner for a runtime nothing
+        exports for is a claim about nothing.
+        """
+        cfg = self._cfg.telemetry
+        if not cfg.enabled:
+            return CheckResult(
+                name="telemetry content",
+                ok=True,
+                detail="disabled (telemetry.enabled = false)",
+                required_for="optional",
+            )
+        owners = ", ".join(
+            f"{kind}={cfg.content_owner_for(kind)}" for kind in cfg.passthrough_kinds
+        )
+        return CheckResult(
+            name="telemetry content",
+            ok=True,
+            detail=(
+                f"{owners or 'no instrumented runtimes'}; correlated on the agent "
+                "session id (published as the langfuse.session.id resource attribute)"
             ),
             required_for="optional",
         )

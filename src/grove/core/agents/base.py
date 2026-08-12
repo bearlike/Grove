@@ -23,20 +23,130 @@ the files (dump, transcript-path display).
 
 from __future__ import annotations
 
+import shlex
+import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import ClassVar, Protocol
+
+from loguru import logger
 
 from grove.core.agents.model import (
     AgentActivity,
+    AgentMessage,
     FinalResult,
     OrderedDigest,
+    QueuedMessage,
     SessionControls,
     SessionRef,
     SessionSummary,
     SessionTurn,
     TodoList,
 )
+
+
+class AgentVersionProbe:
+    """One bounded, memoized ``<binary> <flag>`` read — the shared mechanism
+    behind :meth:`AgentAdapter.tool_version`.
+
+    It sits beside the Protocol rather than inside one adapter because every
+    implementer that *has* a version flag needs the identical discipline, and
+    the discipline is the whole difficulty: the answer is asked for on every
+    launch, it cannot change under a running process (a new build means a
+    reinstall, which means a new process), and a wedged or absent binary must
+    cost the launch nothing. The memo is therefore process-lifetime and keyed by
+    the resolved argv, so N launches of one agent pay one subprocess and a tool
+    that is not installed is probed once and then answers ``None`` for free.
+
+    Concurrency is left to CPython's dict: two launches racing the same cold key
+    at worst run the probe twice and store the same answer, which is cheaper
+    than serializing every agent's probe behind one lock for the whole timeout.
+    """
+
+    TIMEOUT_SECONDS = 5.0
+    """Bounds a binary that hangs instead of answering. A version flag is
+    instant and offline, so this only ever fires on something already broken."""
+
+    MAX_LENGTH = 200
+    """Cap on the recorded string. It becomes a resource attribute on every
+    span the agent exports, so a tool that answers with a banner (or with
+    something that is not a version at all) must not ride along unbounded."""
+
+    _CACHE: ClassVar[dict[tuple[str, ...], str | None]] = {}
+
+    @staticmethod
+    def binary_of(command: str) -> str:
+        """The executable (first shell token) of a launch command, or ``""``.
+
+        ``AgentSpec.command`` may carry flags (``codex --full-auto``); a probe
+        needs only the binary, and taking it from config is what honors a
+        renamed or wrapped tool instead of hard-coding a name here.
+        """
+        try:
+            parts = shlex.split(command)
+        except ValueError:  # unbalanced quotes in a hand-edited command
+            return ""
+        return parts[0] if parts else ""
+
+    @classmethod
+    def version(cls, command: str, *flags: str) -> str | None:
+        """Whatever ``<binary> <flags>`` printed, VERBATIM, or ``None``.
+
+        Verbatim is the provider boundary: vendors spell their answer
+        differently (``codex-cli 0.147.0`` against ``2.1.226 (Claude Code)``),
+        and pulling a semver out of that is interpreting provider *semantics*
+        rather than normalizing shape. The only shaping is defensive — the first
+        non-empty line, stripped and length-capped — because the value ends up
+        in an env var an OTel SDK parses.
+
+        Best-effort by contract, like every adapter read: a missing binary, a
+        non-zero exit, a timeout or empty output is ``None``. A telemetry nicety
+        must never be able to fail a launch.
+        """
+        binary = cls.binary_of(command)
+        if not binary:
+            return None
+        argv = (binary, *flags)
+        if argv in cls._CACHE:
+            return cls._CACHE[argv]
+        version = cls.probe(argv)
+        cls._CACHE[argv] = version
+        return version
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Drop the memo — the public seam tests reset between cases, so no test
+        has to reach for the private dict (the ``clear_caches()`` convention the
+        transcript caches already follow)."""
+        cls._CACHE.clear()
+
+    @classmethod
+    def probe(cls, argv: tuple[str, ...]) -> str | None:
+        """The unmemoized read: run ``argv`` and return its first meaningful
+        line, or ``None``.
+
+        Public because it is the one I/O boundary here and therefore the seam
+        the suite patches to stay offline — a test patching a *private* symbol
+        would make this an implicit contract that a rename silently no-ops.
+        """
+        try:
+            proc = subprocess.run(
+                list(argv),  # fixed argv, shell=False, bounded
+                capture_output=True,
+                text=True,
+                timeout=cls.TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("version probe {} failed: {}", argv, exc)
+            return None
+        if proc.returncode != 0:
+            logger.debug("version probe {} exited {}", argv, proc.returncode)
+            return None
+        for line in proc.stdout.splitlines():
+            if line.strip():
+                return line.strip()[: cls.MAX_LENGTH]
+        return None
 
 
 class AgentAdapter(Protocol):
@@ -56,11 +166,41 @@ class AgentAdapter(Protocol):
     so a future resumable adapter can't be missed by a hand-maintained
     list. Claude Code / Codex are ``True``; a remote (mewbo) session and a bare
     shell have no launch resume handle, so ``False``.
+
+    ``reports_queue`` declares whether :meth:`pending_queue` can OBSERVE this
+    tool's queue at all, which is the one thing an empty tuple cannot say. It is
+    a declaration rather than a fourth return value because the answer is a
+    property of the tool, fixed for the life of the process, and because the
+    alternative is the daemon holding a set of kinds — policy in the layer
+    furthest from the evidence. Claude Code / Codex are ``True``; a bare shell
+    and a remote orchestrator expose no queue, so ``False``, and the wire says
+    ``supported=False`` rather than claiming an empty one.
+
+    ``reports_tool_errors`` declares whether this tool records a STRUCTURAL
+    failure flag on a tool result — the ``reports_queue`` shape applied to
+    ``ContentBlock.is_error``, and for the same reason: only the adapter knows,
+    and the alternative is a provider-name list baked into whatever aggregates
+    the flag, one layer removed from the evidence. It answers the question a
+    count of errors cannot: does ``is_error=False`` mean *the call succeeded*,
+    or merely *this format has no way to say*. Claude Code fills the field
+    natively; Codex's tool-output record has no such key in any version, so a
+    failed Codex call is honestly ``ok`` with its error text in the prose (and
+    reading THAT would be interpreting the tool's semantics — the provider
+    boundary). Adapters with no message spine at all answer ``False`` again,
+    for a third reason: there is no tool result to flag.
+
+    **Consumers must use it as a DENOMINATOR, not as a filter.** A population
+    mixing a reporting tool with a silent one has a real error count and a
+    smaller measurable population than its call count, so dividing by the calls
+    deflates every rate by that scope's share of silent calls — and reports the
+    deflated number with full confidence.
     """
 
     kind: str
     remote: bool
     resumable: bool
+    reports_queue: bool
+    reports_tool_errors: bool
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """Extra argv tokens appended to the agent command so Grove owns the
@@ -132,6 +272,23 @@ class AgentAdapter(Protocol):
         orchestrator whose models are server-side) or when none can be read.
         Adapters return their raw provider vocabulary — the engine
         (``registry.resolve_models``) de-dups and caps the offered list.
+        """
+        ...
+
+    def tool_version(self, command: str) -> str | None:
+        """The version string this tool reports for itself, VERBATIM, or ``None``.
+
+        Identity for an exported trace: a reader looking at a span needs to know
+        which *build* of the agent produced it, and only the tool can say. Like
+        :meth:`available_models` it takes the agent's configured ``command`` so
+        the binary comes from config rather than a hard-coded name, and like it
+        the answer is best-effort — every implementation runs through
+        :class:`AgentVersionProbe`, which bounds and memoizes the subprocess.
+
+        ``None`` is a real answer, not a degradation: a tool whose work happens
+        on a backend (mewbo) has no local build to report, and a bare shell has
+        no version at all. The provider boundary rules out guessing one, and an
+        absent value is an OMITTED attribute rather than an invented ``unknown``.
         """
         ...
 
@@ -207,6 +364,25 @@ class AgentAdapter(Protocol):
         point-in-time activity parse) instead of bare ids, and *without* an
         exclusion: Grove-launched and hand-started sessions both appear.
         Best-effort: ``[]`` on error or for tools with no transcripts.
+        """
+        ...
+
+    def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
+        """The session's agentic-loop spine — the lineage-preserving message list
+        every content projection derives from, oldest first.
+
+        ``read_turns`` and ``transcript_digest`` are projections of this, and a
+        trace replay walks it to emit one observation per assistant message and
+        tool call. Provider-neutral by construction (role, content blocks, ids,
+        and token usage where the provider reports it), which is what lets a
+        consumer read any tool's content with no per-tool branch.
+
+        **An adapter with no message spine returns ``()``, and that is an ANSWER
+        rather than a degradation:** a remote session's history lives behind an
+        API and a bare shell records nothing, so "there is no content here to
+        replay" is the honest thing for a content consumer to act on. Best-effort
+        like every read here — ``()`` when the session or its backing store
+        cannot be read, never a raise.
         """
         ...
 
@@ -286,6 +462,31 @@ class AgentAdapter(Protocol):
         sits arbitrarily far back, so the fold must run from session start).
         Best-effort like every read here: ``None`` when no todo/Task tool has
         been called yet, or the session/transcript can't be read.
+        """
+        ...
+
+    def pending_queue(self, cwd: Path, session_id: str) -> tuple[QueuedMessage, ...]:
+        """What the HARNESS is holding for this session but has not delivered yet,
+        in the order the harness reports.
+
+        The :meth:`latest_todo` sibling in shape and in contract: a read of
+        something the tool already owns, never a Grove-side ledger. Both shipped
+        harnesses queue a message typed while the agent is busy and decide
+        themselves when to inject it, so a second queue here would be a second
+        writer with no arbitration — it would drift the instant somebody typed
+        straight into the pane.
+
+        Where the queue LIVES is the per-provider difference this seam exists to
+        absorb: Claude Code writes ``queue-operation`` records into the
+        transcript Grove already folds, Codex keeps a SQLite table under its
+        config root, and neither a bare shell nor a remote orchestrator exposes
+        one at all.
+
+        ``()`` is deliberately ambiguous HERE and disambiguated one layer up: an
+        adapter that cannot see a queue and an adapter whose queue is empty both
+        answer ``()``, and the wire shape carries the ``supported`` flag that
+        tells them apart (``WorkspaceQueueView``). Best-effort like every read
+        here: an unreadable store is ``()``, never a raise.
         """
         ...
 

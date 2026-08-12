@@ -9,12 +9,13 @@ failure returns zero, not a blocked render loop.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI with the peek rail showing the summary card and the transcript tab" /></div>
-  <figcaption class="ms-shot__body">The <em>summary</em> card carries branch, git stats, agent metrics and recent commits. The <em>preview</em> below it has transcript and terminal tabs.</figcaption>
+  <figcaption class="ms-shot__body">The <em>summary</em> card carries branch, git stats, agent metrics and recent commits. <em>Tickets</em> sits under it, the <em>preview</em> under that with transcript and terminal tabs.</figcaption>
 </figure>
 
 ## What the rail shows
 
-A summary card sits over a tabbed preview pane, one row per workspace property.
+Three panels stack down the rail: a summary card, a tickets panel, and a tabbed
+preview.
 
 | Card row | What it carries |
 |---|---|
@@ -22,6 +23,13 @@ A summary card sits over a tabbed preview pane, one row per workspace property.
 | Agent | Model, turn and reply and tool-call counts, token usage and agent state, when Grove can read the session |
 | Task phase | The [task phase](features-status.md#the-third-axis-task-phase) the agent reported, with its bounded todo progress |
 | Commits | The three most recent commits |
+
+**Tickets** is its own panel because a workspace can carry several, and several
+of anything inside the summary card would push the rest of it off screen. Its
+title states the count, each [linked ticket](features-ticket-providers.md) takes
+one line, and the panel scrolls inside its own border rather than growing. A
+pull request leads with an arrow and takes the colour of its state. A workspace
+with no tickets shows no panel at all.
 
 **Transcript** groups every consecutive run of tool calls into one row and
 never expands a row, since it stays a glance surface. Press ++s++ for

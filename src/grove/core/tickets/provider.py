@@ -70,6 +70,7 @@ from grove.core.contracts.tickets import (
 )
 from grove.core.errors import (
     TicketAssigneesUnsupported,
+    TicketBodyUnsupported,
     TicketCommentsUnsupported,
     TicketProviderError,
     TicketPullRequestsUnsupported,
@@ -134,6 +135,27 @@ class TicketProvider(Protocol):
         ...
 
     @property
+    def web_root(self) -> str | None:
+        """Scheme + browser authority for this tracker, or ``None``. Pure.
+
+        Declared here because a caller composing a link to a ticket needs it
+        alongside :attr:`context`; the concrete classes derive it from the
+        configured base URL.
+        """
+        ...
+
+    @property
+    def can_edit_body(self) -> bool:
+        """True when a body rewrite would actually reach the ticket.
+
+        Same capability-AND-credential fold as :attr:`can_comment`. A caller
+        treats ``False`` as "log it and carry on": a footer is decoration on
+        somebody else's description, and it is never worth failing the status
+        update it accompanies.
+        """
+        ...
+
+    @property
     def can_assign(self) -> bool:
         """True when an assignee write would actually reach the tracker.
 
@@ -154,13 +176,17 @@ class TicketProvider(Protocol):
         """
         ...
 
-    def assign_self(self, ticket_id: str) -> None:
+    def assign_self(self, ticket_id: str) -> bool:
         """Add :meth:`viewer_login` to the ticket's assignees. Network I/O.
 
         Additive and idempotent: an existing human assignee is never displaced,
-        and assigning twice is a no-op. Deliberately has no completion inverse —
-        Grove never unassigns when work lands, because the assignment IS the
-        record of who did it.
+        and assigning twice is a no-op.
+
+        Returns whether THIS call is what put the login there — ``False`` meaning
+        it was already assigned, by a human or by an earlier run. The distinction
+        cannot be recovered afterwards (the finished state is identical either
+        way) and it is what entitles a caller to unassign later: taking the login
+        off a ticket somebody else assigned it to would undo their decision.
         """
         ...
 
@@ -177,6 +203,26 @@ class TicketProvider(Protocol):
 
         One call for the caller, two round-trips underneath — the forges keep the
         body on the issue and the comments on a sub-resource.
+        """
+        ...
+
+    def read_body(self, ticket_id: str) -> str:
+        """The ticket's own description text. Network I/O.
+
+        Separate from :meth:`read_thread` because the caller that edits a body
+        wants exactly the body: the thread read also pulls every comment, which
+        on a long-running ticket is the expensive half and is pure waste when
+        the answer is thrown away.
+        """
+        ...
+
+    def update_body(self, ticket_id: str, body: str) -> None:
+        """Replace the ticket's description with ``body``. Network I/O.
+
+        The caller owns the merge. This is a blind whole-body write because both
+        forges model it that way, so anything wanting to preserve what a human
+        wrote must read, splice and pass the WHOLE result — which is why the
+        footer is delimited by a marker rather than appended.
         """
         ...
 
@@ -284,6 +330,14 @@ class HttpTicketProvider(ABC):
     flag: assigning needs repo write where commenting does not, so one must
     never answer for the other."""
 
+    body_supported: ClassVar[bool] = False
+    """Declared by the subclasses that override the body read/write below. A
+    THIRD flag on the same grounds the second one exists: editing a ticket's
+    description rewrites what a human wrote, which is a strictly larger claim
+    than adding a comment beside it, and a deployment can honestly hold one
+    permission and not the other. Same declaration-not-derivation rule, same
+    drift-guard test."""
+
     def __init__(
         self,
         *,
@@ -341,6 +395,11 @@ class HttpTicketProvider(ABC):
     def can_comment(self) -> bool:
         """Capability AND credential — see the Protocol member for why both."""
         return self.comments_supported and self.configured
+
+    @property
+    def can_edit_body(self) -> bool:
+        """Capability AND credential — see the Protocol member for why both."""
+        return self.body_supported and self.configured
 
     @property
     def can_assign(self) -> bool:
@@ -439,6 +498,15 @@ class HttpTicketProvider(ABC):
         """
         raise self._comments_unsupported("read_thread")
 
+    def read_body(self, ticket_id: str) -> str:  # noqa: ARG002
+        raise self._body_unsupported("read_body")
+
+    def update_body(self, ticket_id: str, body: str) -> None:  # noqa: ARG002
+        raise self._body_unsupported("update_body")
+
+    def _body_unsupported(self, op: str) -> TicketBodyUnsupported:
+        return TicketBodyUnsupported(f"{self.name} provider does not implement {op}")
+
     def _comments_unsupported(self, op: str) -> TicketCommentsUnsupported:
         return TicketCommentsUnsupported(f"{self.name} provider does not implement {op}")
 
@@ -447,7 +515,7 @@ class HttpTicketProvider(ABC):
     def viewer_login(self) -> str:
         raise self._assignees_unsupported("viewer_login")
 
-    def assign_self(self, ticket_id: str) -> None:  # noqa: ARG002
+    def assign_self(self, ticket_id: str) -> bool:  # noqa: ARG002
         raise self._assignees_unsupported("assign_self")
 
     def unassign_self(self, ticket_id: str) -> None:  # noqa: ARG002

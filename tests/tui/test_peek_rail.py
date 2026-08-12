@@ -51,8 +51,8 @@ from grove.tui.widgets.peek_rail import (
     _render_pane_body,
     _render_peek,
     _render_provision_body,
+    _render_tickets_panel,
     _render_workspace,
-    _ticket_block,
 )
 from tests.conftest import FakeTmux
 
@@ -99,21 +99,29 @@ def _stub_state(**overrides: object) -> WorkspaceState:
     return WorkspaceState(**base)  # type: ignore[arg-type]
 
 
-# ─── ticket block ────────────────────────────────────────────────────────────
+# ─── tickets panel (pure render) ─────────────────────────────────────────────
+#
+# Tickets moved out of the summary card into their own bounded, scrollable
+# panel (`PeekRail._update_tickets`, wired through `#card-tickets`) so a
+# workspace with several attached tickets can't push the stats / description
+# / affordance / commits blocks off screen. `_render_tickets_panel` is the
+# pure render helper for that panel's body — see the Pilot-level tests below
+# for the panel's visibility, height bound, and title.
 
 
-def test_ticket_block_empty_refs_is_empty_text() -> None:
-    """No associated tickets → an empty ``Text`` so the rail ships no
-    placeholder line."""
-    block = _ticket_block([], dark=True)
+def test_tickets_panel_empty_refs_is_empty_text() -> None:
+    """No associated tickets → an empty ``Text`` so the panel stays hidden."""
+    block = _render_tickets_panel([], dark=True)
     assert block.plain == ""
     assert block.spans == []
 
 
-def test_ticket_block_renders_pill_title_status_assignee_and_url() -> None:
-    """Each ref shows the compact pill, the title, muted-labelled status +
-    assignee, and the url — one line per ref."""
-    block = _ticket_block(
+def test_tickets_panel_renders_pill_title_status_and_assignee() -> None:
+    """Each ref shows the compact pill, the title, and muted-labelled status
+    + assignee — one line per ref. The raw ``url`` is deliberately dropped:
+    it was most of the old inline block's bloat and isn't clickable in a
+    terminal anyway."""
+    block = _render_tickets_panel(
         [
             TicketRef(
                 provider="linear",
@@ -132,8 +140,8 @@ def test_ticket_block_renders_pill_title_status_assignee_and_url() -> None:
     assert "Wire the provider layer" in body
     assert "status" in body and "In Progress" in body
     assert "assignee" in body and "alice" in body
-    assert "https://linear.app/x/ENG-123" in body
-    # Second ref renders its pill + title even with no status/assignee/url.
+    assert "https://linear.app/x/ENG-123" not in body
+    # Second ref renders its pill + title even with no status/assignee.
     assert "GH#42" in body
     assert "Bug: crash on boot" in body
     # One body line per ref: each pill heads its own line.
@@ -141,16 +149,18 @@ def test_ticket_block_renders_pill_title_status_assignee_and_url() -> None:
     assert len(pill_lines) == 2
 
 
-def test_ticket_block_ambiguous_pill_is_suffixed() -> None:
+def test_tickets_panel_ambiguous_pill_is_suffixed() -> None:
     """An ambiguous branch-inferred ref reads as tentative via a trailing `?`."""
-    block = _ticket_block([TicketRef(provider="github", id="42", ambiguous=True)], dark=True)
+    block = _render_tickets_panel(
+        [TicketRef(provider="github", id="42", ambiguous=True)], dark=True
+    )
     assert "GH#42?" in block.plain
 
 
-def test_ticket_block_issue_only_refs_render_unchanged() -> None:
+def test_tickets_panel_issue_only_refs_render_unchanged() -> None:
     """A `kind == "issue"` ref (the default) renders exactly as before this
     story — no `PR_GLYPH`, pill stays the plain agent-info cyan."""
-    block = _ticket_block([TicketRef(provider="linear", id="ENG-7")], dark=True)
+    block = _render_tickets_panel([TicketRef(provider="linear", id="ENG-7")], dark=True)
     assert PR_GLYPH not in block.plain
     info_hex = ref_color("info", dark=True).lower()
     found = False
@@ -162,14 +172,14 @@ def test_ticket_block_issue_only_refs_render_unchanged() -> None:
     assert found
 
 
-def test_ticket_block_pull_request_leads_with_pr_glyph_and_status_color() -> None:
+def test_tickets_panel_pull_request_leads_with_pr_glyph_and_status_color() -> None:
     """A PR ref (`kind == "pull_request"`) leads with `PR_GLYPH`, and both
     the pill and the `status` value take `pr_status_color` — never the
     plain issue cyan or the unstyled bold `status` uses for issues."""
     ref = TicketRef(
         provider="github", id="50", kind="pull_request", status="merged", title="Ship it"
     )
-    block = _ticket_block([ref], dark=True)
+    block = _render_tickets_panel([ref], dark=True)
     body = block.plain
     assert f"{PR_GLYPH} GH#50" in body
     assert "status" in body and "merged" in body
@@ -181,9 +191,28 @@ def test_ticket_block_pull_request_leads_with_pr_glyph_and_status_color() -> Non
     assert "bold" in seen.get("merged", "") and merged_hex in seen.get("merged", "")
 
 
-def test_render_workspace_includes_ticket_block() -> None:
-    """The ticket block is wired into the workspace card composition, so a
-    peek whose state carries refs surfaces them in the rail body."""
+def test_tickets_panel_body_is_one_line_per_ref() -> None:
+    """One row per ticket, however long the title.
+
+    The pure helper owns the row COUNT; the cropping that keeps each row to
+    one line is the panel's `text-wrap: nowrap` style, pinned separately at
+    the Pilot level. Setting `Text.no_wrap` here instead does not survive the
+    render pipeline, which is exactly the bug this pairing replaced: the
+    attribute read back as set while every title still wrapped on screen.
+    """
+    refs = [
+        TicketRef(provider="github", id="1", title="x" * 200),
+        TicketRef(provider="gitea", id="2", title="y" * 200, status="open", assignee="dana"),
+    ]
+    block = _render_tickets_panel(refs, dark=True)
+    assert len(block.plain.splitlines()) == 2
+
+
+def test_render_workspace_excludes_tickets() -> None:
+    """Tickets no longer render inside the summary card at all — they moved
+    to their own panel (`_render_tickets_panel`, wired through
+    `PeekRail._update_tickets`). `_render_workspace`'s body must not
+    reference a ticket pill or title even when `ticket_refs` is populated."""
     peek = WorkspacePeek(
         state=_stub_state(ticket_refs=[TicketRef(provider="gitea", id="5", title="Add docs")]),
         base_ahead=0,
@@ -196,8 +225,45 @@ def test_render_workspace_includes_ticket_block() -> None:
         snapshot_taken_at=None,
     )
     body = _render_workspace(peek, dark=True).plain
-    assert "GTEA#5" in body
-    assert "Add docs" in body
+    assert "GTEA#5" not in body
+    assert "Add docs" not in body
+
+
+def test_render_workspace_is_byte_identical_regardless_of_ticket_refs() -> None:
+    """Extends the byte-identical-when-absent guarantee: since
+    `_render_workspace` no longer touches `ticket_refs` at all, a workspace
+    with several attached tickets renders the exact same summary-card bytes
+    as one with none — the count can never leak into this Static."""
+    no_tickets = WorkspacePeek(
+        state=_stub_state(ticket_refs=[]),
+        base_ahead=1,
+        base_behind=0,
+        diff_added=5,
+        diff_removed=1,
+        dirty_files=2,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    many_tickets = WorkspacePeek(
+        state=_stub_state(
+            ticket_refs=[
+                TicketRef(provider="gitea", id=str(n), title=f"ticket {n}") for n in range(10)
+            ]
+        ),
+        base_ahead=1,
+        base_behind=0,
+        diff_added=5,
+        diff_removed=1,
+        dirty_files=2,
+        recent_commits=(),
+        agent_snapshot=None,
+        snapshot_taken_at=None,
+    )
+    plain = _render_workspace(no_tickets, dark=True)
+    ticketed = _render_workspace(many_tickets, dark=True)
+    assert plain.plain == ticketed.plain
+    assert plain.spans == ticketed.spans
 
 
 # ─── pure rendering ──────────────────────────────────────────────────────────
@@ -1189,6 +1255,123 @@ async def test_preview_hidden_when_no_peek(
         await pilot.pause()
 
 
+# ─── tickets panel (Pilot) ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_tickets_panel_hidden_when_workspace_has_no_tickets(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A ticketless workspace never shows the panel — same `-hidden` idiom
+    the tabbed preview uses, so the rail renders as if the panel never
+    existed."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="no-tickets"))
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause(delay=0.2)
+        panel = app.screen.query_one("#card-tickets", VerticalScroll)
+        assert panel.has_class("-hidden")
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tickets_panel_visible_with_count_in_border_title(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """With tickets attached, the panel un-hides, its border title states
+    the count, and its body carries every ref's pill."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        rail.set_peek(
+            _stub_peek(
+                ticket_refs=[
+                    TicketRef(provider="gitea", id="5", title="Add docs"),
+                    TicketRef(provider="github", id="42", title="Bug: crash on boot"),
+                ]
+            )
+        )
+        await pilot.pause()
+        panel = rail.query_one("#card-tickets", VerticalScroll)
+        assert not panel.has_class("-hidden")
+        assert str(panel.border_title) == "tickets 2"
+        assert "GTEA#5" in rail.body_text
+        assert "GH#42" in rail.body_text
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tickets_panel_bounds_its_own_height(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The whole reason for this panel: many attached tickets must never
+    grow it past its CSS `max-height` — it scrolls internally instead,
+    leaving the stats/description/affordance/commits blocks (and the
+    preview tabs below) their room on screen."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        refs = [TicketRef(provider="gitea", id=str(n), title=f"ticket {n}") for n in range(20)]
+        rail.set_peek(_stub_peek(ticket_refs=refs))
+        await pilot.pause()
+        panel = rail.query_one("#card-tickets", VerticalScroll)
+        assert not panel.has_class("-hidden")
+        assert str(panel.border_title) == "tickets 20"
+        # 20 one-line rows would need 20+ rows unbounded; the panel's outer
+        # size must stay at or under its CSS cap regardless.
+        assert panel.outer_size.height <= 8
+        # And the content genuinely overflows the viewport, proving the cap
+        # is doing something rather than just happening to fit.
+        assert panel.max_scroll_y > 0
+        # Rows crop rather than wrap. This is a STYLE, not a `Text` attribute:
+        # `Text.no_wrap` set on the renderable is ignored on the way through,
+        # so a row's second line reappears with nothing failing anywhere.
+        body = rail.query_one("#tickets-body", Static)
+        assert body.styles.text_wrap == "nowrap"
+        assert body.styles.text_overflow == "ellipsis"
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tickets_panel_reflects_selection_change(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Selecting a workspace with no tickets after one that has them hides
+    the panel again — it isn't stuck showing a stale ref list."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        _stop_screen_timers(app.screen)
+        rail = app.screen.query_one(PeekRail)
+        panel = rail.query_one("#card-tickets", VerticalScroll)
+
+        rail.set_peek(_stub_peek(id="wid-1", ticket_refs=[TicketRef(provider="gitea", id="5")]))
+        await pilot.pause()
+        assert not panel.has_class("-hidden")
+
+        rail.set_peek(_stub_peek(id="wid-2", title="other", ticket_refs=[]))
+        await pilot.pause()
+        assert panel.has_class("-hidden")
+        await pilot.press("q")
+        await pilot.pause()
+
+
 # ─── transcript tab + default-tab preference ─────────────────────────────────
 
 
@@ -1604,6 +1787,7 @@ async def test_rail_shows_the_build_log_in_the_terminal_tab(
     app = GroveApp(manager)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
+        _stop_screen_timers(app.screen)
         rail = app.screen.query_one(PeekRail)
         progress = ProvisionProgress(
             elapsed_ms=61_000,

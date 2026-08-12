@@ -10,6 +10,7 @@
     "applies_to": "host"
   },
   "container": {
+    "enabled": false,
     "egress": {
       "allow": [
         "cdn.playwright.dev",

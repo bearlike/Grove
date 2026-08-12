@@ -558,13 +558,26 @@ def test_statusline_reports_subscription_usage_from_the_payload() -> None:
     assert "3d 16h" in usage
 
 
-def test_statusline_omits_usage_entirely_for_a_login_that_has_no_pools() -> None:
+def test_statusline_omits_usage_entirely_for_a_login_that_has_no_pools(tmp_path: Path) -> None:
     """An API-key login carries no subscription pools, and 0% would be a lie.
 
     "Not applicable" and "none consumed" are different answers, and only one of
     them is true here — so the segment is absent rather than zeroed.
+
+    Rendered from a NON-repo cwd with a NEUTRAL name, and both halves are
+    load-bearing. **An assertion that something is absent has to control every
+    channel that could supply it**, and this render has two: the git segment
+    carries the checkout's real branch name (``feat/usage-audit`` is what caught
+    this, and scoping to a segment does not help when the marker matches the git
+    segment itself), and the directory segment carries the cwd's — which for a
+    bare ``tmp_path`` is pytest's slug of THIS FUNCTION'S NAME, the word
+    ``usage`` included. Scoping harder fixes neither; removing the sources does.
     """
-    code, out = _statusline('{"model": {"display_name": "Claude Opus 5"}}', glyphs="ascii")
+    work = tmp_path / "elsewhere"
+    work.mkdir()
+    code, out = _statusline(
+        '{"model": {"display_name": "Claude Opus 5"}}', glyphs="ascii", cwd=work
+    )
 
     assert code == 0
     plain = _plain(out)

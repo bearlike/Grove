@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import contextlib
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
@@ -41,13 +41,23 @@ from grove.core.agents import (
 )
 from grove.core.agents.base import AgentAdapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter
-from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook, HookRecord
+from grove.core.agents.hook import (
+    DEFAULT_SIDECAR_MAX_AGE_SECONDS,
+    ClaudeHook,
+    HookRecord,
+    SubagentHookRecord,
+)
+from grove.core.contracts.usage import DurationView, GenerationLatencyView, TokenClassesView
 from grove.core.git import GitRepo
 from grove.core.launch import AgentExit
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
 from grove.core.phase import PhaseReport
 from grove.core.registry import RepoRegistry
+from grove.core.session_duration import duration_of, generation_latency_of
 from grove.core.workspace import CommitSummary, WorkspaceState, WorkspaceStatus
+
+if TYPE_CHECKING:
+    from grove.core.agents import AgentMessage
 
 DeltaKind = Literal["workspace_changed", "session_activity"]
 
@@ -80,11 +90,35 @@ class SessionActivity:
     ``live`` is the optional live-counters block — ``None`` until a live
     tier is wired; the wire mirror hides the whole block rather than
     showing zeros.
+
+    ``duration`` is the SAME ``DurationView`` the session catalog and the
+    project-scoped listing already publish (:func:`grove.core.session_duration.duration_of`
+    over ``adapter.read_messages``) — reused rather than re-derived, so a
+    workspace card and a session-browse row can never disagree about one
+    session's clocks. ``None`` on a row this tick's read never priced (a
+    fleet-entry ``SessionActivity``, built by ``_fleet_entries`` from a
+    different projection that carries no message spine); ``ActivityService``
+    fills it wherever it resolves one.
+
+    ``tokens`` unfolds ``activity.tokens_in`` (fresh input + cache read + cache
+    creation, folded together BY DESIGN — see ``ClaudeCodeAdapter.usage_tokens``)
+    back into its classes, off the same message spine ``duration`` reduces:
+    cache reads routinely dwarf fresh input and are billed far cheaper, so the
+    fold alone cannot explain a nine-figure number, only report it. Same
+    nullability rule and the same population as ``duration``.
+
+    ``latency`` is the model's own average response wait — generation
+    intervals only, never folded with tool time the way ``duration.execution_ms``
+    is. Same reduction (:func:`grove.core.session_duration.generation_latency_of`),
+    same message spine, same nullability rule as ``duration`` and ``tokens``.
     """
 
     session: AgentSession
     activity: AgentActivity
     live: LiveCounters | None = None
+    duration: DurationView | None = None
+    tokens: TokenClassesView | None = None
+    latency: GenerationLatencyView | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -135,6 +169,78 @@ class TodoProgress:
 
 
 @dataclass(slots=True, frozen=True)
+class QueueDepth:
+    """How much the HARNESS is holding for this workspace — a COUNT, never the
+    messages.
+
+    The ``TodoProgress`` shape for the same reason: this rides the ~1 Hz
+    ``session_activity`` delta for every workspace on the host, and a queue is
+    unbounded in both length and text where the full list is one fetch away
+    behind ``GET /workspaces/{id}/queue``. One integer renders "2 waiting" on
+    every card for a fixed cost.
+
+    A value OBJECT rather than a bare int on the row, so the fingerprint can
+    join it whole: a fingerprint that samples one field of a composite goes
+    stale silently the day a second field is added, and the symptom is a UI that
+    looks merely slow.
+    """
+
+    pending: int
+
+    @classmethod
+    def from_queue(cls, queued: Sequence[object]) -> QueueDepth | None:
+        """The depth of ``queued``, or ``None`` when nothing is waiting.
+
+        ``None`` deliberately collapses "this harness has no queue Grove can
+        read" with "the queue is empty", because a card renders both the same
+        way — no indicator. The distinction that a client DOES act on lives on
+        the fetch-on-demand route, whose ``WorkspaceQueueView.supported`` tells
+        "nothing waiting" from "no idea". Putting a `supported` flag on the tick
+        as well would ship a fact nothing renders, ~1 Hz, per workspace.
+        """
+        return cls(pending=len(queued)) if queued else None
+
+
+@dataclass(slots=True, frozen=True)
+class FleetSummary:
+    """How many sub-agents this session's Claude Code hook has pushed status
+    for, and how many are still running — COUNTS ONLY, the ``TodoProgress`` /
+    ``QueueDepth`` shape applied to the live sub-agent fleet.
+
+    Sourced from :meth:`ClaudeHook.list_subagents` — the hook's per-agent
+    sidecar push, not a transcript parse — so a sub-agent shows up here the
+    instant its ``SubagentStart`` fires, before its own sidechain transcript
+    file necessarily exists on disk. The full per-agent roster (name, current
+    tool, elapsed time) stays fetch-on-demand behind
+    ``GET /workspaces/{id}/fleet``: this rides the ~1 Hz ``session_activity``
+    delta for every workspace on the host, and a fleet is exactly as unbounded
+    as a todo list or a message queue.
+    """
+
+    active: int
+    total: int
+
+    @classmethod
+    def from_records(cls, records: Sequence[SubagentHookRecord]) -> FleetSummary | None:
+        """Count ``records`` by state, or ``None`` when this session has
+        pushed no sub-agent status at all — the same absence-is-not-a-value
+        rule :meth:`TodoProgress.from_todo` follows: "never spawned a
+        sub-agent" and "every sub-agent already finished" are different facts
+        a client acts on differently (hide the indicator vs. show 0 active of
+        N), so only the first collapses to ``None``.
+
+        A sub-agent counts as active whenever its pushed state is not the
+        terminal WAITING (settled only by an explicit ``SubagentStop`` — see
+        :class:`SubagentHookRecord`), so a quiet-but-still-running sub-agent
+        stays counted rather than aging out.
+        """
+        if not records:
+            return None
+        active = sum(1 for r in records if r.state is not AgentActivityState.WAITING)
+        return cls(active=active, total=len(records))
+
+
+@dataclass(slots=True, frozen=True)
 class WorkspaceActivity:
     """A workspace's dashboard row: reconciled state + its sessions + cheap stats.
 
@@ -154,12 +260,23 @@ class WorkspaceActivity:
     was produced (the per-card "updated Xs ago"); the dashboard-wide refresh time
     is ``DashboardSnapshot.generated_at``.
 
-    ``phase`` and ``todo`` are the two "how is the TASK going" fields, both
-    ``None`` when the agent has said nothing. They are DERIVED per tick from
-    durable artifacts (a worktree file, the transcript) exactly like the session
-    activity above — neither is persisted onto ``WorkspaceState``, so nothing
-    here can go stale relative to what the agent last wrote. Both default so the
-    row can still be constructed from the fields that predate them.
+    ``phase``, ``todo``, ``queue`` and ``fleet`` are the "how is the TASK going"
+    fields, all ``None`` when there is nothing to say. They are DERIVED per tick
+    from durable artifacts (a worktree file, the transcript, the harness's own
+    queue, the hook's per-sub-agent sidecars) exactly like the session activity
+    above — none is persisted onto ``WorkspaceState``, so nothing here can go
+    stale relative to what the agent last wrote. All default so the row can
+    still be constructed from the fields that predate them.
+
+    ``branch`` is derived the same way and for the same reason, but against a
+    field that ALREADY EXISTS on the state — and that is the trap it closes.
+    ``WorkspaceState.branch`` is a create-time snapshot nothing refreshes, so
+    every reader that treated it as current reported the branch the workspace was
+    born on: an agent that branched afterwards had its stats computed elsewhere
+    and its issue-ops comment naming a stale branch and tip commit on a public
+    tracker. It is deliberately NOT written back — that field is the identity
+    ``resume`` rebuilds the worktree from. Empty falls back to ``state.branch``,
+    so a row built without it behaves exactly as before.
     """
 
     state: WorkspaceState
@@ -174,6 +291,18 @@ class WorkspaceActivity:
     observed_at: datetime
     phase: PhaseReport | None = None
     todo: TodoProgress | None = None
+    queue: QueueDepth | None = None
+    fleet: FleetSummary | None = None
+    branch: str = ""
+
+    @property
+    def live_branch(self) -> str:
+        """The branch to RENDER and reason about: the live one, else the recorded one.
+
+        One accessor so no consumer has to remember which of the two fields is
+        current — the distinction that produced the bug in the first place.
+        """
+        return self.branch or self.state.branch
 
     @property
     def primary(self) -> AgentActivity | None:
@@ -203,11 +332,12 @@ class WorkspaceActivity:
         included so a fresh commit streams promptly even when it doesn't move the
         ahead/behind counts (an amend on the tip).
 
-        ``phase`` and ``todo`` go in WHOLE rather than field-by-field: both are
-        frozen value objects that compare by value, so including the object
-        cannot forget a field a later change adds — where the per-session tuple
-        below must stay explicit precisely because ``AgentActivity`` carries
-        fields that churn every tick. Note this makes ``PhaseReport.updated_at``
+        ``phase``, ``todo``, ``queue`` and ``fleet`` go in WHOLE rather than
+        field-by-field: each is a frozen value object that compares by value, so
+        including the object cannot forget a field a later change adds — where
+        the per-session tuple below must stay explicit precisely because
+        ``AgentActivity`` carries fields that churn every tick. Note this makes
+        ``PhaseReport.updated_at``
         part of the key on purpose: unlike ``observed_at`` it moves only when the
         agent actually rewrites the file, so a re-report of the same phase is a
         real "still here" signal worth streaming, not per-tick noise.
@@ -222,6 +352,8 @@ class WorkspaceActivity:
             self.recent_commits[0].sha if self.recent_commits else None,
             self.phase,
             self.todo,
+            self.queue,
+            self.fleet,
             # Every session, not just the primary: a hand-started secondary's
             # state change must stream too, and a sessions set going empty (a
             # discovery miss) is itself a change worth emitting.
@@ -312,6 +444,32 @@ class DashboardDelta:
     detail: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(slots=True, frozen=True)
+class _SpineFacts:
+    """Everything ONE pass over a session's message spine yields.
+
+    A value object rather than three return values, for the reason
+    ``QueueDepth``'s docstring gives about the fingerprint: a composite that
+    travels whole cannot forget a member the day a fourth reduction is added.
+
+    It exists because three of them arrived one at a time, each written as its
+    own method with its own memo — and each re-called ``adapter.read_messages``.
+    That call is memoized to a ``stat`` on an unchanged transcript, so it is
+    cheap, but it is not free: measured on the largest real transcript on this
+    host (9,568 messages, 33 MB) a warm ``read_messages`` costs **3.5 ms**
+    against ``parse_activity``'s 3.4 ms, so the tick was paying ~10.5 ms per
+    session where 3.5 ms would do — three times the yardstick this file's own
+    guidance names ("measure it against ``parse_activity`` rather than against
+    zero"). Two of the three calls were pure duplication.
+
+    One read, three reductions, one memo.
+    """
+
+    duration: DurationView
+    tokens: TokenClassesView
+    latency: GenerationLatencyView
+
+
 class ActivityService:
     """Aggregates workspaces, sessions, and activity across every repo.
 
@@ -344,6 +502,13 @@ class ActivityService:
         # tiny entries.
         self._settled: dict[str, tuple[AgentActivityState, datetime]] = {}
         self._git_cache: dict[Path, GitRepo] = {}
+        # ONE per-session memo for every reduction over the message spine,
+        # keyed by message COUNT rather than a stat signature (see
+        # ``_session_spine_facts``) — unbounded like ``_settled`` above and for
+        # the same reason: loopback-only, small N, tiny entries. It was three
+        # parallel dicts fed by three separate reads until the cost was
+        # measured; ``_SpineFacts`` carries that measurement.
+        self._spine_cache: dict[str, tuple[int, _SpineFacts]] = {}
 
     # ─── snapshot ──────────────────────────────────────────────────────────
 
@@ -495,13 +660,14 @@ class ActivityService:
     ) -> WorkspaceActivity:
         sessions = self.sessions_for(mgr, state)
         git = self._git_for(Path(state.repo_root))
+        branch = self._live_branch(state)
         try:
-            ahead, behind = git.ahead_behind(state.branch, state.base_branch)
+            ahead, behind = git.ahead_behind(branch, state.base_branch)
         except Exception as exc:  # best-effort: never break the snapshot
             logger.debug("activity ahead_behind({}) failed: {}", state.id, exc)
             ahead = behind = 0
         try:
-            added, removed = git.diff_stats(state.branch, state.base_branch)
+            added, removed = git.diff_stats(branch, state.diff_base)
         except Exception as exc:
             logger.debug("activity diff_stats({}) failed: {}", state.id, exc)
             added = removed = 0
@@ -520,7 +686,7 @@ class ActivityService:
         try:
             # The durable latest-activity signal — one cheap `git log -3` per row,
             # same per-tick discipline as ahead_behind/diff_stats above.
-            commits = git.recent_commits(state.branch, limit=3)
+            commits = git.recent_commits(branch, limit=3)
         except Exception as exc:  # best-effort: never break the snapshot
             logger.debug("activity recent_commits({}) failed: {}", state.id, exc)
             commits = ()
@@ -563,6 +729,49 @@ class ActivityService:
         except Exception as exc:  # best-effort: never break the snapshot
             logger.debug("activity latest_todo({}) failed: {}", state.id, exc)
             todo = None
+        try:
+            # The same handed-over session and the same `*_for` discipline as
+            # the todo above, for the same two reasons: the tick has already
+            # resolved this workspace's primary through the full adoption path
+            # (the only answer that covers codex and a dead minted pointer), and
+            # a discovery scan per workspace per ~1 Hz tick is the daemon-CPU
+            # bug the transcript cache exists to prevent.
+            #
+            # Cost measured on the reference host: Claude's queue is a fold over
+            # the records `parse_activity` already read this tick, memoized on
+            # the same stat signature; Codex's is a read-only sqlite open at
+            # 0.26 ms warm. Both are noise beside the 76 ms parse per session
+            # this tick already pays.
+            queue = QueueDepth.from_queue(
+                mgr.pending_queue_for(
+                    state,
+                    session_id=sessions[0].session.session_id if sessions else None,
+                )
+            )
+        except Exception as exc:  # best-effort: never break the snapshot
+            logger.debug("activity pending_queue({}) failed: {}", state.id, exc)
+            queue = None
+        try:
+            # A handful of small file reads (a directory listing plus one read
+            # per sub-agent), never a transcript parse — so unlike todo/queue
+            # above this needs no `*_for` hand-over, just the workspace's own
+            # minted id. claude_code only: no other kind's hook payload carries
+            # `agent_id` today, and `ClaudeHook.list_subagents` answers `()` for
+            # a session with no sub-agents regardless, so the gate is purely to
+            # avoid a pointless directory stat for every codex/generic/mewbo
+            # workspace on every tick.
+            fleet = (
+                FleetSummary.from_records(
+                    ClaudeHook.list_subagents(
+                        state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                    )
+                )
+                if state.agent_session_id and mgr.effective_kind(state) == "claude_code"
+                else None
+            )
+        except Exception as exc:  # best-effort: never break the snapshot
+            logger.debug("activity fleet({}) failed: {}", state.id, exc)
+            fleet = None
         return WorkspaceActivity(
             state=state,
             sessions=tuple(sessions),
@@ -576,6 +785,9 @@ class ActivityService:
             observed_at=_utcnow(),
             phase=phase,
             todo=todo,
+            queue=queue,
+            fleet=fleet,
+            branch=branch,
         )
 
     def sessions_for(self, mgr: WorkspaceManager, state: WorkspaceState) -> list[SessionActivity]:
@@ -874,6 +1086,7 @@ class ActivityService:
         with mgr.transcript_scope(state):
             paths = adapter.locate_transcripts(cwd, session_id)
             transcript = adapter.parse_activity(cwd, session_id)
+            spine = self._session_spine_facts(adapter, cwd, session_id)
         # Remote adapters surface state with no local file, so "materialized"
         # can't mean "a file exists" — UNKNOWN-and-fileless is the only true
         # STARTING window.
@@ -934,7 +1147,49 @@ class ActivityService:
             session=session,
             activity=replace(transcript, state=blended, questions=questions),
             live=live,
+            duration=spine.duration if spine else None,
+            tokens=spine.tokens if spine else None,
+            latency=spine.latency if spine else None,
         )
+
+    def _session_spine_facts(
+        self, adapter: AgentAdapter, cwd: Path, session_id: str
+    ) -> _SpineFacts | None:
+        """The session's clocks, token classes and model wait — ONE read, ONE memo.
+
+        Every member is a pure reduction over ``adapter.read_messages``, which
+        is itself memoized to a ``stat`` on an unchanged transcript (the same
+        incremental cache ``parse_activity`` uses). The READ is therefore cheap
+        but not free — 3.5 ms warm on this host's largest transcript — which is
+        why it happens once here rather than once per reduction; see
+        ``_SpineFacts`` for the measurement that forced the collapse.
+
+        The REDUCTIONS are the expensive half and are what the memo protects:
+        ``duration_of`` alone costs ~30 ms on that same transcript. Message
+        count is a cheap, monotonic (append-only transcripts) proxy for "did
+        this session's spine change", so a quiet session pays one ``len()``
+        check per tick and a growing one recomputes only what actually grew.
+
+        Caller holds ``mgr.transcript_scope(state)`` already; this makes no
+        further env assumption. Best-effort: an adapter that cannot answer (a
+        vanished file, a remote timeout) degrades to ``None`` for the whole
+        triple — never a fabricated zero, a folded total or a 0 ms average.
+        """
+        try:
+            messages = adapter.read_messages(cwd, session_id)
+        except Exception as exc:  # best-effort: never break the snapshot
+            logger.debug("activity spine read_messages({}) failed: {}", session_id, exc)
+            return None
+        cached = self._spine_cache.get(session_id)
+        if cached is not None and cached[0] == len(messages):
+            return cached[1]
+        facts = _SpineFacts(
+            duration=duration_of(messages),
+            tokens=_token_classes_of(messages),
+            latency=generation_latency_of(messages),
+        )
+        self._spine_cache[session_id] = (len(messages), facts)
+        return facts
 
     @staticmethod
     def _live_counters(
@@ -989,9 +1244,17 @@ class ActivityService:
         cross-check is itself an env-dependent transcript read: unscoped, a
         pinned workspace could never see the resolving result and an
         already-answered batch would linger on the stream forever.
+
+        With no sidecar capture the PARSER's own answer stands. That is not a
+        fallback but the other half of the seam: a provider with no hook
+        mechanism (codex) has to read its pending questions out of the
+        transcript, and a provider whose transcript stays silent while a question
+        is on screen (claude_code) has to read them from the hook. The claude
+        parser leaves ``questions`` empty, so this is byte-identical to returning
+        ``()`` there.
         """
         if sidecar is None or sidecar.question is None:
-            return ()
+            return transcript.questions
         pending = sidecar.question
         questions = AgentQuestion.from_tool_call(
             pending.tool_name, pending.tool_input, pending.tool_use_id
@@ -1179,6 +1442,37 @@ class ActivityService:
 
     # ─── internal ──────────────────────────────────────────────────────────
 
+    def _live_branch(self, state: WorkspaceState) -> str:
+        """The branch the workspace is on NOW, falling back to the recorded one.
+
+        ``WorkspaceState.branch`` is a CREATE-TIME snapshot that nothing
+        refreshes, and it is read as though it were current by four git reads
+        here plus the issue-ops comment — so an agent that branched after create
+        had its ahead/behind, diff stats and "latest activity" commits all
+        computed against a branch it had left, and the sticky comment named that
+        branch and its tip commit on a public tracker. ROOT placement makes it
+        the normal case rather than the exception: Grove creates no branch there,
+        records whatever HEAD pointed at, and the agent is routinely told to
+        branch off it.
+
+        **Derived per tick, never written back.** That field is IDENTITY, not
+        display: ``resume`` passes it to ``worktree_add(existing_branch=…)``, so
+        persisting the live value would fix a rendered string and break the verb
+        that recreates the worktree.
+
+        Read from ``worktree_path``, not ``repo_root`` — a linked worktree has
+        its own HEAD, and the repo root answers for the main checkout, which is
+        wrong for every worktree-placed workspace. Detached HEAD answers ``None``
+        and keeps the recorded name, which is the honest fallback: a detached
+        worktree has no branch to report.
+        """
+        try:
+            live = self._git_for(Path(state.worktree_path)).current_branch()
+        except Exception as exc:  # best-effort, exactly like the reads around it
+            logger.debug("activity current_branch({}) failed: {}", state.id, exc)
+            return state.branch
+        return live or state.branch
+
     def _git_for(self, repo_root: Path) -> GitRepo:
         key = repo_root.resolve()
         git = self._git_cache.get(key)
@@ -1203,3 +1497,39 @@ class ActivityService:
 
 def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def _token_classes_of(messages: Sequence[AgentMessage]) -> TokenClassesView:
+    """Sum each token class across a message spine, kept APART — never folded
+    into one number the way ``AgentActivity.tokens_in`` deliberately is (see
+    ``ClaudeCodeAdapter.usage_tokens``'s docstring).
+
+    A near-identical reduction already runs in
+    ``usage.projector._session_row`` for the historical audit; this is kept as
+    its own small copy rather than imported; that projector runs on refresh,
+    gated by ``usage.enabled`` and pruned by retention, while this fires on
+    the ~1 Hz poll for every live session on the host regardless of whether
+    the audit is even enabled — a live card must not depend on a subsystem a
+    user may have turned off. It also skips that projector's Codex
+    provider-total override on purpose: this reduction sums each message's
+    own faithful ``TokenUsage`` (Codex stamps its per-request
+    ``last_token_usage`` onto the message that earned it, consumed once), so
+    no per-provider branch is needed for a live class breakdown the way the
+    audit's `provider_total` column needs one.
+
+    A class is ``None`` only when EVERY message was silent on it — never a
+    fabricated zero for a class some messages reported and others did not.
+    """
+    usages = [m.usage for m in messages if m.usage is not None]
+    return TokenClassesView(
+        fresh_input=_sum_present(u.input for u in usages),
+        cache_read=_sum_present(u.cache_read for u in usages),
+        cache_creation=_sum_present(u.cache_creation for u in usages),
+        reasoning=_sum_present(u.reasoning for u in usages),
+        output=_sum_present(u.output for u in usages),
+    )
+
+
+def _sum_present(values: Iterable[int | None]) -> int | None:
+    present = [v for v in values if v is not None]
+    return sum(present) if present else None

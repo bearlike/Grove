@@ -215,7 +215,7 @@ gets three more optional surfaces.
 ### Where it shows up
 
 The phase renders wherever Grove shows workspace state, the TUI card,
-the web dashboard's Overview card, and, for a ticket-linked workspace,
+the web dashboard's workspace card, and, for a ticket-linked workspace,
 the sticky comment ([issue-ops](issue-ops.md)), as dot progress with
 the latest note:
 

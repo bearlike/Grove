@@ -41,6 +41,27 @@ def test_deep_merge_recurses_into_dicts() -> None:
     assert merged == {"a": {"b": 2, "c": 1}}
 
 
+def test_usage_quota_profile_map_merges_by_provider_and_can_clear_one() -> None:
+    base = {
+        "usage": {
+            "quota": {
+                "profiles": {
+                    "claude_code": ["/profiles/claude"],
+                    "codex": ["/profiles/codex"],
+                }
+            }
+        }
+    }
+    overlay = {"usage": {"quota": {"profiles": {"claude_code": []}}}}
+
+    cfg = GroveConfig.model_validate(_deep_merge(base, overlay))
+
+    assert cfg.usage.quota.profiles == {
+        "claude_code": (),
+        "codex": ("/profiles/codex",),
+    }
+
+
 def test_deep_merge_replaces_non_agent_lists_wholesale() -> None:
     merged = _deep_merge({"items": [1, 2, 3]}, {"items": [9]})
     assert merged == {"items": [9]}

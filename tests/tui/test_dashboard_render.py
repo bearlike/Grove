@@ -15,7 +15,14 @@ from grove.core.activity import SessionActivity, WorkspaceActivity
 from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
 from grove.core.phase import PhaseReport
 from grove.core.workspace import Placement, Runtime, WorkspaceState, WorkspaceStatus
-from grove.tui._status import phase_glyph, phase_label, runtime_color, runtime_glyph
+from grove.tui._status import (
+    BLOCKED_GLYPH,
+    blocked_color,
+    phase_glyph,
+    phase_label,
+    runtime_color,
+    runtime_glyph,
+)
 from grove.tui.widgets.dashboard_grid import _render_card_body, is_promoted
 
 _NOW = datetime(2026, 5, 6, 12, 0, tzinfo=UTC)
@@ -209,6 +216,37 @@ def test_tile_phase_none_is_byte_identical_to_pre_phase_render() -> None:
     )
     assert baseline.plain == explicit.plain
     assert baseline.spans == explicit.spans
+
+
+def test_tile_blocked_phase_appends_the_flag_beside_the_phase() -> None:
+    """The tile is dense (no `N/M` fraction), but a blocked claim still gets
+    its flag — sparingly, appended right after the phase label, never in
+    place of it."""
+    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=True)
+    plain = _render_card_body(
+        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+    ).plain
+    assert f"{phase_glyph('verifying')} {phase_label('verifying')} {BLOCKED_GLYPH}" in plain
+
+
+def test_tile_unblocked_phase_omits_the_flag() -> None:
+    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=False)
+    plain = _render_card_body(
+        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+    ).plain
+    assert BLOCKED_GLYPH not in plain
+
+
+def test_tile_blocked_flag_uses_blocked_color() -> None:
+    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=True)
+    text = _render_card_body(
+        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+    )
+    hex_ = blocked_color(dark=True).lower()
+    assert any(
+        text.plain[start:end] == f" {BLOCKED_GLYPH}" and hex_ in str(style).lower()
+        for start, end, style in text.spans
+    )
 
 
 # ─── runtime mark (the isolation axis) ──────────────────────────────────────

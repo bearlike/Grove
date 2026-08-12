@@ -455,16 +455,30 @@ class GroveClient:
         body = await self._get(f"/workspaces/{ws_id}/phase")
         return PhaseView.model_validate(body) if body is not None else None
 
-    async def set_phase(self, ws_id: str, phase: TaskPhase, note: str | None = None) -> PhaseView:
+    async def set_phase(
+        self,
+        ws_id: str,
+        phase: TaskPhase,
+        note: str | None = None,
+        *,
+        blocked: bool = False,
+        ticket: str | None = None,
+    ) -> PhaseView:
         """Set or correct the workspace's task-phase claim from outside the agent.
 
         Wraps ``POST /workspaces/{id}/phase`` — the manual counterpart to the
         agent's own file-channel report (see ``grove.core.phase``), mirroring
-        ``remap_session``'s trusted-write shape.
+        ``remap_session``'s trusted-write shape. ``blocked``/``ticket`` are
+        omitted from the payload at their defaults so an older daemon, which
+        does not know either field, keeps decoding the request.
         """
         payload: dict[str, object] = {"phase": phase}
         if note is not None:
             payload["note"] = note
+        if blocked:
+            payload["blocked"] = blocked
+        if ticket is not None:
+            payload["ticket"] = ticket
         body = await self._post(f"/workspaces/{ws_id}/phase", json_payload=payload)
         return PhaseView.model_validate(body)
 

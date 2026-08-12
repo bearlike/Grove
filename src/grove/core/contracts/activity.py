@@ -22,19 +22,23 @@ from pydantic import BaseModel, ConfigDict
 from grove.core.agents import AgentActivityState
 from grove.core.contracts.phase import PhaseView
 from grove.core.contracts.questions import AgentQuestionView
+from grove.core.contracts.usage import DurationView, GenerationLatencyView, TokenClassesView
 from grove.core.contracts.views import CommitSummaryView, WorkspacePaneView, WorkspaceStateView
 
 if TYPE_CHECKING:
     from grove.core.activity import (
         DashboardDelta,
         DashboardSnapshot,
+        FleetSummary,
         LiveCounters,
         ProjectGroup,
+        QueueDepth,
         SessionActivity,
         TodoProgress,
         WorkspaceActivity,
     )
     from grove.core.agents import AgentActivity, AgentSession
+    from grove.core.agents.hook import SubagentHookRecord
 
 
 class AgentSessionView(BaseModel):
@@ -169,6 +173,30 @@ class SessionActivityView(BaseModel):
 
     session: AgentSessionView
     activity: AgentActivityView
+    # Defaults to ``None`` so a pre-existing client deserializes unchanged
+    # (additive wire evolution). Four small integers plus a confidence
+    # string — bounded like every other field on this payload, which is why
+    # it is safe to ride the ~1 Hz stream rather than needing a fetch-on-demand
+    # route the way an unbounded turn list or tool body does. ``None`` means
+    # "not measured", never "did no work" — see ``DurationView``.
+    duration: DurationView | None = None
+    # Unfolds ``activity.tokens_in`` into the classes that sum to it (fresh
+    # input, cache read, cache creation — folded together BY DESIGN, see
+    # ``ClaudeCodeAdapter.usage_tokens``), plus reasoning/output/provider_total
+    # where a provider reports them. Same shape and same reason as ``duration``
+    # above: six nullable integers, bounded, safe to ride the stream; ``None``
+    # on the whole field for the same population ``duration`` is null for (a
+    # fleet-entry row, or a read this tick could not price), and a ``None``
+    # PER CLASS means that class specifically was not measured — never a
+    # fabricated zero. Defaults to ``None`` so a pre-existing client
+    # deserializes unchanged (additive wire evolution).
+    tokens: TokenClassesView | None = None
+    # The model's own average response wait for this session — generation
+    # intervals only, never folded with tool time. Two small integers,
+    # bounded like every other field here; same nullability rule and same
+    # population as ``duration``. Defaults to ``None`` for the same additive-
+    # evolution reason as the two fields above.
+    latency: GenerationLatencyView | None = None
 
     @classmethod
     def from_session_activity(cls, sa: SessionActivity) -> SessionActivityView:
@@ -178,6 +206,9 @@ class SessionActivityView(BaseModel):
                 sa.activity,
                 live=LiveCountersView.from_live(sa.live) if sa.live is not None else None,
             ),
+            duration=sa.duration,
+            tokens=sa.tokens,
+            latency=sa.latency,
         )
 
 
@@ -212,6 +243,107 @@ class TodoProgressView(BaseModel):
         )
 
 
+class QueueDepthView(BaseModel):
+    """Wire mirror of ``grove.core.activity.QueueDepth`` — a count, never the
+    messages.
+
+    ``TodoProgressView``'s sibling and its argument applies verbatim: the full
+    list stays fetch-on-demand behind ``GET /workspaces/{id}/queue`` because a
+    queue is unbounded in length and text, where this rides the ~1 Hz delta for
+    every workspace on the host. One integer renders "2 waiting" for a fixed
+    cost.
+
+    Absent (``None`` on the parent view) means nothing is waiting — which
+    deliberately reads the same for a harness whose queue Grove cannot see,
+    because a card hides the indicator either way. The distinction a client acts
+    on ("nothing waiting" against "no idea") lives on the route, as
+    ``WorkspaceQueueView.supported``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pending: int
+
+    @classmethod
+    def from_depth(cls, d: QueueDepth) -> QueueDepthView:
+        return cls(pending=d.pending)
+
+
+class SubagentActivityView(BaseModel):
+    """Wire mirror of ``grove.core.agents.hook.SubagentHookRecord`` — one LIVE
+    sub-agent, hook-pushed rather than transcript-derived.
+
+    The full-detail counterpart to ``FleetProgressView``'s counts, served only
+    behind ``GET /workspaces/{id}/fleet`` (see that view's docstring for why
+    it never rides the SSE stream). ``current_tool`` is the name of a
+    ``PreToolUse`` this sub-agent has not yet resolved with its own
+    ``PostToolUse`` — the same "unresolved means in-flight" fact
+    ``ToolCallView`` carries for a finished transcript's tool calls, sourced
+    here from the live push instead. ``last_message`` is populated only once
+    ``state`` has settled to ``waiting`` (an explicit ``SubagentStop``); it is
+    never a placeholder while the sub-agent runs.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    agent_id: str
+    agent_type: str | None
+    state: AgentActivityState
+    started_at: datetime
+    last_event_at: datetime
+    current_tool: str | None
+    last_message: str | None
+
+    @classmethod
+    def from_record(cls, r: SubagentHookRecord) -> SubagentActivityView:
+        return cls(
+            agent_id=r.agent_id,
+            agent_type=r.agent_type,
+            state=r.state,
+            started_at=r.started_at,
+            last_event_at=r.last_event_at,
+            current_tool=r.current_tool,
+            last_message=r.last_message,
+        )
+
+
+class SubagentFleetView(BaseModel):
+    """The full sub-agent roster for one workspace — ``GET /workspaces/{id}/fleet``.
+
+    ``TodoListView``'s sibling in shape: a fleet is unbounded in count exactly
+    like a checklist, so it stays off the ~1 Hz stream entirely
+    (``WorkspaceActivityView.fleet`` carries only counts, via
+    ``FleetProgressView``) and is fetched on demand instead.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    subagents: list[SubagentActivityView] = []
+
+
+class FleetProgressView(BaseModel):
+    """Wire mirror of ``grove.core.activity.FleetSummary`` — counts, never the roster.
+
+    ``TodoProgressView``'s sibling: rides the ~1 Hz ``session_activity`` delta
+    as two integers ("2 running of 5"), where the full per-agent detail (name,
+    current tool, elapsed time) is unbounded in count and stays behind
+    ``GET /workspaces/{id}/fleet``.
+
+    Absent (``None`` on the parent view) means this session has pushed no
+    sub-agent status at all — a client hides the indicator rather than
+    rendering 0/0, exactly as it does for ``todo`` and ``queue``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    active: int
+    total: int
+
+    @classmethod
+    def from_summary(cls, s: FleetSummary) -> FleetProgressView:
+        return cls(active=s.active, total=s.total)
+
+
 class WorkspaceActivityView(BaseModel):
     """Wire mirror of ``grove.core.activity.WorkspaceActivity`` — one dashboard card.
 
@@ -220,11 +352,12 @@ class WorkspaceActivityView(BaseModel):
     ``observed_at`` is the per-card "updated Xs ago"; the dashboard-wide refresh
     time stays on ``DashboardSnapshotView.generated_at``.
 
-    ``phase`` and ``todo`` are the task axis: what the agent says it is doing
-    about the task, and how far through its own checklist it is. Both default to
-    ``None`` so a pre-existing client deserializes unchanged (additive wire
-    evolution), and both mean "the agent has not said" when absent — never a
-    zero value.
+    ``phase``, ``todo``, ``queue`` and ``fleet`` are the task axis: what the
+    agent says it is doing about the task, how far through its own checklist
+    it is, how much the harness is still holding for it, and how many
+    sub-agents it has running. All default to ``None`` so a pre-existing
+    client deserializes unchanged (additive wire evolution), and all mean
+    "nothing to report" when absent — never a zero value.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -242,6 +375,8 @@ class WorkspaceActivityView(BaseModel):
     observed_at: datetime
     phase: PhaseView | None = None
     todo: TodoProgressView | None = None
+    queue: QueueDepthView | None = None
+    fleet: FleetProgressView | None = None
 
     @classmethod
     def from_activity(cls, w: WorkspaceActivity) -> WorkspaceActivityView:
@@ -259,6 +394,8 @@ class WorkspaceActivityView(BaseModel):
             observed_at=w.observed_at,
             phase=PhaseView.from_report(w.phase) if w.phase is not None else None,
             todo=TodoProgressView.from_progress(w.todo) if w.todo is not None else None,
+            queue=QueueDepthView.from_depth(w.queue) if w.queue is not None else None,
+            fleet=FleetProgressView.from_summary(w.fleet) if w.fleet is not None else None,
         )
 
 

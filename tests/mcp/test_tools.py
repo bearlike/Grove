@@ -11,8 +11,47 @@ import pytest
 
 from grove.client import ProtocolError, TransportError
 from grove.core.contracts import ContainerAttachView, RootBranch
+from grove.core.contracts.phase import PhaseView
+from grove.core.phase import TaskPhase
 from grove.mcp.tools import GroveTools
 from tests.mcp.conftest import FakeGroveClient, make_peek, make_snapshot
+
+
+class _PhaseRecordingClient(FakeGroveClient):
+    """Local double for ``set_phase`` — the shared ``FakeGroveClient`` in
+    ``conftest.py`` has no override for it (nothing here exercised the write
+    side before), and adding one there is out of this file's ownership."""
+
+    async def set_phase(
+        self,
+        ws_id: str,
+        phase: TaskPhase,
+        note: str | None = None,
+        *,
+        blocked: bool = False,
+        ticket: str | None = None,
+    ) -> PhaseView:
+        self.calls.append(
+            (
+                "set_phase",
+                {
+                    "ws_id": ws_id,
+                    "phase": phase,
+                    "note": note,
+                    "blocked": blocked,
+                    "ticket": ticket,
+                },
+            )
+        )
+        return PhaseView.model_validate(
+            {
+                "phase": phase,
+                "note": note,
+                "updated_at": "2026-08-11T00:00:00Z",
+                "index": 0,
+            }
+        )
+
 
 # ─── read tools ──────────────────────────────────────────────────────────────
 
@@ -391,3 +430,49 @@ async def test_detach_ticket_passes_ref_straight_through(fake_client: FakeGroveC
     result = await tools.detach_ticket("ws-1", "#42")
     assert result.id == "ws-1"
     assert fake_client.calls[-1] == ("detach_ticket_by_ref", {"ws_id": "ws-1", "ref": "#42"})
+
+
+# ─── set phase: blocked + ticket ─────────────────────────────────────────────
+
+
+async def test_set_workspace_phase_defaults_blocked_false_and_ticket_none() -> None:
+    fake_client = _PhaseRecordingClient()
+    tools = GroveTools(fake_client)
+    result = await tools.set_workspace_phase("ws-1", "implementing")
+    assert result.phase == "implementing"
+    assert fake_client.calls == [
+        (
+            "set_phase",
+            {
+                "ws_id": "ws-1",
+                "phase": "implementing",
+                "note": None,
+                "blocked": False,
+                "ticket": None,
+            },
+        )
+    ]
+
+
+async def test_set_workspace_phase_threads_blocked_and_ticket() -> None:
+    fake_client = _PhaseRecordingClient()
+    tools = GroveTools(fake_client)
+    await tools.set_workspace_phase(
+        "ws-1",
+        "implementing",
+        "waiting on design review",
+        blocked=True,
+        ticket="gitea:498",
+    )
+    assert fake_client.calls == [
+        (
+            "set_phase",
+            {
+                "ws_id": "ws-1",
+                "phase": "implementing",
+                "note": "waiting on design review",
+                "blocked": True,
+                "ticket": "gitea:498",
+            },
+        )
+    ]

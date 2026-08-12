@@ -19,8 +19,10 @@ from typing import ClassVar
 
 import pytest
 
+from grove import __version__
 from grove.core import paths
 from grove.core import tmux as tmux_mod
+from grove.core.agents.base import AgentVersionProbe
 from grove.core.agents.brief import AgentBrief
 from grove.core.agents.registry import get_adapter
 from grove.core.config import GroveConfig
@@ -59,6 +61,12 @@ class FakeLaunchBackend(HostNamespaceBackend):
 
     def launch(self, spec: LaunchSpec) -> None:
         self.specs.append(spec)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_resource_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A parent Grove workspace must not stamp its identity into test launches."""
+    monkeypatch.delenv("OTEL_RESOURCE_ATTRIBUTES", raising=False)
 
 
 def _cfg(tmp_path: Path) -> GroveConfig:
@@ -104,7 +112,10 @@ def test_create_routes_the_assembled_command_through_the_backend(
     assert state.agent_session_id in spec.decoration
     # The hermetic launch env rides the spec, not an AgentSpec — plus the
     # per-agent phase path Grove composes for every launch.
-    assert spec.env == {
+    # `OTEL_RESOURCE_ATTRIBUTES` is asserted separately below: its VALUE embeds
+    # the tmp worktree path and the minted session id, so pinning it literally
+    # here would assert the fixture rather than the contract.
+    assert {k: v for k, v in spec.env.items() if k != "OTEL_RESOURCE_ATTRIBUTES"} == {
         "FOO": "bar",
         PhaseFile.PATH_ENV: str(
             PhaseFile.path_for(state.worktree_path, PhaseFile.key_for(state.id))
@@ -115,11 +126,70 @@ def test_create_routes_the_assembled_command_through_the_backend(
         # answer.
         AgentBrief.PATH_ENV: str(paths.agent_brief_path()),
     }
+    # Identity stamping rides every launch, telemetry credentials or not — and
+    # the correlation attribute is what later joins Grove's own spans to the
+    # agent's independently-traced ones, so both are part of this contract.
+    attrs = spec.env["OTEL_RESOURCE_ATTRIBUTES"]
+    assert f"grove.workspace.id={state.id}" in attrs
+    assert f"langfuse.session.id={state.agent_session_id}" in attrs
     assert spec.env_unset == ("CLAUDE_CONFIG_DIR",)
 
     # No tmux was invoked: the backend replaced create_session + layout entirely.
     assert fake_tmux.sessions == set()
     assert fake_tmux.layouts == []
+
+
+def test_every_launch_stamps_who_ran_it_and_which_builds(
+    monkeypatch: pytest.MonkeyPatch, tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The identity half of the resource: a reader of an exported trace can tell
+    it came from Grove, which Grove, and which build of the agent produced it.
+
+    The agent's version is the only one of the three that no code here can
+    know — it is read from the tool itself at the launch boundary, ONCE per
+    binary per process, and a second create must not pay a second subprocess.
+    """
+    probed: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        AgentVersionProbe,
+        "probe",
+        classmethod(lambda cls, argv: probed.append(argv) or "2.1.226 (Claude Code)"),
+    )
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    backend = FakeLaunchBackend()
+    mgr = WorkspaceManager(
+        repo_root=tmp_repo, cfg=_cfg(tmp_path), store=store, launch_backend=backend
+    )
+
+    mgr.create(CreateWorkspaceRequest(agent_name="claude", title="first"))
+    mgr.create(CreateWorkspaceRequest(agent_name="claude", title="second"))
+
+    assert probed == [("claude", "--version")]
+    for spec in backend.specs:
+        attrs = spec.env["OTEL_RESOURCE_ATTRIBUTES"]
+        assert "grove.agent.version=2.1.226%20%28Claude%20Code%29" in attrs
+        assert "grove.orchestrator.name=grove" in attrs
+        assert f"grove.orchestrator.version={__version__}" in attrs
+
+
+def test_a_tool_that_cannot_report_a_version_still_launches(
+    monkeypatch: pytest.MonkeyPatch, tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A missing or wedged binary must cost the launch nothing but the one
+    attribute — the whole reason the probe is best-effort and bounded."""
+    monkeypatch.setattr(AgentVersionProbe, "probe", classmethod(lambda cls, argv: None))
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    backend = FakeLaunchBackend()
+    mgr = WorkspaceManager(
+        repo_root=tmp_repo, cfg=_cfg(tmp_path), store=store, launch_backend=backend
+    )
+
+    mgr.create(CreateWorkspaceRequest(agent_name="claude", title="unanswerable"))
+
+    attrs = backend.specs[0].env["OTEL_RESOURCE_ATTRIBUTES"]
+    assert "grove.agent.version" not in attrs
+    # …and the rest of the identity is untouched by that absence.
+    assert "grove.orchestrator.name=grove" in attrs
 
 
 def test_tmux_backend_unpacks_the_spec_into_the_tmux_calls(

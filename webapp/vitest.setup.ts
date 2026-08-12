@@ -1,41 +1,19 @@
-import "@testing-library/jest-dom/vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 
-// jsdom doesn't ship `ResizeObserver`; radix ScrollArea creates one when its
-// scrollbar/thumb mounts (e.g. a userEvent click hover inside a ScrollArea).
-if (typeof window !== "undefined" && !window.ResizeObserver) {
-  Object.defineProperty(window, "ResizeObserver", {
-    writable: true,
-    value: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
+/**
+ * The adapter suite is pure by contract, so the setup file's job is to make a
+ * breach of that contract fail loudly rather than to prop a DOM up. A `fetch`
+ * from an adapter is a design regression, not a flake.
+ *
+ * Imported explicitly rather than leaning on `globals: true`, so `tsc` sees
+ * them without a `types` entry in the shared tsconfig.
+ */
+beforeEach(() => {
+  vi.stubGlobal("fetch", () => {
+    throw new Error("lib/grove/adapters must be pure — no network. Move the I/O into lib/grove/api.");
   });
-}
+});
 
-// jsdom doesn't implement element scrolling; assistant-ui's thread viewport
-// (the chat transcript) calls `element.scrollTo` in its autoscroll rAF on every
-// mount + message change. Stub it (and its `scrollIntoView` sibling) so the
-// transcript renders in component tests instead of throwing an uncaught
-// `scrollTo is not a function`.
-if (typeof Element !== "undefined") {
-  Element.prototype.scrollTo = Element.prototype.scrollTo || (() => {});
-  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || (() => {});
-}
-
-// jsdom doesn't ship `matchMedia`; next-themes calls it during mount.
-if (typeof window !== "undefined" && !window.matchMedia) {
-  Object.defineProperty(window, "matchMedia", {
-    writable: true,
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false,
-    }),
-  });
-}
+afterEach(() => {
+  vi.unstubAllGlobals();
+});

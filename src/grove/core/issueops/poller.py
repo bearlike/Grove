@@ -36,13 +36,15 @@ import contextlib
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from grove.core.contracts.tickets import TicketProviderName
+from grove.core.contracts.tickets import TicketKind, TicketProviderName
 from grove.core.errors import GroveError
 from grove.core.issueops.handover import HandoverLog
 from grove.core.issueops.pickup import PickupCandidate, PickupEngine, PickupPlan
@@ -59,6 +61,20 @@ if TYPE_CHECKING:
 # different hosts and different credentials, so one of them rate-limiting says
 # nothing about the other.
 _ProviderKey = tuple[str, TicketProviderName]
+
+
+@dataclass(frozen=True, slots=True)
+class _Assigned:
+    """Where a ticket Grove assigned came from, so the release can reach it again.
+
+    The workspace that occasioned the assignment is deliberately NOT in here: by
+    the time a release is due that record is gone (``kill`` deletes it outright),
+    so the only durable coordinates are the ones that name the TICKET.
+    """
+
+    repo_root: str
+    provider: TicketProviderName
+    ticket_id: str
 
 
 class AssigneePoller:
@@ -89,10 +105,13 @@ class AssigneePoller:
         # not refuse it (the token is deliberately the only identity there is),
         # it says whose queue it is draining.
         self._identity: dict[_ProviderKey, str] = {}
-        # Tickets already assigned this process. The outbound write is idempotent
-        # upstream, so this memo is purely about not spending a round-trip per
+        # Tickets this process assigned, and where each came from. The outbound
+        # write is idempotent upstream, so the memo saves a round-trip per
         # workspace per tick; it resets on restart and self-heals in one call.
-        self._assigned: set[str] = set()
+        # It carries the repo/provider/id rather than just the key because it is
+        # ALSO the release set — a ticket is unassigned only if Grove is the one
+        # that assigned it, and the release has to resolve a provider to do it.
+        self._assigned: dict[str, _Assigned] = {}
         self._lock = Lock()
         self._pool: ThreadPoolExecutor | None = None
         self._timer: threading.Timer | None = None
@@ -319,36 +338,133 @@ class AssigneePoller:
 
     # ─── the outbound half ──────────────────────────────────────────────────
 
+    def assign_now(
+        self,
+        repo_root: str,
+        provider_name: TicketProviderName,
+        ticket_id: str,
+        kind: TicketKind = "issue",
+    ) -> bool:
+        """Assign the bot to one ticket immediately, recording Grove's ownership.
+
+        The seam an edge-triggered caller uses instead of waiting up to a poll
+        interval — the publisher calls it as it upserts a sticky comment, which
+        is the moment a ticket is *deterministically* known to be Grove's work.
+
+        **It exists so there is exactly ONE ownership memo.** An assignment made
+        anywhere else would be absent from ``_assigned``, and ``_release_ended``
+        releases only what that memo holds — so a directly-assigned ticket would
+        never be released and the board would keep claiming Grove was working it
+        forever. That is the same leak this poller was just fixed to close, so a
+        second assignment path must feed the same memo rather than run beside it.
+
+        Idempotent and cheap on the repeat: the memo short-circuits a ticket
+        already assigned this process, so a per-flush call costs nothing after
+        the first. Returns whether the ticket is now Grove-owned.
+        """
+        try:
+            mgr = self._registry.get(Path(repo_root))
+        except GroveError as exc:
+            logger.debug("issue-ops assign_now could not resolve {}: {}", repo_root, exc)
+            return False
+        return self._assign_once(mgr, provider_name, ticket_id, kind) is not None
+
     def _reconcile_assignments(self) -> None:
-        """Put the bot's name on every ticket a live workspace currently holds."""
+        """Assign the bot to every ticket a live workspace holds, and release the rest.
+
+        Both directions run off ONE sweep of the live fleet, because they are the
+        same question asked twice: the tickets a live workspace holds are what the
+        assignment means, so a key Grove assigned that is no longer in that set is
+        precisely a ticket whose workspace has ended. Reconciling rather than
+        hooking teardown is what makes the release correct for every way a
+        workspace can stop — `kill`, a detach, a record that vanished — including
+        the ones that never run a verb Grove could have hooked.
+        """
+        live: set[str] = set()
+        answered: set[str] = set()
         for root in self._registry.known_roots():
             try:
                 mgr = self._registry.get(root)
                 states = mgr.list()
             except GroveError as exc:
+                # A repo that could not be read has not said its tickets are
+                # gone. Releasing on that silence would unassign a live
+                # workspace's ticket over a transient config error, so an
+                # unreadable repo is skipped by the release too (below).
                 logger.warning("issue-ops assignment skipping {}: {}", root, exc)
                 continue
+            answered.add(str(root))
             for state in states:
                 for ref in state.ticket_refs:
-                    # Issues only: the queue is issues, and a pull request
-                    # already records its author, so assigning one adds noise
-                    # rather than a fact a reader did not have.
-                    if ref.kind != "issue":
-                        continue
-                    self._assign_once(mgr, ref.provider, ref.id)
+                    wire = self._assign_once(mgr, ref.provider, ref.id, ref.kind)
+                    if wire is not None:
+                        live.add(wire)
+        self._release_ended(live, answered)
 
     def _assign_once(
-        self, mgr: WorkspaceManager, provider_name: TicketProviderName, ticket_id: str
-    ) -> None:
+        self,
+        mgr: WorkspaceManager,
+        provider_name: TicketProviderName,
+        ticket_id: str,
+        kind: TicketKind = "issue",
+    ) -> str | None:
+        """Assign the bot once per ticket; return its key iff GROVE owns the assignment.
+
+        ``None`` covers four different situations that all mean the same thing
+        here — not an issue, unkeyable, unassignable, or already assigned by
+        somebody else — because none of them makes this ticket Grove's to
+        release later.
+
+        **The issues-only rule lives HERE because two callers need it and only
+        one of them used to have it.** The reconcile sweep filtered kind itself
+        while the publisher's edge-triggered ``assign_now`` did not, so a pull
+        request was assigned on the publish edge, recorded as owned, then found
+        missing from the sweep's live set and RELEASED on the next tick — an
+        assign/unassign flap writing noise to somebody else's tracker once per
+        interval, forever. A rule two callers share belongs at the seam they
+        share, or the copy that is missing is the one nobody notices.
+
+        A pull request already records its author, so assigning one adds noise
+        rather than a fact a reader did not have.
+        """
+        if kind != "issue":
+            return None
         try:
             key = PickupEngine.key_for(mgr, provider_name, ticket_id)
             provider = mgr.ticket_providers.get(provider_name)
         except GroveError:
-            return
+            return None
         if key.wire in self._assigned:
-            return
+            return key.wire
         if self._engine.assign_bot(provider, ticket_id):
-            self._assigned.add(key.wire)
+            self._assigned[key.wire] = _Assigned(
+                repo_root=str(mgr.repo_root), provider=provider_name, ticket_id=ticket_id
+            )
+            return key.wire
+        return None
+
+    def _release_ended(self, live: set[str], answered: set[str]) -> None:
+        """Unassign the bot from the tickets it assigned whose workspace has ended.
+
+        Only keys in ``_assigned`` are ever released, and that memo is the whole
+        safety argument: it holds what GROVE assigned in THIS process, so a
+        ticket a human assigned to the bot by hand is never touched, and a
+        restart forgets rather than sweeping somebody else's board.
+
+        A repo that failed to answer this tick is skipped rather than treated as
+        empty — the failure direction that matters, since reading "no live
+        workspaces" out of an error would unassign every ticket on that repo.
+        """
+        for wire, entry in list(self._assigned.items()):
+            if wire in live or entry.repo_root not in answered:
+                continue
+            del self._assigned[wire]  # dropped either way: released, or unreleasable
+            try:
+                mgr = self._registry.get(Path(entry.repo_root))
+                provider = mgr.ticket_providers.get(entry.provider)
+            except GroveError:
+                continue
+            self._engine.release_bot(provider, entry.ticket_id)
 
     @staticmethod
     def _utcnow() -> datetime:

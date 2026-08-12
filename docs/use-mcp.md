@@ -2,15 +2,13 @@
 
 ## Let an agent drive Grove
 
-Grove ships an MCP server, `grove-mcp`. Think of the Grove daemon as a control tower and `grove-mcp` as its radio. An assistant tunes in and can list, create, steer, and tear down workspaces without touching git or tmux.
-
-It stays a thin adapter at either range. Every call travels the daemon REST API the TUI and dashboard use, so Grove's safety rules apply unchanged. Your git stays yours.
+Grove ships an MCP server, `grove-mcp`: a radio to the daemon's control tower. An assistant tunes in and can list, create, steer, and tear down workspaces without touching git or tmux, through the same daemon API the TUI and dashboard use. Grove's safety rules apply unchanged. Your git stays yours.
 
 ---
 
 ## Choosing a range
 
-Both transports serve the identical tool surface. They differ in who starts the process and who may reach it.
+Both transports serve the identical tools, differing in who starts the process and who may reach it.
 
 | | stdio | Streamable HTTP |
 |---|---|---|
@@ -20,20 +18,20 @@ Both transports serve the identical tool surface. They differ in who starts the 
 | What it costs | Nothing. | A token, a port, a safe path. |
 | Best for | Your laptop. | A remote or hosted harness. |
 
-Start with stdio. HTTP means choosing a port, setting an inbound token, and deciding how the traffic gets there safely. Both reach the same daemon, so you can run one of each.
+Start with stdio. HTTP adds a port, an inbound token, and safe routing. Both reach the same daemon, so run one of each if needed.
 
 ---
 
 ## Same machine: stdio
 
-The client spawns the process, so there is no token to manage and no port to protect. Install the `mcp` extra and start the daemon:
+The client spawns the process: no token or port to protect. Install the `mcp` extra and start the daemon:
 
 ```bash
 pip install 'grove[all]'   # or 'grove[mcp]' for just the MCP server
 grove daemon serve         # or run the packaged systemd user service
 ```
 
-Register the server with your client:
+Register it with your client:
 
 ```json title="mcp.json"
 {
@@ -48,19 +46,19 @@ Register the server with your client:
 }
 ```
 
-Claude Code does the same in one command:
+Claude Code does it in one command:
 
 ```bash
 claude mcp add grove -- grove-mcp
 ```
 
-`grove mcp install` writes that registration through each harness's own `mcp add`. It covers Claude Code and Codex, which reaches Grove over stdio.
+`grove mcp install` writes that registration through each harness's own `mcp add`, for Claude Code and Codex over stdio.
 
 ---
 
 ## Another machine: HTTP
 
-Pass `--transport streamable-http` and `grove-mcp` becomes a server. The daemon does not move. It still binds loopback, as the [security model](use-auth.md#the-security-model) describes. `grove-mcp` is the process facing the network, reaching the daemon over loopback or an SSH forward:
+Pass `--transport streamable-http` and `grove-mcp` faces the network instead, reaching the daemon over loopback or an SSH forward. The daemon itself still binds loopback, per the [security model](use-auth.md#the-security-model):
 
 ```mermaid
 flowchart TB
@@ -78,11 +76,11 @@ export GROVE_MCP_TOKEN="$(openssl rand -hex 32)"
 grove-mcp --transport streamable-http --host 127.0.0.1 --port 7431
 ```
 
-`http` is an alias for `streamable-http`, matching what Claude Code calls it. The endpoint mounts at `/mcp` unless `--path` moves it. On startup the server prints its resolved address and scope to stderr.
+`http` is an alias for `streamable-http`, Claude Code's own name for it. The endpoint mounts at `/mcp` unless `--path` moves it, printed to stderr on startup along with its scope.
 
 ### Two tokens, two directions
 
-Two credentials point in opposite directions and are never the same string.
+Two credentials point in opposite directions, never the same string.
 
 | Token | Direction | Required |
 |---|---|---|
@@ -92,18 +90,18 @@ Two credentials point in opposite directions and are never the same string.
 Callers present the inbound token as `Authorization: Bearer <GROVE_MCP_TOKEN>`.
 
 > [!WARNING] The inbound token is not optional
-> An open port here hands full workspace lifecycle control to anyone who can reach it, `grove_kill_workspace` included. So `grove-mcp` fails closed. Without `GROVE_MCP_TOKEN` it refuses to bind, exits `2`, and prints the fix. There is deliberately no `--insecure` escape hatch, because an opt-out flag survives into production.
+> An open port hands full workspace lifecycle control to anyone reaching it, `grove_kill_workspace` included, so `grove-mcp` fails closed: without `GROVE_MCP_TOKEN` it refuses to bind, exits `2`, and prints the fix. There is deliberately no `--insecure` escape hatch, since an opt-out flag survives into production.
 
 ### Connecting a client
 
-One command registers the remote server:
+One command registers it:
 
 ```bash
 claude mcp add --transport http grove http://<host>:7431/mcp \
   --header "Authorization: Bearer $GROVE_MCP_TOKEN"
 ```
 
-That writes an entry you can keep by hand:
+That writes this entry:
 
 ```json title="mcp.json"
 {
@@ -119,46 +117,46 @@ That writes an entry you can keep by hand:
 }
 ```
 
-Claude Code interpolates `${VAR}` in headers, keeping the token out of the file. A static bearer header takes precedence over any OAuth flow.
+Claude Code interpolates `${VAR}` in headers, keeping tokens out of the file. A static bearer header wins over OAuth.
 
 ### Where it is safe to run
 
-The transport is plain HTTP, so the bearer token crosses the wire in cleartext. Fine on a trusted LAN, across a WireGuard or Tailscale network, or behind a TLS-terminating reverse proxy. Not fine on the open internet. So bind loopback and forward the port, the lever the [dashboard](use-webapp.md#reaching-it-from-outside-the-network) uses:
+The transport is plain HTTP, so the bearer token crosses in cleartext: fine on a trusted LAN, WireGuard, Tailscale, or behind a TLS-terminating proxy, never the open internet. Bind loopback and forward the port instead, the lever the [dashboard](use-webapp.md#reaching-it-from-outside-the-network) uses:
 
 ```bash
 ssh -N -L 7431:127.0.0.1:7431 you@grove-host.internal
 ```
 
-The harness then points at `http://127.0.0.1:7431/mcp` on its own machine. Reach for `--host 0.0.0.0` only once a VPN or TLS proxy sits in front of it.
+The harness then points at `http://127.0.0.1:7431/mcp` locally, reaching for `--host 0.0.0.0` only once a VPN or TLS proxy fronts it.
 
-`GROVE_MCP_ALLOWED_HOSTS` and `GROVE_MCP_ALLOWED_ORIGINS` each take a comma-separated list and switch on DNS-rebinding protection, off until you set one. Only the `Host` headers you named are accepted, so a page on another domain cannot rebind onto your port.
+`GROVE_MCP_ALLOWED_HOSTS` and `GROVE_MCP_ALLOWED_ORIGINS` each take a comma-separated list, switching on DNS-rebinding protection, off by default: only named `Host` headers are accepted, so a page on another domain cannot rebind onto your port.
 
 ### Read-only exposure
 
-`--read-only` (or `GROVE_MCP_READ_ONLY=1`) registers only the tools that observe, and the [tool table](#tools) marks which survive. A tool an agent can see is a tool it will eventually try, so the withheld ones leave the surface rather than being refused at call time. It works at either range.
+`--read-only` (or `GROVE_MCP_READ_ONLY=1`) registers only the tools that observe, marked in the [tool table](#tools): a tool an agent can see is one it will eventually try, so withheld tools leave the surface rather than being refused at call time. Works at either range.
 
 ---
 
 ## Hosting it as a service
 
-A stdio server needs no supervision. An HTTP server is long-lived, so Grove ships an opt-in systemd user unit:
+A stdio server needs no supervision, but an HTTP one is long-lived, so Grove ships an opt-in systemd unit:
 
 ```bash
 WITH_MCP=1 make systemd
 WITH_MCP=1 make systemd-enable
 ```
 
-That renders `grove-mcp.service`, bound to `127.0.0.1:7431` unless `MCP_HOST` and `MCP_PORT` override it at install time. It reads its token from a file rather than baking a secret into the unit:
+That renders `grove-mcp.service`, bound to `127.0.0.1:7431` unless `MCP_HOST`/`MCP_PORT` override it, reading its token from a file rather than baking a secret into the unit:
 
 ```bash
 install -m 600 /dev/null ~/.config/grove/mcp.env
 echo "GROVE_MCP_TOKEN=$(openssl rand -hex 32)" >> ~/.config/grove/mcp.env
 ```
 
-If that file is missing, the service starts and exits `2` with the reason in its log. That is fail-closed working, not a packaging bug. Read it with `journalctl --user -u grove-mcp -f`.
+Missing that file, the service starts and exits `2` with the reason in `journalctl --user -u grove-mcp -f`: fail-closed working, not a packaging bug.
 
 > [!TIP]
-> A hosted HTTP server does not pick up a Grove upgrade on its own. Restart it after an update, like the daemon. A stdio server needs none, because your client respawns it.
+> A hosted HTTP server needs a restart after a Grove upgrade, like the daemon. A stdio server needs none: your client respawns it.
 
 ---
 
@@ -186,7 +184,7 @@ A CLI flag wins, the environment comes next, and a built-in default fills the ga
 | `GROVE_MCP_ALLOWED_HOSTS` | unset | `Host` allowlist. Enables DNS-rebinding protection. |
 | `GROVE_MCP_ALLOWED_ORIGINS` | unset | `Origin` allowlist, same switch. |
 
-All but `GROVE_MCP_READ_ONLY` are inert under stdio, which binds no socket and authenticates no caller. Read-only shapes registration instead, applies at either range, and can only tighten. If the environment set it, omitting `--read-only` will not turn it off.
+All but `GROVE_MCP_READ_ONLY` are inert under stdio, which binds no socket and authenticates no caller. Read-only shapes registration instead, applies at either range, and can only tighten it: an environment variable that set it survives an omitted `--read-only`.
 
 ### Which file holds what
 
@@ -198,9 +196,9 @@ All but `GROVE_MCP_READ_ONLY` are inert under stdio, which binds no socket and a
 | Grove's own config | Everything the *daemon* does: projects, agents, worktrees, tickets. | `~/.config/grove/config.json` and `.grove/config.json` |
 
 > [!NOTE]
-> Grove's [config cascade](configure-reference.md) carries no `mcp` section, on purpose. The server is a client of the daemon, not part of it, and runs on a machine with no Grove config at all. So it reads flags and environment variables only, kept in `mcp.env` for a hosted server.
+> Grove's [config cascade](configure-reference.md) carries no `mcp` section, on purpose: the server is a client of the daemon, not part of it, and runs on a machine with no Grove config at all. It reads only flags and environment variables, kept in `mcp.env` for a hosted server.
 
-The cascade still decides which projects exist, which agents `grove_list_agents` offers, and what `grove_create_workspace` builds. Configure the fleet there, the radio here.
+The cascade still decides which projects exist, which agents `grove_list_agents` offers, and what `grove_create_workspace` builds: configure the fleet there, the radio here.
 
 ---
 
@@ -242,9 +240,9 @@ Every response is structured JSON with explicit status fields and stable workspa
 
 ## Using Grove from Mewbo
 
-Mewbo can adopt Grove as its durable workspace backend over this server. Its hypervisor calls the tools above, and Grove stays the system of record for worktrees, branches, sessions, and lifecycle state. Grove owns the workspace control plane, Mewbo owns scheduling, skills, and conversation. Point its MCP pool at either range.
+Mewbo can adopt Grove as its durable workspace backend, its hypervisor calling the tools above while Grove stays the system of record for worktrees, branches, sessions, and lifecycle state. Grove owns the control plane, Mewbo owns scheduling, skills, and conversation, pointing its MCP pool at either range.
 
-To run Mewbo (or any agent) inside a Grove workspace, define it as a regular agent in your project config:
+To run Mewbo, or any agent, inside a workspace, define it as a regular agent in your project config:
 
 ```json title=".grove/config.json"
 {
@@ -258,4 +256,4 @@ To run Mewbo (or any agent) inside a Grove workspace, define it as a regular age
 }
 ```
 
-See [Agents](configure-agents.md) for the configuration reference, and [Workspace Lifecycle](features-workspace-lifecycle.md) for what pause, respawn, and kill mean.
+See [Agents](configure-agents.md) for the config reference, and [Workspace Lifecycle](features-workspace-lifecycle.md) for what pause, respawn, and kill mean.

@@ -109,7 +109,7 @@ from grove.core.agents import SessionTurn, TodoList
 from grove.core.contracts.activity import DashboardSnapshotView
 from grove.core.contracts.tickets import TicketRef
 from grove.core.issueops import HandoverKey, PickupEngine
-from grove.core.phase import PHASE_ORDER, PhaseReport, TaskPhase
+from grove.core.phase import PHASE_ORDER, PhaseReport, TaskPhase, TicketClaim
 from grove.core.store import JsonWorkspaceStore
 
 
@@ -835,17 +835,25 @@ def show_workspace(
 # ─── phase verb (the task-phase axis, grove.core.phase) ───────────────────────
 
 
-def _phase_summary(report: PhaseReport | None) -> str:
-    """One workspace's phase as a single line — the shared formatting both the
-    `grove phase` verb and `grove show`'s identity block print.
+def _phase_summary(report: PhaseReport | TicketClaim | None) -> str:
+    """One phase claim as a single line — the shared formatting for the
+    workspace's own claim AND every per-ticket claim underneath it, so
+    `grove phase`, `grove show`'s identity block, and the per-ticket
+    breakdown never hand-roll three copies of the same string.
 
     ``None`` renders as an explicit "(none reported)" rather than an empty
     string: an agent that has said nothing is a distinct, common answer from
     "reported scoping", and a blank would read as the latter (``PhaseFile.read``
-    makes the same distinction on the engine side)."""
+    makes the same distinction on the engine side). ``blocked`` is a flag
+    beside the phase, not a replacement — appended as a trailing note so the
+    reader still sees *where it stopped* alongside *that it stopped*, mirroring
+    the TUI convention (blocked is never the whole story on its own)."""
     if report is None:
         return "(none reported)"
-    return f"{report.phase}  ({report.index + 1}/{len(PHASE_ORDER)})"
+    summary = f"{report.phase}  ({report.index + 1}/{len(PHASE_ORDER)})"
+    if report.blocked:
+        summary += "  (blocked)"
+    return summary
 
 
 def _emit_phase(state: WorkspaceState, report: PhaseReport | None) -> None:
@@ -853,7 +861,13 @@ def _emit_phase(state: WorkspaceState, report: PhaseReport | None) -> None:
     (bold id + title) applied to this single-purpose command, then indented
     facts. ``report is None`` is a real, common answer (nothing reported yet),
     never an error — rendered as an honest short note, same convention as
-    every degraded section in :class:`WorkspaceInspection`."""
+    every degraded section in :class:`WorkspaceInspection`.
+
+    After the workspace's own claim, list every attached ticket's own claim
+    (``report.tickets``) — a workspace can report progress against several
+    tickets independently, and each line reuses :func:`_phase_summary` rather
+    than a second hand-rolled format. An empty ``tickets`` tuple (no per-ticket
+    claims, or no report at all) prints nothing extra."""
     typer.secho(f"{state.id}  {state.title}", fg=typer.colors.GREEN, bold=True)
     typer.echo(f"  phase: {_phase_summary(report)}")
     if report is None:
@@ -861,6 +875,10 @@ def _emit_phase(state: WorkspaceState, report: PhaseReport | None) -> None:
     if report.note:
         typer.echo(f"  note:  {report.note}")
     typer.echo(f"  age:   {_ago(report.updated_at)}")
+    for claim in report.tickets:
+        typer.echo(f"  ticket {claim.ticket}: {_phase_summary(claim)}")
+        if claim.note:
+            typer.echo(f"    note:  {claim.note}")
 
 
 def phase_workspace(
@@ -877,6 +895,19 @@ def phase_workspace(
     note: str | None = typer.Option(
         None, "--note", help="One-line note attached to the phase (<=200 chars)."
     ),
+    ticket: str | None = typer.Option(
+        None,
+        "--ticket",
+        help='Scope this claim to one attached ticket (its "provider:id" key) '
+        "rather than the workspace as a whole — for a workspace working "
+        "several attached tickets at once.",
+    ),
+    blocked: bool = typer.Option(
+        False,
+        "--blocked",
+        help="Flag the phase as blocked: stuck ON this step, not just at it — "
+        "a flag beside the phase, never a replacement for it.",
+    ),
 ) -> None:
     """Report or read a workspace's task-phase: how far through its task the
     agent says it is (scoping/planning/implementing/verifying/delivering/done)
@@ -889,6 +920,8 @@ def phase_workspace(
       grove phase planning                        # cwd-inferred, no note
       grove phase implementing --note "wiring the CLI verb"
       grove phase a1b2 verifying                   # explicit workspace ref
+      grove phase verifying --ticket gitea:42      # scoped to one attached ticket
+      grove phase implementing --blocked           # stuck on this step
       grove phase                                  # show the cwd-inferred phase
       grove phase a1b2                              # show a1b2's phase
       grove phase show                              # same as bare `grove phase`
@@ -908,13 +941,24 @@ def phase_workspace(
 
         if target_phase is not None:
             state = _resolve_or_infer_workspace(manager, target_ref)
-            written = manager.set_phase(state.id, target_phase, note)
+            written = manager.set_phase(
+                state.id, target_phase, note, blocked=blocked, ticket=ticket
+            )
             _emit_phase(state, written)
             return
 
         if note is not None:
             raise GroveError(
                 "--note only applies when setting a phase, e.g. `grove phase planning --note ...`"
+            )
+        if ticket is not None:
+            raise GroveError(
+                "--ticket only applies when setting a phase, "
+                "e.g. `grove phase planning --ticket gitea:42`"
+            )
+        if blocked:
+            raise GroveError(
+                "--blocked only applies when setting a phase, e.g. `grove phase planning --blocked`"
             )
         state = _resolve_or_infer_workspace(manager, target_ref)
         current = manager.phase(state.id)

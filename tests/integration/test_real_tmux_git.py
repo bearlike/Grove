@@ -240,6 +240,33 @@ def test_shell_command_really_reaches_window_zeros_pane(real_repo: Path, tmp_pat
         kill_session(session)
 
 
+def test_agent_command_starts_without_waiting_for_a_fresh_prompt(
+    real_repo: Path, tmp_path: Path
+) -> None:
+    """The agent window launches atomically even when shell startup is slow."""
+    cfg = GroveConfig.model_validate({"tmux": {"session_prefix": "grove-it-"}})
+    session = "grove-it-agent-window"
+    marker = tmp_path / "agent-window-ran"
+    with contextlib.suppress(Exception):
+        kill_session(session)
+    create_session(session, real_repo)
+    try:
+        build_workspace_layout(
+            session,
+            cfg=cfg,
+            worktree=real_repo,
+            command=f"touch {marker}; sleep 30",
+        )
+        for _ in range(50):
+            if marker.exists():
+                break
+            time.sleep(0.1)
+
+        assert marker.exists(), "the agent command waited unsubmitted at a fresh prompt"
+    finally:
+        kill_session(session)
+
+
 def test_init_script_real_subprocess_creates_marker(real_repo: Path, tmp_path: Path) -> None:
     cfg = GroveConfig.model_validate(
         {

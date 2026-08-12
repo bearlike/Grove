@@ -38,10 +38,12 @@ from loguru import logger
 from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
+    AgentMessage,
     DigestEntry,
     FileEdit,
     FinalResult,
     OrderedDigest,
+    QueuedMessage,
     SessionControls,
     SessionRef,
     SessionSummary,
@@ -544,6 +546,13 @@ class MewboAdapter:
     kind = "mewbo"
     remote = True
     resumable = False
+    # Whether a remote backend queues at all is its own scheduler's business;
+    # `/events` reports what happened, never what is pending.
+    reports_queue = False
+    # No message spine (`read_messages` is empty on purpose), so there is no
+    # tool-result block to carry a flag. The backend's own timeline may know;
+    # this seam is about `ContentBlock.is_error`, and that never exists here.
+    reports_tool_errors = False
 
     def __init__(self, client: MewboClient | None = None) -> None:
         self._client = client
@@ -594,6 +603,14 @@ class MewboAdapter:
         del command
         return ()
 
+    def tool_version(self, command: str) -> str | None:
+        # ``command`` launches nothing here — the work runs on the backend, so
+        # there is no local build whose version would describe the session. The
+        # honest answer is "no version to report", not a probe of whatever
+        # binary the command happens to name.
+        del command
+        return None
+
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         # Remote sessions have no local backing file — empty by design (the
         # deliberately filesystem-shaped method; see the protocol docstring).
@@ -625,8 +642,9 @@ class MewboAdapter:
         (honest filtering — a session claiming no location can't be placed on
         a catalog grouped by project, and this mirrors ``list_sessions``'
         own skip). Best-effort: ``()`` on any error, or when no client is
-        configured. No local file, so ``transcript_path`` is ``None`` and
-        ``mtime`` is ``0.0`` (Mewbo rows carry no recency timestamp today).
+        configured. No local file, so ``transcript_path`` is ``None``,
+        ``mtime`` is ``0.0`` (Mewbo rows carry no recency timestamp today) and
+        ``size_bytes`` is ``None`` (nothing to ``stat()``).
         """
         client = self._client_or_none()
         if client is None:
@@ -656,6 +674,7 @@ class MewboAdapter:
                     birth=_parse_timestamp(row.get("created_at")),
                     mtime=0.0,
                     git_branch=branch,
+                    size_bytes=None,
                 )
             )
         return tuple(refs)
@@ -708,6 +727,15 @@ class MewboAdapter:
             )
         return summaries
 
+    def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
+        # No message spine: a remote session's history is the backend's own
+        # timeline, projected here as turns rather than as the lineage-preserving
+        # `AgentMessage` layer the filesystem parsers build. Synthesizing one
+        # would be a second parser over a shape it does not fit — so the honest
+        # answer is empty, and a content consumer emits nothing for this kind.
+        del cwd, session_id
+        return ()
+
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None
     ) -> tuple[SessionTurn, ...]:
@@ -746,6 +774,14 @@ class MewboAdapter:
         every other read here; ``None`` when the fetch degrades."""
         log = self._fetch_log(cwd, session_id)
         return log.current_task_text() if log is not None else None
+
+    def pending_queue(self, cwd: Path, session_id: str) -> tuple[QueuedMessage, ...]:
+        # Whether a remote orchestrator queues a message at all, and what it is
+        # holding, are facts about the backend's own scheduler; ``/events`` is a
+        # log of what HAPPENED and reports nothing pending. Empty is the honest
+        # answer, exactly as for the local-surface reads above.
+        del cwd, session_id
+        return ()
 
     def session_controls(self, cwd: Path, session_id: str) -> SessionControls:
         # A remote orchestrator's controls (commands / skills / MCP servers) live

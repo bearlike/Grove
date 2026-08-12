@@ -41,6 +41,9 @@ def on_files(files: Files, config: dict[str, Any], **_: Any) -> Files:
 
     out_path = docs_dir / _TARGET
     out_path.write_text(body, encoding="utf-8")
+    existing = files.get_file_from_path(_TARGET)
+    if existing is not None:
+        files.remove(existing)
     files.append(
         File(
             _TARGET,

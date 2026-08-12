@@ -53,6 +53,7 @@ devcontainer CLI, or the manager.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -74,6 +75,7 @@ from grove.core.config import (
     EgressMode,
     RangeSource,
     ResourcesConfig,
+    TelemetryConfig,
 )
 
 #: Where Grove's per-workspace agent config dir is mounted INSIDE the container.
@@ -1010,12 +1012,19 @@ class EgressPolicy:
         *,
         kind: AgentKind,
         remote_urls: Iterable[str] = (),
+        telemetry: TelemetryConfig | None = None,
+        env: Mapping[str, str] | None = None,
         fetch_ranges: Callable[[RangeSource], tuple[str, ...]] = fetch_published_ranges,
     ) -> EgressPolicy:
         """Resolve the effective destination set for one workspace.
 
         `remote_urls` comes from `GitRepo.remote_urls()` at the boundary; only
         the host part is kept (a URL's path is not a destination).
+
+        `telemetry` contributes the telemetry plane (:meth:`telemetry_hosts`),
+        read against `env` — the workspace's launch environment, defaulting to
+        Grove's own. It is optional so the planner keeps working for a caller
+        that has no opinion about telemetry, and so a test can state one.
 
         `fetch_ranges` is the one impure edge, injected so the planner stays
         testable without a network and defaulted so the provisioner needs no
@@ -1025,8 +1034,24 @@ class EgressPolicy:
         for the same reason — belt and braces cost one resolved `/32` each.
         """
         if cfg.mode == "open":
+            # Before the telemetry read, which can resolve a configured env
+            # source: nothing is blocked here, so there is nothing to derive and
+            # nothing to say.
             return cls(mode="open")
+        telemetry_hosts = cls.telemetry_hosts(telemetry, env)
         if cfg.mode == "deny":
+            if telemetry_hosts:
+                # The one combination that cannot be reconciled: `deny` permits
+                # loopback and the workspace network only, and telemetry is by
+                # definition off-box. Said here rather than silently dropped,
+                # because the symptom otherwise is an empty trace tree with a
+                # config that reads `enabled: true` everywhere you look.
+                logger.warning(
+                    "egress.mode is 'deny', so the telemetry endpoint at {} is unreachable from "
+                    "this container and every span it exports will be dropped at the firewall — "
+                    "use egress.mode 'allowlist' (the default) or turn telemetry off",
+                    ", ".join(telemetry_hosts),
+                )
             return cls(mode="deny")
         published: list[str] = []
         for source in cfg.range_sources:
@@ -1036,6 +1061,7 @@ class EgressPolicy:
             *cfg.package_plane,
             *cfg.grove_plane,
             *(cls.remote_host(url) for url in remote_urls),
+            *telemetry_hosts,
             *cfg.allow,
             *published,
         ]
@@ -1049,6 +1075,19 @@ class EgressPolicy:
                 # A literal unspecified address is never a destination, and a
                 # rule for one reads as an allow while permitting nothing.
                 logger.warning("egress: skipping unusable destination {!r}", value)
+                continue
+            if ":" in value:
+                # `iptables -d` REFUSES an IPv6 address (and a `host:port`), and
+                # the script runs under `set -e` — so a single such entry aborts
+                # the whole ruleset and fails the container start, turning a
+                # misconfigured destination into an unusable workspace. Dropped
+                # loudly instead: the firewall is IPv4-only by construction (v6
+                # is denied outright), so there was never a rule to emit here.
+                logger.warning(
+                    "egress: skipping {!r} — the in-container firewall is IPv4-only, and an "
+                    "IPv6 address or a host:port would abort the whole ruleset",
+                    value,
+                )
                 continue
             (cidrs if cls._is_address(value) else hosts).setdefault(value, None)
         return cls(mode="allowlist", hosts=tuple(hosts), cidrs=tuple(cidrs))
@@ -1441,7 +1480,14 @@ class EgressPolicy:
                     "# Hostnames resolve to addresses once, here. A name whose address",
                     "# changes mid-session stops matching until the next start.",
                     f"for host in {' '.join(shlex.quote(h) for h in self.hosts)}; do",
-                    "  addrs=$(getent ahostsv4 \"$host\" | awk '{print $1}' | sort -u)",
+                    # `|| addrs=` is load-bearing under `set -euo pipefail`: getent
+                    # exits 2 for a name that does not resolve, and pipefail promotes
+                    # that to the pipeline's status. As a bare assignment that aborts
+                    # the whole script — so the guard below, and every rule after it,
+                    # is unreachable for exactly the case it was written to report.
+                    # The previous `for addr in $(...)` form was immune because a
+                    # substitution in a for-list is not a checked command.
+                    "  addrs=$(getent ahostsv4 \"$host\" | awk '{print $1}' | sort -u) || addrs=",
                     "  # A name that resolves to NOTHING contributes no rule, and until",
                     "  # this line it did so in silence — `allow` is loud about an",
                     "  # unusable 0.0.0.0, but an unresolvable name never reaches it, so",
@@ -1505,6 +1551,51 @@ class EgressPolicy:
             *self._ipv6_lines(),
         ]
         return "\n".join(lines)
+
+    @staticmethod
+    def telemetry_hosts(
+        telemetry: TelemetryConfig | None, env: Mapping[str, str] | None = None
+    ) -> tuple[str, ...]:
+        """The telemetry plane: where this workspace's spans have to be sent.
+
+        Derived, never configured twice. The destination is stated once — as
+        whatever ``telemetry`` resolves its host variable to — and read back
+        here through the same :meth:`TelemetryConfig.derive_env` the launch
+        boundary uses, so the address the agent exports to and the address the
+        firewall admits cannot disagree. Empty whenever telemetry is off or its
+        host resolves to nothing, which is also the case ``derive_env`` has
+        already warned about.
+
+        **The self-hosted endpoint is the ordinary case, not the exception**: a
+        LAN name or an RFC1918 literal arrives here like any other entry, and a
+        name the container's own resolver cannot answer costs one skip line in
+        the provision log rather than a failed start. That asymmetry is
+        deliberate — telemetry is a convenience, and a workspace that starts
+        untraced is enormously better than one that does not start.
+
+        The endpoint is preferred over the bare host because it is the URL the
+        exporter actually dials; the host is the fallback for a partial
+        credential set, where the endpoint is not derived at all but the
+        operator's intent about *where* is already unambiguous.
+        """
+        if telemetry is None or not telemetry.enabled:
+            return ()
+        derived = telemetry.derive_env(env if env is not None else os.environ)
+        target = derived.get("OTEL_EXPORTER_OTLP_ENDPOINT") or derived.get("LANGFUSE_HOST", "")
+        if not target:
+            return ()
+        host = urlsplit(target).hostname or ""
+        if not host:
+            # A host variable carrying no scheme (`langfuse.example:3000`) is
+            # unparseable as a URL and equally unusable to the exporter, so the
+            # firewall is not the layer that failed — but it is the layer that
+            # notices, and silence here reads as a network fault later.
+            logger.warning(
+                "telemetry is enabled but its endpoint names no host, so no egress rule can be "
+                "derived for it — the host variable should carry a full URL (https://…)"
+            )
+            return ()
+        return (host,)
 
     @staticmethod
     def remote_host(url: str) -> str:

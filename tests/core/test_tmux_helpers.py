@@ -741,22 +741,33 @@ class _FakePane:
         del enter, suppress_history
         self.keys.append(cmd)
 
+    def enter(self) -> None: ...
+
 
 class _FakeWindow:
     def __init__(self, pane: _FakePane) -> None:
         self.active_pane = pane
 
     def rename_window(self, _name: str) -> None: ...
-    def select_window(self) -> None: ...
+    def select(self) -> None: ...
 
 
 class _FakeSession:
     def __init__(self, window: _FakeWindow) -> None:
         self.windows = [window]
         self._agent_window = window
+        self.window_shell = ""
 
-    def new_window(self, *, window_name: str, start_directory: str, attach: bool) -> _FakeWindow:
+    def new_window(
+        self,
+        *,
+        window_name: str,
+        start_directory: str,
+        attach: bool,
+        window_shell: str,
+    ) -> _FakeWindow:
         del window_name, start_directory, attach
+        self.window_shell = window_shell
         return self._agent_window
 
 
@@ -773,15 +784,16 @@ class _FakeServer:
 
 
 @pytest.fixture
-def fake_pane(monkeypatch: pytest.MonkeyPatch) -> _FakePane:
+def fake_session(monkeypatch: pytest.MonkeyPatch) -> _FakeSession:
     """Drive the real ``build_workspace_layout`` against an in-memory libtmux."""
     pane = _FakePane()
-    server = _FakeServer(_FakeSession(_FakeWindow(pane)))
+    session = _FakeSession(_FakeWindow(pane))
+    server = _FakeServer(session)
     monkeypatch.setattr(tmux, "_server", lambda: server)
-    return pane
+    return session
 
 
-def _layout(pane_fixture: _FakePane, agent: AgentSpec) -> list[str]:
+def _layout(session: _FakeSession, agent: AgentSpec) -> str:
     # The layout takes structured primitives, not an AgentSpec (it sits below the
     # LaunchBackend seam); unpack the fixture's agent the way the manager's
     # TmuxLaunchBackend does, so these hermetic-env assertions still pin the
@@ -794,10 +806,10 @@ def _layout(pane_fixture: _FakePane, agent: AgentSpec) -> list[str]:
         env=agent.env,
         env_unset=agent.env_unset,
     )
-    return pane_fixture.keys
+    return session.window_shell
 
 
-def test_layout_unsets_before_export_so_pane_is_hermetic(fake_pane: _FakePane) -> None:
+def test_layout_unsets_before_export_so_pane_is_hermetic(fake_session: _FakeSession) -> None:
     """The leaked var is ``unset`` and a configured var ``export``ed, both before
     the command — so the pane's profile is decided by the agent, not the daemon."""
     agent = AgentSpec(
@@ -806,15 +818,15 @@ def test_layout_unsets_before_export_so_pane_is_hermetic(fake_pane: _FakePane) -
         env={"FOO": "bar"},
         env_unset=("CLAUDE_CONFIG_DIR",),
     )
-    keys = _layout(fake_pane, agent)
-    assert "unset CLAUDE_CONFIG_DIR" in keys
-    assert "export FOO='bar'" in keys
+    script = _layout(fake_session, agent)
+    assert "unset CLAUDE_CONFIG_DIR" in script
+    assert "export FOO=" in script
     # unset and export both precede the launched command.
-    assert keys.index("unset CLAUDE_CONFIG_DIR") < keys.index("claude")
-    assert keys.index("export FOO='bar'") < keys.index("claude")
+    assert script.index("unset CLAUDE_CONFIG_DIR") < script.index("claude")
+    assert script.index("export FOO=") < script.index("claude")
 
 
-def test_layout_export_wins_over_unset_for_same_key(fake_pane: _FakePane) -> None:
+def test_layout_export_wins_over_unset_for_same_key(fake_session: _FakeSession) -> None:
     """A key in both ``env_unset`` and ``env`` ends up exported: unset runs first,
     so a user who pins ``CLAUDE_CONFIG_DIR`` via ``env`` gets that dir, not the
     cleared default."""
@@ -824,13 +836,13 @@ def test_layout_export_wins_over_unset_for_same_key(fake_pane: _FakePane) -> Non
         env={"CLAUDE_CONFIG_DIR": "/work"},
         env_unset=("CLAUDE_CONFIG_DIR",),
     )
-    keys = _layout(fake_pane, agent)
-    assert keys.index("unset CLAUDE_CONFIG_DIR") < keys.index("export CLAUDE_CONFIG_DIR='/work'")
+    script = _layout(fake_session, agent)
+    assert script.index("unset CLAUDE_CONFIG_DIR") < script.index("export CLAUDE_CONFIG_DIR=")
 
 
-def test_layout_no_env_unset_emits_no_unset(fake_pane: _FakePane) -> None:
+def test_layout_no_env_unset_emits_no_unset(fake_session: _FakeSession) -> None:
     """A plain agent (no ``env_unset``) emits no ``unset`` — the mechanism is opt-in
     per agent, not a blanket scrub."""
     agent = AgentSpec(name="shell", command="$SHELL")
-    keys = _layout(fake_pane, agent)
-    assert not any(k.startswith("unset ") for k in keys)
+    script = _layout(fake_session, agent)
+    assert "unset " not in script

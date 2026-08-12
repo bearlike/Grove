@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import subprocess
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -78,7 +78,11 @@ def _build_app(store: JsonWorkspaceStore, channel: _CapturingChannel) -> FastAPI
         }
     )
     broker = NotificationBroker(
-        channels=[channel], deep_link_base_url=cfg.notifications.deep_link_base_url
+        channels=[channel],
+        deep_link_base_url=cfg.notifications.deep_link_base_url,
+        # These tests are about the wiring (activity → broker → channel), not the
+        # quiet-window policy — see tests/core/test_notifications.py for that.
+        waiting_quiet=timedelta(0),
     )
     return build_app(cfg=cfg, store=store, notification_broker=broker)
 

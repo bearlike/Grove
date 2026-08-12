@@ -23,6 +23,7 @@ from grove.core.workspace import Runtime
 from grove.tui.theme import (
     ACTIVE_PULSE_TINT_HEX,
     AGENT_STATE_HEX,
+    BLOCKED_HEX,
     CHROME_HEX,
     INIT_STATUS_HEX,
     PHASE_HEX,
@@ -203,6 +204,28 @@ def phase_label(phase: TaskPhase) -> str:
 def phase_color(phase: TaskPhase, *, dark: bool = True) -> str:
     """Return the theme hex for a `TaskPhase`. Unknown → fg fallback."""
     return PHASE_HEX[dark].get(phase, "#ffffff" if dark else "#000000")
+
+
+# `blocked` is a FLAG carried beside a phase claim, never a `TaskPhase` member
+# (grove.core.phase's own vocabulary deliberately excludes it — an agent
+# blocked on a question is still IN some phase, and a consumer wants both
+# facts at once). So it earns its own single-color slot rather than a seventh
+# ramp entry: `theme.BLOCKED_HEX` is a bare `dict[bool, str]`, not nested by
+# `TaskPhase`. `‼` (U+203C, DOUBLE EXCLAMATION MARK — General Punctuation, the
+# block this file's own glyph-picking rule prefers) is a fifth glyph family,
+# disjoint from the status/agent-state circles (`● ○ ◐ ◑ ◌ ‖ ⊘ ⚠ ✗ ·`), the
+# phase block ramp (`▁▂▄▆█✓`), the PR arrow (`⇒`) and the runtime squares
+# (`■▣`) — verified against `MesloLGS NF` / `DejaVu Sans Mono`, the same
+# reference families the other axes check coverage against. It renders
+# trailing the phase segment (`<glyph> <label> N/M ‼`), never leading and
+# never replacing the phase glyph — a reader needs *where it stopped* as much
+# as *that it stopped*.
+BLOCKED_GLYPH: Final = "‼"
+
+
+def blocked_color(*, dark: bool = True) -> str:
+    """Return the theme hex for the blocked flag."""
+    return BLOCKED_HEX[dark]
 
 
 # Runtime — the isolation axis, and the ONE axis whose glyph is not defined in

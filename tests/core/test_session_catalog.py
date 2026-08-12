@@ -21,11 +21,13 @@ from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.agents.model import SessionRef
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.sessions import SessionSummaryView
 from grove.core.manager import WorkspaceManager
 from grove.core.process import LiveRuntime
 from grove.core.registry import RepoRegistry
-from grove.core.sessions import CatalogEntry, SessionCatalog
+from grove.core.sessions import CatalogEntry, SessionCatalog, SessionExplorer
 from grove.core.store import JsonWorkspaceStore
+from grove.core.turn_count import TurnCountCache
 from tests.conftest import FakeTmux
 
 MINTED_SID = "11111111-1111-4111-8111-111111111111"
@@ -340,3 +342,148 @@ def test_scan_marks_a_row_live_when_a_real_runtime_matches(
 
     assert len(entries) == 1
     assert entries[0].live is True
+
+
+# ─── the durable turn count (the one field a catalog row fills from a cache) ──
+
+
+def test_scan_reports_no_turn_count_until_the_cache_has_counted_the_session(
+    registry: RepoRegistry, claude_home: Path, tmp_repo: Path, tmp_path: Path
+) -> None:
+    """The scan itself never parses a transcript, so a cold host answers
+    `turn_count=None` — the honest "not counted", which the wire is contracted
+    to render as an em dash and never as 0."""
+    _write_transcript(claude_home, ROOT_SID, tmp_repo, mtime=1_000)
+    catalog = SessionCatalog(registry, turn_counts=TurnCountCache(path=tmp_path / "turns.json"))
+
+    entries = catalog.scan()
+
+    assert [e.turn_count for e in entries] == [None]
+
+    assert catalog.count_turns(entries) == 1
+    assert [e.turn_count for e in catalog.scan()] == [1]
+
+
+def test_a_counted_row_goes_back_to_null_when_its_transcript_grows(
+    registry: RepoRegistry, claude_home: Path, tmp_repo: Path, tmp_path: Path
+) -> None:
+    """A count is bound to the transcript VERSION it was taken at: a session
+    that has since gained a turn reads as uncounted rather than reporting the
+    number it used to have."""
+    path = _write_transcript(claude_home, ROOT_SID, tmp_repo, mtime=1_000)
+    catalog = SessionCatalog(registry, turn_counts=TurnCountCache(path=tmp_path / "turns.json"))
+    catalog.count_turns(catalog.scan())
+    assert [e.turn_count for e in catalog.scan()] == [1]
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"type":"user","uuid":"h-2","timestamp":"2026-06-09T09:00:00.000Z",'
+            f'"isSidechain":false,"cwd":"{tmp_repo}","gitBranch":"main",'
+            '"message":{"role":"user","content":"again"}}\n'
+        )
+
+    assert [e.turn_count for e in catalog.scan()] == [None]
+    entries = catalog.scan()
+    assert catalog.count_turns(entries) == 1
+    assert [e.turn_count for e in catalog.scan()] == [2]
+
+
+def test_a_cwdless_row_stays_uncounted_forever(
+    registry: RepoRegistry, claude_home: Path, tmp_path: Path
+) -> None:
+    """No cwd means no coordinate any adapter can read the session under, so
+    the count is permanently unavailable — and still not a fabricated 0."""
+    _write_cwdless_transcript(claude_home, UNMANAGED_SID, mtime=1_000)
+    catalog = SessionCatalog(registry, turn_counts=TurnCountCache(path=tmp_path / "turns.json"))
+
+    entries = catalog.scan()
+    assert catalog.count_turns(entries) == 0
+    assert [e.turn_count for e in catalog.scan()] == [None]
+
+
+# ─── the two clocks, and the two scopes agreeing about them ───────────────────
+
+
+def _write_worked_transcript(claude_home: Path, sid: str, cwd: Path, *, mtime: int) -> Path:
+    """A transcript holding real WORK: a prompt and the reply it produced two
+    minutes later, so the derived duration is a number rather than a null."""
+    path = _write_transcript(claude_home, sid, cwd, mtime=mtime)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f'{{"type":"assistant","uuid":"a-{sid[:4]}","requestId":"r-{sid[:4]}",'
+            f'"isSidechain":false,"cwd":"{cwd}","timestamp":"2026-06-09T08:02:00.000Z",'
+            f'"message":{{"id":"m-{sid[:4]}","role":"assistant","model":"claude-opus-5",'
+            '"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2},'
+            '"content":[{"type":"text","text":"done"}]}}\n'
+        )
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_scan_reports_no_duration_until_the_same_pass_has_timed_the_session(
+    registry: RepoRegistry, claude_home: Path, tmp_repo: Path, tmp_path: Path
+) -> None:
+    """The duration rides the SAME cached entry as the turn count, from the same
+    parse — so a row can never carry one fact without the other, and both are
+    honestly null on a cold host rather than zeroed."""
+    _write_worked_transcript(claude_home, ROOT_SID, tmp_repo, mtime=1_000)
+    catalog = SessionCatalog(registry, turn_counts=TurnCountCache(path=tmp_path / "turns.json"))
+
+    assert [(e.turn_count, e.duration) for e in catalog.scan()] == [(None, None)]
+
+    catalog.count_turns(catalog.scan())
+    timed = catalog.scan()[0]
+
+    assert timed.turn_count == 1
+    assert timed.duration is not None
+    assert timed.duration.active_ms == 2 * 60_000
+    assert timed.duration.execution_ms == 2 * 60_000  # nothing ran concurrently
+
+
+def test_the_project_and_host_scopes_report_the_same_duration(
+    manager: WorkspaceManager,
+    registry: RepoRegistry,
+    claude_home: Path,
+    tmp_path: Path,
+) -> None:
+    """One session, two listings, one number. The project scope derives it from
+    the spine it is already reading and the host scope reads it out of the
+    durable cache — different roads, one `duration_of`, so a client cannot be
+    shown two different costs for one session depending on which list it
+    opened."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="timed work"))
+    assert state.agent_session_id is not None
+    _write_worked_transcript(
+        claude_home, state.agent_session_id, Path(state.worktree_path), mtime=3_000
+    )
+    catalog = SessionCatalog(registry, turn_counts=TurnCountCache(path=tmp_path / "turns.json"))
+    catalog.count_turns(catalog.scan())
+
+    project_row = SessionExplorer(manager).for_workspace(state.id)[0]
+    host_row = next(e for e in catalog.scan() if e.ref.session_id == state.agent_session_id)
+
+    assert project_row.duration is not None
+    assert project_row.duration.active_ms == 2 * 60_000
+    assert host_row.duration == project_row.duration
+    # And each carries onto its own wire constructor unchanged.
+    assert SessionSummaryView.from_listing(project_row).duration == project_row.duration
+    assert SessionSummaryView.from_catalog(host_row).duration == project_row.duration
+
+
+def test_a_project_row_is_timed_before_any_background_pass_has_run(
+    manager: WorkspaceManager, claude_home: Path
+) -> None:
+    """Project scope must not depend on the catalog's cache: a user who never
+    opens the host-wide list still gets the column, because this scope pays for
+    its own parse."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="timed work"))
+    assert state.agent_session_id is not None
+    _write_worked_transcript(
+        claude_home, state.agent_session_id, Path(state.worktree_path), mtime=3_000
+    )
+
+    row = SessionExplorer(manager).for_workspace(state.id)[0]
+
+    assert row.duration is not None
+    assert row.duration.active_ms == 2 * 60_000
+    assert row.duration.confidence == "derived"

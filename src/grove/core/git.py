@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -31,7 +31,7 @@ from loguru import logger
 from grove.core import paths
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.errors import GitError
-from grove.core.workspace import CommitSummary
+from grove.core.workspace import CommitScope, CommitSummary
 
 _DIFFSTAT_INSERTIONS = re.compile(r"(\d+) insertion")
 _DIFFSTAT_DELETIONS = re.compile(r"(\d+) deletion")
@@ -257,6 +257,76 @@ class GitRepo:
             return 0
         return sum(1 for line in result.stdout.splitlines() if line.strip())
 
+    # ─── working-tree patch (the Files tab's only source) ──────────────────
+
+    def tracked_patch(
+        self, worktree_path: Path, *, base: str = "HEAD", path: str | None = None
+    ) -> str:
+        """Unified `git diff <base>` for the worktree — TRACKED changes only.
+
+        `base` is the revision the caller measures from; the `"HEAD"` default is
+        "uncommitted changes only" and stays the answer for a workspace with no
+        recorded creation anchor. A caller passing that anchor gets everything
+        the workspace has done — committed and not — in one patch, which is the
+        only form in which a file committed an hour ago still appears.
+
+        Returned verbatim, never parsed: `git diff` produces the format and the
+        client's diff renderer consumes it, so anything in between is a second
+        model of a format git already owns. Binary files therefore arrive as
+        git's own `Binary files … differ` line rather than being filtered out.
+
+        `--no-color` and `--no-ext-diff` are load-bearing rather than tidy: a
+        user's `color.diff=always` or a configured `diff.external` would
+        otherwise hand back ANSI escapes or some other tool's output entirely,
+        and the consumer is a parser expecting plain unified diff.
+
+        Best-effort like every other peek-shaped read — a failure is `""`, and
+        the CALLER distinguishes "no changes" from "could not read" (see
+        `WorkspaceManager.working_diff`); this returning empty never means the
+        second thing on its own.
+        """
+        cmd = ["git", "diff", "--no-color", "--no-ext-diff", base]
+        if path is not None:
+            cmd += ["--", path]
+        result = self._run(cmd, cwd=worktree_path, check=False)
+        return result.stdout if result.returncode == 0 else ""
+
+    def untracked_files(self, worktree_path: Path) -> tuple[str, ...]:
+        """Worktree-relative paths git can see but does not track, honouring ignores.
+
+        Separate from `tracked_patch` because **`git diff HEAD` does not show a
+        new file at all**, and creating files is an agent's usual first act — so
+        a diff built from `git diff` alone is blank for exactly the work a
+        reviewer most wants to see. `--exclude-standard` applies the same ignore
+        rules `git status` does, so build output never reaches the patch.
+        """
+        result = self._run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=worktree_path,
+            check=False,
+        )
+        if result.returncode != 0:
+            return ()
+        return tuple(entry for entry in result.stdout.split("\0") if entry)
+
+    def untracked_patch(self, worktree_path: Path, rel_path: str) -> str:
+        """Unified diff for ONE untracked file, as an all-additions patch.
+
+        **`--no-index` is the whole point: it never touches the index.** The
+        obvious alternative — `git add --intent-to-add` — would stage into the
+        user's own worktree, and Grove does not mutate a user's git state to
+        answer a read (the same rule that keeps `commit`/`push` out of this
+        module). Diffing against `/dev/null` gets the same all-additions patch
+        with no side effect at all.
+
+        `--no-index` exits **1 when the files differ**, which is the normal case
+        here, so a zero exit would mean an EMPTY new file; both are real answers
+        and only a higher code is a failure.
+        """
+        cmd = ["git", "diff", "--no-color", "--no-ext-diff", "--no-index", "--"]
+        result = self._run([*cmd, "/dev/null", rel_path], cwd=worktree_path, check=False)
+        return result.stdout if result.returncode in (0, 1) else ""
+
     # ─── branch read helpers (peek + create dropdowns + validation) ────────
 
     def ahead_behind(self, branch: str, base: str) -> tuple[int, int]:
@@ -309,7 +379,7 @@ class GitRepo:
         workspace?" use ``branch_commits(branch, base)`` — that filter is
         the comprehensive view a detail screen wants.
         """
-        return self._parse_commit_log(["git", "log", f"-n{limit}", branch])
+        return self._parse_commit_log(["git", "log", f"-n{limit}", branch], scope=None)
 
     def branch_commits(
         self,
@@ -330,16 +400,67 @@ class GitRepo:
         if limit is not None:
             cmd.append(f"-n{limit}")
         cmd.append(f"{base}..{branch}")
-        return self._parse_commit_log(cmd)
+        return self._parse_commit_log(cmd, scope="since_fork_point")
 
-    def _parse_commit_log(self, cmd: list[str]) -> tuple[CommitSummary, ...]:
+    def branch_commits_since(
+        self,
+        branch: str,
+        since: datetime,
+        *,
+        limit: int | None = None,
+    ) -> tuple[CommitSummary, ...]:
+        """Commits on `branch` dated at or after `since`, newest first.
+
+        The honest degradation for a workspace with **no recorded fork point**.
+        A ref range cannot answer there: `diff_base` falls back to `base_branch`,
+        which for a ROOT workspace is the literal string ``"HEAD"``, and
+        ``git log HEAD..<branch>`` is *structurally* empty however much work was
+        done — measured on this repo's own root workspace, 0 against a true 106.
+        A timestamp is a different kind of answer rather than a better guess: it
+        never claims to be the anchor, and `WorkspaceState.created_at` is a
+        recorded fact, which is exactly what a merge-base backfill would not be.
+
+        The answer **errs high** — see `CommitScope`, which is how the caller
+        tells this apart from a fork-point answer.
+
+        `since` is a `datetime` rather than a string ON PURPOSE, and that type is
+        the flag guard: this repo's recorded incident is a value that BECOMES an
+        option, which `shell=False` and list-form argv do not defend against. A
+        `datetime` cannot spell one, `isoformat()` of it always begins with a
+        digit, and it is interpolated into a SINGLE ``--since=<value>`` token, so
+        there is no argv position at which it could be read as an option of its
+        own. Formatting it ourselves also closes git's quieter trap: ``--since``
+        is parsed by approxidate, which never fails — an unparseable string is
+        silently taken as *now*, i.e. an empty log that looks like an answer.
+
+        Naive input is read as UTC, matching `WorkspaceState.adopts_session`'s
+        coercion so the two cannot disagree about what a stored stamp meant.
+        """
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        cmd = ["git", "log"]
+        if limit is not None:
+            cmd.append(f"-n{limit}")
+        cmd.append(f"--since={since.astimezone(UTC).isoformat()}")
+        cmd.append(branch)
+        return self._parse_commit_log(cmd, scope="since_created_at")
+
+    def _parse_commit_log(
+        self,
+        cmd: list[str],
+        *,
+        scope: CommitScope | None,
+    ) -> tuple[CommitSummary, ...]:
         """Run a ``git log`` invocation that ends in the rev-spec and parse it.
 
         Caller passes the prefix (``["git", "log", "-n3", branch]`` or
         ``["git", "log", "base..branch"]``); this helper appends the format
         flag + ``--`` separator, executes, and parses the tab-delimited
-        output. Centralised so the two callers can't drift on tab parsing
+        output. Centralised so the three callers can't drift on tab parsing
         or date handling.
+
+        `scope` is required and unguessable from `cmd`, so each caller states
+        which question its range answered rather than this helper inferring one.
         """
         fmt = "%h%x09%s%x09%cI"  # short-sha \t subject \t committer-iso-date
         full = [*cmd, f"--pretty=format:{fmt}", "--"]
@@ -356,7 +477,9 @@ class GitRepo:
                 committed_at = datetime.fromisoformat(when)
             except ValueError:
                 continue
-            commits.append(CommitSummary(sha=sha, subject=subject, committed_at=committed_at))
+            commits.append(
+                CommitSummary(sha=sha, subject=subject, committed_at=committed_at, scope=scope)
+            )
         return tuple(commits)
 
     def list_local_branches(self) -> list[BranchInfo]:

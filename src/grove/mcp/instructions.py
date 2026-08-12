@@ -35,6 +35,15 @@ The vocabulary is restated here as literal prose rather than derived from
 :data:`grove.core.phase.PHASE_ORDER`. Deriving it would produce a sentence
 assembled at import time for a string that changes about as often as the enum
 does, and the enum is a closed set of six by deliberate design.
+
+The per-ticket ``tickets`` object and ``blocked`` earn their space in a string
+that is spent on every connection because omitting them is actively wrong, not
+merely incomplete: an agent that never learns the keys are pre-seeded will
+invent its own, and one that never learns ``blocked`` exists reports a false
+``done`` or freezes on a phase it cannot actually reach. Everything else about
+the shape — why the key is ``"<provider>:<id>"``, why ``blocked`` sits beside a
+phase instead of joining the six — belongs to :mod:`grove.core.phase` and is
+not re-derived here.
 """
 
 from __future__ import annotations
@@ -83,14 +92,28 @@ doing changes, which is a handful of times across a whole task.
 Moving backwards is a correct report, not a failure. If verifying shows the
 design was wrong, say planning again.
 
+Attached to more than one ticket? The file grows a "tickets" object, keyed
+"<provider>:<id>", one entry already seeded per ticket at "scoping" — edit the
+entries in place, never invent a key:
+
+    {"phase": "implementing", "tickets": {"gitea:498": {"phase": "verifying"}}}
+
+Each ticket's phase is its own claim, independent of the top-level one and of
+every other ticket's. Add "blocked": true beside any phase — top-level or a
+ticket's — when there is no way for you to finish it; keep reporting the phase
+you actually reached and say why in the note. That is a claim about the work,
+not the same as being blocked on a question (a transient activity state Grove
+already infers and clears on its own).
+
 The write is best-effort. If it fails, keep going with the real work and try
 again at the next transition. Never let phase reporting block, retry-loop, or
 derail the task you were given.
 
-Where they exist, `grove phase <phase> --note "..."` and
-grove_set_workspace_phase do the same thing more conveniently. Both are often
-unreachable from inside a container, so the file is what you fall back to and
-the file never needs anything to be reachable.
+Where they exist, `grove phase <phase> --ticket <ref> --blocked --note "..."`
+and grove_set_workspace_phase (same ticket/blocked options) do the same thing
+more conveniently. Both are often unreachable from inside a container, so the
+file is what you fall back to and the file never needs anything to be
+reachable.
 </task_phase>
 """
 

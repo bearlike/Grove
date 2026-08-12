@@ -45,6 +45,10 @@ _HOOKS_SETTINGS_FILE = "claude-hooks-settings.json"
 _CONTAINER_SETTINGS_FILE = "claude-container-settings.json"
 _BRIEF_FILE = "agent-brief.md"
 _HANDOVER_FILE = "handovers.json"
+_USAGE_DB_FILE = "usage.sqlite3"
+_QUOTA_STATE_FILE = "quota-state.json"
+_TELEMETRY_LEDGER_FILE = "telemetry-exports.sqlite3"
+_SESSION_TURNS_FILE = "session-turns.json"
 
 
 def ensure_dir(path: Path) -> Path:
@@ -152,6 +156,58 @@ def user_schema_path() -> Path:
 def user_state_path() -> Path:
     """Single global workspace-state file. Keyed internally by repo_root."""
     return Path(user_state_dir(_APP_NAME)) / _STATE_FILE
+
+
+def usage_db_path() -> Path:
+    """The historical usage audit's SQLite cache.
+
+    Under the STATE dir, beside the workspace state, because nobody authors it:
+    it is derived wholly from transcripts Grove can already read, and deleting
+    it is always safe — the next refresh rebuilds it. That is also why it takes
+    no lock discipline from ``exclusive_lock``: SQLite in WAL mode owns its own
+    concurrency, and the file has exactly one writer path.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _USAGE_DB_FILE
+
+
+def quota_state_path() -> Path:
+    """Durable last-known-good quota readings and per-account probe cool-offs.
+
+    Beside the workspace state rather than inside ``usage.sqlite3`` because it is
+    the opposite kind of file: that cache is derived wholly from transcripts and
+    may be deleted at any time, while a quota reading can never be recomputed —
+    once a provider stops answering, the last one Grove saw is the only one that
+    will ever exist. Holding it here is also what lets the daemon, the TUI and a
+    `grove` CLI run share one probe budget instead of each contacting a provider
+    to learn the same number. Contains no credential: account ids, operator
+    labels, percentages and timestamps only.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _QUOTA_STATE_FILE
+
+
+def session_turns_path() -> Path:
+    """Durable human-turn count per agent session, keyed by transcript identity.
+
+    Beside the workspace state rather than inside ``usage.sqlite3`` even though
+    both are rebuildable transcript projections: that cache prunes by
+    ``usage.retention_days`` and is gated on ``usage.enabled``, so a column
+    there would go blank for exactly the old sessions a browse view still
+    lists, under a knob that belongs to a different feature. It is a
+    cross-process cache by design — the daemon is the only writer, and every
+    ``grove`` CLI run and TUI screen reads the counts it already paid for.
+    Contains ids, transcript fingerprints and integers; no prompt, no content.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _SESSION_TURNS_FILE
+
+
+def telemetry_ledger_path() -> Path:
+    """Durable record of external telemetry observations already accepted.
+
+    Unlike ``usage.sqlite3`` this is not a rebuildable cache: deleting it can
+    cause an external backend to receive the same historical observation
+    again. It therefore has its own file and schema lifecycle.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _TELEMETRY_LEDGER_FILE
 
 
 def user_handover_path() -> Path:

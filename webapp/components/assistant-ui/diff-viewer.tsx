@@ -1,19 +1,12 @@
 "use client";
 
 import { type ComponentProps, useMemo } from "react";
+import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 import { cva, type VariantProps } from "class-variance-authority";
 import { diffLines } from "diff";
+import parseDiff from "parse-diff";
 
 import { cn } from "@/lib/utils";
-
-// Vendored from assistant-ui's shadcn registry (the /docs/ui/diff-viewer
-// component), trimmed at adoption: the upstream `patch=`/`code=` prop parsed a
-// unified-diff STRING via `parse-diff`, and `DiffViewerProps` extended
-// `Partial<SyntaxHighlighterProps>` from `@assistant-ui/react-markdown` for the
-// markdown code-block integration. Grove only ever feeds `oldFile`/`newFile`
-// (see `components/chat/file-edit-view.tsx`), so both the patch path and the
-// highlighter passthrough — and their two dependencies — were dead weight and
-// were removed. Split-view / badge / stats are kept as upstream affordances.
 
 type DiffLineType = "add" | "del" | "normal";
 
@@ -35,6 +28,50 @@ interface ParsedFile {
 interface SplitLinePair {
   left: ParsedLine | null;
   right: ParsedLine | null;
+}
+
+function parsePatch(patch: string): ParsedFile[] {
+  const files = parseDiff(patch);
+  return files.map((file) => {
+    const lines: ParsedLine[] = [];
+    let additions = 0;
+    let deletions = 0;
+    for (const chunk of file.chunks) {
+      let oldLine = chunk.oldStart;
+      let newLine = chunk.newStart;
+      for (const change of chunk.changes) {
+        if (change.type === "add") {
+          additions++;
+          lines.push({
+            type: "add",
+            content: change.content.slice(1),
+            newLineNumber: newLine++,
+          });
+        } else if (change.type === "del") {
+          deletions++;
+          lines.push({
+            type: "del",
+            content: change.content.slice(1),
+            oldLineNumber: oldLine++,
+          });
+        } else {
+          lines.push({
+            type: "normal",
+            content: change.content.slice(1),
+            oldLineNumber: oldLine++,
+            newLineNumber: newLine++,
+          });
+        }
+      }
+    }
+    return {
+      oldName: file.from,
+      newName: file.to,
+      lines,
+      additions,
+      deletions,
+    };
+  });
 }
 
 function computeDiff(
@@ -396,17 +433,21 @@ function DiffViewerSplitLine({
   );
 }
 
-export type DiffViewerProps = VariantProps<typeof diffViewerVariants> & {
-  oldFile?: { content: string; name?: string };
-  newFile?: { content: string; name?: string };
-  viewMode?: "split" | "unified";
-  showLineNumbers?: boolean;
-  showIcon?: boolean;
-  showStats?: boolean;
-  className?: string;
-};
+export type DiffViewerProps = Partial<SyntaxHighlighterProps> &
+  VariantProps<typeof diffViewerVariants> & {
+    patch?: string;
+    oldFile?: { content: string; name?: string };
+    newFile?: { content: string; name?: string };
+    viewMode?: "split" | "unified";
+    showLineNumbers?: boolean;
+    showIcon?: boolean;
+    showStats?: boolean;
+    className?: string;
+  };
 
 function DiffViewer({
+  code,
+  patch,
   oldFile,
   newFile,
   viewMode = "unified",
@@ -417,16 +458,25 @@ function DiffViewer({
   size,
   className,
 }: DiffViewerProps) {
-  const parsedFiles = useMemo(() => {
-    if (oldFile && newFile) {
+  const diffPatch = patch ?? code;
+  const oldContent = oldFile?.content;
+  const oldName = oldFile?.name;
+  const newContent = newFile?.content;
+  const newName = newFile?.name;
+
+  const parsedFiles = useMemo<ParsedFile[]>(() => {
+    if (diffPatch) {
+      return parsePatch(diffPatch);
+    }
+    if (oldContent !== undefined && newContent !== undefined) {
       const { lines, additions, deletions } = computeDiff(
-        oldFile.content,
-        newFile.content,
+        oldContent,
+        newContent,
       );
       return [
         {
-          oldName: oldFile.name,
-          newName: newFile.name,
+          oldName,
+          newName,
           lines,
           additions,
           deletions,
@@ -434,7 +484,12 @@ function DiffViewer({
       ];
     }
     return [];
-  }, [oldFile, newFile]);
+  }, [diffPatch, oldContent, oldName, newContent, newName]);
+
+  const splitLinePairs = useMemo<SplitLinePair[][]>(() => {
+    if (viewMode !== "split") return [];
+    return parsedFiles.map((file) => pairLinesForSplit(file.lines));
+  }, [parsedFiles, viewMode]);
 
   if (parsedFiles.length === 0) {
     return (
@@ -456,7 +511,11 @@ function DiffViewer({
       className={cn(diffViewerVariants({ variant, size }), className)}
     >
       {parsedFiles.map((file, fileIndex) => (
-        <div key={fileIndex} data-slot="diff-viewer-file">
+        <div
+          key={fileIndex}
+          data-slot="diff-viewer-file"
+          className="[contain-intrinsic-size:auto_240px] [content-visibility:auto]"
+        >
           <DiffViewerHeader
             oldName={file.oldName}
             newName={file.newName}
@@ -467,7 +526,7 @@ function DiffViewer({
           />
           <div data-slot="diff-viewer-content" className="overflow-x-auto">
             {viewMode === "split"
-              ? pairLinesForSplit(file.lines).map((pair, pairIndex) => (
+              ? (splitLinePairs[fileIndex] ?? []).map((pair, pairIndex) => (
                   <DiffViewerSplitLine
                     key={pairIndex}
                     pair={pair}
@@ -504,5 +563,6 @@ export {
   diffViewerVariants,
   diffLineVariants,
   diffLineTextVariants,
+  parsePatch,
   computeDiff,
 };

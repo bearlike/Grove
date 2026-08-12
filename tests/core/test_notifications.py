@@ -22,7 +22,13 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from grove.core.activity import DashboardDelta, SessionActivity, WorkspaceActivity
+from grove.core.activity import (
+    DashboardDelta,
+    FleetSummary,
+    QueueDepth,
+    SessionActivity,
+    WorkspaceActivity,
+)
 from grove.core.agents import (
     AgentActivity,
     AgentActivityState,
@@ -92,6 +98,7 @@ def _session(
     task: str | None = None,
     questions: tuple[AgentQuestion, ...] = (),
     error: str | None = None,
+    active_subagents: int = 0,
 ) -> SessionActivity:
     return SessionActivity(
         session=AgentSession(
@@ -101,12 +108,20 @@ def _session(
             provenance="grove_launched",
         ),
         activity=AgentActivity(
-            state=state, current_task=task, questions=questions, error_detail=error
+            state=state,
+            current_task=task,
+            questions=questions,
+            error_detail=error,
+            active_subagents=active_subagents,
         ),
     )
 
 
-def _row(*sessions: SessionActivity) -> WorkspaceActivity:
+def _row(
+    *sessions: SessionActivity,
+    fleet: FleetSummary | None = None,
+    queue: QueueDepth | None = None,
+) -> WorkspaceActivity:
     return WorkspaceActivity(
         state=_ws_state(),
         sessions=tuple(sessions),
@@ -118,16 +133,22 @@ def _row(*sessions: SessionActivity) -> WorkspaceActivity:
         pane_target=None,
         recent_commits=(),
         observed_at=T0,
+        fleet=fleet,
+        queue=queue,
     )
 
 
-def _delta(*sessions: SessionActivity) -> DashboardDelta:
+def _delta(
+    *sessions: SessionActivity,
+    fleet: FleetSummary | None = None,
+    queue: QueueDepth | None = None,
+) -> DashboardDelta:
     return DashboardDelta(
         kind="session_activity",
         seq=1,
         workspace_id="ws1",
         repo_root="/home/u/proj",
-        workspace=_row(*sessions),
+        workspace=_row(*sessions, fleet=fleet, queue=queue),
     )
 
 
@@ -145,6 +166,12 @@ def _lifecycle(event: str, *, workspace_id: str = "ws1", **detail: str) -> Dashb
 
 def _broker(**kw: object) -> NotificationBroker:
     clock = kw.pop("clock", lambda: T0)
+    # Every existing test in this module predates the quiet-window push and
+    # exercises some OTHER edge (debounce, dedupe, lifecycle, rendering) — none
+    # of them mean to wait out `waiting_quiet`, so the helper defaults it to
+    # immediate (the pre-feature contract) and only the tests that are actually
+    # about the quiet window override it.
+    kw.setdefault("waiting_quiet", timedelta(0))
     return NotificationBroker(channels=[], deep_link_base_url=DEEP_LINK_BASE, clock=clock, **kw)  # type: ignore[arg-type]
 
 
@@ -221,6 +248,101 @@ def test_debounce_suppresses_second_fire_within_window() -> None:
     assert len(broker.evaluate(_delta(_session(AgentActivityState.WAITING)))) == 1
 
 
+# ─── the quiet-window push (WAITING is not "done") ────────────────────────────
+
+
+def test_waiting_edge_is_held_back_while_a_subagent_is_active() -> None:
+    """A WAITING turn with a spawned-but-unreturned sub-agent is not "done" — the
+    edge does not even queue until ``active_subagents`` drops to zero."""
+    broker = _broker(waiting_quiet=timedelta(minutes=1))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
+    assert broker.evaluate(_delta(_session(AgentActivityState.WAITING, active_subagents=1))) == []
+    assert broker.due_quiet(now=T0 + timedelta(hours=1)) == []  # nothing was ever parked
+    broker.evaluate(_delta(_session(AgentActivityState.WAITING, active_subagents=0)))
+    assert len(broker.due_quiet(now=T0 + timedelta(minutes=2))) == 1
+
+
+def test_waiting_edge_is_held_back_while_the_fleet_is_active() -> None:
+    """Same gate, sourced from the hook's live fleet rather than the transcript."""
+    broker = _broker(waiting_quiet=timedelta(minutes=1))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
+    busy = FleetSummary(active=1, total=1)
+    assert broker.evaluate(_delta(_session(AgentActivityState.WAITING), fleet=busy)) == []
+    settled = FleetSummary(active=0, total=1)
+    broker.evaluate(_delta(_session(AgentActivityState.WAITING), fleet=settled))
+    assert len(broker.due_quiet(now=T0 + timedelta(minutes=2))) == 1
+
+
+def test_waiting_edge_is_held_back_while_the_queue_has_pending_messages() -> None:
+    """Same gate, sourced from the harness's own steer queue."""
+    broker = _broker(waiting_quiet=timedelta(minutes=1))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
+    pending = QueueDepth(pending=1)
+    assert broker.evaluate(_delta(_session(AgentActivityState.WAITING), queue=pending)) == []
+    broker.evaluate(_delta(_session(AgentActivityState.WAITING)))
+    assert len(broker.due_quiet(now=T0 + timedelta(minutes=2))) == 1
+
+
+def test_quiet_window_push_waits_the_full_window_and_fires_once() -> None:
+    broker = _broker(waiting_quiet=timedelta(minutes=15))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
+    assert broker.evaluate(_delta(_session(AgentActivityState.WAITING))) == []  # parked, not fired
+    assert broker.due_quiet(now=T0 + timedelta(minutes=14)) == []  # not yet
+    fired = broker.due_quiet(now=T0 + timedelta(minutes=15))
+    assert len(fired) == 1
+    assert fired[0].trigger == "agent_state"
+    assert fired[0].state is AgentActivityState.WAITING
+    assert fired[0].reason == "finished its turn"
+    # Idempotence requirement #1: fires exactly once — the entry is gone.
+    assert broker.due_quiet(now=T0 + timedelta(minutes=30)) == []
+
+
+def test_quiet_window_push_is_cancelled_if_work_resumes_before_it_elapses() -> None:
+    broker = _broker(waiting_quiet=timedelta(minutes=15))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
+    broker.evaluate(_delta(_session(AgentActivityState.WAITING)))  # parked
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))  # resumes before it elapses
+    assert broker.due_quiet(now=T0 + timedelta(minutes=30)) == []
+
+
+def test_quiet_window_push_is_cancelled_by_a_fresh_question() -> None:
+    """A question means the turn was not actually over — the parked "finished"
+    push is wrong the moment that becomes true, so a question wins instead."""
+    broker = _broker(waiting_quiet=timedelta(minutes=15))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
+    broker.evaluate(_delta(_session(AgentActivityState.WAITING)))  # parked
+    out = broker.evaluate(
+        _delta(_session(AgentActivityState.BLOCKED, questions=(_question("q1"),)))
+    )
+    assert len(out) == 1
+    assert out[0].trigger == "question"
+    assert broker.due_quiet(now=T0 + timedelta(minutes=30)) == []
+
+
+def test_first_observation_never_queues_a_quiet_push_even_if_already_waiting() -> None:
+    """Idempotence requirements #2/#3: the very first observation of a session
+    always seeds (``previous is None``), so a workspace that was already
+    WAITING/settled before this broker existed — a daemon restart, or a
+    workspace quiet since before the daemon ever started — can never enter the
+    quiet-window queue from that observation. Only a genuine transition
+    observed AFTER startup can queue one."""
+    broker = _broker(waiting_quiet=timedelta(minutes=15))
+    assert broker.evaluate(_delta(_session(AgentActivityState.WAITING))) == []
+    assert broker.due_quiet(now=T0 + timedelta(days=1)) == []
+
+
+def test_waiting_quiet_zero_restores_immediate_fire() -> None:
+    """The escape hatch: ``waiting_quiet_minutes: 0`` fires the instant every
+    known tracker agrees nothing is left, exactly like before this feature —
+    the busy-gate still applies even with the wait disabled."""
+    broker = _broker(waiting_quiet=timedelta(0))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
+    assert broker.evaluate(_delta(_session(AgentActivityState.WAITING, active_subagents=1))) == []
+    out = broker.evaluate(_delta(_session(AgentActivityState.WAITING, active_subagents=0)))
+    assert len(out) == 1
+    assert out[0].state is AgentActivityState.WAITING
+
+
 def test_custom_notify_states_can_include_idle_and_exclude_error() -> None:
     broker = _broker(notify_states=frozenset({AgentActivityState.IDLE}))
     broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
@@ -279,7 +401,7 @@ def test_a_non_error_state_never_borrows_the_error_detail() -> None:
 
 
 def test_no_deep_link_base_yields_none() -> None:
-    broker = NotificationBroker(channels=[], clock=lambda: T0)
+    broker = NotificationBroker(channels=[], clock=lambda: T0, waiting_quiet=timedelta(0))
     broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
     assert broker.evaluate(_delta(_session(AgentActivityState.WAITING)))[0].deep_link is None
 
@@ -366,6 +488,46 @@ def test_open_question_on_first_sight_of_a_session_does_not_fire() -> None:
     q1 = _question("q1")
     assert broker.evaluate(_delta(_session(AgentActivityState.BLOCKED, questions=(q1,)))) == []
     assert broker.evaluate(_delta(_session(AgentActivityState.BLOCKED, questions=(q1,)))) == []
+
+
+def test_a_question_on_a_session_first_seen_by_a_WARM_broker_fires() -> None:
+    """The new-workspace case, and the counterpart to the restart guard above.
+
+    `grove create --initial-prompt …` boots an agent that reads its task and
+    asks something inside the first activity tick. That session is unseen for
+    the same reason a pre-restart session is unseen, so seeding on "unseen
+    alone" swallowed the push exactly when the human was most blocked. Once the
+    broker is warm, an unseen session is genuinely new and its first question
+    is owed.
+    """
+    clock = {"t": T0}
+    broker = _broker(clock=lambda: clock["t"], warmup=timedelta(seconds=5))
+    # Any first fold opens the warm-up window; this one is a different session.
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING, sid="pre-existing")))
+    clock["t"] = T0 + timedelta(seconds=30)
+
+    out = broker.evaluate(
+        _delta(_session(AgentActivityState.BLOCKED, sid="brand-new", questions=(_question("q1"),)))
+    )
+
+    assert len(out) == 1
+    assert out[0].trigger == "question"
+
+
+def test_a_cold_broker_stays_silent_for_every_session_it_meets_at_once() -> None:
+    """A restart with a fleet of open questions pushes nothing, however many
+    workspaces arrive — the guard is the broker's own warm-up, so it covers
+    sessions it has never met rather than only the first one."""
+    broker = _broker(warmup=timedelta(seconds=5))  # clock frozen at T0 → always cold
+    out = [
+        broker.evaluate(
+            _delta(
+                _session(AgentActivityState.BLOCKED, sid=sid, questions=(_question(f"q-{sid}"),))
+            )
+        )
+        for sid in ("s1", "s2", "s3")
+    ]
+    assert out == [[], [], []]
 
 
 def test_answered_question_never_fires() -> None:
@@ -568,7 +730,7 @@ def test_bind_delivers_edge_through_the_dispatch_pool() -> None:
     channel via the dispatch worker, and ``close`` unsubscribes + stops it."""
     bus = _FakeBus()
     channel = _CapturingChannel()
-    broker = NotificationBroker(channels=[channel], clock=lambda: T0)
+    broker = NotificationBroker(channels=[channel], clock=lambda: T0, waiting_quiet=timedelta(0))
     broker.bind(bus.subscribe)  # type: ignore[arg-type]
     try:
         assert callable(bus.callback)
@@ -907,7 +1069,22 @@ def test_default_deep_link_base_is_the_local_webapp() -> None:
 
 
 def test_a_default_config_broker_produces_a_tappable_link() -> None:
-    """End to end through the factory: default config in, deep link out."""
+    """End to end through the factory: default config in, deep link out.
+
+    Driven by a QUESTION rather than a WAITING edge, and the difference is the
+    whole point of `waiting_quiet_minutes`. A default-config broker deliberately
+    does NOT push the instant a turn stops generating — it waits out the quiet
+    window first, because "the top-level turn ended" is not "the work is done"
+    while a backgrounded shell command Grove cannot see may still be running. A
+    question is the one trigger exempt from both the debounce and that window,
+    so it is the only edge that fires immediately under real defaults, which is
+    exactly why it is the right one to prove the link through the factory.
+
+    The seeding delta is not ceremony: `from_config` injects no clock, so the
+    broker is genuinely COLD, and a cold broker treats the first question it
+    ever sees on a session as one that predates it (the daemon-restart guard).
+    Seeding the session first is what makes the second delta a real edge.
+    """
     cfg = GroveConfig(
         notifications={  # type: ignore[arg-type]
             "enabled": True,
@@ -916,8 +1093,10 @@ def test_a_default_config_broker_produces_a_tappable_link() -> None:
     ).notifications
     broker = NotificationBroker.from_config(cfg)
     assert broker is not None
-    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))
-    out = broker.evaluate(_delta(_session(AgentActivityState.WAITING)))
+    broker.evaluate(_delta(_session(AgentActivityState.WORKING)))  # seed
+    out = broker.evaluate(
+        _delta(_session(AgentActivityState.WORKING, questions=(_question("q1"),)))
+    )
     assert out[0].deep_link == "http://localhost:3000/w/ws1"
 
 

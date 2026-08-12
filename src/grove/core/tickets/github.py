@@ -60,6 +60,7 @@ class GitHubProvider(NumberTicketProvider):
     builtin_prefixes: ClassVar[tuple[str, ...]] = ("gh",)
     comments_supported: ClassVar[bool] = True
     assignees_supported: ClassVar[bool] = True
+    body_supported: ClassVar[bool] = True
     branch_view_segment: ClassVar[str] = "tree"
     viewer_path: ClassVar[str] = "/user"
 
@@ -140,10 +141,41 @@ class GitHubProvider(NumberTicketProvider):
             comments=tuple(self.list_comments(ticket_id)),
         )
 
+    # ─── body read/write ────────────────────────────────────────────────────
+
+    def read_body(self, ticket_id: str) -> str:
+        owner, repo = self._scoped("read a ticket body")
+        payload = self._request("GET", f"/repos/{owner}/{repo}/issues/{ticket_id}")
+        if not isinstance(payload, dict):
+            raise TicketProviderError(f"github returned an unexpected shape for issue {ticket_id}")
+        return str(payload.get("body") or "")
+
+    def update_body(self, ticket_id: str, body: str) -> None:
+        owner, repo = self._scoped("update a ticket body")
+        self._request(
+            "PATCH", f"/repos/{owner}/{repo}/issues/{ticket_id}", json_body={"body": body}
+        )
+
     # ─── assignee writes (one additive round-trip; no read needed) ───────────
 
-    def assign_self(self, ticket_id: str) -> None:
+    def assign_self(self, ticket_id: str) -> bool:
+        """Add the bot, and report whether THIS call is what added it.
+
+        The additive endpoint answers with the issue, not with what changed, so
+        the "was it already there" fact has to come from a read — one this arm
+        would not otherwise make. It is worth the round-trip because the caller
+        uses the answer to decide whether it may later UNASSIGN: without it,
+        Grove cannot tell its own assignment from a human's and would eventually
+        undo somebody else's.
+        """
+        owner, repo = self._scoped("change assignees")
+        login = self.viewer_login()
+        payload = self._request("GET", f"/repos/{owner}/{repo}/issues/{ticket_id}")
+        already = isinstance(payload, dict) and login in self.assignee_logins(payload)
+        if already:
+            return False
         self._assignees(ticket_id, "POST")
+        return True
 
     def unassign_self(self, ticket_id: str) -> None:
         self._assignees(ticket_id, "DELETE")

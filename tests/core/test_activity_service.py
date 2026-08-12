@@ -20,14 +20,23 @@ import pytest
 
 from grove.core import paths as core_paths
 from grove.core import tmux
-from grove.core.activity import ActivityService, DashboardDelta, SessionActivity, WorkspaceActivity
-from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
+from grove.core.activity import (
+    ActivityService,
+    DashboardDelta,
+    FleetSummary,
+    SessionActivity,
+    WorkspaceActivity,
+    _token_classes_of,
+)
+from grove.core.agents import AgentActivity, AgentActivityState, AgentMessage, AgentSession
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
-from grove.core.agents.hook import ClaudeHook
+from grove.core.agents.hook import ClaudeHook, SubagentHookRecord
+from grove.core.agents.model import TokenUsage
 from grove.core.config import GroveConfig, load_config
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.usage import DurationView, TokenClassesView
 from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
@@ -2116,3 +2125,292 @@ def test_a_repo_that_becomes_readable_is_picked_up_without_a_restart(
 
     healed = service.snapshot()
     assert healed.projects[0].error is None
+
+
+# ─── sub-agent fleet: hook-pushed, live before any sidechain transcript ─────
+
+
+def _fleet_record(agent_id: str, *, state: AgentActivityState, now: datetime) -> SubagentHookRecord:
+    return SubagentHookRecord(
+        session_id="s",
+        agent_id=agent_id,
+        agent_type="general-purpose",
+        state=state,
+        event="SubagentStart",
+        started_at=now,
+        last_event_at=now,
+    )
+
+
+def test_fleet_summary_from_records_counts_by_state() -> None:
+    now = datetime.now(tz=UTC)
+    working = _fleet_record("a-1", state=AgentActivityState.WORKING, now=now)
+    waiting = _fleet_record("a-2", state=AgentActivityState.WAITING, now=now)
+
+    summary = FleetSummary.from_records([working, waiting])
+
+    assert summary is not None
+    assert summary.active == 1
+    assert summary.total == 2
+
+
+def test_fleet_summary_from_records_is_none_for_an_empty_fleet() -> None:
+    """ "Never spawned a sub-agent" is a different fact than "every sub-agent
+    already finished" — only the first collapses to `None` (the same
+    absence-is-not-a-value rule `TodoProgress.from_todo` follows)."""
+    assert FleetSummary.from_records([]) is None
+
+
+def test_workspace_activity_fleet_is_none_with_no_subagents(
+    env: tuple[ActivityService, RepoRegistry],
+    tmp_path: Path,
+) -> None:
+    service, registry = env
+    repo = _init_repo(tmp_path / "repo")
+    registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="no-fleet"))
+
+    row = service.snapshot().projects[0].workspaces[0]
+
+    assert row.fleet is None
+
+
+def test_workspace_activity_fleet_reflects_live_hook_pushes(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The gap this whole feature closes: a sub-agent is visible on the
+    dashboard from its `SubagentStart` push, before its own sidechain
+    transcript file necessarily exists — never via the transcript-ordering
+    hack."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="fleet"))
+    now = datetime.now(tz=UTC)
+
+    for agent_id in ("a-1", "a-2"):
+        ClaudeHook.record_event(
+            {
+                "hook_event_name": "SubagentStart",
+                "session_id": state.agent_session_id,
+                "agent_id": agent_id,
+                "agent_type": "general-purpose",
+            },
+            sidecar_dir=sidecar_dir,
+            tmux_pane=None,
+            now=now,
+        )
+    ClaudeHook.record_event(
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": state.agent_session_id,
+            "agent_id": "a-2",
+            "agent_type": "general-purpose",
+            "last_assistant_message": "done",
+        },
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=now + timedelta(seconds=5),
+    )
+
+    row = service.snapshot().projects[0].workspaces[0]
+
+    assert row.fleet is not None
+    assert row.fleet.total == 2
+    assert row.fleet.active == 1  # a-1 still running, a-2 stopped
+
+    view = DashboardSnapshotView.from_snapshot(service.snapshot())
+    fleet_view = view.projects[0].workspaces[0].fleet
+    assert fleet_view is not None
+    assert fleet_view.active == 1
+    assert fleet_view.total == 2
+
+
+def test_workspace_activity_fleet_is_none_for_a_non_claude_kind(
+    env: tuple[ActivityService, RepoRegistry],
+    tmp_path: Path,
+) -> None:
+    """No other kind's hook payload carries `agent_id` today, so the fleet
+    axis stays honestly empty for a `shell`/generic workspace rather than
+    reaching for a directory listing nothing will ever populate."""
+    service, registry = env
+    repo = _init_repo(tmp_path / "repo")
+    registry.get(repo).create(CreateWorkspaceRequest(agent_name="shell", title="not-claude"))
+
+    row = service.snapshot().projects[0].workspaces[0]
+
+    assert row.fleet is None
+
+
+# ─── session duration: the per-tick cost gate ────────────────────────────────
+
+
+class _FakeMessageAdapter:
+    """A minimal stand-in for the one method `_session_spine_facts` calls.
+
+    Controls the message COUNT `read_messages` reports, so the cache's proxy
+    for "did this session's spine change" can be driven directly without a
+    real transcript. `reads` is what pins the ONE-read rule: three reductions
+    over one spine must not cost three reads.
+    """
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+        self.reads = 0
+
+    def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
+        del cwd, session_id
+        self.reads += 1
+        # Real `AgentMessage`s, not bare ints. Each reduction used to be
+        # exercised alone with the other two patched out, so a placeholder
+        # sufficed; one read now feeds all three, and an unpatched reduction
+        # walking a placeholder raises. The count — the thing the memo keys
+        # on — is unchanged.
+        return tuple(AgentMessage(role="user") for _ in range(self.count))
+
+
+def test_spine_facts_recompute_only_when_message_count_changes(
+    env: tuple[ActivityService, RepoRegistry], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The measured cost gate: `duration_of` is a pure reduction with no
+    memoization of its own — on the largest real transcript measured
+    (33MB/9566 messages) it costs ~30ms EVERY call, against `parse_activity`'s
+    ~5ms warm-cache hit the same tick already pays. `_session_spine_facts` keys
+    a process-lifetime cache on message COUNT (transcripts are append-only, so
+    count is a cheap monotonic proxy for "did the spine change") rather than
+    re-running the reductions every tick. This pins that an unchanged count is
+    a cache hit — no reduction at all — and a grown count recomputes."""
+    service, _ = env
+    calls = 0
+
+    def fake_duration_of(messages: object) -> DurationView:
+        nonlocal calls
+        calls += 1
+        return DurationView(confidence="derived")
+
+    monkeypatch.setattr("grove.core.activity.duration_of", fake_duration_of)
+    adapter = _FakeMessageAdapter(count=3)
+    cwd = tmp_path / "repo"
+
+    first = service._session_spine_facts(adapter, cwd, "s1")
+    assert first is not None
+    assert calls == 1
+
+    second = service._session_spine_facts(adapter, cwd, "s1")
+    assert calls == 1  # unchanged message count: cache hit, no re-reduction
+    assert second is first  # the exact cached object, not merely an equal one
+
+    adapter.count = 5
+    third = service._session_spine_facts(adapter, cwd, "s1")
+    assert calls == 2  # grew: recomputed
+    assert third is not first
+
+
+def test_one_tick_reads_the_message_spine_exactly_once(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    """Three reductions, ONE read — the regression this collapse exists for.
+
+    Duration, token classes and the model-wait average each arrived as their
+    own method with its own memo, and each re-called `read_messages`. That call
+    is memoized to a `stat` on an unchanged transcript so it is cheap, but at a
+    measured 3.5ms warm on this host's largest transcript it is not free: the
+    tick paid ~10.5ms per session where 3.5ms would do, three times the
+    `parse_activity` yardstick this file's guidance names. A count assertion
+    catches a fourth reduction re-introducing the same cost; a timing one could
+    not.
+    """
+    service, _ = env
+    adapter = _FakeMessageAdapter(count=3)
+
+    facts = service._session_spine_facts(adapter, tmp_path, "s1")
+
+    assert adapter.reads == 1
+    assert facts is not None
+    # All three reductions really were produced from that single read.
+    assert facts.duration is not None
+    assert facts.tokens is not None
+    assert facts.latency is not None
+
+
+def test_spine_facts_degrade_to_none_on_a_read_failure(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    """Best-effort like every other read on this tick: a session Grove could
+    not measure reports `None` ("not measured"), never a raised exception that
+    would break the whole snapshot for one bad session. The whole triple goes,
+    because one failed read is what produced all three."""
+    service, _ = env
+
+    class _BrokenAdapter:
+        def read_messages(self, cwd: Path, session_id: str) -> tuple[int, ...]:
+            raise OSError("transcript vanished")
+
+    assert service._session_spine_facts(_BrokenAdapter(), tmp_path, "s1") is None
+
+
+# ─── session token classes: the reduction, and the per-tick cost gate ────────
+
+
+def test_token_classes_of_sums_each_class_apart() -> None:
+    """The pure reduction the live poll uses to unfold `tokens_in`: each class
+    summed independently across the message spine, never folded together the
+    way `AgentActivity.tokens_in` is by design."""
+    messages = (
+        AgentMessage(role="assistant", usage=TokenUsage(input=10, cache_read=200, output=5)),
+        AgentMessage(role="assistant", usage=TokenUsage(input=20, cache_read=300, output=7)),
+        AgentMessage(role="user"),  # no usage: contributes nothing
+    )
+
+    view = _token_classes_of(messages)
+
+    assert view.fresh_input == 30
+    assert view.cache_read == 500
+    assert view.output == 12
+    assert view.cache_creation is None  # never reported by any message: absent, not 0
+
+
+def test_token_classes_of_a_class_no_message_reported_stays_none() -> None:
+    """An absent count is never fabricated as zero, per class — independent
+    of whatever the other classes measured."""
+    messages = (AgentMessage(role="assistant", usage=TokenUsage(input=10)),)
+
+    view = _token_classes_of(messages)
+
+    assert view.fresh_input == 10
+    assert view.cache_read is None
+    assert view.reasoning is None
+
+
+def test_the_token_class_reduction_shares_the_one_spine_memo(
+    env: tuple[ActivityService, RepoRegistry], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The class reduction is cheaper than `duration_of` (no interval merge,
+    just a handful of `sum()` passes) but still not free every tick — and it is
+    now gated by the SAME memo, so an unchanged count skips all three
+    reductions together rather than each keeping its own bookkeeping."""
+    service, _ = env
+    calls = 0
+
+    def fake_token_classes_of(messages: object) -> TokenClassesView:
+        nonlocal calls
+        calls += 1
+        return TokenClassesView(fresh_input=1)
+
+    monkeypatch.setattr("grove.core.activity._token_classes_of", fake_token_classes_of)
+    adapter = _FakeMessageAdapter(count=3)
+    cwd = tmp_path / "repo"
+
+    first = service._session_spine_facts(adapter, cwd, "s1")
+    assert first is not None
+    assert first.tokens.fresh_input == 1
+    assert calls == 1
+
+    assert service._session_spine_facts(adapter, cwd, "s1") is first
+    assert calls == 1  # unchanged message count: cache hit, no re-reduction
+
+    adapter.count = 5
+    assert service._session_spine_facts(adapter, cwd, "s1") is not first
+    assert calls == 2  # grew: recomputed

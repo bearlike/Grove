@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import os
 import platform
 import socket
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, NamedTuple
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -23,13 +24,19 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from grove import __version__ as _GROVE_VERSION
+from grove.core import paths as core_paths
 from grove.core.activity import ActivityService
-from grove.core.agents import get_adapter, resolve_models
-from grove.core.agents.hook import HOOK_INGEST_ROUTE
+from grove.core.agents import SessionTurn, get_adapter, resolve_models
+from grove.core.agents.hook import HOOK_INGEST_ROUTE, ClaudeHook
 from grove.core.auth import SessionStore
 from grove.core.config import GroveConfig, load_config
 from grove.core.container_infra import ProjectInfra
-from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
+from grove.core.contracts.activity import (
+    DashboardEvent,
+    DashboardSnapshotView,
+    SubagentActivityView,
+    SubagentFleetView,
+)
 from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.issueops import IssueOpsEvent, IssueOpsOutcome
@@ -37,11 +44,13 @@ from grove.core.contracts.phase import PhaseView, SetPhaseRequest
 from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import (
+    QueuedMessageView,
     RemapSessionRequest,
     SessionControlsView,
     SessionDetailView,
     SessionSummaryView,
     TodoListView,
+    WorkspaceQueueView,
 )
 from grove.core.contracts.tickets import (
     TicketProviderName,
@@ -56,6 +65,7 @@ from grove.core.contracts.views import (
     ProjectView,
     ProvisionProgressView,
     WhoamiView,
+    WorkspaceDiffView,
     WorkspacePaneView,
     WorkspacePeekView,
     WorkspaceStateView,
@@ -77,6 +87,7 @@ from grove.core.errors import (
     SteeringUnsupported,
     TicketLinkAmbiguous,
     TicketLinkError,
+    TicketNotAttached,
     TicketProviderError,
     TicketProviderNotConfigured,
     TicketPullRequestsUnsupported,
@@ -89,6 +100,7 @@ from grove.core.notifications import NotificationBroker
 from grove.core.release import ReleaseChecker, ReleaseStatus
 from grove.core.sessions import SessionCatalog, SessionExplorer, SessionListing
 from grove.core.store import JsonWorkspaceStore
+from grove.core.trace_forwarder import TraceForwarder
 from grove.daemon._audience import _PollAudience
 from grove.daemon._catalog import _CatalogMemo
 from grove.daemon._lifecycle import _LifecycleRunner
@@ -97,6 +109,15 @@ from grove.daemon._poll_coalescer import _PollCoalescer
 from grove.daemon._sse import _SseHub
 from grove.daemon.auth import build_auth_router, make_require_hook_token, make_require_session
 from grove.daemon.repos import RepoRegistry
+from grove.daemon.usage import _default_usage_service, build_usage_router
+
+if TYPE_CHECKING:
+    # Type-only: the real import is deferred into `build_app`, gated on
+    # `cfg.telemetry.receiver.enabled` — see the construction site for why an
+    # unconditional module-scope import is wrong here (unlike `trace_forwarder`,
+    # importing `grove.core.telemetry.receiver` unconditionally pulls in
+    # `opentelemetry-proto` even for a daemon that never turns the receiver on).
+    from grove.core.telemetry.receiver import OtlpIngest
 
 # How often the lifespan task recomputes activity and emits ``session_activity``
 # deltas. Transcript/pane changes aren't lifecycle events, so this poll is what
@@ -105,16 +126,40 @@ from grove.daemon.repos import RepoRegistry
 _POLL_INTERVAL_SECONDS = 2.0
 
 
-def _build_whoami(started_at: datetime, release: ReleaseStatus) -> WhoamiView:
+def _close_best_effort(name: str, close: Callable[[], None]) -> None:
+    """Run one shutdown hook without preventing independent owners from closing."""
+    try:
+        close()
+    except Exception as exc:
+        logger.warning("{} shutdown failed: {}", name, type(exc).__name__)
+
+
+async def _aclose_best_effort(name: str, aclose: Callable[[], Awaitable[None]]) -> None:
+    """Async sibling of :func:`_close_best_effort`, for a coroutine ``close``.
+
+    Kept separate rather than a sync/async branch inside one function: a
+    coroutine handed to the sync version would be built and discarded without
+    ever being awaited — closing nothing while looking wired.
+    """
+    try:
+        await aclose()
+    except Exception as exc:
+        logger.warning("{} shutdown failed: {}", name, type(exc).__name__)
+
+
+def _build_whoami(
+    started_at: datetime, release: ReleaseStatus, *, langfuse_host: str | None = None
+) -> WhoamiView:
     """Snapshot the daemon's identity + uptime + release skew.
 
     Pure: reads stdlib state at call time (``socket.gethostname``,
-    ``getpass.getuser``, ``platform.*``), takes ``started_at`` and the
-    pre-resolved ``release`` status as input so tests can pin both
-    deterministically. ``int(...)`` truncates rather than rounds — uptime is a
-    coarse signal, sub-second precision is noise. ``release`` is resolved off
-    the loop (executor) at the route edge; mapping it here keeps this builder
-    free of I/O.
+    ``getpass.getuser``, ``platform.*``), takes ``started_at``, the
+    pre-resolved ``release`` status and the pre-resolved ``langfuse_host`` as
+    input so tests can pin all three deterministically. ``int(...)`` truncates
+    rather than rounds — uptime is a coarse signal, sub-second precision is
+    noise. Both ``release`` and ``langfuse_host`` are resolved off the loop
+    (executor) at the route edge; mapping them here keeps this builder free
+    of I/O.
     """
     now = datetime.now(UTC)
     return WhoamiView(
@@ -127,7 +172,29 @@ def _build_whoami(started_at: datetime, release: ReleaseStatus) -> WhoamiView:
         python_version=platform.python_version(),
         latest_version=release.latest,
         update_available=release.update_available,
+        langfuse_host=langfuse_host,
     )
+
+
+def _resolve_langfuse_host(cfg: GroveConfig) -> str | None:
+    """The Langfuse UI host, only when a real launch would also export there.
+
+    Reuses the exact resolution ``grove doctor``'s telemetry check performs
+    (:mod:`grove.core.preflight`) — ``derive_env`` then ``unresolved`` — so a
+    host name only reaches the wire once host/public/secret ALL resolve.
+    Reporting the host alone (partial credentials) would render a button that
+    opens Langfuse for a deployment that never actually exports a trace there.
+    Best-effort like every other telemetry read on this path: an unusable
+    ``env_file`` degrades to ``None`` (already logged by ``derive_env``),
+    never raises into the route.
+    """
+    telemetry = cfg.telemetry
+    if not telemetry.enabled:
+        return None
+    derived = telemetry.derive_env(os.environ)
+    if telemetry.unresolved(derived):
+        return None
+    return derived.get("LANGFUSE_HOST")
 
 
 class _PauseBody(BaseModel):
@@ -263,6 +330,53 @@ def _sse_frame(event: DashboardEvent) -> str:
     return f"{id_line}event: {event.kind}\ndata: {event.model_dump_json()}\n\n"
 
 
+class _TurnWindow(NamedTuple):
+    """Which slice of a session's turns one response carries, and why."""
+
+    turns: tuple[SessionTurn, ...]
+    total: int
+    first_index: int
+    incremental: bool
+
+
+def _turn_window(
+    turns: tuple[SessionTurn, ...], *, last: int | None, after_turn: int | None
+) -> _TurnWindow:
+    """Resolve the requested window over a session's complete turn list.
+
+    ``after_turn`` is INCLUSIVE of its own index, and that is the whole answer to
+    the tail-mutation problem: turns are append-*mostly*, not append-only — the
+    last turn keeps growing as the agent streams parts and resolves tool calls,
+    while every earlier one is frozen (measured on a live session: 6 of 7 turns
+    byte-identical over 45 s, only the tail moved). An exclusive cursor would
+    freeze a half-finished turn on screen for the rest of the session, so the
+    client's last-known turn is always re-sent and it replaces from
+    ``first_index`` rather than blindly appending.
+
+    A cursor STRICTLY BEYOND the end is the GAP: the session now holds fewer
+    turns than the client claims to have seen, so the transcript was replaced
+    or forked under the reader, ordinals no longer mean what the client thinks,
+    and the honest answer is the whole session with ``incremental=False``.
+    Fail-safe by construction — anything this cannot prove it can serve
+    incrementally comes back whole, mirroring ``_SseHub.can_replay``'s fall
+    back to a full snapshot.
+
+    ``after_turn == total`` is deliberately NOT a gap but an empty incremental
+    window: the client is exactly up to date, and answering a one-off-by-one
+    cursor with the entire session would make the common "nothing happened"
+    tick the most expensive request on the route.
+    """
+    total = len(turns)
+    if after_turn is not None:
+        if after_turn > total:
+            return _TurnWindow(turns, total, 0, False)
+        return _TurnWindow(turns[after_turn:], total, after_turn, True)
+    if last is not None:
+        start = max(total - last, 0)
+        return _TurnWindow(turns[start:], total, start, False)
+    return _TurnWindow(turns, total, 0, False)
+
+
 def _parse_last_event_id(raw: str | None) -> int | None:
     """Parse the ``Last-Event-ID`` header to an int seq, tolerating junk → ``None``."""
     if not raw:
@@ -350,6 +464,7 @@ def build_app(  # noqa: PLR0915
         on_project_registered=ProjectInfra.registration_hook(cfg),
     )
     activity_service = ActivityService(registry=registry)
+    usage_service = _default_usage_service(cfg=cfg, registry=registry)
     # Host-wide session catalog, request-scoped behind a short TTL — never
     # polled, never per-row (see `_catalog.py`). Shared by the host-scoped
     # listing and its drill-in so the pair costs one scan.
@@ -390,6 +505,15 @@ def build_app(  # noqa: PLR0915
     # somebody else's tracker and spawn real agents.
     if assignee_poller is None:
         assignee_poller = AssigneePoller.from_config(cfg.issueops, registry=registry)
+    # Assignment is edge-triggered as well as polled, and BOTH go through the
+    # poller so there is exactly ONE ownership memo. The publisher assigns as it
+    # upserts a sticky comment — the moment a ticket is deterministically known
+    # to be Grove's work — instead of waiting up to a poll interval; the poller
+    # still sweeps, which is what releases an assignment when the workspace ends.
+    # Wired here rather than in `from_config` because it is the daemon that holds
+    # both objects, and `core` must not have the publisher import the poller.
+    if status_publisher is not None and assignee_poller is not None:
+        status_publisher.set_assigner(assignee_poller.assign_now)
     # Every lifecycle verb (create/pause/resume/respawn/kill) goes through this
     # one seam instead of reaching for a raw executor handle: it owns the
     # dedicated bounded pool AND the per-workspace serialization the event loop
@@ -416,13 +540,36 @@ def build_app(  # noqa: PLR0915
     # Same config flag, a DIFFERENT mechanism: the hook-ingest route
     # can't ask a human to approve a pairing challenge (see `make_require_hook_token`).
     require_hook_token = make_require_hook_token(enabled=cfg.auth.enabled)
+    # The OTLP/HTTP receiver — `grove.core.telemetry.receiver`, built and tested
+    # but never mounted until now. Off by default (`cfg.telemetry.receiver.enabled`),
+    # and the import is deliberately INSIDE this branch: the module imports
+    # `opentelemetry-proto` at its own module scope (unlike `trace.py`/
+    # `trace_forwarder.py`, which import OTel lazily so `grove.core` stays
+    # importable without the `telemetry` extra), so an unconditional top-level
+    # import here would make that extra mandatory for every `[daemon]`-only
+    # install, receiver on or off. With it off, nothing below this branch runs
+    # and the app is byte-identical to before this route existed.
+    otlp_ingest: OtlpIngest | None = None
+    if cfg.telemetry.receiver.enabled:
+        from grove.core.telemetry.receiver import OtlpIngest as _OtlpIngest  # noqa: PLC0415
+
+        otlp_ingest = _OtlpIngest(
+            queue_capacity=cfg.telemetry.receiver.queue_capacity,
+            workers=cfg.telemetry.receiver.workers,
+        )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
+        # Statement count grows linearly with subscriber/owner count (bind on
+        # entry, close in `finally`) — the same justification `build_app`
+        # itself already carries the identical suppression for.
         app.state.registry = registry
         app.state.auth_store = auth_store
         app.state.activity = activity_service
+        app.state.usage = usage_service
         app.state.sse_hub = sse_hub
+        if otlp_ingest is not None:
+            app.state.otlp_ingest = otlp_ingest
         # Captured once at lifespan-entry — every ``/whoami`` request
         # diffs against this to compute uptime. UTC throughout so the
         # subtraction is timezone-correct regardless of the host's
@@ -452,6 +599,29 @@ def build_app(  # noqa: PLR0915
             status_publisher.bind(activity_service.subscribe)
             audience.join()
             app.state.status_publisher = status_publisher
+        # The trace forwarder is the bus's fourth subscriber. It DOES
+        # `audience.join()`, on the notification broker's argument rather than
+        # by copying its line: it consumes deltas, so an unjoined forwarder is
+        # subscribed to a bus that stops ticking the moment the last dashboard
+        # closes — and a fleet running unattended overnight is exactly the run
+        # whose trace someone reads the next morning. The cost is stated plainly:
+        # a daemon with telemetry configured polls the fleet continuously, the
+        # same bargain notifications and issue-ops already make. `None` when
+        # telemetry is off or its credentials did not resolve, so a disabled
+        # forwarder is indistinguishable from an absent one.
+        # `pricing` is what makes a replayed generation carry `cost_details`.
+        # Passed HERE because this is the only composition point holding both
+        # halves — the telemetry config and the usage catalog — and a seam
+        # wired everywhere except its one real call site is the failure this
+        # tier already shipped once: fully built, fully tested, and reached by
+        # nothing.
+        trace_forwarder = TraceForwarder.from_config(
+            cfg.telemetry, registry=registry, pricing=cfg.usage.pricing
+        )
+        if trace_forwarder is not None:
+            trace_forwarder.bind(activity_service.subscribe)
+            audience.join()
+            app.state.trace_forwarder = trace_forwarder
         # No `audience.join()` here on purpose: the audience gates the ACTIVITY
         # poll, and the assignee poller consumes no deltas — it drives its own
         # timer against the trackers. Joining would make it hold the fleet's
@@ -471,14 +641,23 @@ def build_app(  # noqa: PLR0915
             with suppress(asyncio.CancelledError):
                 await poll_task
             if notification_broker is not None:
-                notification_broker.close()
+                _close_best_effort("notification broker", notification_broker.close)
             if status_publisher is not None:
-                status_publisher.close()
+                _close_best_effort("status publisher", status_publisher.close)
+            if trace_forwarder is not None:
+                _close_best_effort("trace forwarder", trace_forwarder.close)
             if assignee_poller is not None:
-                assignee_poller.close()
-            sse_hub.stop()
-            activity_service.close()
-            lifecycle.shutdown()
+                _close_best_effort("assignee poller", assignee_poller.close)
+            if otlp_ingest is not None:
+                await _aclose_best_effort("otlp ingest", otlp_ingest.aclose)
+            _close_best_effort("session catalog", catalog.close)
+            _close_best_effort("SSE hub", sse_hub.stop)
+            _close_best_effort("activity service", activity_service.close)
+            try:
+                await asyncio.to_thread(usage_service.close)
+            except Exception as exc:
+                logger.warning("usage service shutdown failed: {}", type(exc).__name__)
+            _close_best_effort("lifecycle", lifecycle.shutdown)
 
     app = FastAPI(
         title="Grove daemon",
@@ -490,9 +669,34 @@ def build_app(  # noqa: PLR0915
         lifespan=lifespan,
     )
 
+    if otlp_ingest is not None:
+        # A MOUNT, never routes re-declared here: `build_receiver_app` is what
+        # keeps the receiver a separately-runnable ASGI app (the standalone
+        # deployment gets that for free) — re-registering its routes on `app`
+        # would forfeit it for good. **Unauthenticated on purpose:** the daemon
+        # binds loopback only, which is the same load-bearing constraint that
+        # already defers auth on every other route (see `daemon/CLAUDE.md`) —
+        # the agents posting OTLP here are local processes with no daemon
+        # session token, so `auth_dep` would make the mount unusable for the
+        # only callers it has. A mounted sub-app's OWN lifespan never runs
+        # (`_asgi.py`), which is why draining happens from THIS app's
+        # `lifespan` above instead, on `otlp_ingest` directly.
+        from grove.core.telemetry.receiver import build_receiver_app  # noqa: PLC0415
+
+        app.mount(cfg.telemetry.receiver.path, build_receiver_app(ingest=otlp_ingest))
+
     # Pairing + sessions router. Mounts before the gated routes so its own
     # per-route auth decisions stay local to ``build_auth_router``.
     app.include_router(build_auth_router(auth_store=auth_store, require_session=require_session))
+
+    # The historical usage-audit router — bounded reads over the SQLite cache,
+    # the past-tense sibling of `/activity` + `/events` above. Auth is applied
+    # HERE at inclusion (like every other gated route) rather than inside the
+    # router, which is what keeps this a two-line integration.
+    app.include_router(
+        build_usage_router(cfg=cfg, registry=registry, usage_service=usage_service),
+        dependencies=auth_dep,
+    )
 
     def _grove_error_to_http(exc: GroveError) -> HTTPException:
         """Translate engine error subclasses to RFC-shaped HTTP errors.
@@ -549,6 +753,11 @@ def build_app(  # noqa: PLR0915
             # TicketProviderError, so order between them is immaterial.
             TicketProviderNotConfigured: (404, "ticket_provider_not_configured"),
             TicketProviderError: (502, "ticket_provider_error"),
+            # A per-ticket phase claim (`POST .../phase` with `ticket=`) named
+            # a key the workspace has no ref for. 404, mirroring
+            # AgentSessionNotFound: well-formed request, and the fix (attach
+            # that ticket first) is a state change the client can make.
+            TicketNotAttached: (404, "ticket_not_attached"),
             # Human-typed ticket references (`ref`, workspace-links story).
             # TicketLinkAmbiguous MUST precede its parent TicketLinkError — the
             # map is a linear isinstance scan, same rule as BranchError above.
@@ -682,9 +891,12 @@ def build_app(  # noqa: PLR0915
         hours, so this is a no-op cache read on all but the occasional refresh
         tick — and a refresh's blocking GitHub GET runs off the event loop,
         never stalling the handler (best-effort, like every other side effect).
+        The Langfuse host resolution can read an ``env_file`` off disk, so it
+        rides the executor too.
         """
         release = await asyncio.to_thread(release_checker.check)
-        return _build_whoami(app.state.started_at, release)
+        langfuse_host = await asyncio.to_thread(_resolve_langfuse_host, cfg)
+        return _build_whoami(app.state.started_at, release, langfuse_host=langfuse_host)
 
     @app.get("/activity", response_model=DashboardSnapshotView, dependencies=auth_dep)
     async def activity() -> DashboardSnapshotView:
@@ -1265,19 +1477,32 @@ def build_app(  # noqa: PLR0915
         response_model=list[CommitSummaryView],
         dependencies=auth_dep,
     )
-    async def workspace_commits(ws_id: str) -> list[CommitSummaryView]:
-        """Comprehensive branch history (``git log base..branch``).
+    async def workspace_commits(
+        ws_id: str,
+        limit: Annotated[int | None, Query(ge=1, le=1000)] = None,
+    ) -> list[CommitSummaryView]:
+        """Every commit made in this workspace since it was created, newest first.
 
-        Distinct from ``peek.recent_commits`` which is a tight 3-row
-        rail summary walking all of branch history. This route returns
-        every commit done in the workspace since fork from base, newest
-        first, uncapped — the detail-page consumer wants the full log.
+        The range is anchored on the commit Grove recorded at create time, not
+        on the base branch — so a workspace running on the repo root, whose
+        branch *is* its base branch, reports its work instead of an empty list,
+        and a base branch that moves on afterwards does not change the answer.
+        Distinct from ``peek.recent_commits``, a tight 3-row rail summary
+        walking all of branch history.
         Best-effort like peek; never raises, returns ``[]`` on failure. The
         ``git log`` walk is blocking, so it runs in the executor.
+
+        ``limit`` is OPT-IN and the default stays uncapped, deliberately. The
+        response is a bare array with nowhere to say "there are more", so a
+        default cap would be exactly the silent truncation this parameter
+        exists to avoid — three shipped consumers read it as the complete log.
+        A client that wants lazy loading asks for a page; measured at ~186 B
+        per commit, so a 1000-commit branch is ~190 KB.
         """
         mgr = _manager_for(ws_id)
         commits = await asyncio.to_thread(mgr.commits, ws_id)
-        return [CommitSummaryView.from_summary(c) for c in commits]
+        rows = [CommitSummaryView.from_summary(c) for c in commits]
+        return rows if limit is None else rows[:limit]
 
     @app.get(
         "/workspaces/{ws_id}/sessions",
@@ -1313,6 +1538,43 @@ def build_app(  # noqa: PLR0915
         return [SessionSummaryView.from_listing(ls) for ls in listings[:limit]]
 
     @app.get(
+        "/workspaces/{ws_id}/diff",
+        response_model=WorkspaceDiffView,
+        dependencies=auth_dep,
+    )
+    async def workspace_diff(
+        ws_id: str,
+        path: Annotated[str | None, Query()] = None,
+    ) -> WorkspaceDiffView:
+        """Every file this workspace has changed, as one RAW unified patch.
+
+        Straight from `git diff`, never parsed — the clients render the format
+        directly, so the daemon's whole job here is running git and bounding
+        the output. Binary files arrive as git's own `Binary files … differ`
+        line rather than being filtered.
+
+        **Scope is the worktree against the commit Grove recorded when the
+        workspace was created, including untracked files** — so work the agent
+        has already committed stays in the patch, and a workspace running on
+        the repo root (where the committed-vs-base stats are always zero) has
+        an answer at all. A workspace created before Grove recorded that anchor
+        falls back to uncommitted-only. `peek`'s `dirty_files` is deliberately
+        the narrower *uncommitted* count and will read lower once anything has
+        been committed.
+
+        `available: false` with a `reason` means git could not answer (no repo,
+        a paused workspace whose worktree is gone) and the UI owes helper text;
+        an empty `patch` with `available: true` is the ordinary "nothing
+        changed". Bounded to 1 MB, cut at a whole-file boundary so the result
+        stays parseable, with `truncated` saying so — `?path=` fetches one
+        file's hunks rather than raising the cap. Best-effort like peek; the
+        blocking `git diff` runs in the executor.
+        """
+        mgr = _manager_for(ws_id)
+        diff = await asyncio.to_thread(mgr.working_diff, ws_id, path=path)
+        return WorkspaceDiffView.from_diff(diff)
+
+    @app.get(
         "/workspaces/{ws_id}/sessions/{session_id}/turns",
         response_model=SessionDetailView,
         dependencies=auth_dep,
@@ -1321,6 +1583,7 @@ def build_app(  # noqa: PLR0915
         ws_id: str,
         session_id: str,
         last: Annotated[int | None, Query(ge=1)] = None,
+        after_turn: Annotated[int | None, Query(ge=0)] = None,
     ) -> SessionDetailView:
         """The session's conversation, oldest-first; ``last`` keeps only the tail.
 
@@ -1331,7 +1594,27 @@ def build_app(  # noqa: PLR0915
         ``SessionExplorer.subagent_turns`` before the typed 404, so a fleet
         child's transcript stays reachable. 404 ``agent_session_not_found``
         when the id isn't recorded for this workspace either way.
+
+        ``after_turn=<n>`` is the INCREMENTAL read a live follower wants: it
+        returns turn ``n`` onward — inclusive, because the tail turn keeps
+        growing while the agent works — and sets ``incremental: true``. Measured
+        on a live session, a progress tick re-downloaded 426 KB to gain 269 B;
+        the same tick costs 46 KB with a cursor. The response always reports
+        ``total_turns`` and ``first_turn_index``, and **``incremental: false``
+        means the whole session is attached and the client must REPLACE** — a
+        cursor past the end signals a transcript replaced under the reader, so
+        it falls back rather than silently skipping turns. ``after_turn`` and
+        ``last`` are mutually exclusive (422): ``last`` counts from the end, so
+        combining them makes the reported index ambiguous.
         """
+        if last is not None and after_turn is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "invalid_turn_window",
+                    "message": "`last` and `after_turn` are mutually exclusive",
+                },
+            )
         mgr = _manager_for(ws_id)
         explorer = SessionExplorer(mgr)
 
@@ -1340,14 +1623,31 @@ def build_app(  # noqa: PLR0915
             listing: SessionListing | None = next(
                 (ls for ls in listings if ls.summary.session_id == session_id), None
             )
+            # Read the WHOLE list and window here rather than pushing `last`
+            # down: the adapter memoizes per `last`, so a client alternating
+            # between a tail and a cursor would hold two projections of one
+            # parse, and only the complete list can report an honest
+            # `total_turns`.
             if listing is not None:
+                window = _turn_window(explorer.turns_for(listing), last=last, after_turn=after_turn)
                 return SessionDetailView.from_listing_turns(
-                    listing, explorer.turns_for(listing, last=last)
+                    listing,
+                    window.turns,
+                    total_turns=window.total,
+                    first_turn_index=window.first_index,
+                    incremental=window.incremental,
                 )
-            fallback = explorer.subagent_turns(ws_id, session_id, last=last)
+            fallback = explorer.subagent_turns(ws_id, session_id)
             if fallback is not None:
                 fleet_listing, turns = fallback
-                return SessionDetailView.from_listing_turns(fleet_listing, turns)
+                window = _turn_window(turns, last=last, after_turn=after_turn)
+                return SessionDetailView.from_listing_turns(
+                    fleet_listing,
+                    window.turns,
+                    total_turns=window.total,
+                    first_turn_index=window.first_index,
+                    incremental=window.incremental,
+                )
             raise AgentSessionNotFound(
                 f"no session {session_id!r} recorded for workspace {ws_id!r}"
             )
@@ -1380,6 +1680,85 @@ def build_app(  # noqa: PLR0915
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
         return TodoListView.from_todo(todo) if todo is not None else TodoListView()
+
+    @app.get(
+        "/workspaces/{ws_id}/queue",
+        response_model=WorkspaceQueueView,
+        dependencies=auth_dep,
+    )
+    async def workspace_queue(ws_id: str) -> WorkspaceQueueView:
+        """What the agent's HARNESS is holding but has not delivered yet.
+
+        The ``/todo`` route's sibling in shape, cost and refusal. Fetch-on-demand
+        because a queue is unbounded where the ~1 Hz stream must stay small (the
+        stream carries only the count); resolved through
+        ``WorkspaceManager.pending_queue``, whose session resolution is
+        ``_todo_session_id`` and NOT ``agent_session_id`` — keying on the mint
+        excludes codex by construction, which is the bug ``/todo`` already
+        documents. Off the loop: the claude arm folds a transcript and the codex
+        arm opens a sqlite store.
+
+        404 ``agent_session_not_found`` when the workspace has no session at
+        all; a session with an empty queue is a real 200. ``supported`` is the
+        third answer the route must keep distinct — a harness whose queue Grove
+        cannot observe reports ``supported=False`` with no messages, so a client
+        renders "no idea" rather than "nothing waiting".
+        """
+        mgr = _manager_for(ws_id)
+
+        def _read() -> WorkspaceQueueView:
+            # Both halves off the loop: `pending_queue` folds a transcript or
+            # opens a sqlite store, and resolving the kind reads the store and
+            # reconciles (which for a container workspace reaches `docker`).
+            queued = mgr.pending_queue(ws_id)
+            supported = get_adapter(mgr.effective_kind(mgr.get(ws_id))).reports_queue
+            return WorkspaceQueueView(
+                messages=tuple(QueuedMessageView.from_message(m) for m in queued),
+                supported=supported,
+            )
+
+        try:
+            return await asyncio.to_thread(_read)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/workspaces/{ws_id}/fleet",
+        response_model=SubagentFleetView,
+        dependencies=auth_dep,
+    )
+    async def workspace_fleet(ws_id: str) -> SubagentFleetView:
+        """The workspace's live sub-agent roster, full detail.
+
+        The ``/todo``/``/queue`` sibling: a fleet is unbounded in count exactly
+        like a checklist or a message queue, so only counts ride the ~1 Hz
+        stream (``WorkspaceActivityView.fleet``) and the roster itself is
+        fetch-on-demand. Sourced from the Claude Code hook's per-
+        ``(session_id, agent_id)`` sidecar (``ClaudeHook.list_subagents``) — a
+        handful of small file reads, never a transcript parse — so this is
+        claude_code-only (no other kind's hook payload carries ``agent_id``
+        today). Unlike ``/todo``, a workspace of another kind or one with no
+        minted session answers an EMPTY roster rather than 404: "no sub-agents"
+        is a real, common answer for a session that never spawned one, not a
+        missing-session refusal.
+        """
+        mgr = _manager_for(ws_id)
+
+        def _read() -> SubagentFleetView:
+            state = mgr.get(ws_id)
+            if mgr.effective_kind(state) != "claude_code" or not state.agent_session_id:
+                return SubagentFleetView(subagents=[])
+            records = ClaudeHook.list_subagents(
+                state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+            )
+            return SubagentFleetView(
+                subagents=[SubagentActivityView.from_record(r) for r in records]
+            )
+
+        try:
+            return await asyncio.to_thread(_read)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
 
     @app.get(
         "/workspaces/{ws_id}/provision",
@@ -1424,10 +1803,24 @@ def build_app(  # noqa: PLR0915
         for a human or an orchestrator to set/correct the claim, mirroring
         ``remap_workspace_session``'s trusted-write shape. Runs in the
         executor: ``WorkspaceManager.set_phase`` does blocking file I/O.
+
+        ``body.ticket`` (``"<provider>:<id>"``) routes the claim onto that
+        ticket's entry and leaves the workspace's own claim alone, mirroring
+        ``PhaseFile.write``'s split; naming a ticket the workspace has no ref
+        for raises ``TicketNotAttached`` from the engine, which rides the same
+        typed ``GroveError`` envelope as every other refusal here (404
+        ``ticket_not_attached``) rather than an unhandled 500.
         """
         mgr = _manager_for(ws_id)
         try:
-            report = await asyncio.to_thread(mgr.set_phase, ws_id, body.phase, body.note)
+            report = await asyncio.to_thread(
+                mgr.set_phase,
+                ws_id,
+                body.phase,
+                body.note,
+                blocked=body.blocked,
+                ticket=body.ticket,
+            )
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
         return PhaseView.from_report(report)
@@ -1484,6 +1877,12 @@ def build_app(  # noqa: PLR0915
         """
         if repo is None:
             rows = await asyncio.to_thread(catalog.rows)
+            # The one trigger for the turn-count pass, and it returns at once:
+            # counting is a full transcript parse per changed session, so it
+            # runs on the catalog's own worker and this response ships whatever
+            # was already counted. A cold host answers every `turn_count` null
+            # and fills in over the following scans.
+            catalog.count_turns_in_background()
             return [SessionSummaryView.from_catalog(e) for e in rows[:limit]]
         explorer = SessionExplorer(registry.get(_known_root(repo)))
         try:
@@ -1531,8 +1930,21 @@ def build_app(  # noqa: PLR0915
                 raise AgentSessionNotFound(
                     f"no {kind!r} session {session_id!r} recorded under {cwd}"
                 )
-            turns = get_adapter(kind).read_turns(Path(cwd), session_id, last=last)
-            return SessionDetailView.from_catalog_turns(entry, turns)
+            # No `after_turn` here on purpose: this route browses HISTORY (a
+            # session that may belong to no workspace and mostly is not
+            # running), so nothing follows a growing tail. It still reports the
+            # window it served, so `last` stops being a silent truncation.
+            window = _turn_window(
+                get_adapter(kind).read_turns(Path(cwd), session_id),
+                last=last,
+                after_turn=None,
+            )
+            return SessionDetailView.from_catalog_turns(
+                entry,
+                window.turns,
+                total_turns=window.total,
+                first_turn_index=window.first_index,
+            )
 
         try:
             return await asyncio.to_thread(_read)

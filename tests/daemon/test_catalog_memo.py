@@ -9,6 +9,8 @@ without any filesystem.
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,15 +36,27 @@ def _entry(session_id: str, *, kind: str = "claude_code", cwd: str | None = "/w"
 
 
 class _CountingCatalog:
-    """Records how many real scans the memo let through."""
+    """Records how many real scans (and turn-count passes) the memo let through."""
 
     def __init__(self, rows: tuple[CatalogEntry, ...]) -> None:
         self.rows = rows
         self.scans = 0
+        self.counted = 0
+        self.release = threading.Event()
+        self.entered = threading.Event()
 
     def scan(self, *, limit: int | None = None) -> tuple[CatalogEntry, ...]:
         self.scans += 1
         return self.rows if limit is None else self.rows[:limit]
+
+    def count_turns(
+        self, entries: Sequence[CatalogEntry], *, stop: Callable[[], bool] | None = None
+    ) -> int:
+        del entries, stop
+        self.counted += 1
+        self.entered.set()
+        self.release.wait(timeout=5)
+        return 1
 
 
 class _Clock:
@@ -116,3 +130,45 @@ def test_find_never_matches_a_row_that_recorded_no_cwd() -> None:
     memo = _memo(catalog, _Clock())
 
     assert memo.find(kind="claude_code", cwd="/w", session_id="a") is None
+
+
+def test_the_turn_count_pass_is_single_flight_and_never_blocks_the_scan() -> None:
+    """Counting is a full transcript parse per changed session, so a second
+    request must not queue a second pass over the same files — and neither
+    request may wait for one."""
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog, _Clock())
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+        assert catalog.entered.wait(timeout=5)
+        memo.count_turns_in_background()  # returns at once; joins nothing
+        memo.count_turns_in_background()
+        assert catalog.counted == 1
+    finally:
+        catalog.release.set()
+        memo.close()
+
+
+def test_close_stops_scheduling_and_does_not_wait_for_a_pass_in_flight() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog, _Clock())
+    memo.rows()
+
+    memo.close()  # would hang here if shutdown waited on the blocked pass
+    memo.count_turns_in_background()
+
+    assert catalog.counted == 0
+    catalog.release.set()
+
+
+def test_nothing_is_scheduled_before_a_scan_has_produced_rows() -> None:
+    """The pass exists to serve a listing somebody asked for; with no rows in
+    hand there is nothing to count and no request to have prompted it."""
+    catalog = _CountingCatalog(())
+    memo = _memo(catalog, _Clock())
+    try:
+        memo.count_turns_in_background()
+        assert catalog.counted == 0
+    finally:
+        memo.close()

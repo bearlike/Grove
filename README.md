@@ -12,11 +12,13 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
+<p align="center"><strong>Supports Codex and Claude Code.</strong></p>
+
 ## 🌳 Overview
 
-Writing the code stopped being the slow part. Deciding what to build did. More agents would help, but two in one checkout overwrite each other's files and fight over the same branch. Grove gives each an isolated **workspace** and touches nothing about the agent itself. One worktree, one branch, one window. Add a [container](https://bearlike.github.io/Grove/latest/features-containers/) and it gets a whole stack of its own, so permissions off risks a sandbox and not your machine.
+Writing the code stopped being the slow part. Deciding what to build did. More agents would help, but two in one checkout overwrite each other's files and fight over the same branch. Grove gives each an isolated **workspace** and touches nothing about the agent itself. One worktree, one branch, one window. Add a [container](https://bearlike.github.io/Grove/latest/features-containers/) and it gets a whole stack of its own, prefabricated from your repo and identical anywhere, so permissions off risks a sandbox and not your machine.
 
-Then work arrives on its own. Assign an issue on Linear, GitHub or Gitea and a workspace starts against it, using that issue as its spec. It reports back on [the same ticket](https://bearlike.github.io/Grove/latest/issue-ops/), so nobody reads code to follow along. Shape the next one. Review what came back. Unblock what stalled. You stop writing the code. You do not stop owning it.
+Then work arrives on its own. Assign an issue on Linear, GitHub or Gitea and a workspace starts against it, using that issue as its spec. It reports its phase back on [the same ticket](https://bearlike.github.io/Grove/latest/issue-ops/), so one glance says what is moving, what needs you and what it cost, without anyone reading code to follow along. Shape the next one. Review what came back. Unblock what stalled. You stop writing the code. You do not stop owning it.
 
 ## ✨ Features
 
@@ -40,7 +42,7 @@ Grove is a terminal program first. Run `grove` in a repo and create, attach, pau
 
 ### Containerized agents
 
-Optionally, run agents inside devcontainers. This gives each agent a complete stack of its own, Docker in Docker, so it starts its own database and services without touching yours. It comes up out of your project's `.devcontainer/`, under resource ceilings it cannot spend past. `--runtime host` keeps any workspace on your machine.
+Optionally, run agents inside devcontainers. Each gets a complete stack of its own, Docker in Docker, so it starts its own database and services without touching yours. It comes up out of your project's `.devcontainer/`, under resource and egress ceilings that bound both what an agent can reach and what it can spend.
 
 [Docs →](https://bearlike.github.io/Grove/latest/features-containers/)
 
@@ -66,15 +68,15 @@ Grove ships an MCP server. Claude Code, Codex, OpenCode and other orchestrators 
 <tr>
 <td width="50%" valign="middle">
 
-### A web IDE for your agents
+### The whole fleet in your browser
 
-Reach the whole fleet over your network. A session rail lists every agent thread by recency, and the landing is a composer, so a prompt spins up a workspace. Pair a device once and the daemon stays loopback.
+Reach every agent over your network to read a transcript, steer a run mid-flight, or spin up a workspace from the fleet grid, all behind a one-time device pairing that keeps the daemon on loopback.
 
 [Docs →](https://bearlike.github.io/Grove/latest/use-webapp/)
 
 </td>
 <td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-home.png" alt="Grove's web IDE: a session rail listing every agent thread on the left, a composer at the center to start a workspace, on a dark space-black canvas" width="100%" /></a>
+  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-fleet-workspace.gif" alt="Grove's web dashboard alternating between two views: a flat, attention-sorted grid of workspace cards beside a session rail, and a single workspace showing its agent transcript next to the work panel" width="100%" /></a>
 </td>
 </tr>
 <tr>
@@ -91,6 +93,20 @@ Every ticket a Grove workspace works gets one comment, rewritten in place as the
   <a href="https://bearlike.github.io/Grove/latest/features-ticket-providers/"><img src="docs/img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue, showing a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done" width="100%" /></a>
 </td>
 </tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Audit and tune the whole fleet
+
+Agents now act on staging and production unattended, and off-the-shelf harnesses leave no record you can hold them to. Grove turns each turn into one trace, so a team can see what ran where, what it cost, and which tool calls are eating the time. Point it at Langfuse or any OTLP backend.
+
+[Docs →](https://bearlike.github.io/Grove/latest/features-telemetry/)
+
+</td>
+<td width="50%">
+  <a href="https://bearlike.github.io/Grove/latest/features-telemetry/"><img src="docs/img/screenshots/telemetry-trace.png" alt="One Claude Code turn as a Langfuse trace: an agent-turn root with cost and duration, nested model generations, and a span for each Bash, Skill, WebFetch and WebSearch call, with GenAI and Grove attributes on the selected span" width="100%" /></a>
+</td>
+</tr>
 </table>
 
 **Also in the box:**
@@ -101,6 +117,9 @@ Every ticket a Grove workspace works gets one comment, rewritten in place as the
 - **[Session recovery](https://bearlike.github.io/Grove/latest/features-workspace-lifecycle/).** Grove pane-verifies each agent session and re-adopts it across daemon restarts and a different user attaching. A stale pointer remaps to the recovered session in a click.
 - **[Ticket providers](https://bearlike.github.io/Grove/latest/features-ticket-providers/).** Attach a GitHub, Gitea or Linear issue or pull request to a workspace, or let Grove read the link straight off the branch name so it follows the branch.
 - **[Push notifications](https://bearlike.github.io/Grove/latest/features-notifications/).** Get pinged when an agent finishes a turn or needs you.
+- **[Subscription windows](https://bearlike.github.io/Grove/latest/use-webapp/).** Every plan's usage, reset and burn rate in one place, with a forecast of which limit you hit first.
+- **[Usage trends](https://bearlike.github.io/Grove/latest/use-webapp/).** A year of tokens by day, cost and latency per model, and where the time goes across agents and projects.
+- **[Local by default](https://bearlike.github.io/Grove/latest/features-telemetry/).** The audit is projected from transcripts on your own disk. Export is opt-in, and prompt bodies stay off unless you enable them.
 
 https://github.com/user-attachments/assets/256714c5-37e5-4c9d-8b2d-47422d5aae0f
 

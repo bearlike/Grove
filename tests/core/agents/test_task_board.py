@@ -19,7 +19,7 @@ only place the assigned id appears.
 
 from __future__ import annotations
 
-from grove.core.agents import TASK_TOOL_NAMES, TaskBoard, TodoItem
+from grove.core.agents import TASK_TOOL_NAMES, TaskBoard, TodoItem, ToolOutcome
 from grove.core.agents.model import ContentBlock
 
 
@@ -142,14 +142,14 @@ def test_task_tool_names_covers_exactly_create_and_update() -> None:
 
 def test_apply_taskcreate_resolves_the_id_from_its_own_tool_result() -> None:
     board = TaskBoard()
-    answered = {"tc1": "Task #1 created successfully: Fix the bug"}
+    outcomes = {"tc1": ToolOutcome(text="Task #1 created successfully: Fix the bug")}
     block = ContentBlock(
         type="tool_use",
         tool_name="TaskCreate",
         tool_use_id="tc1",
         tool_input={"subject": "Fix the bug"},
     )
-    assert board.apply("TaskCreate", block, answered) is True
+    assert board.apply("TaskCreate", block, outcomes) is True
     assert board.snapshot().items[0].content == "Fix the bug"
 
 

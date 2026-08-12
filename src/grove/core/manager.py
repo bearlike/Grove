@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
@@ -30,6 +31,7 @@ from grove.core.agents import (
     AgentAdapter,
     AgentQuestion,
     AnswerSelection,
+    QueuedMessage,
     SessionControls,
     TodoList,
     all_adapters,
@@ -67,6 +69,7 @@ from grove.core.errors import (
     QuestionNotPending,
     ResumeNotSupported,
     SteeringUnsupported,
+    TicketNotAttached,
     TmuxError,
     WorkspaceNotFound,
     WorkspaceStateError,
@@ -80,6 +83,7 @@ from grove.core.launch import (
     TmuxLaunchBackend,
 )
 from grove.core.mewbo import MewboClient
+from grove.core.otel_resource import compose_resource_attributes
 from grove.core.phase import PhaseFile, PhaseReport, TaskPhase
 from grove.core.preflight import HostPreflight
 from grove.core.runtime import ContainerProvisioner, RuntimeDecision, RuntimeResolver
@@ -95,6 +99,7 @@ from grove.core.workspace import (
     ProvisionStatus,
     Runtime,
     TranscriptContext,
+    WorkspaceDiff,
     WorkspaceIdentity,
     WorkspacePeek,
     WorkspaceState,
@@ -161,6 +166,37 @@ _CONTROL_KINDS: frozenset[str] = frozenset({"claude_code", "codex"})
 # `resume_session_id` for anything outside this set before any side effect.
 # frozenset[str] (not AgentKind) — matched against `agent.kind`.
 _RESUMABLE_KINDS: frozenset[str] = frozenset(a.kind for a in all_adapters() if a.resumable)
+
+
+# Byte ceiling on one working-tree patch. Generous rather than tuned: the
+# failure it prevents is a multi-MB body reaching a browser, and the escape
+# hatch for a genuinely large tree is the per-file form, not a bigger number.
+WORKING_DIFF_MAX_BYTES = 1_000_000
+
+# Git writes exactly one of these per file, at the start of a line. Used ONLY to
+# find a safe cut point and to count what was returned — never to parse a patch
+# into a model, which is the renderer's job.
+_FILE_PATCH_HEADER = re.compile(r"(?m)^diff --git ")
+
+
+def _split_file_patches(patch: str) -> list[str]:
+    """Split a multi-file unified diff into one string per file, order preserved.
+
+    **Contiguous slices, so `"".join(...)` reproduces the input byte for byte** —
+    that is what makes a truncated patch a pure PREFIX of git's own output
+    rather than a rewrite of it. A `split()` on the header would drop the
+    newline that separates two files and silently corrupt every multi-file
+    patch, which is the whole reason this indexes instead.
+
+    Anything before the first header rides with the first chunk rather than
+    being dropped; git emits nothing there today, and dropping bytes is exactly
+    the failure this shape exists to make impossible.
+    """
+    starts = [m.start() for m in _FILE_PATCH_HEADER.finditer(patch)]
+    if not starts:
+        return [patch] if patch else []
+    bounds = starts if starts[0] == 0 else [0, *starts]
+    return [patch[a:b] for a, b in zip(bounds, [*bounds[1:], len(patch)], strict=True)]
 
 
 class _Unset:
@@ -912,6 +948,16 @@ class WorkspaceManager:
         # there is no base, so we fall back to "HEAD" — peek tolerates
         # a missing-base (returns zeros) when the branch and base agree.
         base_for_peek = resolved.base_ref or resolved.tracks or "HEAD"
+        # The creation anchor, resolved from the plan's own START POINT — which
+        # is a different ref from `base_for_peek` in exactly the two cases that
+        # made the old math degenerate. A CHECKOUT starts at the attached
+        # branch's own tip (not the repo root's HEAD), and root placement starts
+        # at live HEAD, which `branch` already holds (`current_branch()`, or the
+        # literal "HEAD" for a detached checkout). Resolved here, before any side
+        # effect: every ref named is one `_validate_branch_plan` just proved
+        # exists, and the new branch does not exist yet. `None` (an empty repo,
+        # an unreadable git) is recorded as None rather than guessed.
+        base_commit = self._git.rev_parse(resolved.base_ref or resolved.tracks or branch)
         # Description normalizes empty string → None so the wire and disk
         # values agree on a single representation of "no description".
         description = (request.description or "").strip() or None
@@ -926,6 +972,7 @@ class WorkspaceManager:
             repo_root=str(self._repo_root),
             branch=branch,
             base_branch=base_for_peek,
+            base_commit=base_commit,
             worktree_path=str(worktree),
             tmux_session=session,
             agent_name=request.agent_name,
@@ -1638,6 +1685,13 @@ class WorkspaceManager:
         (title/status) is the daemon's on-demand fetch, never persisted here, so
         attach stays pure and offline-safe. Permitted in any status except
         ORPHANED (same gate as ``update`` — a doomed record gains nothing).
+
+        Seeds the phase file with an entry for the newly attached key
+        (:meth:`PhaseFile.seed`, best-effort) right after the store save, so an
+        agent that attaches a ticket mid-task finds the key already there
+        instead of composing it. Deliberately NOT mirrored on
+        :meth:`detach_ticket` — see that method's docstring, and
+        :meth:`PhaseFile.seed`'s, for why a detached entry is left standing.
         """
         persisted = self._store.get(workspace_id)
         ensure_can_update(self._reconcile_status(persisted))
@@ -1645,12 +1699,14 @@ class WorkspaceManager:
         matched = [r for r in persisted.ticket_refs if (r.provider, r.id) == key]
         if matched and all(r.kind == selector.kind for r in matched):
             return persisted
+        new_ref = TicketRef(provider=selector.provider, id=selector.id, kind=selector.kind)
         new_refs = [
             *(r for r in persisted.ticket_refs if (r.provider, r.id) != key),
-            TicketRef(provider=selector.provider, id=selector.id, kind=selector.kind),
+            new_ref,
         ]
         new_state = _replace(persisted, updated_at=_utcnow(), ticket_refs=new_refs)
         self._store.save(new_state)
+        PhaseFile.seed(new_state.worktree_path, PhaseFile.key_for(new_state.id), [new_ref.key])
         self._emit(
             "updated",
             new_state.id,
@@ -2435,6 +2491,52 @@ class WorkspaceManager:
         with self.transcript_scope(state):
             return adapter.latest_todo(state.transcript_scan_cwds[0], session_id)
 
+    def pending_queue(self, workspace_id: str) -> tuple[QueuedMessage, ...]:
+        """What the harness is holding for this workspace but has not delivered
+        — the engine seam ``GET /workspaces/{id}/queue`` reads.
+
+        The :meth:`latest_todo` sibling in every respect that matters, and for
+        the same reasons. Resolution is :meth:`_todo_session_id`, NOT
+        ``agent_session_id``: codex mints no id at all and a rotated claude id
+        is a dead pointer, so keying on the mint would exclude a whole provider
+        by construction — the exact bug the todo route already documents.
+        ``AgentSessionNotFound`` is raised only when neither the mint nor
+        discovery names a session, so a caller that NAMED a workspace can tell
+        404 from "a session exists and nothing is queued" (an empty tuple, a
+        real answer). The adapter read stays best-effort on its own.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        session_id = self._todo_session_id(state)
+        if not session_id:
+            raise AgentSessionNotFound(f"workspace {state.id} has no recorded agent session")
+        return self.pending_queue_for(state, session_id=session_id)
+
+    def pending_queue_for(
+        self, state: WorkspaceState, *, session_id: str | None = None
+    ) -> tuple[QueuedMessage, ...]:
+        """:meth:`pending_queue` for a state a caller ALREADY holds reconciled —
+        the :meth:`latest_todo_for` split, for the identical reason.
+
+        Degrades to ``()`` for a sessionless workspace rather than raising (the
+        404-vs-empty distinction is the *id* seam's contract), does NO discovery
+        of its own (a scan per workspace per ~1 Hz tick is the daemon-CPU bug the
+        transcript cache exists to prevent), and reads
+        ``transcript_scan_cwds[0]`` because a filesystem adapter resolves a
+        session by globbing its id — and because the codex arm ignores ``cwd``
+        outright, its queue being keyed by thread id in a config-root-global
+        store.
+
+        Scoped, like every adapter read here: an unscoped read on a
+        profile-pinned workspace resolves the wrong config dir and answers
+        empty, which on this axis is indistinguishable from "nothing queued".
+        """
+        session_id = session_id or state.agent_session_id
+        if not session_id:
+            return ()
+        adapter = get_adapter(self.effective_kind(state))
+        with self.transcript_scope(state):
+            return adapter.pending_queue(state.transcript_scan_cwds[0], session_id)
+
     def latest_task(self, workspace_id: str) -> str | None:
         """The workspace's current task text, UNCAPPED — the engine seam the
         issueops sticky-comment publisher reads in-process.
@@ -2528,15 +2630,33 @@ class WorkspaceManager:
         return self.phase_for(self._store.get(workspace_id))
 
     def set_phase(
-        self, workspace_id: str, phase: TaskPhase, note: str | None = None
+        self,
+        workspace_id: str,
+        phase: TaskPhase,
+        note: str | None = None,
+        *,
+        blocked: bool = False,
+        ticket: str | None = None,
     ) -> PhaseReport:
-        """Record a phase claim for a workspace — the CLI verb / MCP tool seam.
+        """Record a phase claim for a workspace, or for one of its tickets —
+        the CLI verb / MCP tool seam.
 
         The in-workspace agent never comes through here; it writes the file
         directly (that is the whole point of the file channel). This is for an
-        orchestrator or a human setting or correcting a workspace's phase from
-        outside, so it is LOUD where :meth:`phase_for` is best-effort — a caller
-        that asked to write is entitled to know it did not happen.
+        orchestrator or a human setting or correcting a claim from outside, so
+        it is LOUD where :meth:`phase_for` is best-effort — a caller that asked
+        to write is entitled to know it did not happen.
+
+        ``ticket``, when given, MUST be one of ``state.ticket_refs``' own
+        ``.key`` — never validated against free text, because a key this
+        workspace never attached would seed a per-ticket claim the store, the
+        sticky publisher and every other joiner can never reach. Checked
+        against a FRESH read of the store (never a caller-cached list), so a
+        detach that raced this call is honoured rather than silently
+        overwritten. Raises :class:`TicketNotAttached`, naming both the
+        rejected key and the workspace's actual attached keys, before touching
+        the file. Omit it to set the workspace's own claim, unchanged from
+        before.
 
         No event is emitted: the phase is derived per poll tick from the file
         rather than persisted on the record, so the existing
@@ -2545,7 +2665,21 @@ class WorkspaceManager:
         a record that does not carry the phase at all.
         """
         state = self._store.get(workspace_id)
-        return PhaseFile.write(state.worktree_path, PhaseFile.key_for(state.id), phase, note)
+        if ticket is not None:
+            attached = {ref.key for ref in state.ticket_refs}
+            if ticket not in attached:
+                raise TicketNotAttached(
+                    f"ticket {ticket!r} is not attached to workspace {workspace_id!r}; "
+                    f"attached: {', '.join(sorted(attached)) or 'none'}"
+                )
+        return PhaseFile.write(
+            state.worktree_path,
+            PhaseFile.key_for(state.id),
+            phase,
+            note,
+            blocked=blocked,
+            ticket=ticket,
+        )
 
     def invoke_control(self, workspace_id: str, name: str) -> None:
         """Invoke a named session control — a slash command or a skill.
@@ -2784,7 +2918,7 @@ class WorkspaceManager:
 
         try:
             ahead, behind = self._git.ahead_behind(state.branch, state.base_branch)
-            added, removed = self._git.diff_stats(state.branch, state.base_branch)
+            added, removed = self._git.diff_stats(state.branch, state.diff_base)
             commits = self._git.recent_commits(state.branch, limit=3)
         except Exception as exc:  # peek is best-effort; never raise
             logger.debug("peek({}) git stats failed: {}", workspace_id, exc)
@@ -2814,10 +2948,42 @@ class WorkspaceManager:
     def commits(self, workspace_id: str) -> tuple[CommitSummary, ...]:
         """Comprehensive commit history for a workspace, newest first.
 
-        ``git log base..branch`` — every commit done in this workspace
-        since the branch diverged from ``base_branch``. Distinct from
-        ``peek.recent_commits`` which walks all of branch history (no
-        fork-point filter) and is capped at 3 for the TUI's tight rail.
+        ``git log <diff_base>..branch`` — every commit made in this workspace
+        since it was created. The anchor is the commit recorded at create
+        (``WorkspaceState.diff_base``), NOT the base branch: for a ROOT
+        workspace the branch and the base branch are the same ref, so the
+        branch-derived range collapsed to empty however much work was done.
+        Distinct from ``peek.recent_commits`` which walks all of branch history
+        (no fork-point filter) and is capped at 3 for the TUI's tight rail.
+
+        **A record with no recorded anchor is answered by TIME, not by a ref.**
+        ``diff_base``'s fallback is `base_branch`, and this is the one consumer
+        for which that degradation does not survive contact with ROOT placement:
+        a root workspace's `base_branch` is the literal ``"HEAD"``, so the range
+        collapses to empty however much work happened, and the card then prints
+        a confident false claim ("no commits on this branch yet") rather than a
+        degraded one. Reproduced on this repo's own root workspace: **0 commits
+        from the ref range against 106 from the ``--since`` form**. So a null
+        anchor takes ``branch_commits_since(branch, created_at)`` — a recorded
+        fact answering a different, well-posed question — and the answer says
+        which question it was via `CommitScope`, because the count errs high.
+        With an anchor present nothing changes: `diff_base` IS `base_commit`
+        there, so the call is byte-identical to what it always was.
+
+        A merge-base backfill stays refused, for the reason this module already
+        records: it would be indistinguishable on the wire from a recorded fact.
+        A timestamp is not, and never claims to be the anchor.
+
+        **The window is taken only where the ref range CANNOT answer, which is
+        a property of the refs and not of the record's shape.** On a legacy
+        Grove-created branch ``base_branch`` is a real, different ref and the
+        range is exact, so trading it for a window that can over-report would
+        lose precision this method already had. The test is therefore whether
+        the two ends resolve to the same commit — true for root placement (where
+        `base_branch` is the literal ``"HEAD"``), and the one condition under
+        which the answer is *structurally* zero rather than measured. An
+        unresolvable base is degenerate for the same reason: `branch_commits`
+        could only raise on it.
 
         Best-effort: degrades to ``()`` on git failure, mirroring the
         peek-helpers' never-raise contract for read paths. The daemon's
@@ -2827,10 +2993,113 @@ class WorkspaceManager:
         """
         state = self._reconcile_status(self._store.get(workspace_id))
         try:
-            return self._git.branch_commits(state.branch, state.base_branch)
+            if state.base_commit is None and self._range_is_degenerate(state):
+                return self._git.branch_commits_since(state.branch, state.created_at)
+            return self._git.branch_commits(state.branch, state.diff_base)
         except Exception as exc:
             logger.debug("commits({}) git failed: {}", workspace_id, exc)
             return ()
+
+    def _range_is_degenerate(self, state: WorkspaceState) -> bool:
+        """Whether ``diff_base..branch`` can only ever be empty, refs aside.
+
+        Two ends that resolve to one commit describe an empty range by
+        construction, so a zero from it is a property of the record rather than
+        a measurement of the work. That is the single condition under which
+        `commits` prefers a time window — narrower than "has no anchor", which
+        would also demote the legacy records whose `base_branch` is exact.
+
+        An unresolvable end counts as degenerate: `branch_commits` has nothing
+        to walk from there either.
+        """
+        base = self._git.rev_parse(state.diff_base)
+        return base is None or base == self._git.rev_parse(state.branch)
+
+    def working_diff(
+        self,
+        workspace_id: str,
+        *,
+        path: str | None = None,
+        max_bytes: int = WORKING_DIFF_MAX_BYTES,
+    ) -> WorkspaceDiff:
+        """Every file this workspace has changed since it was created.
+
+        **Scope is the worktree against the recorded creation anchor
+        (``WorkspaceState.base_commit``), INCLUDING untracked files** — so a
+        file the agent committed an hour ago is still in the answer. Anchoring
+        on `HEAD` instead made the patch go blank the moment the agent
+        committed, which is precisely when a reviewer wants it, and it is the
+        *only* axis a ROOT workspace has: there the branch IS the base branch,
+        so the committed-vs-base stats collapse to zero.
+
+        The anchor is a fact recorded once, never a range re-derived here — the
+        base branch moving on afterwards must not change what this workspace is
+        credited with. A record written before the anchor existed falls back to
+        `HEAD`, i.e. exactly the historical uncommitted-only patch; that is the
+        honest degradation, not a fabricated baseline. **This is why the patch's
+        file count no longer matches `peek`'s `dirty_files`** once anything has
+        been committed: that counter deliberately stays the *uncommitted* churn
+        signal the activity stream fingerprints.
+
+        Untracked files are appended as individual all-additions patches
+        because `git diff` omits them entirely (see `untracked_patch` for why
+        the index is never touched to get them).
+
+        Bounded by `max_bytes`, cut at a whole-file boundary so the result is
+        always a parseable patch, with `truncated` saying so. A caller wanting
+        one file passes `path` — the per-file form is what lets a client read a
+        big tree one file at a time instead of raising the cap.
+
+        Never raises: an unreadable worktree is `available=False` with a
+        reason, which is a materially different answer from an empty patch.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        worktree = Path(state.worktree_path)
+        if not worktree.exists():
+            return WorkspaceDiff.unavailable("worktree_missing")
+        if GitRepo.detect_root(worktree) is None:
+            return WorkspaceDiff.unavailable("not_a_repo")
+        try:
+            return self._compose_working_diff(
+                worktree, base=state.base_commit or "HEAD", path=path, max_bytes=max_bytes
+            )
+        except Exception as exc:  # a read must never break the caller
+            logger.debug("working_diff({}) failed: {}", workspace_id, exc)
+            return WorkspaceDiff.unavailable("git_failed")
+
+    def _compose_working_diff(
+        self, worktree: Path, *, base: str, path: str | None, max_bytes: int
+    ) -> WorkspaceDiff:
+        """Concatenate the tracked patch and each untracked file's, under the cap.
+
+        The only structure this imposes on git's output is finding the
+        `diff --git ` file headers — a cut point, not a parse. Splitting there
+        is what makes truncation safe; counting them is what makes `files`
+        describe the patch actually returned rather than the one git offered.
+        """
+        chunks: list[str] = []
+        tracked = self._git.tracked_patch(worktree, base=base, path=path)
+        if tracked:
+            chunks.extend(_split_file_patches(tracked))
+        untracked = self._git.untracked_files(worktree)
+        for rel in untracked if path is None else [p for p in untracked if p == path]:
+            chunk = self._git.untracked_patch(worktree, rel)
+            if chunk:
+                chunks.append(chunk)
+
+        kept: list[str] = []
+        size = 0
+        for chunk in chunks:
+            if size + len(chunk) > max_bytes and kept:
+                return WorkspaceDiff(patch="".join(kept), files=len(kept), truncated=True)
+            kept.append(chunk)
+            size += len(chunk)
+        # A single file over the cap is kept WHOLE rather than cut mid-hunk:
+        # the client's remedy is the per-file form, and a corrupt patch would
+        # be worse than a large one.
+        return WorkspaceDiff(
+            patch="".join(kept), files=len(kept), truncated=len(kept) < len(chunks)
+        )
 
     def peek_pane(
         self, workspace_id: str, *, agent: str = ""
@@ -3098,6 +3367,16 @@ class WorkspaceManager:
         # file write, with no `mkdir` step to spend a line of the instructions
         # string on. Best-effort, and free after the first launch.
         PhaseFile.ensure_dir(state.worktree_path)
+        # Seed one entry per already-attached ticket so the agent finds the
+        # keys already there and edits them, rather than composing
+        # `f"{provider}:{id}"` from prose it may have skimmed (PhaseFile.seed).
+        # Best-effort like `ensure_dir` just above — a seed failure costs a
+        # convenience, never the launch.
+        PhaseFile.seed(
+            state.worktree_path,
+            PhaseFile.key_for(state.id),
+            [ref.key for ref in state.ticket_refs],
+        )
         # Before the agent runs, never after: a stale record from the
         # PREVIOUS launch would make the relaunched agent read as dead the
         # instant it started — and `respawn` is the documented remedy for
@@ -3120,13 +3399,24 @@ class WorkspaceManager:
         `decoration` comes from `_compose_launch` + the adapter — this only
         packages the assembled command as structured data for the backend.
         """
+        env = self._launch_env(state, agent)
         return LaunchSpec(
             session_name=state.tmux_session,
             cwd=state.agent_cwd,
             command=agent.command,
             decoration=tuple(decoration),
-            env=self._launch_env(state, agent),
-            env_unset=agent.env_unset,
+            env=env,
+            # The inherited half of the telemetry reservation. `_launch_env`
+            # can only correct what Grove composes, and a pane inherits the
+            # tmux server's environment — the same road `CLAUDE_CONFIG_DIR`
+            # travels — so a reserved name Grove does not set has to be cleared
+            # here or it reaches the agent anyway. Deduped because `env_unset`
+            # renders one `unset` statement per name.
+            env_unset=tuple(
+                dict.fromkeys(
+                    (*agent.env_unset, *self._cfg.telemetry.reserved_unset(agent.kind, env))
+                )
+            ),
             cfg=self._cfg,
             # The worktree ROOT, distinct from the agent cwd for a nested
             # project. Passing the cwd for both collapses every nested project
@@ -3181,35 +3471,94 @@ class WorkspaceManager:
             if agent.kind in self._cfg.telemetry.passthrough_kinds
             else {}
         )
-        if telemetry.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-            telemetry = {**telemetry, **get_adapter(agent.kind).telemetry_env()}
+        # Where Grove owns the content, Grove's replay IS the trace, so the
+        # runtime's own exporter is not switched on beside it — the interim
+        # answer until Grove's OTLP receiver stands in the agent's data path and
+        # can ingest that stream rather than suppress it. The known cost, stated
+        # rather than hidden: Claude Code's beta `llm_request` span is the only
+        # place `ttft_ms` exists — it is in no transcript — so a suppressed
+        # native exporter means no time-to-first-token for that runtime, and a
+        # deployment that needs TTFT more than it needs one tree names the kind
+        # `external` until ingestion lands.
+        if not self._cfg.telemetry.owns_content(agent.kind) and telemetry.get(
+            "OTEL_EXPORTER_OTLP_ENDPOINT"
+        ):
+            # The adapter's switch is a DEFAULT, not an override: it says what
+            # this runtime needs in order to export at all, while the telemetry
+            # env source says what the operator's own working pipeline actually
+            # uses. Merged under, so a deployment that has proved a
+            # configuration keeps it — the adapter turning an exporter back on
+            # here would silently re-point a stream the operator had aimed
+            # somewhere else, which is the one failure this whole seam exists
+            # to stop being possible.
+            telemetry = {**get_adapter(agent.kind).telemetry_env(), **telemetry}
         share = self._share_plan(state, agent)
-        return {
-            # Lowest precedence deliberately: this is a convenience Grove offers
-            # the agent, not an isolation contract like the config-dir pointer
-            # below, so an operator who names it explicitly wins.
-            **self._phase_env(state, agent_slot),
-            **self._brief_env(state, agent),
-            **telemetry,
-            **self._cfg.proxy.proxy_env(agent.kind),
-            # A container's agent inherits no shell, so anything the host
-            # exports for free has to be named. Placed BELOW the share
-            # env deliberately: the share's config-dir pointer is Grove's
-            # isolation contract and a user's dotenv must not be able to
-            # redirect it, while `agent.env` stays the most specific override
-            # and still wins. Empty for a host workspace.
-            **self._container_env(state).values,
-            # The other half of the agent-config share: the provisioner
-            # bind-mounts the host's settings/skills/credentials into Grove's
-            # per-workspace config dir, and this points the agent's own
-            # config-dir env var at it. Mount without env is a share the agent
-            # never looks at; env without mount points it at an empty directory
-            # — so both come from ONE `share_plan` call, never two derivations.
-            # Only for a container workspace: on the host that var would
-            # redirect the agent away from the user's real config.
-            **(dict(share.env) if share is not None else {}),
-            **agent.env,
-        }
+        # Identity stamping, deliberately independent of the telemetry gate
+        # above: it costs nothing when Grove exports nothing itself, and an
+        # agent's own standalone OTel export should still carry it. Merged
+        # with whatever the ambient env already names (never clobbered) —
+        # `compose_resource_attributes` documents the collision rule.
+        # The agent's version can only be answered by the agent, so it is read
+        # here — at the launch boundary, where side effects belong — and handed
+        # to the pure composer. `AgentVersionProbe` memoizes it for the process
+        # lifetime (a new build means a reinstall, which means a new process),
+        # so a fleet of launches costs one bounded subprocess per binary, and a
+        # tool that cannot answer costs an omitted attribute and nothing else.
+        resource_attrs = compose_resource_attributes(
+            state,
+            agent,
+            existing=os.environ.get("OTEL_RESOURCE_ATTRIBUTES"),
+            agent_version=get_adapter(agent.kind).tool_version(agent.command),
+        )
+        resource_env = {"OTEL_RESOURCE_ATTRIBUTES": resource_attrs} if resource_attrs else {}
+        # Grove reserves the telemetry env for the agents it launches, so this
+        # is the one seam where `agent.env` does NOT get the last word. The
+        # decision itself is pure (`TelemetryConfig.reserve`); the two side
+        # effects belong here — reading the environment Grove runs under, and
+        # saying out loud that a destination somebody else configured is being
+        # taken over. A user who wired their own agent telemetry must be told,
+        # once per launch, in a line that names variables and never values.
+        reservation = self._cfg.telemetry.reserve(
+            agent.kind, grove=telemetry, claimed={**os.environ, **agent.env}
+        )
+        if reservation.displaced:
+            logger.warning(
+                "workspace {}: Grove owns the telemetry environment of the agents it "
+                "launches, so {} will not reach {!r} as configured — name the destination "
+                "under telemetry.env_file / telemetry.env_command instead",
+                state.id,
+                ", ".join(f"'{name}'" for name in reservation.displaced),
+                agent.name,
+            )
+        return reservation.apply(
+            {
+                # Lowest precedence deliberately: this is a convenience Grove offers
+                # the agent, not an isolation contract like the config-dir pointer
+                # below, so an operator who names it explicitly wins.
+                **self._phase_env(state, agent_slot),
+                **self._brief_env(state, agent),
+                **telemetry,
+                **resource_env,
+                **self._cfg.proxy.proxy_env(agent.kind),
+                # A container's agent inherits no shell, so anything the host
+                # exports for free has to be named. Placed BELOW the share
+                # env deliberately: the share's config-dir pointer is Grove's
+                # isolation contract and a user's dotenv must not be able to
+                # redirect it, while `agent.env` stays the most specific override
+                # and still wins. Empty for a host workspace.
+                **self._container_env(state).values,
+                # The other half of the agent-config share: the provisioner
+                # bind-mounts the host's settings/skills/credentials into Grove's
+                # per-workspace config dir, and this points the agent's own
+                # config-dir env var at it. Mount without env is a share the agent
+                # never looks at; env without mount points it at an empty directory
+                # — so both come from ONE `share_plan` call, never two derivations.
+                # Only for a container workspace: on the host that var would
+                # redirect the agent away from the user's real config.
+                **(dict(share.env) if share is not None else {}),
+                **agent.env,
+            }
+        )
 
     def _briefed_by_hook(self, state: WorkspaceState, agent: AgentSpec) -> bool:
         """Can THIS launch's hook deliver the first-turn brief?

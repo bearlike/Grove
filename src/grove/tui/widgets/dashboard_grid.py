@@ -45,9 +45,11 @@ from grove.core.agents import AgentActivity, AgentActivityState
 from grove.core.phase import PhaseReport
 from grove.core.workspace import Placement, WorkspaceState
 from grove.tui._status import (
+    BLOCKED_GLYPH,
     agent_state_color,
     agent_state_glyph,
     agent_state_label,
+    blocked_color,
     chrome_color,
     phase_color,
     phase_glyph,
@@ -481,7 +483,9 @@ def _append_identity(
     ``None`` (no report yet) appends nothing, same absence convention as the
     row card. Deliberately no ``N/M`` progress fraction here (unlike the row
     card): the tile is tighter on width and the glyph/color ramp already
-    carries the coarse signal.
+    carries the coarse signal. A blocked claim still appends the trailing
+    ``‼`` flag beside the phase label (never in place of it, same convention
+    as the row card) — the tile is dense, but "stuck" is worth the one glyph.
     """
     text.append(f"{glyph} ", style=f"bold {state_hex}")
     text.append(_trim(s.title, _TITLE_TRIM), style="bold underline")
@@ -516,6 +520,8 @@ def _append_identity(
             f"{phase_glyph(phase.phase)} {phase_label(phase.phase)}",
             style=f"bold {phase_color(phase.phase, dark=dark)}",
         )
+        if phase.blocked:
+            text.append(f" {BLOCKED_GLYPH}", style=f"bold {blocked_color(dark=dark)}")
 
 
 def _summary(primary: AgentActivity | None) -> str | None:

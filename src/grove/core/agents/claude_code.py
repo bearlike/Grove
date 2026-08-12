@@ -40,6 +40,7 @@ from typing import Any
 
 from loguru import logger
 
+from grove.core.agents.base import AgentVersionProbe
 from grove.core.agents.model import (
     TASK_TOOL_NAMES,
     AgentActivity,
@@ -48,6 +49,7 @@ from grove.core.agents.model import (
     AgentQuestion,
     AgentSession,
     AnswerSelection,
+    CompactionBoundary,
     ContentBlock,
     ControlScope,
     DigestEntry,
@@ -55,6 +57,7 @@ from grove.core.agents.model import (
     FinalResult,
     MessageRole,
     OrderedDigest,
+    QueuedMessage,
     SessionControl,
     SessionControls,
     SessionRef,
@@ -63,8 +66,11 @@ from grove.core.agents.model import (
     TaskBoard,
     TodoList,
     TokenUsage,
+    ToolCall,
+    ToolOutcome,
     final_result_from_messages,
     latest_todo_from_messages,
+    tool_outcomes,
 )
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 from grove.core.tmux import SendKey, SendOp
@@ -86,6 +92,22 @@ _NOTIFICATION_MARKER = "<task-notification>"
 # STRING-content line wrapping ``<teammate-message teammate_id="...">``
 # around an embedded JSON payload (e.g. ``{"type":"idle_notification",...}``).
 _TEAMMATE_MESSAGE_MARKER = "<teammate-message"
+
+# A peer relay that arrived through the QUEUE wears a second envelope —
+# ``<agent-message from="...">`` rather than ``<teammate-message teammate_id=…>``
+# (139 of 140 queued peer records on-host; the odd one is bare prose). One
+# concept, two spellings from one provider, so the envelope readers below match
+# either and the CLASSIFICATION never keys on the marker: a queued peer message
+# is identified by ``origin.kind == "peer"``, which the bare-prose one has too.
+_PEER_MESSAGE_MARKER = "<agent-message"
+
+# Both spellings, one reader each. The backreference keeps the closing tag
+# honest, so a body quoting the other tag name cannot split one relay in two.
+_PEER_ENVELOPE_RE = re.compile(
+    r"<(teammate-message|agent-message)\b[^>]*>(.*?)</\1>",
+    re.DOTALL,
+)
+_PEER_SENDER_RE = re.compile(r'(?:teammate_id|from)="([^"]*)"')
 
 _NON_HUMAN_MARKERS: tuple[str, ...] = (
     "<command-name>",
@@ -120,6 +142,38 @@ _ASYNC_ACK_STATUSES = frozenset({"teammate_spawned", "async_launched"})
 # Sentinel model id Claude Code writes for interrupts / synthetic lines; never a
 # real model and never counted toward token usage or the displayed model.
 _SYNTHETIC_MODEL = "<synthetic>"
+
+# The attachment a delivered queued message rides in on, and the ``type`` of the
+# records that mutate the queue itself. Claude Code 2.1.x does NOT write a queued
+# user message as ``type:"user"``: it writes an ``attachment`` whose payload is
+# ``{type:"queued_command", prompt, commandMode, origin:{kind}, timestamp}``,
+# plus ``queue-operation`` records for each enqueue/remove/dequeue/popAll.
+# Measured over the 25 busiest sessions on the reference host: 729 human queued
+# messages, 15 of which ALSO appear as a plain user line — so before this was
+# classified, 97.9 % of everything typed at a busy agent was invisible to every
+# Grove surface.
+_QUEUED_ATTACHMENT = "queued_command"
+_QUEUE_OPERATION_TYPE = "queue-operation"
+
+# ``commandMode`` partitions the queue totally and cleanly (2,526 real records):
+# ``prompt`` + ``origin.kind == "human"`` (1330) is a real user steer;
+# ``task-notification`` (999, and ``origin`` is ABSENT on every one) is a
+# background notice; ``prompt`` + ``origin.kind == "peer"`` (197) is a teammate
+# relay. The last two are the QUEUED forms of records Grove already routes away
+# from the human path, and letting them fall into it inflates ``human_turns``
+# exactly as ``_NON_HUMAN_MARKERS`` exists to prevent.
+_QUEUED_MODE_PROMPT = "prompt"
+_QUEUED_MODE_TASK_NOTIFICATION = "task-notification"
+_QUEUED_ORIGIN_HUMAN = "human"
+_QUEUED_ORIGIN_PEER = "peer"
+
+# Where the fold stamps a queued message's DELIVERY instant. It lives in the raw
+# dict (the one mutable surface a frozen ``_Record`` has — the same place
+# ``absorb_continuation`` writes, and safe for the same reason: every raw dict is
+# private to one fold state) rather than on a field, because the value is not a
+# property of the record. It is a property of the record's POSITION among its
+# neighbours, which only a pass over the whole fold can see.
+_DELIVERED_AT_KEY = "_groveDeliveredAt"
 
 _DIGEST_MAX_ENTRIES = 60
 _DIGEST_TEXT_CAP = 200
@@ -285,6 +339,75 @@ class _ClaudeHome:
         return raw if isinstance(raw, dict) else {}
 
     @classmethod
+    def team_name(cls, paths: Sequence[Path]) -> str | None:
+        """The team this session belongs to, off the first sub-agent sidecar that
+        names one (``teamName``, verified on-host) — ``None`` for a session that
+        spawned none.
+
+        The team is what owns the shared task board, and a session's id is NOT a
+        reliable key for it: the id rotates in place (``/clear``, a fork) while
+        the team — and its board — persist under the id the LEAD started with.
+        NOT compaction, despite the long-standing note here that said so: over
+        36 real compacted transcripts every one carried exactly ONE
+        ``sessionId``, history and all, so a compaction keeps both the id and
+        the file. (``/clear`` was not re-tested and its rotation claim stands
+        unverified either way.) Takes the already-located transcript paths so this costs
+        one ``read`` of a file the fleet reader opens anyway; a main transcript
+        has no sidecar and simply contributes nothing.
+        """
+        for path in paths:
+            name = cls.read_subagent_meta(path).get("teamName")
+            if isinstance(name, str) and name:
+                return name
+        return None
+
+    #: Bound on how many sibling sessions :meth:`resolve_team` will inspect
+    #: before giving up — a filesystem-listing-only fallback, but still one
+    #: worth capping against a cwd with a very long session history.
+    _TEAM_SIBLING_SCAN_LIMIT = 10
+
+    @classmethod
+    def resolve_team(
+        cls, cwd: Path, session_id: str, *, own_paths: Sequence[Path] | None = None
+    ) -> str | None:
+        """:meth:`team_name` widened to the session's SIBLINGS under ``cwd`` —
+        the fix for a session whose id just rotated (``/clear``, a fork — not
+        compaction, see :meth:`team_name`) and has not yet spawned a single
+        team-tagged sub-agent of its own.
+
+        Claude Code stamps ``teamName`` into a sub-agent's sidecar only at
+        SPAWN time, so a freshly rotated session id carries none of its own
+        until it spawns its first teammate — during that window ``team_name``
+        honestly returns ``None`` even though the team (and its board)
+        plainly still exists, and :class:`_ClaudeTasks` falls back to
+        ``_own_board(session_id)``, which almost never matches a
+        pre-existing board once any rotation has happened. Reproduced
+        on-host: a rotated id with zero sub-agents of its own read the wrong
+        board and silently degraded to the transcript fold (58 real vs. 84+
+        folded, see :class:`_ClaudeTasks`).
+
+        The team a workspace's session belongs to is a fact about the
+        WORKSPACE, not about any one session id in its rotation history, so
+        the fallback asks every OTHER session recorded for this ``cwd``,
+        newest-first, and returns the first team any of them names — cheap
+        (:meth:`discover_paths` is one directory listing; :meth:`locate` per
+        candidate is a glob, never a transcript parse) and self-limiting: the
+        moment the current session spawns its own first teammate,
+        :meth:`team_name` on its own paths answers directly again and this
+        fallback never runs.
+        """
+        own = cls.team_name(own_paths if own_paths is not None else cls.locate(cwd, session_id))
+        if own:
+            return own
+        for sid, _path, _mtime, _birth in cls.discover_paths(cwd, exclude_id=session_id)[
+            : cls._TEAM_SIBLING_SCAN_LIMIT
+        ]:
+            name = cls.team_name(cls.locate(cwd, sid))
+            if name:
+                return name
+        return None
+
+    @classmethod
     def discover(cls, cwd: Path, *, exclude_id: str | None) -> list[str]:
         """Session ids of transcripts recorded for ``cwd`` (excluding ``exclude_id``),
         ordered **most-recently-active first** (by transcript mtime).
@@ -431,6 +554,8 @@ class _ClaudeHome:
         like ``discover_paths``. Best-effort: a malformed or vanished file is
         skipped, never raised; a file whose head read can't recover a cwd
         still yields a ref with ``cwd=None`` rather than being dropped.
+        ``size_bytes`` comes free too, off the same ``stat()`` call that
+        already produces ``mtime`` — a single ``stat_result`` answers both.
         """
         found: dict[str, SessionRef] = {}
         for projects in cls.projects_dirs():
@@ -443,9 +568,12 @@ class _ClaudeHome:
                     session_id = path.stem
                     cwd, birth, branch = cls._head_cwd_and_birth(path)
                     try:
-                        mtime = path.stat().st_mtime
+                        st = path.stat()
+                        mtime = st.st_mtime
+                        size_bytes: int | None = st.st_size
                     except OSError:
                         mtime = 0.0
+                        size_bytes = None
                     prior = found.get(session_id)
                     if prior is not None and prior.mtime >= mtime:
                         continue
@@ -457,8 +585,125 @@ class _ClaudeHome:
                         birth=birth,
                         mtime=mtime,
                         git_branch=branch,
+                        size_bytes=size_bytes,
                     )
         return tuple(sorted(found.values(), key=lambda ref: (-ref.mtime, ref.session_id)))
+
+
+class _ClaudeTasks:
+    """Resolves *where the live task board is* and reads it — the Task system's
+    own store, not a transcript reconstruction.
+
+    **The board is a directory of one JSON file per task**
+    (``<config>/tasks/<board>/<id>.json``, fields ``id``/``subject``/``status``/
+    ``activeForm`` — the same names the tool payloads carry, which is why the
+    record maps through :class:`TaskBoard` rather than a second field mapping).
+    Reading it is not an optimization over folding ``TaskCreate``/``TaskUpdate``
+    out of the transcript: **that fold cannot be correct, and it is wrong in one
+    direction — always too many.** Three losses, measured on a real 5000-line
+    on-host session whose live board held 58 tasks while the fold reported 84:
+
+    * **A deletion emits no tool call at all.** Tasks are removed from the board
+      (a stale item cleared, a whole planning epoch dropped) by deleting the
+      file; nothing lands in any transcript, so a fold can only ever grow.
+    * **Ids restart when the board does.** A re-issued id silently overwrote an
+      earlier task in the fold, merging two generations of one list.
+    * **A shared board has several writers.** Teammates hold the same board and
+      each ``TaskUpdate`` lands in ITS OWN transcript, so a session's own
+      transcript carries a fraction of the mutations — 21 of 58 tasks read
+      ``pending`` in the fold while the board had them completed.
+
+    Same discipline as :class:`_ClaudeHome`: pure path logic plus a read-only
+    listing, the config-dir cascade read live on each call, and every failure
+    (missing dir, unreadable file, malformed JSON) degrades to "no board" so the
+    transcript fold still answers.
+    """
+
+    #: The board directory a session gets when it is not part of a team — the
+    #: leading 8 hex characters of its own id, e.g. ``session-b3b5108d``.
+    _OWN_BOARD_PREFIX_LEN = 8
+
+    @classmethod
+    def locate(cls, session_id: str, *, team: str | None) -> list[Path]:
+        """Every task file of the board ``session_id`` writes to, ordered by id;
+        ``[]`` when no board holds anything (a ``TodoWrite`` session, a session
+        that never called a Task tool, a board the reader cannot reach).
+
+        ``team`` wins over the session's own name because a session that joined
+        a team writes to the team's board — including when its own id has since
+        rotated away from the one the board is named for. An empty directory is
+        *not* a board: Claude Code creates one per session eagerly, so "exists"
+        would claim an authoritative empty list for every session on the host.
+        """
+        candidates = [
+            name for name in (team, cls._own_board(session_id)) if name and cls._is_safe(name)
+        ]
+        for name in candidates:
+            for base in _ClaudeHome.config_dirs():
+                files = cls._task_files(base / "tasks" / name)
+                if files:
+                    return files
+        return []
+
+    @classmethod
+    def read(cls, paths: Sequence[Path]) -> TodoList | None:
+        """The board those files describe, as the shared checklist shape.
+
+        Each record folds through :meth:`TaskBoard.create` + :meth:`TaskBoard.update`
+        — the identical field mapping and defensive coercion the transcript fold
+        applies to the tool payloads, because a stored task and a ``TaskCreate``
+        payload carry the same field names. An unreadable file is skipped, never
+        raised; ``None`` when nothing readable remains.
+        """
+        board = TaskBoard()
+        for path in paths:
+            raw = cls._record(path)
+            if raw is None:
+                continue
+            task_id = raw.get("id")
+            if not isinstance(task_id, str) or not task_id:
+                task_id = path.stem
+            if board.create(task_id, raw):
+                board.update(task_id, raw)
+        snapshot = board.snapshot()
+        return snapshot if snapshot.items else None
+
+    @classmethod
+    def _own_board(cls, session_id: str) -> str:
+        return f"session-{session_id[: cls._OWN_BOARD_PREFIX_LEN]}"
+
+    @staticmethod
+    def _is_safe(name: str) -> bool:
+        """A board name is a single directory entry. It arrives from a file
+        Grove did not write (``teamName`` in a sub-agent sidecar), so a name that
+        could climb out of ``tasks/`` is refused rather than resolved."""
+        return name not in {".", ".."} and "/" not in name and "\\" not in name
+
+    @classmethod
+    def _task_files(cls, board: Path) -> list[Path]:
+        try:
+            entries = [
+                path
+                for path in board.iterdir()
+                if path.suffix == ".json" and not path.name.startswith(".")
+            ]
+        except OSError:
+            return []
+        return sorted(entries, key=cls._id_order)
+
+    @staticmethod
+    def _id_order(path: Path) -> tuple[int, int, str]:
+        """Numeric ids in numeric order (``#2`` before ``#10``), anything else
+        after them alphabetically — the order the agent's own list is shown in."""
+        return (0, int(path.stem), "") if path.stem.isdigit() else (1, 0, path.stem)
+
+    @staticmethod
+    def _record(path: Path) -> dict[str, Any] | None:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return raw if isinstance(raw, dict) else None
 
 
 class _ClaudeControls:
@@ -666,7 +911,14 @@ class _Record:
         return []
 
     def text(self) -> str:
-        """Concatenated human-readable text (string content, or ``text`` blocks)."""
+        """Concatenated human-readable text (string content, or ``text`` blocks).
+
+        Falls back to a delivered queued message's own ``prompt``: an
+        ``attachment`` record carries no ``message`` key at all, so every
+        predicate below that reads text — and every projection downstream of
+        them — saw the empty string for the whole class of records a user's
+        queued steer arrives in.
+        """
         content = self._message.get("content")
         if isinstance(content, str):
             return content
@@ -675,7 +927,121 @@ class _Record:
             for block in self._content_blocks()
             if block.get("type") == "text" and isinstance(block.get("text"), str)
         ]
-        return "\n".join(p for p in parts if p)
+        joined = "\n".join(p for p in parts if p)
+        return joined or self.queued_prompt
+
+    # ── the harness queue ─────────────────────────────────────────────────
+    @property
+    def _queued_command(self) -> dict[str, Any]:
+        """The ``queued_command`` attachment payload, or ``{}`` for every other
+        record — so each accessor below is a plain read with no type guard."""
+        attachment = self.raw.get("attachment")
+        if not isinstance(attachment, dict) or attachment.get("type") != _QUEUED_ATTACHMENT:
+            return {}
+        return attachment
+
+    @property
+    def queued_prompt(self) -> str:
+        """The delivered queued message's text, or ``""``."""
+        value = self._queued_command.get("prompt")
+        return value if isinstance(value, str) else ""
+
+    @property
+    def _queued_mode(self) -> str:
+        value = self._queued_command.get("commandMode")
+        return value if isinstance(value, str) else ""
+
+    @property
+    def _queued_origin(self) -> str:
+        """``origin.kind``, or ``""`` when the payload carries no origin at all.
+
+        Absent is the ordinary case for a ``task-notification`` (999/999
+        on-host), which is precisely why it must never DEFAULT to human: the
+        cheapest possible mistake here files every background notice as a user
+        turn."""
+        origin = self._queued_command.get("origin")
+        kind = origin.get("kind") if isinstance(origin, dict) else None
+        return kind if isinstance(kind, str) else ""
+
+    @property
+    def is_queued_prompt(self) -> bool:
+        """A queued HUMAN steer the harness has now delivered — a real user turn.
+
+        ``commandMode`` is checked FIRST because it is the total partition; the
+        origin then separates the human from the peer inside the ``prompt``
+        mode. A missing origin is non-human by construction (see
+        :attr:`_queued_origin`).
+        """
+        return (
+            self._queued_mode == _QUEUED_MODE_PROMPT
+            and self._queued_origin == _QUEUED_ORIGIN_HUMAN
+            and not self.is_sidechain
+        )
+
+    @property
+    def is_queued_peer_message(self) -> bool:
+        """A queued relay from a peer session — the queued form of
+        :attr:`is_teammate_message`, which is where it is routed."""
+        return (
+            self._queued_mode == _QUEUED_MODE_PROMPT
+            and self._queued_origin == _QUEUED_ORIGIN_PEER
+            and not self.is_sidechain
+        )
+
+    @property
+    def is_queued_task_notification(self) -> bool:
+        """A queued background notice — the queued form of
+        :attr:`is_task_notification`, which is where it is routed."""
+        return self._queued_mode == _QUEUED_MODE_TASK_NOTIFICATION and not self.is_sidechain
+
+    @property
+    def is_queued(self) -> bool:
+        """Any delivered queued message, whatever it turned out to be — the one
+        test for "these two clocks differ", used by the ordering pass and by the
+        spine mapping so they cannot disagree about which records have a send
+        instant worth carrying."""
+        return bool(self._queued_command) and not self.is_sidechain
+
+    @property
+    def queue_operation(self) -> tuple[str, str] | None:
+        """``(operation, content)`` for a ``queue-operation`` record, else ``None``.
+
+        ``content`` is ``""`` whenever the harness recorded the pop without
+        saying what it popped — every ``dequeue`` (278/278 on-host) and a
+        minority of ``remove``s (22/1403). That is what makes the FIFO fallback
+        in :meth:`_TranscriptParser.pending_queue` an assumption, and why the
+        fallback keys on the ABSENT content rather than on the op name.
+        """
+        if self.type != _QUEUE_OPERATION_TYPE:
+            return None
+        operation = self.raw.get("operation")
+        if not isinstance(operation, str) or not operation:
+            return None
+        content = self.raw.get("content")
+        return (operation, content if isinstance(content, str) else "")
+
+    @property
+    def delivered_at(self) -> datetime | None:
+        """When this record entered the conversation, as opposed to when it was
+        written — the two differ only for a queued message, and only there does
+        the difference change the reading of the transcript.
+
+        A ``queued_command``'s own ``timestamp`` is the SEND instant (it equals
+        its enqueue op's timestamp on 2358/2517 real records) while its FILE
+        POSITION is after that op on 2517/2517. So position is the delivery
+        signal and :func:`_stamp_deliveries` writes it here; everything else
+        answers with its own timestamp.
+        """
+        stamped = self.raw.get(_DELIVERED_AT_KEY)
+        if isinstance(stamped, datetime):
+            return stamped
+        return self.timestamp
+
+    def stamp_delivery(self, at: datetime | None) -> None:
+        """Record the instant this queued message was delivered — written once
+        per fold pass by :func:`_stamp_deliveries`, which is the only caller."""
+        if at is not None:
+            self.raw[_DELIVERED_AT_KEY] = at
 
     def _has_block(self, block_type: str) -> bool:
         return any(b.get("type") == block_type for b in self._content_blocks())
@@ -688,7 +1054,16 @@ class _Record:
         ``type:"user"``, not a sub-agent line, not meta, carrying no
         ``tool_result`` block, and whose text isn't a slash-command echo, bash
         I/O, caveat banner, or compaction summary.
+
+        A message the user typed while the agent was busy is NOT a ``type:"user"``
+        line at all — the harness delivers it as a ``queued_command`` attachment
+        — so that shape is admitted here first. Admitting it HERE rather than at
+        each projection is what makes one edit reach the turn count, the tail,
+        the spine, the digest and the rendered turns at once: every one of them
+        already asks this question.
         """
+        if self.is_queued_prompt:
+            return bool(self.queued_prompt.strip())
         if self.type != "user" or self.is_sidechain or self.is_meta:
             return False
         if _as_bool(self.raw.get("isCompactSummary")):
@@ -711,11 +1086,85 @@ class _Record:
         return self.type == "user" and not self.is_sidechain and self._has_block("tool_result")
 
     @property
+    def is_compact_boundary(self) -> bool:
+        """The record marking where the harness replaced history with a summary.
+
+        ``type:"system"`` + ``subtype:"compact_boundary"``, written INLINE in the
+        same transcript file (measured: 55 boundaries across 36 real on-host
+        sessions). Not to be confused with ``type:"summary"``, which is an
+        unrelated session-title record and appears zero times in that corpus —
+        keying on it would find nothing and mean nothing.
+        """
+        return self.type == "system" and self.raw.get("subtype") == "compact_boundary"
+
+    @property
+    def is_compact_summary(self) -> bool:
+        """A ``type:"user"`` record carrying a compaction's replacement summary.
+
+        Already excluded from :attr:`is_human_turn` (it is the harness talking,
+        not the user); this is the same flag read positively, so the boundary can
+        claim the text as its own payload instead of it vanishing entirely.
+        """
+        return self.type == "user" and _as_bool(self.raw.get("isCompactSummary"))
+
+    @property
+    def _compact_metadata(self) -> dict[str, Any]:
+        value = self.raw.get("compactMetadata")
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def cumulative_dropped_tokens(self) -> int | None:
+        """``compactMetadata.cumulativeDroppedTokens`` — a SESSION-RUNNING TOTAL.
+
+        Never a per-event figure: it is the sum of everything dropped since the
+        session began, so it only becomes an answer after the previous
+        boundary's total is subtracted (see
+        :meth:`_TranscriptParser._compaction_boundaries`).
+        """
+        value = self._compact_metadata.get("cumulativeDroppedTokens")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def compaction_boundary(
+        self, *, summary: str = "", previous_total: int = 0
+    ) -> CompactionBoundary:
+        """This boundary record as a :class:`CompactionBoundary`.
+
+        ``previous_total`` is the preceding boundary's own
+        ``cumulativeDroppedTokens`` within the SAME file (0 before the first,
+        which is what makes a first boundary's delta equal its own total —
+        verified exactly, 55/55, against the independent
+        ``preTokens - postTokens`` the same record carries). A total that went
+        backwards yields ``None`` rather than a negative count: that would mean
+        the counter restarted under us, and "cannot tell" must not be spelled as
+        an answer.
+
+        ``trigger`` is passed through only when it is one of the two values
+        Claude Code actually writes — a third spelling is a provider change we
+        have not measured, and coercing it would invent a fact.
+        """
+        trigger = self._compact_metadata.get("trigger")
+        total = self.cumulative_dropped_tokens
+        dropped = None if total is None or total < previous_total else total - previous_total
+        return CompactionBoundary(
+            trigger=trigger if trigger in ("manual", "auto") else None,
+            at=self.timestamp,
+            dropped_tokens=dropped,
+            summary=summary,
+        )
+
+    @property
     def is_task_notification(self) -> bool:
         """A delivered background-task notice (``type:"user"`` carrier of the
         ``<task-notification>`` envelope) — the agent being told a sub-agent or
         background command finished. A notification the agent *received*, so it
-        advances the tail (the agent's move) but is never a human turn."""
+        advances the tail (the agent's move) but is never a human turn.
+
+        A notice that waited in the queue arrives as a ``queued_command``
+        attachment instead, carrying the identical envelope in its ``prompt``.
+        Same fact, same routing: keeping the queued form out would let 999
+        background notices per busy session read as user turns."""
+        if self.is_queued_task_notification:
+            return True
         return (
             self.type == "user"
             and not self.is_sidechain
@@ -754,7 +1203,15 @@ class _Record:
         :attr:`is_task_notification` guards against) wrapping
         ``<teammate-message teammate_id="...">…</teammate-message>``. A
         notice the agent *received*, so it advances the tail exactly like a
-        task-notification, but is never a human turn."""
+        task-notification, but is never a human turn.
+
+        A relay that waited in the queue arrives as a ``queued_command``
+        attachment with ``origin.kind == "peer"`` — classified by that origin
+        and never by the marker, because the queued form wears a DIFFERENT
+        envelope (``<agent-message from=…>``) and one observed record wears none
+        at all."""
+        if self.is_queued_peer_message:
+            return True
         return (
             self.type == "user"
             and not self.is_sidechain
@@ -784,7 +1241,11 @@ class _Record:
         sender = self.teammate_message_sender() or "a teammate"
         inner = self._teammate_message_inner()
         if inner is None:
-            return f"message from {sender}"
+            # No envelope: a queued peer relay is sometimes bare prose, and the
+            # prose IS the message — dropping it for a placeholder would lose
+            # the only content the record carries.
+            body = self.text().strip()
+            return body or f"message from {sender}"
         try:
             payload = json.loads(inner)
         except json.JSONDecodeError:
@@ -807,7 +1268,7 @@ class _Record:
             sender = payload.get("from")
             if isinstance(sender, str) and sender:
                 return sender
-        match = re.search(r'teammate_id="([^"]*)"', self.text())
+        match = _PEER_SENDER_RE.search(self.text())
         return match.group(1) if match else None
 
     @property
@@ -835,12 +1296,15 @@ class _Record:
         return payload if isinstance(payload, dict) else None
 
     def _teammate_message_inner(self) -> str | None:
-        """The raw text between the ``<teammate-message>`` tags, stripped —
-        JSON for a structured relay, plain prose for a peer's own message."""
-        match = re.search(
-            r"<teammate-message[^>]*>(.*?)</teammate-message>", self.text(), re.DOTALL
-        )
-        return match.group(1).strip() if match else None
+        """The raw text between the relay tags, stripped — JSON for a structured
+        relay, plain prose for a peer's own message.
+
+        Matches either envelope spelling (see :data:`_PEER_MESSAGE_MARKER`).
+        ``None`` for a relay wearing neither, whose body is already the whole
+        message — the callers fall back to the bare text rather than to markup.
+        """
+        match = _PEER_ENVELOPE_RE.search(self.text())
+        return match.group(2).strip() if match else None
 
     @property
     def tool_use_result(self) -> dict[str, Any]:
@@ -873,7 +1337,7 @@ class _Record:
         return sum(1 for b in self._content_blocks() if b.get("type") == "tool_use")
 
     # ── spine mapping ─────────────────────────────────────────────────────────
-    def to_message(self) -> AgentMessage | None:
+    def to_message(self, compaction: CompactionBoundary | None = None) -> AgentMessage | None:
         """Map this record onto one agentic-loop spine message, or ``None`` for a
         record that is not a loop message (stream metadata, machinery, preamble).
 
@@ -886,10 +1350,22 @@ class _Record:
         reply → ``assistant``; a ``tool_result`` carrier → ``tool``. Sub-agent
         (sidechain) records ride with ``is_sidechain`` + their lineage
         (``parent_tool_use_id`` = ``sourceToolAssistantUUID``, ``thread_id`` =
-        ``agentId``), classified by their underlying shape."""
+        ``agentId``), classified by their underlying shape.
+
+        A compaction boundary → ``compaction``, CONTENTLESS: its payload cannot
+        be derived from content blocks, and its summary lives in a *later*
+        record, so :meth:`_TranscriptParser.messages` resolves it and hands it in
+        via *compaction*. Called without one (a lone record mapped in isolation)
+        the boundary still maps honestly, just with no summary and no delta."""
         role = self._spine_role()
         if role is None:
             return None
+        if role == "compaction":
+            return AgentMessage(
+                role=role,
+                timestamp=self.timestamp,
+                compaction=compaction if compaction is not None else self.compaction_boundary(),
+            )
         content: tuple[ContentBlock, ...]
         if role == "user":
             text = self.text()
@@ -911,7 +1387,10 @@ class _Record:
             parent_tool_use_id=self._source_tool_uuid,
             model=self.model,
             usage=self._spine_usage(),
-            timestamp=self.timestamp,
+            # Delivery orders the loop; the submit instant rides beside it and
+            # is set only where the two genuinely differ (see `sent_at`).
+            timestamp=self.delivered_at,
+            sent_at=self.timestamp if self.is_queued else None,
             is_sidechain=self.is_sidechain,
             thread_id=self._agent_id,
         )
@@ -920,6 +1399,8 @@ class _Record:
         # The main-thread predicates all exclude sidechain, so a sidechain record
         # only reaches ``_sidechain_role`` — where it keeps its real role plus the
         # ``is_sidechain`` flag, so lineage survives but projections can filter it.
+        if self.is_compact_boundary:
+            return "compaction"
         if self.is_human_turn:
             return "user"
         if self.is_agent_notice:
@@ -1400,8 +1881,146 @@ class _TranscriptParser:
         spine — the ONE representation :meth:`turns` and :meth:`digest`
         below both project (DRY: one parse, many projections). Non-message
         records map to nothing; sub-agent (sidechain) messages ride with their
-        lineage fields set."""
-        return tuple(msg for rec in self._records if (msg := rec.to_message()) is not None)
+        lineage fields set. A compaction boundary is resolved first (its summary
+        and its per-event token delta both need neighbouring records) and handed
+        to the record's own mapper."""
+        boundaries = self._compaction_boundaries()
+        return tuple(
+            msg
+            for index, rec in enumerate(self._records)
+            if (msg := rec.to_message(boundaries.get(index))) is not None
+        )
+
+    def _compaction_boundaries(self) -> dict[int, CompactionBoundary]:
+        """Every compaction boundary in this transcript, keyed by its position in
+        the (time-sorted) record list.
+
+        Two facts a boundary record cannot answer about itself, both pinned
+        against the real on-host corpus (36 sessions, 55 boundaries):
+
+        * **The summary is a SEPARATE record** — a ``type:"user"`` line with
+          ``isCompactSummary`` — and it is joined by ``parentUuid``, which equals
+          the boundary's own ``uuid`` on 55 of 55. That exact link is used
+          instead of a positional scan because **position here is a trap in both
+          directions**: the summary is written AFTER the boundary in file order
+          but carries an EARLIER timestamp (55/55, by up to 1.6 s), so by the
+          time :meth:`ClaudeCodeAdapter._read` has time-sorted the records the
+          summary sits BEFORE the boundary in 47 of 55 cases. A forward scan is
+          correct against the raw file and wrong against the stream this parser
+          actually sees. The same clock-versus-order conflict ``_stamp_deliveries``
+          exists for; an id join sidesteps it entirely.
+        * **``cumulativeDroppedTokens`` is a running total**, so the per-event
+          delta needs the previous boundary's total. A session compacts
+          repeatedly (up to 5 observed in one file) and reporting the raw total
+          would inflate every boundary after the first by the whole session's
+          history. The running total is accumulated in FOLD order (``index``,
+          i.e. what the writer appended) rather than sorted order, for the same
+          reason the join is by id.
+        """
+        summaries: dict[str, str] = {}
+        for rec in self._records:
+            parent = rec.raw.get("parentUuid")
+            if rec.is_compact_summary and isinstance(parent, str) and rec.text().strip():
+                summaries[parent] = rec.text()
+
+        positions = {id(rec): position for position, rec in enumerate(self._records)}
+        out: dict[int, CompactionBoundary] = {}
+        previous_total = 0
+        for rec in sorted(
+            (r for r in self._records if r.is_compact_boundary), key=lambda r: r.index
+        ):
+            out[positions[id(rec)]] = rec.compaction_boundary(
+                summary=summaries.get(rec.uuid or "", ""), previous_total=previous_total
+            )
+            total = rec.cumulative_dropped_tokens
+            if total is not None:
+                previous_total = total
+        return out
+
+    def pending_queue(self) -> tuple[QueuedMessage, ...]:
+        """What the harness is still holding, folded from its own ops — the
+        SAME records :meth:`messages` walks, so this costs no extra I/O.
+
+        Claude Code narrates its queue as it mutates it: ``enqueue`` pushes,
+        ``remove`` pops a named message (the delivery pop — it sits immediately
+        before the ``queued_command`` attachment), ``popAll`` clears, and
+        ``dequeue`` pops the front.
+
+        **An op that names nothing pops the FRONT, and that is an assumption
+        rather than a reading.** Measured over 3548 real ops: every one of the
+        278 ``dequeue`` records is contentless, and so are 22 of the 1403
+        ``remove`` records — so the contentless branch is not a ``dequeue``
+        special case but the shape either op can take, and keying it to the op
+        NAME would leave those 22 removes silently unapplied. Where the
+        assumption could disagree with the ``queued_command`` attachment, the
+        attachment wins: it is a WITNESS to an actual delivery where FIFO is an
+        inference about one.
+
+        That precedence is why a contentless dequeue is DEFERRED rather than
+        applied where it is read. A dequeue and the delivery that follows it are
+        one event, so popping eagerly and then dropping the witness by content
+        removes TWO messages for one delivery — which is what the first version
+        of this fold did, silently, and only for the shape the assumption was
+        written for. The deferred pop is applied when the next op or the end of
+        the records proves no witness is coming.
+
+        Ordered by the position the harness currently implies (insertion order),
+        which is what it reports and not a promise about what it will do.
+
+        **A finished session can legitimately report a residual queue**, and it
+        is the harness's ledger rather than a fold bug: across the 25 busiest
+        sessions on the reference host the ops record 1811 enqueues against 1737
+        pops, leaving 70 messages the harness took and never narrated delivering
+        (mostly re-queued background notices). Reconciling that away would mean
+        Grove keeping a second, corrected queue — the one thing this axis must
+        not do.
+        """
+        queued: list[tuple[str, datetime | None]] = []
+        # A contentless dequeue awaiting either its witness or its FIFO fallback.
+        deferred_pop = False
+
+        def _drop(content: str) -> bool:
+            for i, (text, _) in enumerate(queued):
+                if text == content:
+                    del queued[i]
+                    return True
+            return False
+
+        def _settle_pop() -> None:
+            nonlocal deferred_pop
+            if deferred_pop:
+                if queued:
+                    del queued[0]
+                deferred_pop = False
+
+        for rec in self._records:
+            if rec.is_queued:
+                # The delivery this record witnesses is the one a preceding
+                # dequeue popped, so the witness ANSWERS that pop rather than
+                # adding to it. It answers nothing when the message is already
+                # gone, and then the FIFO fallback still owes a pop.
+                if _drop(rec.queued_prompt):
+                    deferred_pop = False
+                else:
+                    _settle_pop()
+                continue
+            operation = rec.queue_operation
+            if operation is None:
+                continue
+            _settle_pop()
+            name, content = operation
+            if name == "enqueue":
+                queued.append((content, rec.timestamp))
+            elif name == "popAll":
+                queued.clear()
+            elif content:
+                _drop(content)
+            else:
+                deferred_pop = True
+        _settle_pop()
+        return tuple(
+            QueuedMessage(text=text, sent_at=at, position=i) for i, (text, at) in enumerate(queued)
+        )
 
     def digest(self) -> OrderedDigest:
         """Ordered ``user / assistant / tool`` skeleton, ``tool_result`` stripped
@@ -1415,6 +2034,12 @@ class _TranscriptParser:
             elif message.role == "notification":
                 note = _truncate(message.text(), _DIGEST_TEXT_CAP)
                 entries.append(DigestEntry("notification", note))
+            elif message.role == "compaction" and message.compaction is not None:
+                # Headline only: the digest is the cheap LLM-interpreter seam and
+                # strips payloads by design, and a compaction summary is the
+                # largest single thing a transcript carries (13.9-55.3 KB across
+                # the real corpus). The rendered turn below carries it whole.
+                entries.append(DigestEntry("compaction", message.compaction.headline()))
             elif message.role == "assistant":
                 names = message.tool_names()
                 if names:
@@ -1457,47 +2082,63 @@ class _TranscriptParser:
         turns: list[SessionTurn] = []
         entries: list[DigestEntry] = []
         # Pre-scan every tool_result block so a question entry renders resolved
-        # no matter where its answer landed (a tool_result is a forward reference
-        # — it always follows the question's tool_use). Sidechain results are
-        # included, exactly as the record-level scan was.
-        answered: dict[str, str | None] = {}
-        for message in messages:
-            for block in message.content:
-                if block.type == "tool_result" and block.tool_use_id:
-                    answered[block.tool_use_id] = block.text
+        # and every tool entry knows its response, error flag and end time, no
+        # matter where they landed (a tool_result is a forward reference — it
+        # always follows the tool_use it resolves). Sidechain results are
+        # included, exactly as the record-level scan was. `tool_outcomes` is the
+        # shared seam so the two adapters cannot build different maps.
+        outcomes = tool_outcomes(messages)
 
         # One board per parse (session-scoped, never persisted) — folds
-        # TaskCreate/TaskUpdate calls into the running task list `answered`
+        # TaskCreate/TaskUpdate calls into the running task list. `outcomes`
         # above already carries each call's own tool_result, which is also
         # where a TaskCreate's server-assigned id lives (see `TaskBoard`).
         board = TaskBoard()
 
-        def _flush(user_text: str, started_at: datetime | None) -> None:
+        def _flush(user_text: str, started_at: datetime | None, sent_at: datetime | None) -> None:
             turns.append(
-                SessionTurn(user_text=user_text, started_at=started_at, entries=tuple(entries))
+                SessionTurn(
+                    user_text=user_text,
+                    started_at=started_at,
+                    entries=tuple(entries),
+                    sent_at=sent_at,
+                )
             )
             entries.clear()
 
-        current: tuple[str, datetime | None] | None = None
+        # (text, delivered-at, submitted-at) — the third element is set only for
+        # a queued prompt, whose two clocks genuinely differ.
+        current: tuple[str, datetime | None, datetime | None] | None = None
         for message in messages:
             if message.is_sidechain and not include_sidechain:
                 continue
             if message.role == "user":
                 if current is not None or entries:
-                    _flush(*(current or ("", None)))
-                current = (message.text(), message.timestamp)
+                    _flush(*(current or ("", None, None)))
+                current = (message.text(), message.timestamp, message.sent_at)
             elif message.role == "notification":
                 # A notice the agent received mid-turn — an entry inside the
                 # current turn, never a new turn of its own.
                 entries.append(DigestEntry("notification", message.text()))
+            elif message.role == "compaction" and message.compaction is not None:
+                # Same placement rule as a notification: the harness cut the
+                # context mid-turn, so the marker belongs inside the turn it
+                # happened in rather than starting one.
+                entries.append(
+                    DigestEntry(
+                        "compaction",
+                        message.compaction.headline(),
+                        compaction=message.compaction,
+                    )
+                )
             elif message.role == "assistant":
                 if current is None and not entries and message.timestamp is not None:
                     # Leading continuation block inherits the first reply's time.
-                    current = ("", message.timestamp)
-                entries.extend(cls._assistant_entries(message, answered, board))
+                    current = ("", message.timestamp, None)
+                entries.extend(cls._assistant_entries(message, outcomes, board))
             # role == "tool": a result carrier — feeds `answered`, no entry.
         if current is not None or entries:
-            _flush(*(current or ("", None)))
+            _flush(*(current or ("", None, None)))
 
         if last is not None:
             return tuple(turns[-last:]) if last > 0 else ()
@@ -1505,7 +2146,7 @@ class _TranscriptParser:
 
     @classmethod
     def _assistant_entries(
-        cls, message: AgentMessage, answered: Mapping[str, str | None], board: TaskBoard
+        cls, message: AgentMessage, outcomes: Mapping[str, ToolOutcome], board: TaskBoard
     ) -> list[DigestEntry]:
         """One assistant message's content projected to turn entries, in block
         order — text, structured questions, structured file edits, structured
@@ -1514,7 +2155,7 @@ class _TranscriptParser:
 
         A question tool (``AskUserQuestion`` / ``ExitPlanMode``) yields one
         ``question`` entry per question (a batch → N), stamped resolved when its
-        group_id is in ``answered``; a file-edit tool yields one ``file_edit``
+        group_id is in ``outcomes``; a file-edit tool yields one ``file_edit``
         per edit (a ``MultiEdit`` → N); a todo tool (``TodoWrite``) yields one
         ``todo`` entry carrying the whole list; a Task-system call
         (``TaskCreate``/``TaskUpdate``, see :data:`TASK_TOOL_NAMES`) folds into
@@ -1523,7 +2164,14 @@ class _TranscriptParser:
         card TodoWrite feeds renders the Task system too; any other tool keeps
         its single ``tool`` entry — as does a recognized edit/todo/task call
         whose payload didn't parse or apply. ``thinking`` blocks are dropped (the
-        render never showed them)."""
+        render never showed them).
+
+        EVERY entry a ``tool_use`` block produced also carries that block's
+        :class:`ToolCall` — request, response, duration, running-or-settled —
+        including the structured cards, which say nothing about the invocation
+        itself. One call built once per block and shared by the N entries a
+        batch fans out to: the fan-out is a rendering of one invocation, so N
+        rows reporting one duration is the truth."""
         entries: list[DigestEntry] = []
         for block in message.content:
             if block.type == "text":
@@ -1531,30 +2179,41 @@ class _TranscriptParser:
                     entries.append(DigestEntry("assistant", block.text))
             elif block.type == "tool_use" and block.tool_name:
                 name = block.tool_name
+                call = ToolCall.from_block(block, outcomes, called_at=message.timestamp)
                 if AgentQuestion.recognizes(name):
                     # ``tool_use_id or ""``: an id-less block yields a group_id
-                    # that simply never matches the answered map, never "None".
+                    # that simply never matches the outcome map, never "None".
                     for q in AgentQuestion.from_tool_call(
                         name, block.tool_input, block.tool_use_id or ""
                     ):
-                        resolved = q.resolved(answered[q.group_id]) if q.group_id in answered else q
-                        entries.append(DigestEntry("question", resolved.prompt, question=resolved))
+                        resolved = (
+                            q.resolved(outcomes[q.group_id].text) if q.group_id in outcomes else q
+                        )
+                        entries.append(
+                            DigestEntry("question", resolved.prompt, question=resolved, tool=call)
+                        )
                 elif FileEdit.recognizes(name) and (
                     edits := FileEdit.from_tool_call(name, block.tool_input)
                 ):
                     entries.extend(
-                        DigestEntry("file_edit", f"{name} {edit.path}".strip(), file_edit=edit)
+                        DigestEntry(
+                            "file_edit", f"{name} {edit.path}".strip(), file_edit=edit, tool=call
+                        )
                         for edit in edits
                     )
                 elif TodoList.recognizes(name) and (
                     todos := TodoList.from_tool_call(name, block.tool_input)
                 ):
-                    entries.extend(DigestEntry("todo", lst.summary, todo=lst) for lst in todos)
-                elif name in TASK_TOOL_NAMES and board.apply(name, block, answered):
+                    entries.extend(
+                        DigestEntry("todo", lst.summary, todo=lst, tool=call) for lst in todos
+                    )
+                elif name in TASK_TOOL_NAMES and board.apply(name, block, outcomes):
                     snapshot = board.snapshot()
-                    entries.append(DigestEntry("todo", snapshot.summary, todo=snapshot))
+                    entries.append(DigestEntry("todo", snapshot.summary, todo=snapshot, tool=call))
                 else:
-                    entries.append(DigestEntry("tool", cls._tool_display(name, block.tool_input)))
+                    entries.append(
+                        DigestEntry("tool", cls._tool_display(name, block.tool_input), tool=call)
+                    )
         return entries
 
     @staticmethod
@@ -1588,17 +2247,51 @@ class _TranscriptParser:
                 return rec.last_prompt
         return None
 
+    def last_human_prompt_text(self) -> str | None:
+        """The newest ``last-prompt`` record a HUMAN submitted.
+
+        The same scan as :meth:`last_prompt_text`, minus the records whose text
+        carries a ``_NON_HUMAN_MARKERS`` envelope. **The classification is not
+        new and no text is rewritten** — a record is selected or skipped by the
+        one constant ``is_human_turn`` already uses to decide that a
+        ``type:"user"`` line is not a prompt somebody typed. That is what
+        separates it from stripping a wrapper, which would be reading another
+        tool's markup for meaning and would go stale on its next format.
+
+        Why it is a separate method from :meth:`last_prompt_text`: that one
+        backs ``SessionSummary.last_prompt``, which asks *what was submitted
+        last* — and a relayed teammate message genuinely was. This one backs
+        *what is this agent working on*, where the same record is somebody
+        else's news.
+        """
+        for rec in reversed(self._records):
+            text = rec.last_prompt
+            if text and not any(marker in text for marker in _NON_HUMAN_MARKERS):
+                return text
+        return None
+
     def current_task_text(self) -> str | None:
         """The session's task text, UNCAPPED — the ONE selection
         :meth:`activity` caps onto ``AgentActivity.current_task``.
 
-        The rule (unchanged, only factored out): the newest ``last-prompt``
-        record carrying text wins, else the FIRST real human turn's text. Both
-        readers share this method precisely so a future change to the rule
-        cannot move one and leave the other behind. Whitespace-only text is
-        ``None`` — the honest "this session carries no task text".
+        The rule: the newest HUMAN ``last-prompt`` record wins, else the FIRST
+        real human turn's text. Both readers share this method precisely so a
+        future change to the rule cannot move one and leave the other behind.
+        Whitespace-only text is ``None`` — the honest "this session carries no
+        task text".
+
+        **Both arms are filtered by the same classification, and for a while
+        only one of them was.** ``_first_human_raw`` has always honoured
+        ``is_human_turn``, which counts a ``<teammate-message>`` or a
+        ``<task-notification>`` as machine traffic rather than a prompt; the
+        ``last-prompt`` arm asked nothing, so a session whose newest submission
+        was a relay published that envelope, wrapper and all, as what the agent
+        was doing (reproduced on 4 real on-host sessions). The two adapters that
+        never had the second arm were right by omission: codex selects the first
+        real human turn, and mewbo the newest plan step or tool label — the
+        agent's own work, never its inbox.
         """
-        text = self.last_prompt_text() or self._first_human_raw()
+        text = self.last_human_prompt_text() or self._first_human_raw()
         return text if text and text.strip() else None
 
     def created_at(self) -> datetime | None:
@@ -1689,6 +2382,13 @@ class ClaudeCodeAdapter:
     kind = "claude_code"
     remote = False
     resumable = True
+    # The queue narrates itself in the transcript (`queue-operation` records).
+    reports_queue = True
+    # `tool_result` blocks carry a native `is_error`, so a `False` here really
+    # does mean the call succeeded. Measured over this host's whole Claude
+    # store: 1,067 of 49,505 real `tool_result` blocks across 333 transcripts
+    # set it.
+    reports_tool_errors = True
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """``--session-id <uuid>`` for a fresh session — what makes correlation
@@ -1744,6 +2444,12 @@ class ClaudeCodeAdapter:
         """
         del command
         return self._MODEL_ALIASES
+
+    def tool_version(self, command: str) -> str | None:
+        """``claude --version``, recorded verbatim (on-host: ``2.1.226 (Claude
+        Code)`` — the product name rides along and is kept, since trimming it
+        would be interpreting the vendor's format)."""
+        return AgentVersionProbe.version(command, "--version")
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         try:
@@ -1842,9 +2548,43 @@ class ClaudeCodeAdapter:
         return final_result_from_messages(self.read_messages(cwd, session_id))
 
     def latest_todo(self, cwd: Path, session_id: str) -> TodoList | None:
-        """The session's current todo/checklist state — a projection of
-        :meth:`read_messages`, never a second parser."""
+        """The session's current todo/checklist state.
+
+        The Task system keeps its board on disk (:class:`_ClaudeTasks`), so that
+        is read first and read WHOLE: the board is the list, where the transcript
+        holds only the mutations one participant made to it and no deletion at
+        all. The transcript projection stays as the answer for everything the
+        board does not cover — a ``TodoWrite`` session (no board), a session that
+        never called a Task tool, a board this process cannot reach — so nothing
+        that reported a checklist before stops reporting one.
+
+        Memoized on the board files' own stat signature, exactly like the
+        transcript projections: a task edited in place, added or deleted all move
+        it, so the ~1 Hz activity poll costs one ``stat`` per task file while the
+        list stands still.
+        """
+        paths = self.locate_transcripts(cwd, session_id)
+        team = _ClaudeHome.resolve_team(cwd, session_id, own_paths=paths)
+        board = _ClaudeTasks.locate(session_id, team=team)
+        if board:
+            return _MEMO.get_or_compute(
+                ("task-board", str(board[0].parent)), board, lambda: _ClaudeTasks.read(board)
+            )
         return latest_todo_from_messages(self.read_messages(cwd, session_id))
+
+    def pending_queue(self, cwd: Path, session_id: str) -> tuple[QueuedMessage, ...]:
+        """What Claude Code is still holding for this session, oldest first.
+
+        Folded from the ``queue-operation`` records the transcript already
+        carries, through the SAME incremental read every other projection here
+        uses — no new file, no new scan, and one ``stat`` on an idle session.
+        """
+        paths = self.locate_transcripts(cwd, session_id)
+        return _MEMO.get_or_compute(
+            ("queue", str(cwd), session_id),
+            paths,
+            lambda: _TranscriptParser(self._read(paths)).pending_queue(),
+        )
 
     def latest_task(self, cwd: Path, session_id: str) -> str | None:
         """The session's task text, uncapped — the same
@@ -2216,12 +2956,40 @@ class ClaudeCodeAdapter:
         parsed first either way.
         """
         records = _TRANSCRIPTS.read(paths)
+        _stamp_deliveries(records)
         records.sort(key=_sort_key)
         return records
 
 
+def _stamp_deliveries(records: list[_Record]) -> None:
+    """Stamp every queued message with the instant it was DELIVERED, walking in
+    FOLD order — which is file order, and must run before the sort.
+
+    A ``queued_command``'s own timestamp is when the human hit enter, not when
+    the harness injected it: measured on real transcripts it equals the enqueue
+    op's timestamp on 2358/2517 records, while the attachment's file POSITION is
+    after that op on 2517/2517. Sorting by it files a message sent 42 s earlier
+    back among the assistant work that answered the PREVIOUS prompt — a causal
+    lie in the rendered transcript, and the kind a reader trusts.
+
+    Position is therefore the only honest delivery signal, and the newest
+    timestamp seen before the record is how a position becomes a sort key: it is
+    the preceding ``remove``/``dequeue`` op's own clock, which is exactly when
+    the harness popped the message. The send instant is not discarded — it rides
+    on as :attr:`_Record.timestamp` and reaches the wire as ``sent_at``.
+    """
+    newest: datetime | None = None
+    for rec in records:
+        if rec.is_queued:
+            rec.stamp_delivery(newest)
+            continue
+        ts = rec.timestamp
+        if ts is not None and (newest is None or ts > newest):
+            newest = ts
+
+
 def _sort_key(rec: _Record) -> tuple[float, int]:
-    ts = rec.timestamp
+    ts = rec.delivered_at
     # Records without a timestamp keep their parse position via the index, sorting
     # stably rather than jumping to the epoch.
     return (ts.timestamp() if ts is not None else 0.0, rec.index)

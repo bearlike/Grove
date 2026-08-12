@@ -79,6 +79,40 @@ def test_no_schema_prose_carries_a_bare_issue_reference() -> None:
     assert offenders == {}
 
 
+def test_a_fields_own_docstring_reaches_the_published_page() -> None:
+    """An attribute docstring must EXPORT, not merely exist in the source.
+
+    Pydantic emits one only under `use_attribute_docstrings`, and while that was
+    off every field's prose was written, stored and silently dropped:
+    `schema_to_md.py` rendered a Description column blank for 84 of 94 fields,
+    so a shipped flag like `assign_bot` was undiscoverable to anyone reading the
+    published reference. Nothing failed — an absent description is structurally
+    valid, the docs built clean, and the other tests here assert the dump's
+    SHAPE rather than that any field says anything.
+
+    So this pins the mechanism at its narrowest honest point: fields that DO
+    carry a docstring must have it reach the schema. It deliberately does not
+    demand that every field carry one — a field whose prose was never written is
+    a gap to fill, not a regression, and conflating the two would make this test
+    fail for a reason it cannot explain.
+    """
+    schema = json.loads(dump_schema_json())
+    issueops = (schema.get("$defs", {}).get("IssueOpsConfig") or {}).get("properties") or {}
+    for field in ("enabled", "assign_bot", "pickup_enabled", "trigger"):
+        described = (issueops.get(field, {}).get("description") or "").strip()
+        assert described, f"`issueops.{field}` publishes no description"
+    # The flag is global, so a representative section proves it for every model:
+    # this is the count moving, not one hand-picked field being special.
+    total = sum(len(b.get("properties") or {}) for b in schema.get("$defs", {}).values())
+    described = sum(
+        1
+        for b in schema.get("$defs", {}).values()
+        for spec in (b.get("properties") or {}).values()
+        if (spec.get("description") or "").strip()
+    )
+    assert described > total // 2, f"only {described}/{total} fields describe themselves"
+
+
 def _walk_strings(node: object, path: str) -> list[tuple[str, str]]:
     """Every string in the schema, paired with the JSON path it sits at."""
     if isinstance(node, dict):

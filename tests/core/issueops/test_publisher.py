@@ -29,7 +29,7 @@ from grove.core.issueops import (
     TicketStatusPublisher,
 )
 from grove.core.issueops.publisher import SessionLink, _FlushJob
-from grove.core.phase import PhaseReport
+from grove.core.phase import PhaseReport, TaskPhase, TicketClaim
 from grove.core.workspace import CommitSummary, WorkspaceState, WorkspaceStatus
 
 T0 = datetime(2026, 7, 9, 21, 38, 0, tzinfo=UTC)
@@ -69,6 +69,7 @@ def _row(
     commit: CommitSummary | None = None,
     refs: Sequence[TicketRef] = (_GITEA_REF,),
     phase: PhaseReport | None = None,
+    branch: str = "",
 ) -> WorkspaceActivity:
     session = SessionActivity(
         session=AgentSession(
@@ -91,6 +92,27 @@ def _row(
         recent_commits=(commit,) if commit else (),
         observed_at=T0,
         phase=phase,
+        branch=branch,
+    )
+
+
+def _claim(
+    ticket: str, phase: TaskPhase, *, note: str | None = None, blocked: bool = False
+) -> TicketClaim:
+    """One per-ticket claim, keyed exactly as ``TicketRef.key`` composes it."""
+    return TicketClaim(ticket=ticket, phase=phase, note=note, blocked=blocked)
+
+
+def _report(
+    phase: TaskPhase = "implementing",
+    *,
+    note: str | None = None,
+    blocked: bool = False,
+    tickets: Sequence[TicketClaim] = (),
+) -> PhaseReport:
+    """A phase report: the workspace's own claim, plus any per-ticket claims."""
+    return PhaseReport(
+        phase=phase, note=note, blocked=blocked, updated_at=T0, tickets=tuple(tickets)
     )
 
 
@@ -150,10 +172,18 @@ class _FakeProvider:
         statuses: dict[str, str] | None = None,
         enrich_fails: bool = False,
         links: bool = True,
+        body_supported: bool = True,
+        bodies: dict[str, str] | None = None,
     ) -> None:
         self.name: TicketProviderName = name
         self.configured = configured
         self.comments_supported = comments_supported
+        self.body_supported = body_supported
+        # Real per-ticket body state, not a scripted answer: the footer splice is
+        # read-modify-write, so a double whose write does not move its own next
+        # read would let an unsplicing (or duplicating) implementation pass.
+        self.bodies: dict[str, str] = dict(bodies or {})
+        self.body_writes: list[tuple[str, str]] = []
         self.posts: list[tuple[str, str]] = []
         self.edits: list[tuple[str, str]] = []
         self.listed: list[str] = []
@@ -171,6 +201,23 @@ class _FakeProvider:
     @property
     def can_comment(self) -> bool:
         return self.comments_supported and self.configured
+
+    @property
+    def can_edit_body(self) -> bool:
+        return self.body_supported and self.configured
+
+    @property
+    def web_root(self) -> str | None:
+        return "https://forge.example.com" if self._links else None
+
+    def read_body(self, ticket_id: str) -> str:
+        return self.bodies.get(ticket_id, "")
+
+    def update_body(self, ticket_id: str, body: str) -> None:
+        if self._fail or ticket_id in self._fail_ids:
+            raise TicketProviderError(f"{self.name} body write refused for {ticket_id}")
+        self.bodies[ticket_id] = body
+        self.body_writes.append((ticket_id, body))
 
     # ── enrichment reads (resolved at dispatch, never persisted on the ref) ──
 
@@ -230,6 +277,7 @@ def _publisher(
     providers: Sequence[_FakeProvider] = (),
     todo: TodoList | None = None,
     phase: PhaseReport | None = None,
+    phase_resolver: Callable[[str, str], PhaseReport | None] | None = None,
     task_resolver: Callable[[str, str], str | None] | None = None,
     transcript_probe: Callable[[str, str, str], bool] | None = None,
     ticket_held: bool | None = None,
@@ -248,7 +296,7 @@ def _publisher(
         ),
         provider_resolver=lambda root, name: table.get(name),
         todo_resolver=lambda root, ws_id: todo,
-        phase_resolver=lambda root, ws_id: phase,
+        phase_resolver=phase_resolver or (lambda root, ws_id: phase),
         task_resolver=task_resolver,
         transcript_probe=transcript_probe,
         holder_resolver=(None if ticket_held is None else (lambda root, refs: ticket_held)),
@@ -739,6 +787,138 @@ def test_the_agents_note_renders_exactly_once_as_a_blockquote_under_the_diagram(
     assert f"> {note}" in progress
 
 
+# ─── the phase is PER TICKET (the one thing a body does not share) ───────────
+
+
+def test_each_target_renders_its_own_tickets_claim() -> None:
+    """The premise of the whole per-ticket axis, at the render seam.
+
+    One workspace routinely carries an issue and the pull request that closes
+    it, and one shared phase cannot say the issue is delivering while the PR is
+    blocked on a review. The body is otherwise identical on both threads — the
+    agent state, the branch, the checklist all answer for the WORKSPACE — so
+    ``focus`` is the one input that makes two bodies out of one snapshot."""
+    report = _report(
+        "scoping",  # the workspace's own claim: deliberately unlike either ticket's
+        tickets=(
+            _claim("gitea:42", "delivering"),
+            _claim("gitea:43", "verifying", blocked=True, note="needs a review decision"),
+        ),
+    )
+    issue = TicketStatusPublisher.render(_snapshot(phase=report), focus="gitea:42")
+    pull = TicketStatusPublisher.render(_snapshot(phase=report), focus="gitea:43")
+
+    assert "| 🧭 **Phase** | ●●●●●○ Delivering · 5 of 6 |" in issue
+    assert "| 🧭 **Phase** | ●●●●○○ ⛔ Verifying, blocked · 4 of 6 |" in pull
+    assert issue != pull
+    # Neither thread inherits the workspace's own claim while it has one of its own.
+    assert "Scoping · 1 of 6" not in issue
+    assert "Scoping · 1 of 6" not in pull
+
+
+def test_a_ticket_with_no_claim_of_its_own_inherits_the_workspaces() -> None:
+    """The fallback, and it is a deliberate direction rather than a default.
+
+    An agent reporting one phase for a job that happens to name three tickets is
+    the ordinary case; withholding that claim from the two it did not name
+    individually would make per-ticket reporting a DOWNGRADE for everyone who
+    never opts in."""
+    report = _report(
+        "implementing", note="wiring the parser", tickets=(_claim("gitea:42", "delivering"),)
+    )
+    body = TicketStatusPublisher.render(_snapshot(phase=report), focus="gitea:99")
+    assert "| 🧭 **Phase** | ●●●○○○ Implementing · 3 of 6 |" in body
+    assert "> wiring the parser" in body
+    # And with no focus at all — every non-ticket caller — it is the same claim.
+    assert TicketStatusPublisher.render(_snapshot(phase=report)) == body
+
+
+def test_a_ticket_nobody_reported_on_reads_as_unreported_never_as_scoping() -> None:
+    """The distinction the whole axis rests on, applied per ticket.
+
+    "Has not reported" is a fleet-health fact about the AGENT; "is scoping" is
+    progress on the task. Defaulting the first to the second would destroy the
+    difference on the one surface a human triages from — and it would do it
+    silently, because ``scoping`` renders perfectly well. Pinned as a PAIR, so
+    the assertion can only pass while the two really do render differently."""
+    unreported = TicketStatusPublisher.render(_snapshot(phase=None), focus="gitea:42")
+    assert "**Phase**" not in unreported
+    assert "```mermaid" not in unreported
+    assert "Progress" not in unreported
+    assert "Scoping" not in unreported
+
+    seeded = TicketStatusPublisher.render(
+        _snapshot(phase=_report("scoping", tickets=(_claim("gitea:42", "scoping"),))),
+        focus="gitea:42",
+    )
+    assert "| 🧭 **Phase** | ●○○○○○ Scoping · 1 of 6 |" in seeded
+
+
+def test_blocked_renders_beside_the_phase_and_never_instead_of_it() -> None:
+    """A flag orthogonal to the position, so both facts have to survive.
+
+    ``scoping, blocked`` is a ticket nobody can even start; ``verifying,
+    blocked`` is work that is substantially done and wants one decision. A
+    render that replaced the phase name with the word "blocked" would throw away
+    the more actionable half AND leave the "4 of 6" beside it contradicted. The
+    reason rides the note, which is the one place with room to print it whole."""
+    report = _report("verifying", note="the API contract is ambiguous", blocked=True)
+    body = TicketStatusPublisher.render(_snapshot(phase=report))
+
+    assert "| 🧭 **Phase** | ●●●●○○ ⛔ Verifying, blocked · 4 of 6 |" in body
+    assert '"⛔ Verifying<br>the API contract is ambiguous"]:::now' in _diagram(body)
+    assert "> ⛔ **Blocked** — the API contract is ambiguous" in body
+
+    # Blocked with nothing to say still says it — the flag is the signal, the
+    # note is the explanation, and a missing explanation must not hide the flag.
+    silent = TicketStatusPublisher.render(_snapshot(phase=_report("scoping", blocked=True)))
+    assert "> ⛔ **Blocked**" in silent
+    assert "●○○○○○ ⛔ Scoping, blocked · 1 of 6" in silent
+
+
+def test_blocked_does_not_repaint_the_diagram() -> None:
+    """The chart's colours encode ONE thing — where on the ramp this is. Blocked
+    is orthogonal to that, so it takes the glyph the comment already uses for
+    the concept and leaves every fill alone; a colour would say "this phase"
+    where the fact is "this phase, stuck"."""
+    plain = _diagram(TicketStatusPublisher.render(_snapshot(phase=_report("verifying"))))
+    stuck = _diagram(
+        TicketStatusPublisher.render(_snapshot(phase=_report("verifying", blocked=True)))
+    )
+    assert _class_defs(plain) == _class_defs(stuck)
+    assert '"Verifying"]:::now' in plain and '"⛔ Verifying"]:::now' in stuck
+
+
+def _class_defs(chart: str) -> list[str]:
+    return [line for line in chart.splitlines() if line.strip().startswith("classDef")]
+
+
+def test_dispatch_gives_each_thread_the_phase_of_the_ticket_it_lands_on() -> None:
+    """The render seam, driven the way production drives it: one snapshot, one
+    todo/phase/enrichment resolution, and one render per target keyed on the
+    ref's own ``TicketRef.key``. A second spelling of that key anywhere would
+    pick no claim at all and read as an agent that never reported."""
+    provider = _FakeProvider()
+    report = _report(
+        "implementing",
+        tickets=(
+            _claim("gitea:42", "verifying"),
+            _claim("gitea:43", "delivering", blocked=True),
+        ),
+    )
+    pub = _publisher(provider, window=5.0, phase=report)
+    pub.observe(_delta(_row(task="mirrored", refs=(_GITEA_REF, _GITEA_PR_REF))))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+
+    bodies = dict(provider.posts)
+    assert "●●●●○○ Verifying · 4 of 6" in bodies["42"]
+    assert "●●●●●○ ⛔ Delivering, blocked · 5 of 6" in bodies["43"]
+    assert bodies["42"] != bodies["43"]
+    # Everything that answers for the WORKSPACE still reads the same on both.
+    for shared in ("| 🌿 **Branch** |", "| 🤖 **Agent** |", "- ticket 42 — #42"):
+        assert shared in bodies["42"] and shared in bodies["43"]
+
+
 # ─── the tracking block (issues, pull requests, the way back to Grove) ────────
 
 
@@ -840,6 +1020,215 @@ def test_dispatch_carries_the_workspaces_ticket_refs_into_the_render() -> None:
     body = provider.posts[0][1]
     assert "- ticket 42 — #42" in body
     assert "- ticket 43 — #43" in body
+
+
+# ─── the badge footer on the ticket's own description ───────────────────────
+
+
+def test_publishing_upserts_the_badge_footer_into_the_description() -> None:
+    """A reader meets the DESCRIPTION first; the status comment may be a long scroll away."""
+    provider = _FakeProvider()
+    provider.bodies["42"] = "the human's description"
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    body = provider.bodies["42"]
+    assert "the human's description" in body  # never damaged
+    assert "open_in-grove_workspace-grey.svg" in body
+    assert "scroll_to-grove_status-grey.svg" in body
+    assert "#issuecomment-" in body  # the status badge reaches the comment itself
+
+
+def test_the_status_badge_points_at_the_path_the_reader_is_already_on() -> None:
+    """A PR anchor must use the pulls path, or clicking it navigates rather than scrolls.
+
+    A forge serves the ISSUE path for a pull request by 303-redirecting to the
+    pulls path, so a PR footer built on `/issues/<n>` sends the reader on a
+    round trip back to the page they were already looking at. Comment I/O is
+    correctly kind-blind; a link cannot be.
+
+    The tempting fix is a bare `#issuecomment-<id>` fragment, and it is wrong:
+    Gitea's sanitizer rewrites a relative fragment to
+    `#user-content-issuecomment-<id>`, which matches no element on the page, so
+    the badge would scroll nowhere at all. The path stays whole.
+    """
+    provider = _FakeProvider()
+    provider.bodies["43"] = "the PR description"
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working", refs=(_GITEA_PR_REF,))))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    body = provider.bodies["43"]
+    assert "/pulls/43#issuecomment-" in body
+    assert "/issues/43#issuecomment-" not in body
+
+
+def test_an_issue_target_keeps_the_issues_path() -> None:
+    provider = _FakeProvider()
+    provider.bodies["42"] = "the issue description"
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert "/issues/42#issuecomment-" in provider.bodies["42"]
+
+
+def test_the_status_badge_carries_no_scheme_so_it_inherits_the_readers_own() -> None:
+    """A configured `http://` tracker read over `https://` makes an absolute anchor
+    cross-origin, and a cross-origin fragment is a full page load rather than a
+    scroll — the exact round trip the anchor exists to remove. Protocol-relative
+    is same-origin on whichever scheme the reader arrived by.
+    """
+    provider = _FakeProvider()
+    provider.bodies["42"] = "the issue description"
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    body = provider.bodies["42"]
+    assert "(//forge.example.com/acme/proj/issues/42#issuecomment-" in body
+    assert "https://forge.example.com/acme/proj/issues/42" not in body
+    assert "http://forge.example.com/acme/proj/issues/42" not in body
+
+
+def test_the_footer_is_written_once_and_not_rewritten_when_nothing_moved() -> None:
+    """A forge rate-limits, and an edit notifies every watcher of the ticket."""
+    provider = _FakeProvider()
+    provider.bodies["42"] = "body"
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="one")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert len(provider.body_writes) == 1
+
+    pub.observe(_delta(_row(task="two")))  # the comment changes, the footer does not
+    pub.flush_pending(now=T0 + timedelta(seconds=10))
+    assert len(provider.body_writes) == 1
+
+
+def test_the_footer_follows_a_ticket_that_moves_to_another_workspace() -> None:
+    """THE handoff case: a ticket outlives the workspace that first held it.
+
+    Nothing hooks the move — the new holder simply publishes, and because both
+    badge destinations are derived from whoever holds the ticket at render time,
+    the footer rewrites itself. A stored link would have kept pointing at a
+    workspace that no longer exists.
+    """
+    provider = _FakeProvider()
+    provider.bodies["42"] = "body"
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="first")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert "/w/ws1" in provider.bodies["42"]
+
+    moved = _row(task="second")
+    object.__setattr__(moved.state, "id", "ws2")  # the same ticket, a new workspace
+    pub.observe(_delta(moved))
+    pub.flush_pending(now=T0 + timedelta(seconds=10))
+    assert "/w/ws2" in provider.bodies["42"]
+    assert "/w/ws1" not in provider.bodies["42"]  # replaced in place, never duplicated
+
+
+def test_a_provider_that_cannot_edit_bodies_still_publishes_its_comment() -> None:
+    """The footer is decoration; the status update is the job."""
+    provider = _FakeProvider(body_supported=False)
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert provider.posts, "the comment must still land"
+    assert provider.body_writes == []
+
+
+def test_publishing_assigns_the_bot_through_the_injected_assigner() -> None:
+    """Assignment rides the same edge as the comment — the moment work is known."""
+    provider = _FakeProvider()
+    seen: list[tuple[str, str, str, str]] = []
+    pub = _publisher(provider, window=5.0)
+    pub._assigner = lambda root, name, tid, kind: bool(seen.append((root, name, tid, kind))) or True
+    pub.observe(_delta(_row(task="working")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert seen == [("/home/u/proj", "gitea", "42", "issue")]
+
+
+def test_a_failing_assigner_never_breaks_the_publish() -> None:
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+
+    def _boom(root: str, name: str, tid: str, kind: str) -> bool:
+        raise RuntimeError("forge said no")
+
+    pub._assigner = _boom
+    pub.observe(_delta(_row(task="working")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))  # must not raise
+    assert provider.posts
+
+
+def test_the_comment_names_the_branch_the_agent_is_actually_on() -> None:
+    """A create-time snapshot rendered as current put a wrong branch on a tracker.
+
+    `WorkspaceState.branch` records what HEAD pointed at when the workspace was
+    born and nothing refreshes it, so a workspace whose agent branched afterwards
+    published the ORIGINAL branch and its tip commit. ROOT placement makes that
+    the normal case, not the exception: Grove creates no branch there, and the
+    agent is routinely told to branch off whatever it started on.
+    """
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working", branch="feat/live-branch")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    body = provider.posts[0][1]
+    assert "feat/live-branch" in body
+    assert "grove/42-fix-auth" not in body
+
+
+def test_switching_branch_schedules_a_publish() -> None:
+    """The stale field never moved, so it silently disabled its own trigger.
+
+    `branch` and the tip commit are two of the fingerprint's members, and the
+    commit list is derived from the branch — so while the branch was a frozen
+    snapshot, neither could ever change and two of the publish triggers were
+    dead. Keying on the live value restores both.
+    """
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working", branch="main")))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert len(provider.edits) == 0
+
+    pub.observe(_delta(_row(task="working", branch="feat/switched")))
+    pub.flush_pending(now=T0 + timedelta(seconds=10))
+    assert provider.edits, "a branch switch must schedule a re-publish"
+    assert "feat/switched" in provider.edits[-1][1]
+
+
+def test_an_absent_live_branch_falls_back_to_the_recorded_one() -> None:
+    """Detached HEAD, or a row built before the field existed, must not blank it."""
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="working")))  # branch="" — nothing derived
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert "grove/42-fix-auth" in provider.posts[0][1]
+
+
+def test_attaching_a_ticket_publishes_without_waiting_for_the_agent_to_move() -> None:
+    """Attach is a render-relevant change, and its absence was a silent forever-bug.
+
+    Every other fingerprint member is a by-product of the agent WORKING — a tool
+    call, a reply, a commit, a phase report. Attaching a ticket moves none of
+    them while changing what the comment is for: it adds a whole new target
+    thread. So a freshly attached ticket got no comment until something
+    unrelated happened to move the key, measured at ~16 minutes on a live
+    workspace and unbounded in principle — attach to an idle workspace and it
+    publishes nothing, forever. It reads as "issue-ops is broken" rather than as
+    a delay, which is exactly why it is expensive.
+    """
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+    pub.observe(_delta(_row(task="steady", refs=(_GITEA_REF,))))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert len(provider.posts) == 1
+
+    # A second ticket is attached. NOTHING else about the workspace changes —
+    # same task text, same tool count, same commit, same phase.
+    pub.observe(_delta(_row(task="steady", refs=(_GITEA_REF, _GITEA_PR_REF))))
+    pub.flush_pending(now=T0 + timedelta(seconds=10))
+    assert [tid for tid, _ in provider.posts] == ["42", "43"]
 
 
 # ─── the uncapped task text (resolved at dispatch, capped field as fallback) ──
@@ -1244,6 +1633,91 @@ def test_rewriting_an_identical_phase_does_not_patch() -> None:
     assert provider.edits == []
 
 
+def test_a_per_ticket_claim_change_alone_schedules_a_patch() -> None:
+    """The SAME bug class as the phase and ``ticket_refs`` omissions, one level
+    down — and this is its third audit, which is the reason it is pinned here
+    rather than trusted.
+
+    Every by-product member of the fingerprint answers "is the agent working":
+    a tool call, a reply, a commit. An agent that edits ONE entry in its phase
+    file moves none of them — not even the workspace's own claim — so leaving
+    the per-ticket claims out of the key means a ticket reported as blocked is
+    invisible on its own thread until something unrelated happens to move it.
+    Unbounded in principle: report a phase, then go quiet, and the comment never
+    catches up.
+
+    Everything else here is held byte-identical on purpose, so the ONLY thing
+    that can schedule the edit is the claim."""
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+    refs = (_GITEA_REF, _GITEA_PR_REF)
+    pub.observe(
+        _delta(
+            _row(
+                task="steady",
+                tool_calls=1,
+                refs=refs,
+                phase=_report("implementing", tickets=(_claim("gitea:43", "implementing"),)),
+            )
+        )
+    )
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert len(provider.posts) == 2 and provider.edits == []
+
+    pub.observe(
+        _delta(
+            _row(
+                task="steady",
+                tool_calls=1,
+                refs=refs,
+                phase=_report("implementing", tickets=(_claim("gitea:43", "verifying"),)),
+            )
+        )
+    )
+    pub.flush_pending(now=T0 + timedelta(seconds=20))
+    assert provider.edits, "a per-ticket claim change must schedule a comment update"
+
+
+def test_flipping_a_tickets_blocked_flag_alone_schedules_a_patch() -> None:
+    """``blocked`` is the single edit most needing a human, and it moves nothing
+    else on the row — the phase name does not even change. So it is the member
+    whose absence from the key would be both the most invisible and the most
+    expensive."""
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+    stuck = _claim("gitea:42", "verifying", blocked=True)
+    fine = _claim("gitea:42", "verifying")
+    pub.observe(_delta(_row(task="steady", tool_calls=1, phase=_report(tickets=(fine,)))))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert len(provider.posts) == 1 and provider.edits == []
+
+    pub.observe(_delta(_row(task="steady", tool_calls=1, phase=_report(tickets=(stuck,)))))
+    pub.flush_pending(now=T0 + timedelta(seconds=20))
+    assert provider.edits, "a blocked flag must schedule a comment update"
+
+
+def test_rewriting_identical_per_ticket_claims_does_not_patch() -> None:
+    """The counterpart, and what keeps the new members from becoming a PATCH
+    storm: only ``(ticket, phase, note, blocked)`` enters the key, and
+    ``PhaseReport`` sorts its claims, so an unchanged file re-read on a later
+    tick — a new mtime, a different mapping order — is still clean."""
+    provider = _FakeProvider()
+    pub = _publisher(provider, window=5.0)
+    claims = (_claim("gitea:42", "verifying"), _claim("gitea:43", "delivering"))
+    pub.observe(_delta(_row(task="steady", tool_calls=1, phase=_report(tickets=claims))))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert len(provider.posts) == 1
+
+    later = PhaseReport(
+        phase="implementing",
+        updated_at=T0 + timedelta(minutes=9),  # the file was rewritten, identically
+        tickets=claims,
+    )
+    pub.observe(_delta(_row(task="steady", tool_calls=1, phase=later)))
+    pub.flush_pending(now=T0 + timedelta(seconds=20))
+    assert provider.edits == []
+
+
 def test_injected_terminal_state_flushes_immediately() -> None:
     provider = _FakeProvider()
     pub = _publisher(provider, terminal_states=frozenset({AgentActivityState.ERROR}))
@@ -1410,10 +1884,13 @@ def test_skips_when_no_provider_resolves_for_the_ref() -> None:
 # ─── multi-target routing (the issue AND the PR that resolves it) ─────────────
 
 
-def test_publishes_the_same_body_to_every_eligible_target() -> None:
-    """A workspace naming an issue and its pull request mirrors onto BOTH threads,
-    with one identical body — a reader of either wants the same answer (how far
-    along, what remains), so nothing varies per target."""
+def test_publishes_to_every_eligible_target_and_varies_only_the_phase() -> None:
+    """A workspace naming an issue and its pull request mirrors onto BOTH threads.
+
+    Almost every fact in the body answers for the WORKSPACE — the agent state,
+    the branch, the commit, the checklist, the cross-links — so with no
+    per-ticket claim reported the two bodies are byte-identical, which is what
+    this pins. The phase is the one exception, and it has its own test."""
     provider = _FakeProvider()
     pub = _publisher(provider, window=5.0)
     pub.observe(_delta(_row(task="mirrored", refs=(_GITEA_REF, _GITEA_PR_REF))))

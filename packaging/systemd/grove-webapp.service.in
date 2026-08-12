@@ -1,5 +1,5 @@
 [Unit]
-Description=Grove webapp (read-only Next.js dashboard)
+Description=Grove webapp (assistant-ui front end)
 Documentation=https://github.com/bearlike/Grove
 # Daemon should come up first; webapp polls it on render. `Wants=` (not
 # `Requires=`) means a daemon failure doesn't tear the webapp down — the

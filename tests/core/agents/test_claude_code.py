@@ -87,6 +87,53 @@ def test_basic_session_metrics(adapter: ClaudeCodeAdapter, claude_home: Path) ->
     assert act.last_event_at == datetime.fromisoformat("2026-06-01T10:00:10.000Z")
 
 
+def test_current_task_skips_a_relayed_teammate_message_for_the_real_prompt(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A relay is the agent's INBOX, never what it is working on.
+
+    Claude Code writes a ``last-prompt`` record for whatever was submitted
+    last, including a peer session's relayed ``<teammate-message>`` — so the
+    newest-last-prompt arm published that envelope, wrapper and all, as
+    ``current_task`` (reproduced on 4 real on-host sessions). The other arm
+    (`_first_human_raw`) had always honoured ``is_human_turn``, which already
+    classifies the envelope as machine traffic; only this arm asked nothing.
+    Nothing is stripped — the record is skipped, and an older HUMAN prompt
+    stands.
+    """
+    cwd = Path("/home/dev/work/relay")
+    sid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    relay = (
+        "Another Claude session sent a message: "
+        '<teammate-message teammate_id=\\"peer\\" summary=\\"done\\">finished</teammate-message>'
+    )
+    (folder / f"{sid}.jsonl").write_text(
+        '{"type":"user","uuid":"h1","timestamp":"2026-06-09T08:00:00.000Z",'
+        f'"isSidechain":false,"cwd":"{cwd}",'
+        '"message":{"role":"user","content":"Rename the widget module"}}\n'
+        f'{{"type":"last-prompt","lastPrompt":"Rename the widget module",'
+        f'"leafUuid":"h1","sessionId":"{sid}"}}\n'
+        f'{{"type":"user","uuid":"n1","timestamp":"2026-06-09T08:05:00.000Z",'
+        f'"isSidechain":false,"cwd":"{cwd}",'
+        f'"message":{{"role":"user","content":"{relay}"}}}}\n'
+        f'{{"type":"last-prompt","lastPrompt":"{relay}",'
+        f'"leafUuid":"n1","sessionId":"{sid}"}}\n',
+        encoding="utf-8",
+    )
+
+    act = adapter.parse_activity(cwd, sid)
+
+    assert act.current_task == "Rename the widget module"
+    # The two readers are one selection: capped and uncapped must never diverge.
+    assert adapter.latest_task(cwd, sid) == "Rename the widget module"
+    # `last_prompt` answers a DIFFERENT question — what was submitted last —
+    # and the relay genuinely was, so that field keeps reporting it.
+    assert adapter.list_sessions(cwd)[0].last_prompt is not None
+    assert "teammate-message" in adapter.list_sessions(cwd)[0].last_prompt
+
+
 def test_resume_dedups_overlapping_records(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
     """basic + its resume share one assistant line (same id+requestId): count once.
 
@@ -1449,8 +1496,11 @@ def test_discover_all_walks_every_folder_across_the_cascade(
     assert by_id[sid_a].cwd == str(project_a)
     assert by_id[sid_a].git_branch == "main"
     assert by_id[sid_a].adapter_kind == "claude_code"
+    # size_bytes rides the same stat() call as mtime — zero extra I/O.
+    assert by_id[sid_a].size_bytes == path_a.stat().st_size
     assert by_id[sid_b].cwd == str(project_b)
     assert by_id[sid_b].git_branch == "feature/x"
+    assert by_id[sid_b].size_bytes == path_b.stat().st_size
 
 
 def test_discover_all_degrades_a_cwdless_transcript_instead_of_dropping_it(
@@ -2745,3 +2795,191 @@ def test_truncated_rewrite_reparses_from_scratch(
         encoding="utf-8",
     )
     assert adapter.parse_activity(INC_CWD, INC_SID).human_turns == 1
+
+
+# ─── tool-call detail on turn entries ────────────────────────────────────────
+#
+# Every entry a ``tool_use`` block produced carries its ``ToolCall`` — request,
+# response, duration and running-or-settled — so a renderer draws one expander
+# with a spinner or a check for every tool call whatever card sits inside it.
+# The rule itself is pinned in test_tool_call.py; these pin the WIRING, and in
+# particular that Claude's mid-tool shape (an assistant ``tool_use`` flushed
+# before its ``tool_result``) is what "running" reads off.
+
+TOOLS_CWD = Path("/home/dev/tools")
+TOOLS_SID = "aaaaaaaa-1111-4111-8111-000000000001"
+
+
+def _tool_use_line(uuid: str, ts: str, calls: list[tuple[str, str, dict[str, object]]]) -> str:
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "timestamp": ts,
+            "cwd": str(TOOLS_CWD),
+            "message": {
+                "id": f"msg_{uuid}",
+                "role": "assistant",
+                "stop_reason": "tool_use",
+                "content": [
+                    {"type": "tool_use", "id": cid, "name": name, "input": args}
+                    for cid, name, args in calls
+                ],
+            },
+        }
+    )
+
+
+def _tool_result_line(uuid: str, ts: str, cid: str, text: str, *, is_error: bool = False) -> str:
+    return json.dumps(
+        {
+            "type": "user",
+            "uuid": uuid,
+            "timestamp": ts,
+            "cwd": str(TOOLS_CWD),
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": cid,
+                        "content": text,
+                        "is_error": is_error,
+                    }
+                ],
+            },
+        }
+    )
+
+
+def test_tool_entries_carry_request_response_and_duration(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    _write_lines(
+        claude_home,
+        TOOLS_CWD,
+        TOOLS_SID,
+        [
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "u1",
+                    "timestamp": "2026-08-11T10:00:00.000Z",
+                    "cwd": str(TOOLS_CWD),
+                    "message": {"role": "user", "content": "run the suite"},
+                }
+            ),
+            _tool_use_line(
+                "a1", "2026-08-11T10:00:01.000Z", [("t1", "Bash", {"command": "pytest -q"})]
+            ),
+            _tool_result_line("r1", "2026-08-11T10:00:04.500Z", "t1", "2 passed"),
+        ],
+    )
+    (entry,) = adapter.read_turns(TOOLS_CWD, TOOLS_SID)[0].entries
+    assert entry.role == "tool"
+    assert entry.tool is not None
+    assert entry.tool.name == "Bash"
+    assert entry.tool.tool_use_id == "t1"
+    assert entry.tool.input == {"command": "pytest -q"}
+    assert entry.tool.result == "2 passed"
+    assert entry.tool.status == "ok"
+    assert entry.tool.duration_ms == 3500
+
+
+def test_a_failed_tool_reports_error_not_a_successful_call_with_sad_text(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    _write_lines(
+        claude_home,
+        TOOLS_CWD,
+        TOOLS_SID,
+        [
+            _tool_use_line("a1", "2026-08-11T10:00:01.000Z", [("t1", "Bash", {"command": "nope"})]),
+            _tool_result_line("r1", "2026-08-11T10:00:02.000Z", "t1", "Exit code 1", is_error=True),
+        ],
+    )
+    (entry,) = adapter.read_turns(TOOLS_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert (entry.tool.status, entry.tool.result) == ("error", "Exit code 1")
+
+
+def test_a_tool_still_in_flight_reads_running(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Claude flushes the assistant message carrying the ``tool_use`` before the
+    result arrives, so a session read mid-tool holds an unresolved call — the
+    same shape Codex's open ``function_call`` has. Verified against real on-host
+    transcripts (2026-08-11), including a live session's in-flight ``Bash``."""
+    _write_lines(
+        claude_home,
+        TOOLS_CWD,
+        TOOLS_SID,
+        [
+            _tool_use_line(
+                "a1", "2026-08-11T10:00:01.000Z", [("t1", "Bash", {"command": "sleep 60"})]
+            )
+        ],
+    )
+    (entry,) = adapter.read_turns(TOOLS_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert entry.tool.status == "running"
+    assert entry.tool.result is None
+    assert entry.tool.duration_ms is None
+    # The request is available the whole time the call is running — that is the
+    # point: a spinner with no arguments is what the report was about.
+    assert entry.tool.input == {"command": "sleep 60"}
+
+
+def test_parallel_tool_calls_stay_individually_correlated(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Claude issues several calls in one assistant message and their results
+    come back interleaved; each entry keeps its own id, body and duration."""
+    _write_lines(
+        claude_home,
+        TOOLS_CWD,
+        TOOLS_SID,
+        [
+            _tool_use_line(
+                "a1",
+                "2026-08-11T10:00:00.000Z",
+                [
+                    ("t1", "Bash", {"command": "make lint"}),
+                    ("t2", "Bash", {"command": "pytest"}),
+                ],
+            ),
+            _tool_result_line("r2", "2026-08-11T10:00:02.000Z", "t2", "green"),
+            _tool_result_line("r1", "2026-08-11T10:00:09.000Z", "t1", "clean"),
+        ],
+    )
+    entries = adapter.read_turns(TOOLS_CWD, TOOLS_SID)[0].entries
+    assert [(e.tool.tool_use_id, e.tool.result, e.tool.duration_ms) for e in entries if e.tool] == [
+        ("t1", "clean", 9000),
+        ("t2", "green", 2000),
+    ]
+
+
+def test_a_structured_card_also_carries_its_tool_call(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A diff card says nothing about the invocation that produced it, so the
+    file_edit entry carries the call too — that is what lets one expander
+    render a spinner-or-check for every tool call, structured or not."""
+    _write_lines(
+        claude_home,
+        TOOLS_CWD,
+        TOOLS_SID,
+        [
+            _tool_use_line(
+                "a1",
+                "2026-08-11T10:00:00.000Z",
+                [("t1", "Edit", {"file_path": "/x/a.py", "old_string": "a", "new_string": "b"})],
+            ),
+            _tool_result_line("r1", "2026-08-11T10:00:00.750Z", "t1", "ok"),
+        ],
+    )
+    (entry,) = adapter.read_turns(TOOLS_CWD, TOOLS_SID)[0].entries
+    assert entry.role == "file_edit"
+    assert entry.file_edit is not None
+    assert entry.tool is not None
+    assert (entry.tool.name, entry.tool.status, entry.tool.duration_ms) == ("Edit", "ok", 750)

@@ -88,6 +88,7 @@ against real git in both directions).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Final, Literal, get_args
@@ -109,10 +110,10 @@ A closed set rather than free text because every client renders it as a badge
 and an orchestrator compares it across workspaces — the same reasoning that
 makes ``WorkspaceStatus`` an enum. Six members, linear and converging.
 
-Deliberately ABSENT: ``blocked`` and ``error``. Both already exist on
-``AgentActivityState``, and duplicating them here would recreate exactly the
-conflation this axis is separate to avoid — an agent blocked on a question is
-still *in* some phase, and the orchestrator wants both facts.
+Deliberately ABSENT: ``error``, which already exists on ``AgentActivityState``.
+``blocked`` is absent *as a member* for a different and sharper reason — see
+:attr:`PhaseClaim.blocked`, which carries it as an orthogonal flag so that
+"stuck, and here is how far it got" stays expressible.
 """
 
 PHASE_ORDER: Final[tuple[TaskPhase, ...]] = get_args(TaskPhase)
@@ -130,8 +131,13 @@ NOTE_CAP: Final = 200
 the agent should have put in its todo list instead."""
 
 
-class PhaseDocument(BaseModel):
-    """Exactly what the agent writes into ``.grove/phase.json``.
+class PhaseClaim(BaseModel):
+    """One claim about progress: how far, a note, and whether it is stuck.
+
+    The atom shared by the workspace's own claim and every per-ticket claim
+    beside it, because "how far along is this" is one question whatever it is
+    asked about. Splitting it into two near-identical models is how the two
+    drift on the next field.
 
     Pydantic rather than a hand-parsed dict because this genuinely *is* a
     contract between two programs — an agent constructs it, Grove consumes it —
@@ -154,6 +160,28 @@ class PhaseDocument(BaseModel):
     phase: TaskPhase
     note: Annotated[str | None, Field(max_length=NOTE_CAP)] = None
 
+    blocked: bool = False
+    """The agent cannot finish this, and is saying so rather than going quiet.
+
+    **A FLAG BESIDE THE PHASE, NOT A SEVENTH PHASE**, and the distinction is the
+    whole point. "Stuck" and "how far it got before it stuck" are two facts, and
+    an orchestrator triaging a fleet needs both: ``scoping + blocked`` is a
+    ticket nobody can even start, while ``verifying + blocked`` is work that is
+    substantially done and wants one decision. Spending a member of
+    :data:`PHASE_ORDER` on it would collapse those into one word and, worse,
+    break every client that renders "4 of 6" — a blocked task has no position on
+    a linear ramp, so :attr:`index` would have to start lying or start being
+    nullable at every call site.
+
+    This is the same reasoning that keeps ``AgentActivityState`` a separate axis
+    from ``WorkspaceStatus``, applied one level down. It does NOT duplicate that
+    enum's own ``BLOCKED``: there, blocked means *waiting on a human right now*
+    and clears the moment they answer; here it means *this task is not
+    completable by me*, which survives the agent going idle, dying, or being
+    respawned, because it is a claim about the work rather than about the
+    process. The reason belongs in :attr:`note`.
+    """
+
     @field_validator("note", mode="before")
     @classmethod
     def _flatten(cls, v: object) -> str | None:
@@ -170,28 +198,127 @@ class PhaseDocument(BaseModel):
         flat = " ".join(v.split())
         return flat[:NOTE_CAP] or None
 
-
-class PhaseReport(PhaseDocument):
-    """A phase claim plus when it was made — what every consumer receives.
-
-    Inherits the document rather than restating its fields: a report *is* the
-    agent's claim, observed at a time. ``updated_at`` is the file's mtime rather
-    than a field the agent writes, because a timestamp is one more thing a model
-    can get wrong or omit while the filesystem already records it exactly — and
-    staleness is the whole reason a consumer asks for it.
-    """
-
-    updated_at: datetime
-
     @property
     def index(self) -> int:
-        """Zero-based position in :data:`PHASE_ORDER` — for progress rendering."""
+        """Zero-based position in :data:`PHASE_ORDER` — for progress rendering.
+
+        Stays honest under :attr:`blocked` precisely because blocked is not a
+        phase: a stuck task still has a position, which is the number a reader
+        wants most.
+        """
         return PHASE_ORDER.index(self.phase)
 
     @property
     def is_terminal(self) -> bool:
-        """Whether the agent considers the task converged."""
-        return self.phase == "done"
+        """Whether this claim has converged and wants nothing further.
+
+        ``blocked`` is terminal too — the agent is done with it either way, and
+        a fleet view that hid a blocked ticket among the live ones would bury
+        the single row most needing a human. What separates them is *who* acts
+        next, which the flag itself says.
+        """
+        return self.phase == "done" or self.blocked
+
+
+class TicketClaim(PhaseClaim):
+    """A :class:`PhaseClaim` about one attached ticket, carrying its key.
+
+    The key is ``f"{provider}:{id}"`` — the identity ``WorkspaceState.ticket_refs``
+    already deduplicates on and the exact string ``attach_ticket`` already emits
+    on its event. Reusing it means the join needs no new vocabulary, no lookup
+    table and no normalizer.
+
+    Grove never composes this key on the agent's behalf at *write* time; it
+    SEEDS the file with an entry per attached ticket (:meth:`PhaseFile.seed`) so
+    the agent edits keys that are already there rather than deriving a format
+    from prose it may have skimmed.
+    """
+
+    ticket: str = Field(min_length=1)
+
+
+class PhaseDocument(PhaseClaim):
+    """Exactly what the agent writes into its phase file.
+
+    The workspace's own claim, plus an optional claim per attached ticket. One
+    workspace routinely carries several tickets — a cluster of issues, or an
+    issue and the PR closing it — and one shared phase cannot say that issue A
+    is delivering while issue B is blocked. It answered the question "how is the
+    workspace" when the question a tracker asks is "how is *this ticket*".
+
+    ``tickets`` is a MAP here and a sorted tuple on :class:`PhaseReport`, which
+    is a deliberate asymmetry rather than an oversight. A map is what a language
+    model writes correctly by hand, and this document has exactly one author. A
+    report is consumed by the activity tick, which puts it inside a fingerprint
+    tuple — so it has to be hashable, which a ``dict`` field is not.
+    """
+
+    tickets: dict[str, PhaseClaim] = Field(default_factory=dict)
+
+    @field_validator("tickets", mode="before")
+    @classmethod
+    def _keep_what_parses(cls, v: object) -> object:
+        """Drop the ticket entries that do not validate, keep the ones that do.
+
+        Tolerant-inward applied at the right GRANULARITY. Without this the whole
+        model is strict about a nested value: one ticket entry naming a phase
+        this Grove does not know fails the document, so the agent loses its
+        workspace phase *and* every other ticket's — a total blackout caused by
+        one typo in one nested key. Per-entry filtering costs the bad entry
+        only, which is exactly what :meth:`PhaseFile.read` already promises for
+        the document as a whole.
+        """
+        if not isinstance(v, dict):
+            return {}
+        kept: dict[str, PhaseClaim] = {}
+        for key, raw in v.items():
+            if not isinstance(key, str) or not key:
+                continue
+            try:
+                kept[key] = PhaseClaim.model_validate(raw)
+            except ValidationError as exc:
+                logger.debug(f"dropping unparseable phase entry for ticket {key!r}: {exc}")
+        return kept
+
+
+class PhaseReport(PhaseClaim):
+    """A phase claim plus when it was made — what every consumer receives.
+
+    Inherits the claim rather than restating its fields: a report *is* the
+    agent's claim, observed at a time. ``updated_at`` is the file's mtime rather
+    than a field the agent writes, because a timestamp is one more thing a model
+    can get wrong or omit while the filesystem already records it exactly — and
+    staleness is the whole reason a consumer asks for it.
+
+    **One mtime covers the document, ticket claims included.** The file is
+    rewritten whole, so there is no per-ticket write time to read; deriving one
+    would mean Grove diffing successive reads and remembering the result, which
+    is per-process state that a daemon restart silently resets. Consistent with
+    this module's standing refusal to render a staleness verdict at all.
+    """
+
+    updated_at: datetime
+
+    tickets: tuple[TicketClaim, ...] = ()
+    """Per-ticket claims, ordered by key so the tuple is stable.
+
+    A TUPLE, not the document's map, for one hard reason: ``WorkspaceActivity``
+    puts this whole report inside its change fingerprint, and a model carrying a
+    ``dict`` field is unhashable — the tick would raise on the first workspace
+    that reported a ticket. Sorting makes the value deterministic, so an
+    unchanged file cannot re-emit a delta just because a mapping iterated in a
+    different order.
+    """
+
+    def for_ticket(self, key: str) -> TicketClaim | None:
+        """This report's claim about one ticket, or ``None`` if it made none.
+
+        ``None`` means *not reported*, never *at step zero* — the same
+        distinction the whole axis rests on, applied per ticket. A linear scan
+        because a workspace holds a handful of tickets, not thousands; an index
+        here would be a dict, which is what the tuple exists to avoid.
+        """
+        return next((t for t in self.tickets if t.ticket == key), None)
 
 
 class PhaseFile:
@@ -295,51 +422,151 @@ class PhaseFile:
         rendering it would put a value on screen that no palette, glyph, or
         ordering can place.
         """
+        doc = cls._document(worktree, key)
+        if doc is None:
+            return None
+        try:
+            mtime = cls.path_for(worktree, key).stat().st_mtime
+        except OSError as exc:
+            logger.debug(f"phase file vanished between read and stat at {worktree}: {exc}")
+            return None
+        return cls._report(doc, datetime.fromtimestamp(mtime, tz=UTC))
+
+    @classmethod
+    def _document(cls, worktree: Path | str, key: str | None) -> PhaseDocument | None:
+        """Parse *key*'s document, or ``None`` for any failure. Never raises."""
         path = cls.path_for(worktree, key)
         try:
             raw = path.read_bytes()
-            mtime = path.stat().st_mtime
         except FileNotFoundError:
             return None
         except OSError as exc:
             logger.debug(f"phase file unreadable at {path}: {exc}")
             return None
         try:
-            doc = PhaseDocument.model_validate_json(raw)
+            return PhaseDocument.model_validate_json(raw)
         except ValidationError as exc:
             logger.debug(f"phase file at {path} is not a valid phase document: {exc}")
             return None
+
+    @staticmethod
+    def _report(doc: PhaseDocument, updated_at: datetime) -> PhaseReport:
+        """Project a document onto the report shape consumers receive.
+
+        The one place the document's ticket MAP becomes the report's sorted
+        TUPLE, so nothing else has to know the two differ (see
+        :class:`PhaseDocument` for why they do).
+        """
         return PhaseReport(
             phase=doc.phase,
             note=doc.note,
-            updated_at=datetime.fromtimestamp(mtime, tz=UTC),
+            blocked=doc.blocked,
+            updated_at=updated_at,
+            tickets=tuple(
+                TicketClaim(ticket=key, phase=c.phase, note=c.note, blocked=c.blocked)
+                for key, c in sorted(doc.tickets.items())
+            ),
         )
 
     @classmethod
     def write(
-        cls, worktree: Path | str, key: str, phase: TaskPhase, note: str | None = None
+        cls,
+        worktree: Path | str,
+        key: str,
+        phase: TaskPhase,
+        note: str | None = None,
+        *,
+        blocked: bool = False,
+        ticket: str | None = None,
     ) -> PhaseReport:
         """Record a phase claim — the seam behind the CLI verb and the MCP tool.
 
         The in-workspace agent does NOT come through here (it has no Grove code
         to call); this exists so an orchestrator, or a human, can set or correct
-        a workspace's phase from outside. Loud on failure, unlike :meth:`read` —
-        a caller that asked to write is entitled to know it did not happen.
+        a claim from outside. Loud on failure, unlike :meth:`read` — a caller
+        that asked to write is entitled to know it did not happen.
 
         Takes a *key*, never the legacy path: a write always lands on the
         per-agent file, so setting a phase from outside is the same claim, in the
         same place, as the one the agent itself would have written.
+
+        With *ticket* set the claim lands on that ticket's entry and the
+        workspace's own claim is left alone; without it, the reverse. **Either
+        way this is a read-modify-write of the whole document**, because the
+        file is rewritten whole and a partial write would drop whatever it did
+        not mention. The agent may be writing concurrently and last-writer-wins,
+        which is tolerable *here* precisely because the ticket LIST is never
+        sourced from this file — the store owns that, so the worst a lost update
+        can cost is one stale claim that the agent's next transition corrects.
         """
         path = cls.path_for(worktree, key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        doc = PhaseDocument(phase=phase, note=note)
-        # Atomic replace, matching JsonWorkspaceStore: a reader on the poll path
-        # must never observe a half-written file.
+        held = cls._document(worktree, key)
+        claim = PhaseClaim(phase=phase, note=note, blocked=blocked)
+        if ticket is None:
+            doc = PhaseDocument(
+                phase=claim.phase,
+                note=claim.note,
+                blocked=claim.blocked,
+                tickets=dict(held.tickets) if held else {},
+            )
+        else:
+            doc = PhaseDocument(
+                phase=held.phase if held else phase,
+                note=held.note if held else None,
+                blocked=held.blocked if held else False,
+                tickets={**(held.tickets if held else {}), ticket: claim},
+            )
+        return cls._replace(path, doc)
+
+    @classmethod
+    def seed(cls, worktree: Path | str, key: str, tickets: Sequence[str]) -> None:
+        """Ensure the file carries an entry for every attached ticket.
+
+        **This is what lets the agent edit keys instead of composing them.** The
+        alternative — telling it the format in prose and hoping — puts a string
+        it has never seen between an honest report and a dropped one, and the
+        drop is silent. Seeding costs one write at launch and one per attach.
+
+        Deliberately additive: an existing entry is never touched (it is the
+        agent's own claim), and a DETACHED ticket's entry is left behind rather
+        than pruned, because the join reads the ticket list from the store — a
+        stale entry there is inert, while a write racing the agent is not.
+
+        Best-effort by contract, like :meth:`ensure_dir`: a read-only worktree
+        costs a convenience, never a launch.
+        """
+        missing = [t for t in tickets if t]
+        if not missing:
+            return
+        try:
+            held = cls._document(worktree, key)
+            entries = dict(held.tickets) if held else {}
+            fresh = {t: PhaseClaim(phase=PHASE_ORDER[0]) for t in missing if t not in entries}
+            if held is not None and not fresh:
+                return
+            path = cls.path_for(worktree, key)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            cls._replace(
+                path,
+                PhaseDocument(
+                    phase=held.phase if held else PHASE_ORDER[0],
+                    note=held.note if held else None,
+                    blocked=held.blocked if held else False,
+                    tickets={**entries, **fresh},
+                ),
+            )
+        except (OSError, ValidationError) as exc:
+            logger.debug(f"phase file not seedable under {worktree}: {exc}")
+
+    @classmethod
+    def _replace(cls, path: Path, doc: PhaseDocument) -> PhaseReport:
+        """Publish *doc* at *path* atomically and report what now stands there.
+
+        Atomic replace, matching ``JsonWorkspaceStore``: a reader on the poll
+        path must never observe a half-written file.
+        """
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(doc.model_dump_json(exclude_none=True) + "\n", encoding="utf-8")
         tmp.replace(path)
-        return PhaseReport(
-            phase=doc.phase,
-            note=doc.note,
-            updated_at=datetime.fromtimestamp(path.stat().st_mtime, tz=UTC),
-        )
+        return cls._report(doc, datetime.fromtimestamp(path.stat().st_mtime, tz=UTC))

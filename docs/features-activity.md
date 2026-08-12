@@ -2,26 +2,15 @@
 
 ## Watch the whole fleet
 
-Run one agent and you watch it. Run six and you cannot. Five are fine,
-one has sat on a permission prompt for twenty minutes, and the only way
-to find out is cycling every tmux window.
+Run six agents and you cannot watch them. Five are fine, one has sat on a
+permission prompt for twenty minutes, and finding out means cycling every tmux
+window. Grove reads what each agent is doing and puts the fleet on one wall that
+answers one question: who needs me right now?
 
-Grove watches for you instead, reading what each agent is doing and
-putting the fleet on one wall that answers one question: who needs me
-right now?
-
-## Two views, one system
-
-Grove tracks agents on two time scales, each with its own surface.
-
-- **Live activity**: the present tense, what every agent is doing
-  right now, across every project.
-- **Session history**: the past tense, what happened and what you
-  asked for.
-
-Both are read-only, built from transcripts and git state on disk.
-Steering an agent from the dashboard sends a fresh follow-up, never a
-rewrite of the record.
+It tracks two time scales. **Live activity** is what every agent is doing now,
+across every project. **Session history** is what happened. Both are read-only,
+built from transcripts and git state on disk, so steering from the dashboard
+sends a fresh follow-up rather than rewriting the record.
 
 ## The Activity Dashboard
 
@@ -30,25 +19,20 @@ home: the same wall, every agent session across every repository the
 daemon knows about, attention-first.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="The web dashboard's Hero composer as the default home surface, with the flat session rail on the left listing every agent session across projects" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="Grove's fleet dashboard: a flat, attention-sorted grid of workspace cards behind a session rail listing every workspace by recency" /></div>
   <figcaption class="ms-shot__body">The wall in the browser, attention-first.</figcaption>
 </figure>
 
-In the browser, the wall is the home surface (`/activity` redirects
-there):
+In the browser the fleet grid is the home surface (`/`), one flat wall rather
+than sectioned by repo. It streams over SSE within a second with a poll
+fallback, and a filter narrows the recency-sorted rail and grid by project,
+state or attention. Each card carries the agent and state, workspace title and
+project, a one-line summary, a diff and commit-divergence line, todo progress,
+and linked tickets. Open a card for the agent's live terminal, on the
+workspace's own Terminal tab.
 
-- A persisted Hero/Overview toggle swaps the default composer for a
-  repo-grouped grid, project chip per card.
-- Both stream over SSE within a second, with a poll fallback for
-  drops. A filter narrows the flat, recency-sorted rail by project,
-  state, or attention, and your choice persists.
-- Each card carries the agent and state, workspace title and project, a
-  one-line agent summary, a turns-tools-tokens metrics line, and the
-  last commit's relative time. A working card's *Live* toggle mirrors
-  that agent's terminal inline over SSE, one pane at a time.
-
-In the TUI, tiles group by project. Quiet ones stay compact, and a
-working, waiting, blocked, or erroring one expands to a terminal tail.
+In the TUI, tiles group by project. Quiet ones stay compact, and a working,
+waiting, blocked or erroring one expands to a terminal tail.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-dashboard.svg" alt="The TUI Activity Dashboard: agent tiles grouped by project, working and waiting tiles promoted with token metrics and a live pane tail" /></div>
@@ -71,20 +55,17 @@ Four signals feed every tile.
 4. **Recent commits.** The last few commits on the branch.
 
 The same state shows on the workspace list and the [peek
-rail](features-peek.md) (model, turns, tokens). It differs from
-[workspace status](features-status.md): a workspace can be ACTIVE
-while its agent is WAITING. Status describes the workspace, agent
-state the conversation inside it, and the dashboard shows both.
+rail](features-peek.md). It is not
+[workspace status](features-status.md), and a workspace can be ACTIVE while its
+agent is WAITING. Status describes the workspace, agent state describes the
+conversation inside it, and the dashboard shows both.
 
 ## Attention never dims
 
-Tiles render in three tiers, driving both brightness and order.
-
-- **Active**: full brightness, pulsing glyph.
-- **Attention** (waiting, blocked, error): full brightness, accent
-  color. These need you, so they never dim and sort to the front.
-- **Dormant** (idle, offline, starting): dimmed, alive but nothing to
-  say.
+Tiles render in three tiers that drive both brightness and order. **Active** is
+full brightness with a pulsing glyph. **Attention** (waiting, blocked, error) is
+full brightness in accent color, and sorts to the front because it needs you.
+**Dormant** (idle, offline, starting) dims: alive, nothing to say.
 
 Bright means look here. Dim means all quiet.
 
@@ -98,33 +79,28 @@ Every agent entry declares a `kind`, the adapter that introspects it.
 - `mewbo`: introspects a remote session over its REST API.
 - `generic`: default, falls back to the terminal-output signal.
 
-The built-in `claude` and `codex` agents ship with their matching kind.
-Declaring one is one line in the agent spec. See
+The built-in `claude` and `codex` agents ship with their matching kind, and
+declaring one is a single line in the agent spec. See
 [Agents](configure-agents.md#telling-grove-what-kind-of-agent-it-is).
 
-Set `hooks.enabled: true` for exact state: a status hook pushes Claude
-Code's lifecycle state as it changes, instead of polling.
-`.claude/settings.json` stays untouched, and turning it off is one
-flag.
+Set `hooks.enabled: true` for exact state, where a status hook pushes Claude
+Code's lifecycle as it changes instead of polling. `.claude/settings.json` stays
+untouched and turning it off is one flag.
 
 ## The agent's own todo list
 
-Claude Code's `TodoWrite`, Codex's `update_plan`, and Mewbo's task
-board each give an agent a running checklist. Grove parses it from the
-transcript for the [issue-ops](issue-ops.md) sticky comment, and now
-surfaces it everywhere: `grove show` prints it, TUI and web cards show
-a bounded count (`4/7 done`), and `grove_get_workspace_todo` hands the
-raw items to an MCP client. It is read-only. See [task
-phase](features-status.md#the-third-axis-task-phase) for the agent's
-counterpart: the todo list is inferred, task phase is stated directly.
+Claude Code's `TodoWrite`, Codex's `update_plan`, and Mewbo's task board each
+give an agent a running checklist. Grove parses it from the transcript and
+surfaces it everywhere: `grove show` prints it, TUI and web cards show a bounded
+count (`4/7 done`), the [issue-ops](issue-ops.md) sticky comment renders it, and
+`grove_get_workspace_todo` hands an MCP client the raw items. It is read-only.
+The [task phase](features-status.md#the-third-axis-task-phase) is its
+counterpart: a todo list is inferred, a phase is stated.
 
 ## Session history
 
-Live state tells you what is happening. Sessions tell you what
-happened. Grove discovers every recorded session for a project, across
-the repo root and every worktree.
-
-`grove sessions` is the front door, the `git log` of agent
+Grove discovers every recorded session for a project, across the repo root and
+every worktree. `grove sessions` is the front door, the `git log` of agent
 conversations:
 
 ```bash
@@ -155,32 +131,29 @@ key, or the web remap picker.
 
 ### The Session Catalog: every session on this host
 
-Most of your agent history lives outside this project. Every
-repository you have pointed Claude Code or Codex at holds its own
-transcripts, and Grove already knows how to read them, but never
-looked past its own configured projects.
-
-`grove sessions list --host` removes that limit, scanning every
-session store on the machine:
+Most of your agent history lives outside this project. Every repository you have
+pointed Claude Code or Codex at holds its own transcripts, and
+`grove sessions list --host` scans every session store on the machine:
 
 ```bash
 grove sessions list --host              # every repo on this host
 ```
 
-The table gains `PROJECT` and `BRANCH` columns, plus a live marker on
-rows with a matching agent process. Agent kind, last-modified time, and
-who launched it stay unchanged. The [web dashboard's Sessions
-screen](use-webapp.md#the-session-catalog) and the TUI's `h` key show
-the catalog.
+The table gains `PROJECT` and `BRANCH` columns plus a live marker on rows with a
+matching agent process. The [web dashboard's Sessions
+screen](use-webapp.md#the-session-catalog) and the TUI's `h` key show the same
+catalog.
 
-The scan reads only each transcript's first few lines, never the whole
-file, staying fast across hundreds of sessions. A transcript missing a
-working directory, or pointing at a non-git directory, still shows up
-rather than being dropped. The catalog is read-only. No verb adopts a
-session found this way into a workspace.
+The scan reads each transcript's first few lines rather than the whole file, so
+it stays fast across hundreds of sessions. A transcript missing a working
+directory, or pointing at a non-git directory, still shows up rather than being
+dropped. The catalog is read-only, and no verb adopts a session found this way
+into a workspace.
 
 ## See also
 
+- [Telemetry and tracing](features-telemetry.md): the same sessions as
+  queryable OpenTelemetry traces, months after the fact.
 - [TUI tour](use-tui.md): the dashboard screen and its keys.
 - [Web dashboard](use-webapp.md): the live grid and the transcript.
 - [CLI](use-cli.md#grove-sessions): `grove sessions list`, `show`, `dump`.

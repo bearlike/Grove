@@ -14,6 +14,7 @@ side only), and the task-pairing status rule. No network, no real ``~/.codex``.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from datetime import UTC, datetime
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from grove.core.agents import AgentActivityState, get_adapter
+from grove.core.agents import AgentActivityState, TokenUsage, get_adapter
 from grove.core.agents.codex import CodexAdapter, _RolloutParser
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -472,7 +473,7 @@ def test_discover_all_reads_git_branch_from_session_meta(
 ) -> None:
     """The real fixture's ``session_meta.payload.git.branch`` rides out of the
     SAME head read that already yields id/cwd — no extra I/O."""
-    _install(codex_home, BASIC_SID, BASIC)
+    path = _install(codex_home, BASIC_SID, BASIC)
     refs = adapter.discover_all()
     assert len(refs) == 1
     ref = refs[0]
@@ -480,6 +481,8 @@ def test_discover_all_reads_git_branch_from_session_meta(
     assert ref.adapter_kind == "codex"
     assert ref.cwd == str(BASIC_CWD)
     assert ref.git_branch == "feature/widget"
+    # size_bytes rides the same stat() call as mtime — zero extra I/O.
+    assert ref.size_bytes == path.stat().st_size
 
 
 def test_discover_all_spans_every_cwd_newest_first(adapter: CodexAdapter, codex_home: Path) -> None:
@@ -618,8 +621,9 @@ def test_read_messages_maps_roles_and_drops_metadata(
 
     assert [m.role for m in messages] == ["user", "assistant", "assistant", "assistant", "tool"]
 
-    # Codex reports usage per SESSION, not per message, and has no logical
-    # message id — those stay unset (never fabricated from the cumulative total).
+    # The one token_count in this slice carries `info: null`, so no turn usage
+    # was reported at all — usage stays absent rather than zeroed. Codex has no
+    # logical message id either.
     assert all(m.usage is None for m in messages)
     assert all(m.message_id is None for m in messages)
 
@@ -673,6 +677,199 @@ def test_read_turns_is_a_projection_of_read_messages(
     spine_prompts = [m.text() for m in messages if m.role == "user"]
     turn_prompts = [t.user_text for t in adapter.read_turns(BASIC_CWD, BASIC_SID)]
     assert turn_prompts == spine_prompts
+
+
+# ─── per-turn token usage (event_msg/token_count → AgentMessage.usage) ───────
+
+# One real model request as the rollout records it (shape verbatim from an
+# on-host codex rollout): the assistant's reply, the tool call it made, the
+# tool's output, then the `token_count` reporting that request. `last_token_usage`
+# is that request's own usage; `total_token_usage` restates the whole session.
+_USAGE_TURN = (
+    '{{"timestamp":"2026-04-28T20:00:0{n}1.000Z","type":"response_item",'
+    '"payload":{{"type":"message","role":"user",'
+    '"content":[{{"type":"input_text","text":"turn {n}"}}]}}}}\n'
+    '{{"timestamp":"2026-04-28T20:00:0{n}2.000Z","type":"response_item",'
+    '"payload":{{"type":"message","role":"assistant",'
+    '"content":[{{"type":"output_text","text":"reply {n}"}}]}}}}\n'
+    '{{"timestamp":"2026-04-28T20:00:0{n}3.000Z","type":"event_msg",'
+    '"payload":{{"type":"token_count","info":{{'
+    '"total_token_usage":{total},"last_token_usage":{last},'
+    '"model_context_window":258400}}}}}}\n'
+)
+
+_TURN_ONE = (
+    '{"input_tokens":19726,"cached_input_tokens":11008,"cache_write_input_tokens":0,'
+    '"output_tokens":109,"reasoning_output_tokens":64,"total_tokens":19835}'
+)
+_TURN_TWO = (
+    '{"input_tokens":19867,"cached_input_tokens":11008,"cache_write_input_tokens":0,'
+    '"output_tokens":19,"reasoning_output_tokens":0,"total_tokens":19886}'
+)
+_SESSION_TOTAL = (
+    '{"input_tokens":39593,"cached_input_tokens":22016,"cache_write_input_tokens":0,'
+    '"output_tokens":128,"reasoning_output_tokens":64,"total_tokens":39721}'
+)
+
+
+def _usage_rollout(sid: str, cwd: str, turns: str) -> str:
+    return (
+        '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+        '"payload":{"id":"' + sid + '","cwd":"' + cwd + '","model_provider":"openai"}}\n'
+    ) + turns
+
+
+def test_last_token_usage_lands_on_the_message_its_request_produced(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Each ``token_count`` reports the request that just finished, so its
+    ``last_token_usage`` stamps the newest assistant message before it — never
+    the cumulative ``total_token_usage``, which would multiply-count the session.
+    ``input`` is netted of ``cached_input_tokens`` (Codex counts cached tokens
+    INSIDE ``input_tokens``, where ``TokenUsage.input`` is the fresh input the
+    cost layer charges at the full rate)."""
+    sid = "55555555-5555-7555-8555-555555555555"
+    cwd = "/home/dev/work/usage"
+    _install_text(
+        codex_home,
+        sid,
+        _usage_rollout(
+            sid,
+            cwd,
+            _USAGE_TURN.format(n=1, total=_TURN_ONE, last=_TURN_ONE)
+            + _USAGE_TURN.format(n=2, total=_SESSION_TOTAL, last=_TURN_TWO),
+        ),
+    )
+    messages = adapter.read_messages(Path(cwd), sid)
+
+    assert [m.role for m in messages] == ["user", "assistant", "user", "assistant"]
+    assert messages[1].usage == TokenUsage(
+        input=19726 - 11008,
+        output=109,
+        cache_creation=0,
+        cache_read=11008,
+        reasoning=64,
+    )
+    assert messages[3].usage == TokenUsage(
+        input=19867 - 11008,
+        output=19,
+        cache_creation=0,
+        cache_read=11008,
+        reasoning=0,
+    )
+    # The prompts carry none: usage belongs to the request, not the turn's input.
+    assert [m.usage for m in messages if m.role == "user"] == [None, None]
+
+
+def test_a_turn_with_no_token_count_has_no_usage(adapter: CodexAdapter, codex_home: Path) -> None:
+    """No usage was reported for the second request, so its message's ``usage``
+    is ABSENT — not zero, and not the first request's figures restamped."""
+    sid = "66666666-6666-7666-8666-666666666666"
+    cwd = "/home/dev/work/nousage"
+    unreported_turn = (
+        '{"timestamp":"2026-04-28T20:00:21.000Z","type":"response_item",'
+        '"payload":{"type":"message","role":"user",'
+        '"content":[{"type":"input_text","text":"turn 2"}]}}\n'
+        '{"timestamp":"2026-04-28T20:00:22.000Z","type":"response_item",'
+        '"payload":{"type":"message","role":"assistant",'
+        '"content":[{"type":"output_text","text":"reply 2"}]}}\n'
+    )
+    _install_text(
+        codex_home,
+        sid,
+        _usage_rollout(
+            sid, cwd, _USAGE_TURN.format(n=1, total=_TURN_ONE, last=_TURN_ONE) + unreported_turn
+        ),
+    )
+    messages = adapter.read_messages(Path(cwd), sid)
+
+    assert messages[1].usage is not None
+    assert messages[3].usage is None
+
+
+def test_token_count_without_last_usage_reports_nothing(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """``info`` is ``null`` early in a session and a report may carry only the
+    cumulative total — neither is per-turn evidence, so no message is stamped."""
+    sid = "77777777-7777-7777-8777-777777777777"
+    cwd = "/home/dev/work/nolast"
+    _install_text(
+        codex_home,
+        sid,
+        _usage_rollout(
+            sid,
+            cwd,
+            '{"timestamp":"2026-04-28T20:00:01.000Z","type":"response_item",'
+            '"payload":{"type":"message","role":"assistant",'
+            '"content":[{"type":"output_text","text":"hi"}]}}\n'
+            '{"timestamp":"2026-04-28T20:00:02.000Z","type":"event_msg",'
+            '"payload":{"type":"token_count","info":null}}\n'
+            '{"timestamp":"2026-04-28T20:00:03.000Z","type":"event_msg",'
+            '"payload":{"type":"token_count","info":{"total_token_usage":' + _TURN_ONE + "}}}\n",
+        ),
+    )
+    assert adapter.read_messages(Path(cwd), sid)[0].usage is None
+
+
+def test_unreported_usage_fields_are_omitted_never_zeroed(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A field absent from ``last_token_usage`` stays ``None``: a fabricated zero
+    reads downstream as a measured zero (and prices a class that was never
+    charged). With no ``cached_input_tokens`` there is nothing to net out, so
+    ``input`` passes through verbatim."""
+    sid = "88888888-8888-7888-8888-888888888888"
+    cwd = "/home/dev/work/sparse"
+    _install_text(
+        codex_home,
+        sid,
+        _usage_rollout(
+            sid,
+            cwd,
+            '{"timestamp":"2026-04-28T20:00:01.000Z","type":"response_item",'
+            '"payload":{"type":"message","role":"assistant",'
+            '"content":[{"type":"output_text","text":"hi"}]}}\n'
+            '{"timestamp":"2026-04-28T20:00:02.000Z","type":"event_msg",'
+            '"payload":{"type":"token_count","info":{"last_token_usage":'
+            '{"input_tokens":40,"output_tokens":7}}}}\n',
+        ),
+    )
+    assert adapter.read_messages(Path(cwd), sid)[0].usage == TokenUsage(input=40, output=7)
+
+
+def test_usage_lands_on_the_tool_call_a_request_produced(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A request whose reply ended in a tool call is still ONE request, and the
+    ``token_count`` follows the tool's output — so the newest assistant-authored
+    message before it is the call, and the earlier text message keeps the usage
+    of its own request (here: none)."""
+    sid = "99999999-9999-7999-8999-999999999999"
+    cwd = "/home/dev/work/toolcall"
+    _install_text(
+        codex_home,
+        sid,
+        _usage_rollout(
+            sid,
+            cwd,
+            '{"timestamp":"2026-04-28T20:00:01.000Z","type":"response_item",'
+            '"payload":{"type":"message","role":"assistant",'
+            '"content":[{"type":"output_text","text":"running it"}]}}\n'
+            '{"timestamp":"2026-04-28T20:00:02.000Z","type":"response_item",'
+            '"payload":{"type":"custom_tool_call","name":"exec","input":"ls","call_id":"c1"}}\n'
+            '{"timestamp":"2026-04-28T20:00:03.000Z","type":"response_item",'
+            '"payload":{"type":"custom_tool_call_output","call_id":"c1","output":"ok"}}\n'
+            '{"timestamp":"2026-04-28T20:00:04.000Z","type":"event_msg",'
+            '"payload":{"type":"token_count","info":{"last_token_usage":' + _TURN_ONE + "}}}\n",
+        ),
+    )
+    messages = adapter.read_messages(Path(cwd), sid)
+
+    assert messages[0].usage is None
+    assert messages[1].content[0].tool_name == "exec"
+    assert messages[1].usage is not None
+    assert messages[1].usage.output == 109
 
 
 # ─── typed final-result extraction ──────────────────────────────────────────
@@ -788,3 +985,382 @@ def test_session_controls_empty_and_tolerant(
     controls = adapter.session_controls(tmp_path / "repo", "sid")
     assert controls.commands == ()
     assert controls.mcp_servers == ()
+
+
+def test_assistant_messages_carry_the_model_that_served_them(tmp_path: Path) -> None:
+    """Usage without a model prices to nothing — the cost layer looks the rate
+    up BY model — so a generation carrying tokens and no model name is tokens
+    that can never become cost, however well the price book is configured.
+
+    `turn_context` announces the model for the turn that follows it, so a
+    session whose model changed mid-run attributes each half to the model that
+    actually served it rather than to whichever value appeared first.
+    """
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:00.000Z",
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-sol"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:01.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "first"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:02.000Z",
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-terra"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:03.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "second"}],
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    parser = _RolloutParser(CodexAdapter._read([path]))
+    replies = [m for m in parser.messages() if m.role == "assistant"]
+    assert [m.model for m in replies] == ["gpt-5.6-sol", "gpt-5.6-terra"]
+
+
+# ─── tool-call detail on turn entries ────────────────────────────────────────
+#
+# The SAME seam the Claude adapter uses (``tool_outcomes`` + ``ToolCall``), which
+# is the whole point: an open ``function_call`` with no ``function_call_output``
+# for its ``call_id`` is the identical unresolved shape a mid-tool Claude
+# transcript has, so "running" needed no Codex branch.
+
+TOOLS_SID = "019dd999-44dd-7461-bd07-dddddddddddd"
+
+
+def _tools_rollout(*records: str) -> str:
+    head = json.dumps(
+        {
+            "timestamp": "2026-08-11T10:00:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": TOOLS_SID, "cwd": str(BASIC_CWD), "cli_version": "0.147.0"},
+        }
+    )
+    return "\n".join([head, *records]) + "\n"
+
+
+def _fn_call(ts: str, call_id: str, name: str, arguments: str) -> str:
+    return json.dumps(
+        {
+            "timestamp": ts,
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments,
+            },
+        }
+    )
+
+
+def _fn_output(ts: str, call_id: str, output: object) -> str:
+    return json.dumps(
+        {
+            "timestamp": ts,
+            "type": "response_item",
+            "payload": {"type": "function_call_output", "call_id": call_id, "output": output},
+        }
+    )
+
+
+def _exec_end(ts: str, call_id: str, *, secs: object, nanos: object, exit_code: object) -> str:
+    """A completed shell call's own measurement — real shape, verified on-host
+    (codex-cli 0.122.0/0.125.0): ``event_msg`` carrying ``exec_command_end``
+    with the SAME ``call_id`` the paired ``function_call``/``function_call_output``
+    share, ``duration`` as a Rust ``Duration`` struct (``{secs, nanos}``, never a
+    bare number), and a plain-int ``exit_code``."""
+    return json.dumps(
+        {
+            "timestamp": ts,
+            "type": "event_msg",
+            "payload": {
+                "type": "exec_command_end",
+                "call_id": call_id,
+                "exit_code": exit_code,
+                "duration": {"secs": secs, "nanos": nanos},
+            },
+        }
+    )
+
+
+def test_tool_entries_carry_request_response_and_duration(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "shell", '{"command":["ls","-l"]}'),
+            _fn_output("2026-08-11T10:00:03.250Z", "c1", "total 0"),
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.role == "tool"
+    assert entry.tool is not None
+    assert entry.tool.name == "shell"
+    assert entry.tool.tool_use_id == "c1"
+    assert entry.tool.input == {"command": ["ls", "-l"]}
+    assert entry.tool.result == "total 0"
+    assert (entry.tool.status, entry.tool.duration_ms) == ("ok", 2250)
+    # No exec_command_end in this rollout — exit_code has no native source.
+    assert entry.tool.exit_code is None
+
+
+def test_a_list_shaped_output_is_joined_rather_than_dropped(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Codex writes ``output`` as a bare string OR as a content-block list —
+    measured 7064 vs 1952 over 9016 real on-host outputs (2026-08-11). While the
+    list shape coerced to ``""``, roughly a fifth of every Codex tool response
+    reached the wire empty with the record holding it the whole time. Matching on
+    a string ``text`` rather than the ``type`` tag is deliberate: an image part
+    has no text and drops out, and keying on the tag re-breaks on a rename."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "shell", "{}"),
+            _fn_output(
+                "2026-08-11T10:00:02.000Z",
+                "c1",
+                [
+                    {"type": "input_text", "text": "Script completed"},
+                    {"type": "input_image", "image_url": "data:…"},
+                    {"type": "input_text", "text": "all good"},
+                ],
+            ),
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert entry.tool.result == "Script completed\nall good"
+
+
+def test_an_open_function_call_reads_running(adapter: CodexAdapter, codex_home: Path) -> None:
+    """Codex writes its rollout record-by-record as the turn runs, so a call
+    with no output yet is genuinely in flight — 21 such calls found across 194
+    real on-host rollouts (2026-08-11)."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "shell", '{"command":["sleep","60"]}')
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert entry.tool.status == "running"
+    assert entry.tool.result is None
+    assert entry.tool.duration_ms is None
+    assert entry.tool.input == {"command": ["sleep", "60"]}
+
+
+def test_codex_never_reports_a_structural_tool_error(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A CENSUS-backed absence, not an oversight: over 9016 real
+    ``function_call_output`` records the payload keys are exactly
+    ``{call_id, output, type}`` (plus an id/metadata variant) — there is no
+    success or error field anywhere, and 0 of 31390 calls across 194 rollouts
+    could report one. The failure lives inside the output prose ("Process exited
+    with code 1"), and reading that would be interpreting the tool's semantics,
+    which an adapter must not do. So a failed Codex tool reads ``ok`` with its
+    error text in ``result``, and this pins that as a known provider gap rather
+    than letting a future reader "fix" it with a regex."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "shell", "{}"),
+            _fn_output("2026-08-11T10:00:02.000Z", "c1", "Process exited with code 1"),
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert entry.tool.status == "ok"
+    assert entry.tool.result == "Process exited with code 1"
+
+
+def test_parallel_codex_calls_stay_individually_correlated(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:00.000Z", "c1", "shell", "{}"),
+            _fn_call("2026-08-11T10:00:00.000Z", "c2", "read_file", "{}"),
+            _fn_output("2026-08-11T10:00:01.000Z", "c2", "body"),
+            _fn_output("2026-08-11T10:00:05.000Z", "c1", "done"),
+        ),
+    )
+    entries = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert [(e.tool.tool_use_id, e.tool.result, e.tool.duration_ms) for e in entries if e.tool] == [
+        ("c1", "done", 5000),
+        ("c2", "body", 1000),
+    ]
+
+
+# ─── exec_command_end: the shell call's own duration + exit-status ──────────
+#
+# Real shape, verified against on-host rollouts (codex-cli 0.122.0/0.125.0):
+# an `event_msg` `exec_command_end` correlated to its `exec_command`
+# `function_call`/`function_call_output` by the SHARED `call_id`, carrying a
+# Rust `Duration` struct (`{secs, nanos}`, never a bare number) and a plain-int
+# `exit_code`. Absent entirely on other sampled CLI versions, including the
+# currently installed 0.147.0 (see agents/CLAUDE.md) — every test here also
+# proves the fixtures used elsewhere in this file (which carry NO
+# exec_command_end) keep working exactly as before.
+
+
+def test_exec_command_end_supplies_native_duration_and_exit_code(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """The native measurement wins over the message-timestamp diff: the
+    fc → fco gap here is 1030ms (the message round-trip), the harness's own
+    measurement is 963ms (the actual process wall-clock time) — the latter is
+    what a cost/duration ranking should see."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "exec_command", '{"command":["ls"]}'),
+            _exec_end("2026-08-11T10:00:01.963Z", "c1", secs=0, nanos=963_300_000, exit_code=0),
+            _fn_output("2026-08-11T10:00:02.030Z", "c1", "total 0"),
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert (entry.tool.duration_ms, entry.tool.exit_code) == (963, 0)
+
+
+def test_exec_command_end_correlates_regardless_of_file_position(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Correlation is a pre-scan over the whole rollout by `call_id`, never a
+    positional/ordering assumption — the record legitimately can land before
+    OR after the `function_call_output` it describes."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "exec_command", "{}"),
+            _fn_output("2026-08-11T10:00:02.030Z", "c1", "total 0"),
+            _exec_end("2026-08-11T10:00:01.963Z", "c1", secs=1, nanos=250_000_000, exit_code=0),
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert entry.tool.duration_ms == 1250
+
+
+def test_exec_command_end_carries_a_nonzero_exit_code(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A failed shell command's exit status is now reachable — distinct from
+    ``ToolCall.status``, which deliberately stays ``"ok"`` (see
+    ``test_codex_never_reports_a_structural_tool_error``): this is new,
+    additive information, not a semantic reinterpretation of the call."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "exec_command", "{}"),
+            _exec_end("2026-08-11T10:00:02.288Z", "c1", secs=1, nanos=288_400_000, exit_code=1),
+            _fn_output("2026-08-11T10:00:02.500Z", "c1", "Process exited with code 1"),
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    assert entry.tool.status == "ok"
+    assert (entry.tool.duration_ms, entry.tool.exit_code) == (1288, 1)
+
+
+def test_exec_command_end_only_applies_to_its_own_call_id(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """A measurement for one call must never leak onto a concurrent, unrelated
+    one — the same per-``call_id`` isolation
+    ``test_parallel_codex_calls_stay_individually_correlated`` pins for the
+    derived duration."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:00.000Z", "c1", "exec_command", "{}"),
+            _fn_call("2026-08-11T10:00:00.000Z", "c2", "exec_command", "{}"),
+            _exec_end("2026-08-11T10:00:00.500Z", "c2", secs=0, nanos=500_000_000, exit_code=0),
+            _fn_output("2026-08-11T10:00:01.000Z", "c2", "body"),
+            _fn_output("2026-08-11T10:00:05.000Z", "c1", "done"),
+        ),
+    )
+    entries = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    by_id = {e.tool.tool_use_id: e.tool for e in entries if e.tool}
+    # c2 got the native measurement; c1 (no exec_command_end of its own) falls
+    # back to the message-timestamp derivation with no exit_code at all.
+    assert (by_id["c2"].duration_ms, by_id["c2"].exit_code) == (500, 0)
+    assert (by_id["c1"].duration_ms, by_id["c1"].exit_code) == (5000, None)
+
+
+def test_exec_command_end_malformed_shape_degrades_instead_of_raising(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Defensive parsing, like every other record in this file: a duration that
+    is not the expected ``{secs, nanos}`` shape yields ``None`` rather than a
+    fabricated number, and a call with no ``exit_code`` at all (never observed
+    on-host, but the parser must not assume it) is dropped entirely rather than
+    reporting a duration with no matching status."""
+    _install_text(
+        codex_home,
+        TOOLS_SID,
+        _tools_rollout(
+            _fn_call("2026-08-11T10:00:01.000Z", "c1", "exec_command", "{}"),
+            json.dumps(
+                {
+                    "timestamp": "2026-08-11T10:00:01.500Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "exec_command_end",
+                        "call_id": "c1",
+                        "exit_code": 0,
+                        "duration": 500,  # malformed: not a {secs, nanos} object
+                    },
+                }
+            ),
+            _fn_output("2026-08-11T10:00:02.000Z", "c1", "done"),
+        ),
+    )
+    (entry,) = adapter.read_turns(BASIC_CWD, TOOLS_SID)[0].entries
+    assert entry.tool is not None
+    # exit_code still applies (it was well-formed); duration falls back to the
+    # message-timestamp derivation rather than being fabricated from garbage.
+    assert (entry.tool.duration_ms, entry.tool.exit_code) == (1000, 0)

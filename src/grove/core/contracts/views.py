@@ -24,12 +24,15 @@ from grove.core.contracts.tickets import TicketRef
 from grove.core.tmux import AttachInstruction, ContainerAttach, HostAttach
 from grove.core.workspace import (
     BranchProvenance,
+    CommitScope,
     CommitSummary,
+    DiffUnavailable,
     InitStatus,
     Placement,
     ProvisionProgress,
     ProvisionStatus,
     Runtime,
+    WorkspaceDiff,
     WorkspacePeek,
     WorkspaceState,
     WorkspaceStatus,
@@ -52,6 +55,12 @@ class WorkspaceStateView(BaseModel):
     repo_root: str
     branch: str
     base_branch: str
+    # The commit this workspace started from — the anchor every "since created"
+    # read measures against. Null for a record created before Grove recorded it
+    # (and for a repo that had no commits at all): null means *unknown*, never
+    # "the workspace has done nothing", so a client renders it as absent rather
+    # than as a zero baseline. Defaulted, so an older client decodes unchanged.
+    base_commit: str | None = None
     worktree_path: str
     tmux_session: str
     agent_name: str
@@ -99,6 +108,7 @@ class WorkspaceStateView(BaseModel):
             repo_root=s.repo_root,
             branch=s.branch,
             base_branch=s.base_branch,
+            base_commit=s.base_commit,
             worktree_path=s.worktree_path,
             tmux_session=s.tmux_session,
             agent_name=s.agent_name,
@@ -128,17 +138,26 @@ class WorkspaceStateView(BaseModel):
 
 
 class CommitSummaryView(BaseModel):
-    """Wire mirror of ``grove.core.workspace.CommitSummary``."""
+    """Wire mirror of ``grove.core.workspace.CommitSummary``.
+
+    ``scope`` describes the RANGE the list came from, not the commit, so every
+    row of one response carries the same value — a bare-array response has
+    nowhere else to put a property of the whole answer, and an envelope would be
+    a breaking shape change for both shipped consumers. Defaults to ``None`` so
+    a client that has not been taught the field decodes unchanged, and so that
+    a list which asked no anchoring question makes no claim.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     sha: str
     subject: str
     committed_at: datetime
+    scope: CommitScope | None = None
 
     @classmethod
     def from_summary(cls, c: CommitSummary) -> CommitSummaryView:
-        return cls(sha=c.sha, subject=c.subject, committed_at=c.committed_at)
+        return cls(sha=c.sha, subject=c.subject, committed_at=c.committed_at, scope=c.scope)
 
 
 class WorkspacePeekView(BaseModel):
@@ -217,6 +236,49 @@ class ProvisionProgressView(BaseModel):
     @classmethod
     def from_progress(cls, p: ProvisionProgress) -> ProvisionProgressView:
         return cls(elapsed_ms=p.elapsed_ms, headline=p.headline, lines=list(p.lines))
+
+
+class WorkspaceDiffView(BaseModel):
+    """Wire mirror of ``grove.core.workspace.WorkspaceDiff`` — a RAW unified patch.
+
+    ``patch`` crosses exactly as ``git diff`` emitted it and is deliberately
+    NOT parsed into files and hunks: the clients already vendor a diff renderer
+    that reads the format, so a structured schema here would be a second model
+    of it maintained on both sides of the wire forever, and every fix would
+    need shipping twice. Binary files therefore arrive as git's own
+    ``Binary files … differ`` line rather than being filtered out.
+
+    **``available: false`` is not "no changes".** It means git could not answer
+    at all — no repo, a paused workspace whose worktree is gone — and the UI
+    owes the reader helper text there where an empty patch is an empty state.
+    Conflating them sends someone hunting for changes that were never there.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    patch: str
+    files: int
+    """How many files the RETURNED patch contains — not how many changed, when
+    ``truncated``. The two agree whenever nothing was withheld."""
+
+    truncated: bool
+    """The cap cut the patch, always at a whole-file boundary so what arrives
+    is still valid. Fetch one file at a time with ``?path=`` rather than
+    expecting a bigger body."""
+
+    available: bool = True
+    reason: DiffUnavailable | None = None
+    """Set if and only if ``available`` is false."""
+
+    @classmethod
+    def from_diff(cls, d: WorkspaceDiff) -> WorkspaceDiffView:
+        return cls(
+            patch=d.patch,
+            files=d.files,
+            truncated=d.truncated,
+            available=d.available,
+            reason=d.reason,
+        )
 
 
 class HostAttachView(BaseModel):
@@ -370,6 +432,15 @@ class WhoamiView(BaseModel):
     python_version: str
     latest_version: str | None = None
     update_available: bool = False
+    langfuse_host: str | None = None
+    """The configured Langfuse UI host (e.g. ``https://cloud.langfuse.com``),
+    present only when ``telemetry.enabled`` AND the whole host/public/secret
+    trio resolves — the identical test ``grove doctor`` and the launch
+    boundary both use (:meth:`TelemetryConfig.derive_env` +
+    :meth:`TelemetryConfig.unresolved`), so a browser button built from this
+    field can never point at a host with no matching credentials. ``None``
+    covers "telemetry off" and "credentials incomplete" alike; a client has no
+    use for distinguishing them, since both mean render no button."""
 
 
 __all__ = [

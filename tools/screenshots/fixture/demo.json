@@ -1,0 +1,1606 @@
+{
+  "base_time": "2026-06-13T10:00:00Z",
+  "models": {
+    "claude_code": "claude-opus-4-8",
+    "codex": "gpt-5.1-codex"
+  },
+  "pricing": {
+    "currency": "USD",
+    "models": {
+      "claude-opus-5": {
+        "input": 15.0,
+        "output": 75.0,
+        "cache_read": 1.5,
+        "cache_write": 18.75
+      },
+      "claude-opus-4-8": {
+        "input": 15.0,
+        "output": 75.0,
+        "cache_read": 1.5,
+        "cache_write": 18.75
+      },
+      "claude-sonnet-5": {
+        "input": 3.0,
+        "output": 15.0,
+        "cache_read": 0.3,
+        "cache_write": 3.75
+      },
+      "gpt-5.6-sol": {
+        "input": 0.0,
+        "output": 12.0,
+        "cache_read": 0.15,
+        "cache_write": 0.0
+      },
+      "gpt-5.4": {
+        "input": 0.0,
+        "output": 10.0,
+        "cache_read": 0.125,
+        "cache_write": 0.0
+      },
+      "gpt-5.3-codex": {
+        "input": 0.0,
+        "output": 10.0,
+        "cache_read": 0.125,
+        "cache_write": 0.0
+      },
+      "gpt-5.2-codex": {
+        "input": 0.0,
+        "output": 10.0,
+        "cache_read": 0.125,
+        "cache_write": 0.0
+      },
+      "gpt-5.1-codex": {
+        "input": 0.0,
+        "output": 6.0,
+        "cache_read": 0.0625,
+        "cache_write": 0.0
+      },
+      "gpt-5.1-codex-mini": {
+        "input": 0.0,
+        "output": 2.0,
+        "cache_read": 0.025,
+        "cache_write": 0.0
+      }
+    }
+  },
+  "repos": {
+    "primary": "acme-api",
+    "secondary": "acme-web"
+  },
+  "tempo": {
+    "think_ms": [
+      900,
+      18000
+    ],
+    "tool_ms": [
+      200,
+      12000
+    ],
+    "fast_tool_ms": [
+      80,
+      2500
+    ],
+    "slow_tool_ms": [
+      25000,
+      180000
+    ],
+    "human_ms": [
+      12000,
+      900000
+    ],
+    "slow_odds": {
+      "pytest": 0.75,
+      "make": 0.6,
+      "npm": 0.5,
+      "go": 0.5,
+      "mypy": 0.45,
+      "docker": 0.45,
+      "uv": 0.4,
+      "terraform": 0.3,
+      "alembic": 0.2,
+      "kubectl": 0.1,
+      "ruff": 0.05,
+      "curl": 0.05,
+      "git": 0.03,
+      "rg": 0.02,
+      "grep": 0.02,
+      "ls": 0.0
+    },
+    "slow_odds_default": 0.06,
+    "context_caps": [
+      [
+        200000,
+        0.45
+      ],
+      [
+        400000,
+        0.3
+      ],
+      [
+        1000000,
+        0.25
+      ]
+    ]
+  },
+  "question": {
+    "questions": [
+      {
+        "question": "The legacy header path still has callers. How should I handle it?",
+        "header": "Legacy header",
+        "multiSelect": false,
+        "options": [
+          {
+            "label": "Keep it behind a flag",
+            "description": "Existing clients keep working."
+          },
+          {
+            "label": "Deprecate with a warning",
+            "description": "Log on use, remove next major."
+          },
+          {
+            "label": "Remove it now",
+            "description": "Breaking change, simplest code."
+          }
+        ]
+      }
+    ]
+  },
+  "workspaces": [
+    {
+      "title": "nav-redesign",
+      "repo": "acme-web",
+      "agent": "claude",
+      "branch": "feat/nav-redesign",
+      "working": false,
+      "description": "Collapsing the primary nav into one sticky row with a repo dropdown.",
+      "tickets": [
+        {
+          "provider": "github",
+          "id": "482",
+          "title": "Collapse the primary nav into one sticky row",
+          "url": "https://github.com/acme-org/acme-web/issues/482",
+          "status": "in progress",
+          "assignee": "priyaz"
+        },
+        {
+          "provider": "github",
+          "id": "491",
+          "title": "Nav dropdown loses its focus outline on keyboard nav",
+          "url": "https://github.com/acme-org/acme-web/issues/491",
+          "status": "open",
+          "assignee": "mrivera"
+        }
+      ],
+      "phase": {
+        "phase": "delivering",
+        "note": "Nav PR is up, waiting on review"
+      },
+      "transcript": {
+        "ai_title": "Collapse the primary nav",
+        "turns": [
+          {
+            "prompt": "The header is two rows on every viewport and the second row is empty half the time.\n\nCollapse it into a single sticky row with a repo dropdown. Active state has to come from the router, not from a prop somebody remembers to pass.",
+            "reply": "One sticky row now, with the repo dropdown taking the space the second row used. Active state reads `usePathname()` inside the nav item, so nothing upstream has to pass it.\n\nTwo knock-ons: the header lost 28px of height, which the split-pane layout was implicitly relying on — fixed by dropping its hard-coded offset — and the dropdown's focus outline is clipped by the sticky container's `overflow`. The second one I have not fixed yet.",
+            "tools": [
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "webapp/components/layout/nav-bar.tsx"
+                },
+                "result": "1  export function NavBar() {\n2    return (\n3      <header className=\"flex items-center gap-4 border-b px-4 py-3\">\n"
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "webapp/components/layout/nav-bar.tsx",
+                  "old_string": "<header className=\"flex items-center gap-4 border-b px-4 py-3\">",
+                  "new_string": "<header className=\"sticky top-0 z-10 flex items-center gap-2 border-b px-4 py-2\">"
+                },
+                "result": "The file webapp/components/layout/nav-bar.tsx has been updated."
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "webapp/components/layout/split-pane.tsx",
+                  "old_string": "className=\"h-[calc(100vh-104px)]\"",
+                  "new_string": "className=\"h-[calc(100vh-var(--header-h))]\""
+                },
+                "result": "The file webapp/components/layout/split-pane.tsx has been updated."
+              },
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "npm run typecheck",
+                  "description": "Typecheck the webapp after the header change"
+                },
+                "result": "tsc --noEmit\n\nNo errors.\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Where does this stand? Update the todo list.",
+            "reply": "Header collapse is done and typechecks. I am verifying the active-state highlighting against the router now — it works for the three top-level routes and I have not checked the nested ones.\n\nThe focus outline is still clipped. That is next, and it is a real accessibility bug rather than a polish item.",
+            "tools": [
+              {
+                "name": "TodoWrite",
+                "input": {
+                  "todos": [
+                    {
+                      "content": "Audit every consumer of the old two-row header",
+                      "status": "completed",
+                      "activeForm": "Auditing consumers of the old header"
+                    },
+                    {
+                      "content": "Collapse the header into one sticky row",
+                      "status": "completed",
+                      "activeForm": "Collapsing the header into one sticky row"
+                    },
+                    {
+                      "content": "Verify active-state highlighting reads from the router",
+                      "status": "in_progress",
+                      "activeForm": "Verifying active-state highlighting"
+                    },
+                    {
+                      "content": "Fix the dropdown's keyboard focus outline",
+                      "status": "pending",
+                      "activeForm": null
+                    },
+                    {
+                      "content": "Update the nav screenshot in the design doc",
+                      "status": "pending",
+                      "activeForm": null
+                    }
+                  ]
+                },
+                "result": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress in this conversation."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "empty-states",
+      "repo": "acme-web",
+      "agent": "codex",
+      "branch": "feat/empty-states",
+      "working": false,
+      "description": "Adding an empty state to the workspace list when a project has none.",
+      "tickets": [
+        {
+          "provider": "gitea",
+          "id": "118",
+          "title": "Workspace list has no empty state",
+          "url": "https://git.acme.internal/acme-web/issues/118",
+          "status": "in progress",
+          "assignee": "klindgren"
+        }
+      ],
+      "phase": {
+        "phase": "verifying",
+        "note": "Snapshot test is green, double-checking a couple of edge cases"
+      },
+      "transcript": {
+        "turns": [
+          {
+            "prompt": "Add an empty state to the workspace list when a project has zero workspaces. Right now it renders a blank panel and reads as a loading bug.",
+            "reply": "There is no `EmptyState` component anywhere in the tree — the three places that need one each render their own `<p>`. I will add one and use it here; converting the other two is a separate change.",
+            "tools": [
+              {
+                "name": "exec_command",
+                "input": {
+                  "cmd": "rg -n 'EmptyState' components"
+                },
+                "result": "No matches found\n"
+              },
+              {
+                "name": "exec_command",
+                "input": {
+                  "cmd": "rg -n 'No .* yet' components | head"
+                },
+                "result": "components/sessions/session-list.tsx:44:      <p>No sessions yet.</p>\ncomponents/tickets/ticket-list.tsx:31:      <p>No tickets attached.</p>\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Ship it and add a snapshot test.",
+            "reply": "Component added with a title, a one-line explanation and an optional action slot, and the workspace list uses it. Snapshot test passes.\n\nI kept it deliberately plain — no illustration, no card — because it has to sit inside a list that already has its own border and a nested card would read as a row.",
+            "tools": [
+              {
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Add File: components/workspace/empty-state.tsx\n+export function EmptyState({ title, hint, action }: EmptyStateProps) {\n+  return (\n+    <div className=\"flex flex-col items-center gap-1 py-10\">\n+      <p className=\"text-sm font-medium\">{title}</p>\n+      <p className=\"text-muted-foreground text-xs\">{hint}</p>\n+      {action}\n+    </div>\n+  );\n+}\n*** End Patch\n",
+                "result": "Applied patch to components/workspace/empty-state.tsx"
+              },
+              {
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Update File: components/workspace/workspace-list.tsx\n@@\n-  if (!workspaces.length) return null;\n+  if (!workspaces.length)\n+    return (\n+      <EmptyState title=\"No workspaces yet\" hint=\"Create one to start a session.\" />\n+    );\n*** End Patch\n",
+                "result": "Applied patch to components/workspace/workspace-list.tsx"
+              },
+              {
+                "name": "exec_command",
+                "input": {
+                  "cmd": "npm test -- --watch=false src/components/workspace"
+                },
+                "result": "PASS src/components/workspace/empty-state.test.tsx\n\nTest Suites: 1 passed, 1 total\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Anything left before this is done?",
+            "reply": "Snapshot test is green. I am checking two edge cases before calling it done: what it renders while the first fetch is still in flight (an empty state and a loading state look identical to a user, and showing the wrong one is the bug this change exists to fix), and a very long project name in the title.",
+            "tools": [
+              {
+                "name": "update_plan",
+                "input": {
+                  "plan": [
+                    {
+                      "step": "Confirm no existing EmptyState component",
+                      "status": "completed"
+                    },
+                    {
+                      "step": "Build the EmptyState component",
+                      "status": "completed"
+                    },
+                    {
+                      "step": "Add a snapshot test",
+                      "status": "completed"
+                    },
+                    {
+                      "step": "Check the zero-workspaces state against a slow network",
+                      "status": "in_progress"
+                    },
+                    {
+                      "step": "Check it against a very long project name",
+                      "status": "pending"
+                    }
+                  ]
+                },
+                "result": "Plan updated."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "mobile-fixes",
+      "repo": "acme-web",
+      "agent": "claude",
+      "branch": "fix/mobile-layout",
+      "working": true,
+      "description": "Fixing the mobile card grid: single-column reflow under 640px and safe-area padding for notched phones.",
+      "tickets": [
+        {
+          "provider": "github",
+          "id": "503",
+          "title": "Card grid overflows on narrow viewports",
+          "url": "https://github.com/acme-org/acme-web/issues/503",
+          "status": "in progress",
+          "assignee": "mrivera"
+        },
+        {
+          "provider": "github",
+          "id": "509",
+          "title": "Sticky footer overlaps the home indicator on notched phones",
+          "url": "https://github.com/acme-org/acme-web/issues/509",
+          "status": "open",
+          "assignee": "mrivera"
+        },
+        {
+          "provider": "github",
+          "id": "512",
+          "kind": "pull_request",
+          "title": "Reflow the mobile card grid to one column",
+          "url": "https://github.com/acme-org/acme-web/pull/512",
+          "status": "open",
+          "assignee": "mrivera"
+        }
+      ],
+      "phase": {
+        "phase": "implementing",
+        "note": "Checking the sticky footer against the safe-area inset"
+      },
+      "transcript": {
+        "ai_title": "Fix the mobile card grid",
+        "turns": [
+          {
+            "prompt": "The card grid keeps two columns down to 320px, so on a phone every card is half-width and the text wraps to nothing.\n\nReflow to one column on phones and respect the safe area at the bottom — the footer currently sits under the home indicator on a notched device.",
+            "reply": "Reflowing below 640px now, and the grid's bottom padding picks up `env(safe-area-inset-bottom)` so the last card clears the home indicator.\n\nBoth layout suites pass. What they do not cover is the sticky footer, which is positioned separately and has its own inset — that is the next thing I want to check rather than assume.",
+            "tools": [
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "webapp/components/workspace/app-shell.tsx",
+                  "old_string": "grid-cols-2 gap-4",
+                  "new_string": "grid-cols-1 gap-3 pb-[env(safe-area-inset-bottom)]"
+                },
+                "result": "The file webapp/components/workspace/app-shell.tsx has been updated."
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "webapp/app/globals.css",
+                  "old_string": "@media (min-width: 480px) {",
+                  "new_string": "@media (min-width: 640px) {"
+                },
+                "result": "The file webapp/app/globals.css has been updated."
+              },
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "npm test -- --watch=false src/layout",
+                  "description": "Run the layout test suite"
+                },
+                "result": "PASS src/layout/grid.test.tsx\nPASS src/layout/safe-area.test.tsx\n\nTest Suites: 2 passed, 2 total\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Where are we? Update the todo list.",
+            "reply": "Grid reflow, safe-area padding and the layout suite are all done.\n\nChecking the sticky footer against the safe area now. After that, landscape on a notched device — the inset is on the sides there, not the bottom, and nothing in this change accounts for that.",
+            "tools": [
+              {
+                "name": "TodoWrite",
+                "input": {
+                  "todos": [
+                    {
+                      "content": "Reflow the card grid to one column under 640px",
+                      "status": "completed",
+                      "activeForm": "Reflowing the card grid"
+                    },
+                    {
+                      "content": "Respect the safe-area inset at the bottom",
+                      "status": "completed",
+                      "activeForm": "Respecting the safe-area inset"
+                    },
+                    {
+                      "content": "Run the layout test suite",
+                      "status": "completed",
+                      "activeForm": "Running the layout test suite"
+                    },
+                    {
+                      "content": "Verify the sticky footer against the home indicator",
+                      "status": "in_progress",
+                      "activeForm": "Verifying the sticky footer"
+                    },
+                    {
+                      "content": "Check landscape orientation on a notched device",
+                      "status": "pending",
+                      "activeForm": null
+                    }
+                  ]
+                },
+                "result": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress in this conversation."
+              }
+            ]
+          },
+          {
+            "prompt": "Now verify the sticky footer doesn't overlap the home indicator.",
+            "reply": "",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "npm test -- --watch=false src/layout/footer",
+                  "description": "Check the footer against the safe-area inset"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "perf-bench",
+      "repo": "acme-api",
+      "agent": "claude",
+      "branch": "perf/bench",
+      "working": false,
+      "description": "Benchmarking the list and peek code paths against the current branch.",
+      "offline": true,
+      "tickets": [
+        {
+          "provider": "linear",
+          "id": "ENG-214",
+          "title": "List and peek feel slow on large fleets",
+          "url": "https://linear.app/acme/issue/ENG-214",
+          "status": "in progress",
+          "assignee": "dpatel"
+        },
+        {
+          "provider": "linear",
+          "id": "ENG-220",
+          "title": "Add a repeatable benchmark harness for list/peek",
+          "url": "https://linear.app/acme/issue/ENG-220",
+          "status": "open",
+          "assignee": "dpatel"
+        }
+      ],
+      "phase": {
+        "phase": "done",
+        "note": "Benchmark results written up and shared with the team"
+      },
+      "transcript": {
+        "ai_title": "Benchmark list and peek",
+        "turns": [
+          {
+            "prompt": "Benchmark the list and peek paths against the current branch. Five repeats each, and I want the spread, not just the mean.",
+            "reply": "List is 30% faster and peek 32% faster than baseline, and both are stable across five repeats — the standard deviations are under a millisecond, so the difference is not noise.\n\nThe win is one change: `pane_target_for(state)` on the already-reconciled state instead of `pane_target(id)`, which was re-fetching from the store and re-reconciling per row.\n\nCaveat worth stating: this is a 24-workspace fleet on a warm cache. A cold start is dominated by the transcript read and this change does nothing for it.",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "python -m grove.tools.bench --repeat 5",
+                  "description": "Run the list/peek microbenchmark five times"
+                },
+                "result": "baseline (current):\n  list      :  31.4 ms ± 0.6\n  peek      :  18.7 ms ± 0.4\n\ncandidate (this branch):\n  list      :  22.1 ms ± 0.5  (-30%)\n  peek      :  12.8 ms ± 0.3  (-32%)\n"
+              },
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "python -m grove.tools.bench --repeat 5 --cold",
+                  "description": "Repeat against a cold transcript cache"
+                },
+                "result": "cold cache:\n  list      : 1.31 s ± 0.04   (baseline 1.33 s ± 0.05)\n  peek      : 0.42 s ± 0.02   (baseline 0.43 s ± 0.02)\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Wrap this up — update the todo list and summarize.",
+            "reply": "Written up and shared. The summary is: one duplicated reconcile per row, removed, worth about a third of the render on a warm cache and nothing on a cold one.\n\nI filed the follow-up ticket for the cold path rather than chasing it here — it is a different problem with a different fix.",
+            "tools": [
+              {
+                "name": "TodoWrite",
+                "input": {
+                  "todos": [
+                    {
+                      "content": "Write the list/peek microbenchmark harness",
+                      "status": "completed",
+                      "activeForm": "Writing the microbenchmark harness"
+                    },
+                    {
+                      "content": "Run baseline vs. candidate, five repeats each",
+                      "status": "completed",
+                      "activeForm": "Running baseline vs. candidate"
+                    },
+                    {
+                      "content": "Write up the benchmark results",
+                      "status": "completed",
+                      "activeForm": "Writing up the benchmark results"
+                    },
+                    {
+                      "content": "Share results in the perf channel",
+                      "status": "completed",
+                      "activeForm": "Sharing results in the perf channel"
+                    },
+                    {
+                      "content": "File a follow-up ticket if regressions reappear",
+                      "status": "completed",
+                      "activeForm": "Filing the follow-up ticket"
+                    }
+                  ]
+                },
+                "result": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress in this conversation."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "flaky-test-fix",
+      "repo": "acme-api",
+      "agent": "aider",
+      "branch": "fix/flaky-tests",
+      "working": false,
+      "description": "Chasing down the auth suite's flaky cookie-jar test before it blocks a release.",
+      "tickets": [
+        {
+          "provider": "gitea",
+          "id": "203",
+          "title": "test_reads_legacy_cookie is flaky under xdist",
+          "url": "https://git.acme.internal/acme-api/issues/203",
+          "status": "in progress",
+          "assignee": "klindgren"
+        },
+        {
+          "provider": "gitea",
+          "id": "207",
+          "title": "CI intermittently times out in tests/core/auth",
+          "url": "https://git.acme.internal/acme-api/issues/207",
+          "status": "open",
+          "assignee": "jchen"
+        },
+        {
+          "provider": "gitea",
+          "id": "211",
+          "title": "Flaky-test dashboard undercounts reruns",
+          "url": "https://git.acme.internal/acme-api/issues/211",
+          "status": "closed",
+          "assignee": "jchen"
+        },
+        {
+          "provider": "linear",
+          "id": "ENG-198",
+          "title": "Quarantine flaky auth tests until fixed",
+          "url": "https://linear.app/acme/issue/ENG-198",
+          "status": "open",
+          "assignee": "dpatel"
+        }
+      ],
+      "phase": {
+        "phase": "scoping",
+        "note": "Reproducing the flakiest test locally before touching anything"
+      }
+    },
+    {
+      "title": "docs-rewrite",
+      "repo": "acme-api",
+      "agent": "claude",
+      "branch": "docs/rewrite",
+      "working": false,
+      "description": "Rewriting the docs landing page to lead with one hero shot.",
+      "ahead": true,
+      "tickets": [
+        {
+          "provider": "github",
+          "id": "465",
+          "title": "Docs landing page leads with a wall of text",
+          "url": "https://github.com/acme-org/acme-api/issues/465",
+          "status": "in progress",
+          "assignee": "klindgren"
+        }
+      ],
+      "phase": {
+        "phase": "planning",
+        "note": "Deciding whether the rewrite needs a second pass on the landing page IA"
+      },
+      "transcript": {
+        "ai_title": "Rewrite the docs landing page",
+        "turns": [
+          {
+            "prompt": "The landing page opens with four paragraphs before anyone sees what Grove looks like. Rebuild it to lead with one hero shot and cut the preamble.\n\nKeep the feature list — just move it below the fold.",
+            "reply": "Rewritten. The page now opens with the hero, one sentence of positioning, and the install command; the feature list follows underneath, unchanged.\n\nThe build is clean: 32 pages, 0 warnings at `--strict`. I did not touch the nav, so the page's position in the sidebar is the same as before.",
+            "tools": [
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "docs/index.md"
+                },
+                "result": "1  # Grove\n2\n3  A terminal-first workspace manager.\n4\n5  Grove was built because managing several agent sessions by hand\n6  means a lot of `cd`, a lot of `tmux attach`, and a lot of\n"
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "docs/index.md",
+                  "old_string": "# Grove\n\nA terminal-first workspace manager.",
+                  "new_string": "# Grove\n\nTend a forest of coding-agent workspaces from one terminal."
+                },
+                "result": "The file docs/index.md has been updated."
+              },
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "mkdocs build --strict",
+                  "description": "Build the docs site in strict mode"
+                },
+                "result": "INFO    -  Cleaning site directory\nINFO    -  Building documentation to directory: site\nINFO    -  Documentation built in 1.43 seconds\n\nbuild OK · 32 pages · 0 warnings\n"
+              }
+            ]
+          },
+          {
+            "prompt": "What's left? Update the todo list.",
+            "reply": "Hero is rewritten and the build is green. Cross-linking the new auth guide is next, then a proofread pass over the whole page.\n\nOne open question: the feature list still repeats three things the hero now says. I would cut them, but that is an editorial call.",
+            "tools": [
+              {
+                "name": "TodoWrite",
+                "input": {
+                  "todos": [
+                    {
+                      "content": "Rebuild the docs site in strict mode",
+                      "status": "completed",
+                      "activeForm": "Rebuilding the docs site"
+                    },
+                    {
+                      "content": "Rewrite the landing page hero",
+                      "status": "completed",
+                      "activeForm": "Rewriting the landing page hero"
+                    },
+                    {
+                      "content": "Cross-link the new auth guide from the landing page",
+                      "status": "in_progress",
+                      "activeForm": "Cross-linking the new auth guide"
+                    },
+                    {
+                      "content": "Proofread the whole landing page",
+                      "status": "pending",
+                      "activeForm": null
+                    }
+                  ]
+                },
+                "result": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress in this conversation."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "rate-limiter",
+      "repo": "acme-api",
+      "agent": "codex",
+      "branch": "feat/rate-limiter",
+      "working": true,
+      "description": "Adding a per-client token-bucket rate limiter to the API gateway, 100 req/min with burst smoothing.",
+      "tickets": [
+        {
+          "provider": "github",
+          "id": "521",
+          "title": "API gateway has no per-client rate limiting",
+          "url": "https://github.com/acme-org/acme-api/issues/521",
+          "status": "in progress",
+          "assignee": "jchen"
+        },
+        {
+          "provider": "github",
+          "id": "524",
+          "title": "Bursty clients should smooth out, not hard-cap",
+          "url": "https://github.com/acme-org/acme-api/issues/524",
+          "status": "open",
+          "assignee": "jchen"
+        },
+        {
+          "provider": "linear",
+          "id": "ENG-233",
+          "title": "Rate-limit response should carry Retry-After",
+          "url": "https://linear.app/acme/issue/ENG-233",
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "provider": "gitea",
+          "id": "229",
+          "title": "Document the new rate limit in the public API guide",
+          "url": "https://git.acme.internal/acme-api/issues/229",
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "provider": "github",
+          "id": "530",
+          "kind": "pull_request",
+          "title": "Add a token-bucket rate limiter to the gateway",
+          "url": "https://github.com/acme-org/acme-api/pull/530",
+          "status": "open",
+          "assignee": "jchen"
+        }
+      ],
+      "phase": {
+        "phase": "implementing",
+        "note": "Wiring the token-bucket limiter into the middleware stack",
+        "tickets": [
+          {
+            "ticket": "github:521",
+            "phase": "implementing",
+            "note": "Limiter is in; wiring it into the middleware stack"
+          },
+          {
+            "ticket": "gitea:229",
+            "phase": "scoping",
+            "note": "Waiting on the limit to settle before documenting it"
+          }
+        ]
+      },
+      "transcript": {
+        "turns": [
+          {
+            "prompt": "Add a token-bucket rate limiter to the API gateway middleware, 100 req/min per client.\n\nPer client means per API key where there is one and per source address where there isn't. Don't invent a third case.",
+            "reply": "Found the middleware stack. `RequestScopeMiddleware` already resolves the client identity, so the limiter hooks in directly after it and gets the key for free.\n\nThere is a `RateLimiter` class in `rate_limit.py` that is a bare `pass` — somebody stubbed it and never came back. I will fill that in rather than add a second one beside it.",
+            "tools": [
+              {
+                "name": "exec_command",
+                "input": {
+                  "cmd": "rg -n 'class .*Middleware' src/app -g '*.py'"
+                },
+                "result": "src/app/http/middleware.py:14:class RequestScopeMiddleware\nsrc/app/http/middleware.py:41:class LoggingMiddleware\n"
+              },
+              {
+                "name": "exec_command",
+                "input": {
+                  "cmd": "cat src/app/http/rate_limit.py"
+                },
+                "result": "class RateLimiter:\n    pass\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Use a per-client token bucket, not a fixed window — bursts should smooth out.",
+            "reply": "Swapped the stub for a token bucket keyed by client id: 100 tokens, refilled continuously over 60 seconds, so a client that has been quiet can spend a burst and one that is saturated is smoothed rather than cut off at a window boundary.\n\nThe bucket state is in-process. That is correct for one gateway and wrong for three behind a load balancer, which is a decision for you rather than for me.",
+            "tools": [
+              {
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Update File: src/app/http/rate_limit.py\n@@\n-class RateLimiter:\n-    pass\n+class TokenBucketLimiter:\n+    def __init__(self, rate: int = 100, per_seconds: int = 60) -> None:\n+        self.rate = rate\n+        self.per_seconds = per_seconds\n+        self._buckets: dict[str, tuple[float, float]] = {}\n+\n+    def allow(self, client: str, now: float) -> bool:\n+        tokens, last = self._buckets.get(client, (self.rate, now))\n+        tokens = min(self.rate, tokens + (now - last) * self.rate / self.per_seconds)\n+        if tokens < 1:\n+            self._buckets[client] = (tokens, now)\n+            return False\n+        self._buckets[client] = (tokens - 1, now)\n+        return True\n*** End Patch\n",
+                "result": "Applied patch to src/app/http/rate_limit.py"
+              },
+              {
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Add File: tests/http/test_rate_limit.py\n+def test_burst_is_smoothed_not_cut_off():\n+    limiter = TokenBucketLimiter(rate=100, per_seconds=60)\n+    assert all(limiter.allow(\"k\", 0.0) for _ in range(100))\n+    assert not limiter.allow(\"k\", 0.0)\n+    assert limiter.allow(\"k\", 1.0)\n*** End Patch\n",
+                "result": "Applied patch to tests/http/test_rate_limit.py"
+              }
+            ]
+          },
+          {
+            "prompt": "Where does this stand? Update the plan.",
+            "reply": "Limiter and its first test are in. Wiring it into the middleware stack now.\n\nLeft to do after that: the http suite, and the API guide, which documents no limit at all today and will be wrong the moment this ships.",
+            "tools": [
+              {
+                "name": "update_plan",
+                "input": {
+                  "plan": [
+                    {
+                      "step": "Locate the middleware stack",
+                      "status": "completed"
+                    },
+                    {
+                      "step": "Implement a token-bucket limiter keyed by client id",
+                      "status": "completed"
+                    },
+                    {
+                      "step": "Wire the limiter into the middleware stack",
+                      "status": "in_progress"
+                    },
+                    {
+                      "step": "Run the http test suite",
+                      "status": "pending"
+                    },
+                    {
+                      "step": "Document the new limit in the API guide",
+                      "status": "pending"
+                    }
+                  ]
+                },
+                "result": "Plan updated."
+              }
+            ]
+          },
+          {
+            "prompt": "Wire it into the middleware stack and run the http tests.",
+            "reply": "",
+            "tools": [
+              {
+                "name": "exec_command",
+                "input": {
+                  "cmd": "pytest tests/http/test_rate_limit.py -q"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "auth-refactor",
+      "repo": "acme-api",
+      "agent": "claude",
+      "branch": "feat/auth-refactor",
+      "working": true,
+      "description": "Moving auth token resolution off the cookie jar and onto the request scope, with the legacy header path kept behind a flag.",
+      "ahead": true,
+      "tickets": [
+        {
+          "provider": "linear",
+          "id": "ENG-201",
+          "title": "Auth token reads from the cookie jar on every request",
+          "url": "https://linear.app/acme/issue/ENG-201",
+          "status": "in progress",
+          "assignee": "klindgren"
+        },
+        {
+          "provider": "linear",
+          "id": "ENG-205",
+          "title": "Legacy header auth path has no deprecation plan",
+          "url": "https://linear.app/acme/issue/ENG-205",
+          "status": "open",
+          "assignee": "klindgren"
+        },
+        {
+          "provider": "linear",
+          "id": "ENG-212",
+          "title": "Auth guide still documents the cookie-jar read",
+          "url": "https://linear.app/acme/issue/ENG-212",
+          "status": "in progress",
+          "assignee": "klindgren"
+        },
+        {
+          "provider": "gitea",
+          "id": "241",
+          "title": "Second cookie fallback has no test and nobody knows why it exists",
+          "url": "https://git.acme.internal/acme-api/issues/241",
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "provider": "github",
+          "id": "478",
+          "kind": "pull_request",
+          "title": "Move auth to request-scope tokens",
+          "url": "https://github.com/acme-org/acme-api/pull/478",
+          "status": "open",
+          "assignee": "klindgren"
+        }
+      ],
+      "phase": {
+        "phase": "verifying",
+        "note": "Re-running the auth suite before wrap-up",
+        "tickets": [
+          {
+            "ticket": "linear:ENG-201",
+            "phase": "delivering",
+            "note": "PR is up, waiting on review"
+          },
+          {
+            "ticket": "linear:ENG-205",
+            "phase": "delivering",
+            "note": "Flag landed in the same PR, default off"
+          },
+          {
+            "ticket": "linear:ENG-212",
+            "phase": "verifying",
+            "note": "Docs rewritten; mkdocs --strict is clean"
+          },
+          {
+            "ticket": "gitea:241",
+            "phase": "scoping",
+            "note": "Blocked on a decision: pin the fallback, or delete it"
+          },
+          {
+            "ticket": "github:478",
+            "phase": "verifying",
+            "note": "CI is running against the PR"
+          }
+        ]
+      },
+      "transcript": {
+        "ai_title": "Move auth to request-scope tokens",
+        "turns": [
+          {
+            "prompt": "We read the session token out of the cookie jar on every request, and it shows up in three different places with three different fallbacks.\n\nMove token reading off the cookie jar and onto the request scope. Resolve it once per request, hang it on the request object, and have everything downstream read that.\n\nStart by showing me what's actually there — I don't want a rewrite of code neither of us has looked at.",
+            "reply": "Token resolution happens in `RequestScopeMiddleware._read_token`, and it is already once per request — the problem is that nothing downstream trusts that, so two other call sites re-read the cookie themselves.\n\nThree things stand out:\n  1. The middleware writes `request.state.token`, so the request-scope slot already exists and is already populated.\n  2. `context.read_token_from_cookie` re-reads the jar and re-parses, which is where the second and third fallbacks live.\n  3. The legacy `X-Auth-Token` header path is checked only in the second reader, so the two disagree about what an authenticated request is.\n\nSo this is less a move than a deletion: the destination already works. What I do not yet know is who depends on the legacy header, and I would rather find that out before changing a signature.",
+            "thinking": "Find where tokens are read before touching anything — a grep first, then the two files it points at.",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "token",
+                  "path": "src/grove/core/auth",
+                  "-n": true
+                },
+                "result": "src/grove/core/auth/middleware.py:14:    def _read_token(self, raw):\nsrc/grove/core/auth/middleware.py:21:        token = request.cookies.get(\"grove_token\")\nsrc/grove/core/auth/context.py:9:def read_token_from_cookie(req):\nsrc/grove/core/auth/context.py:23:    header = request.headers.get(\"X-Auth-Token\")\n"
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "src/grove/core/auth/middleware.py"
+                },
+                "result": "1  class RequestScopeMiddleware:\n2      async def __call__(self, request, call_next):\n3          token = request.cookies.get(\"grove_token\")\n4          request.state.token = self._read_token(token)\n5          return await call_next(request)\n"
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "src/grove/core/auth/context.py"
+                },
+                "result": "9   def read_token_from_cookie(request) -> str | None:\n10      raw = request.cookies.get(\"grove_token\")\n11      if raw is None:\n12          raw = request.cookies.get(\"session\")\n23      header = request.headers.get(\"X-Auth-Token\")\n24      return header or raw\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Show me every caller of the old accessor before we change its signature. Include the tests.",
+            "reply": "Four call sites, all inside the auth package, and two of them are tests:\n\n  - `middleware.py` — the one that should stay\n  - `context.py` — the definition itself\n  - `tests/core/auth/test_middleware.py` — patches it by name\n  - `tests/core/auth/test_context.py` — patches it by name\n\nNothing outside `core/auth` imports it, so the signature is ours to change. The two tests patch the accessor rather than calling it, which means they will keep passing against a function that no longer exists under that name — worth fixing in the same commit rather than leaving as a trap.",
+            "thinking": "A grep across the whole tree tells me the blast radius before I touch the signature; the package-local grep above only proves it is used, not that it is used nowhere else.",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "read_token_from_cookie",
+                  "output_mode": "files_with_matches"
+                },
+                "result": "src/grove/core/auth/middleware.py\nsrc/grove/core/auth/context.py\ntests/core/auth/test_middleware.py\ntests/core/auth/test_context.py\n"
+              },
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "rg -n 'X-Auth-Token' --glob '!tests' | head -20",
+                  "description": "Find the legacy header's real consumers"
+                },
+                "result": "src/grove/core/auth/context.py:23:    header = request.headers.get(\"X-Auth-Token\")\ndocs/features-auth.md:41:| `X-Auth-Token` | legacy | deprecated |\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Go ahead — pull token resolution onto the request scope.",
+            "reply": "Done. `RequestScopeMiddleware.__call__` now calls one resolver and writes the result to `request.state.token`; `context.resolve_request_token` is that resolver, renamed from `read_token_from_cookie` because it no longer reads a cookie jar directly.\n\nThe cookie fallback chain moved inside the resolver unchanged — I did not take the opportunity to simplify it, because a fallback nobody documented is a fallback somebody relies on.\n\nTwo tests are now patching a name that does not exist. I will get to those.",
+            "tools": [
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "src/grove/core/auth/middleware.py",
+                  "old_string": "token = request.cookies.get(\"grove_token\")\n        request.state.token = self._read_token(token)",
+                  "new_string": "request.state.token = self._resolve_request_token(request)"
+                },
+                "result": "The file src/grove/core/auth/middleware.py has been updated."
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "src/grove/core/auth/context.py",
+                  "old_string": "def read_token_from_cookie(request) -> str | None:",
+                  "new_string": "def resolve_request_token(request) -> str | None:"
+                },
+                "result": "The file src/grove/core/auth/context.py has been updated."
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "src/grove/core/auth/__init__.py",
+                  "old_string": "__all__ = [\"read_token_from_cookie\"]",
+                  "new_string": "__all__ = [\"resolve_request_token\"]"
+                },
+                "result": "The file src/grove/core/auth/__init__.py has been updated."
+              }
+            ]
+          },
+          {
+            "prompt": "Refactor the legacy header callers too.",
+            "reply": "Keeping the legacy path behind a flag, per your answer. Existing clients keep working and we get a deprecation window instead of a breaking change.",
+            "tools": [
+              {
+                "name": "AskUserQuestion",
+                "input": {
+                  "questions": [
+                    {
+                      "question": "The legacy header path still has callers. How should I handle it?",
+                      "header": "Legacy header",
+                      "multiSelect": false,
+                      "options": [
+                        {
+                          "label": "Keep it behind a flag",
+                          "description": "Existing clients keep working."
+                        },
+                        {
+                          "label": "Deprecate with a warning",
+                          "description": "Log on use, remove next major."
+                        },
+                        {
+                          "label": "Remove it now",
+                          "description": "Breaking change, simplest code."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "result": "Keep it behind a flag"
+              }
+            ]
+          },
+          {
+            "prompt": "Add the feature flag and gate the legacy path behind it.",
+            "reply": "`AuthConfig.legacy_header_token` is in, defaulting to `False`, and the resolver short-circuits the header branch when it is off.\n\nThe default is the decision worth flagging: off means today's behaviour changes for anyone who was relying on the header without knowing it. That is the point of the flag — they get one line in the release notes and a one-word fix — but it is a behaviour change on upgrade, not a no-op.",
+            "tools": [
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "src/grove/core/auth/config.py",
+                  "old_string": "class AuthConfig(BaseModel):",
+                  "new_string": "class AuthConfig(BaseModel):\n    legacy_header_token: bool = False"
+                },
+                "result": "The file src/grove/core/auth/config.py has been updated."
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "src/grove/core/auth/context.py",
+                  "old_string": "    header = request.headers.get(\"X-Auth-Token\")",
+                  "new_string": "    if not cfg.auth.legacy_header_token:\n        return raw\n    header = request.headers.get(\"X-Auth-Token\")"
+                },
+                "result": "The file src/grove/core/auth/context.py has been updated."
+              }
+            ]
+          },
+          {
+            "prompt": "Now run the auth tests and fix anything that breaks.",
+            "reply": "Two failures, both the ones predicted above — they patch `read_token_from_cookie` by name, so `monkeypatch.setattr` raises on a module attribute that is gone.\n\nNeither is a behaviour loss. The middleware test asserts the legacy cookie still resolves, and that assertion still holds against the new resolver.",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "pytest tests/core/auth -q",
+                  "description": "Run the auth test suite"
+                },
+                "result": "FAILED tests/core/auth/test_middleware.py::test_reads_legacy_cookie\nFAILED tests/core/auth/test_context.py::test_read_token_from_cookie\n10 passed, 2 failed in 1.84s\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Fix the failing tests.",
+            "reply": "Both updated to patch `resolve_request_token`, and the second one renamed to match what it now tests.\n\nI left the assertions alone. A rename that also quietly relaxes an assertion is how a refactor loses coverage without anyone noticing.",
+            "thinking": "The tests patch `read_token_from_cookie` directly — that is a name mismatch now, not a real behaviour loss.",
+            "tools": [
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "tests/core/auth/test_middleware.py"
+                },
+                "result": "18  def test_reads_legacy_cookie(monkeypatch):\n19      monkeypatch.setattr(\n20          context, \"read_token_from_cookie\", lambda r: \"tok\"\n21      )\n22      assert middleware.resolve(request) == \"tok\"\n"
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "tests/core/auth/test_middleware.py",
+                  "old_string": "monkeypatch.setattr(context, \"read_token_from_cookie\", fake_token)",
+                  "new_string": "monkeypatch.setattr(context, \"resolve_request_token\", fake_token)"
+                },
+                "result": "The file tests/core/auth/test_middleware.py has been updated."
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "tests/core/auth/test_context.py",
+                  "old_string": "def test_read_token_from_cookie():",
+                  "new_string": "def test_resolve_request_token():"
+                },
+                "result": "The file tests/core/auth/test_context.py has been updated."
+              },
+              {
+                "name": "Write",
+                "input": {
+                  "file_path": "tests/core/auth/test_legacy_header_flag.py",
+                  "content": "def test_legacy_header_ignored(request_factory):\n    request = request_factory(headers={\"X-Auth-Token\": \"hdr\"})\n    assert context.resolve_request_token(request) is None\n"
+                },
+                "result": "File created at tests/core/auth/test_legacy_header_flag.py"
+              }
+            ]
+          },
+          {
+            "prompt": "Re-run the suite.",
+            "reply": "All 13 auth tests pass — 12 that existed plus the flag test I added.\n\nCoverage on `core/auth` is 96%; the two uncovered lines are the second cookie fallback, which no test exercises because no test knows why it exists. Worth a follow-up ticket rather than a guess.",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "pytest tests/core/auth -q --cov=src/grove/core/auth",
+                  "description": "Re-run the auth test suite with coverage"
+                },
+                "result": "13 passed in 1.74s\n\nName                              Stmts   Miss  Cover\n-----------------------------------------------------\nsrc/grove/core/auth/context.py       41      2    95%\nsrc/grove/core/auth/middleware.py    18      0   100%\n-----------------------------------------------------\nTOTAL                                59      2    96%\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Run the full lint gate before we call this done.",
+            "reply": "ruff, ruff format, mypy and lint-imports are all clean.\n\nmypy needed one change on the way: the resolver's return type was implicit `Any` through the cookie chain, which the strict config rejects. It is `str | None` now, which is what the callers already assumed.",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "make lint",
+                  "description": "Run the full lint gate"
+                },
+                "result": "ruff check .......................... OK\nruff format --check .................. OK\nmypy src/grove ....................... 1 error\n\nsrc/grove/core/auth/context.py:31: error: Returning Any from function declared to return \"str | None\"  [no-any-return]\n"
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "src/grove/core/auth/context.py",
+                  "old_string": "    return header or raw",
+                  "new_string": "    found = header or raw\n    return str(found) if found else None"
+                },
+                "result": "The file src/grove/core/auth/context.py has been updated."
+              },
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "make lint",
+                  "description": "Re-run the full lint gate"
+                },
+                "result": "ruff check .......................... OK\nruff format --check .................. OK\nmypy src/grove ....................... OK\nlint-imports .......................... OK\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Update the docs to mention the new request-scoped token, and make sure the legacy header row says what the flag is called.",
+            "reply": "Updated `docs/features-auth.md` in two places: the token-resolution paragraph now describes the request-scope read, and the legacy header row names `auth.legacy_header_token` and its default.\n\nThe build is clean at `--strict`, so no link went stale.",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "cookie jar",
+                  "path": "docs",
+                  "output_mode": "files_with_matches"
+                },
+                "result": "docs/features-auth.md\n"
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "docs/features-auth.md",
+                  "old_string": "Grove reads the session token out of the cookie jar on every request.",
+                  "new_string": "Grove resolves the session token once per request and stores it on the request scope."
+                },
+                "result": "The file docs/features-auth.md has been updated."
+              },
+              {
+                "name": "Edit",
+                "input": {
+                  "file_path": "docs/features-auth.md",
+                  "old_string": "| `X-Auth-Token` | legacy | deprecated |",
+                  "new_string": "| `X-Auth-Token` | legacy | off unless `auth.legacy_header_token` is true |"
+                },
+                "result": "The file docs/features-auth.md has been updated."
+              },
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "mkdocs build --strict",
+                  "description": "Build the docs in strict mode"
+                },
+                "result": "build OK · 32 pages · 0 warnings\n"
+              }
+            ]
+          },
+          {
+            "prompt": "Where does this stand? Update the todo list.",
+            "reply": "Everything through the docs update is done. What is left is a confirmation run and a changelog entry.\n\nOne thing for you rather than for me: the uncovered cookie fallback. I can either write a test that pins today's behaviour, or delete the branch — but not both, and I do not know which one is right.",
+            "tools": [
+              {
+                "name": "TodoWrite",
+                "input": {
+                  "todos": [
+                    {
+                      "content": "Move token reading off the cookie jar onto the request scope",
+                      "status": "completed",
+                      "activeForm": "Moving token reading onto the request scope"
+                    },
+                    {
+                      "content": "Update the legacy header callers behind a feature flag",
+                      "status": "completed",
+                      "activeForm": "Updating the legacy header callers"
+                    },
+                    {
+                      "content": "Fix the two failing auth tests",
+                      "status": "completed",
+                      "activeForm": "Fixing the two failing auth tests"
+                    },
+                    {
+                      "content": "Run the full lint gate",
+                      "status": "completed",
+                      "activeForm": "Running the full lint gate"
+                    },
+                    {
+                      "content": "Update the auth guide docs",
+                      "status": "completed",
+                      "activeForm": "Updating the auth guide docs"
+                    },
+                    {
+                      "content": "Re-run the auth suite one more time before wrap-up",
+                      "status": "in_progress",
+                      "activeForm": "Re-running the auth suite before wrap-up"
+                    },
+                    {
+                      "content": "Add a changelog entry for the request-scope migration",
+                      "status": "pending",
+                      "activeForm": null
+                    }
+                  ]
+                },
+                "result": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress in this conversation."
+              }
+            ]
+          },
+          {
+            "prompt": "Good. Run the auth tests one more time to be sure, then we can wrap up.",
+            "reply": "",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "pytest tests/core/auth -q --tb=short",
+                  "description": "Final confirmation run"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "history": {
+    "seed": 20260812,
+    "curve": {
+      "sessions": 1000,
+      "days": 365
+    },
+    "codex_share": 0.37,
+    "repos": [
+      "acme-mobile",
+      "acme-billing",
+      "acme-infra",
+      "acme-docs",
+      "acme-payments",
+      "acme-search",
+      "acme-identity",
+      "acme-ingest",
+      "acme-notify",
+      "acme-design"
+    ],
+    "models": {
+      "claude_code": [
+        [
+          "claude-opus-5",
+          0.44
+        ],
+        [
+          "claude-sonnet-5",
+          0.34
+        ],
+        [
+          "claude-opus-4-8",
+          0.22
+        ]
+      ],
+      "codex": [
+        [
+          "gpt-5.3-codex",
+          0.34
+        ],
+        [
+          "gpt-5.2-codex",
+          0.2
+        ],
+        [
+          "gpt-5.1-codex",
+          0.16
+        ],
+        [
+          "gpt-5.4",
+          0.12
+        ],
+        [
+          "gpt-5.6-sol",
+          0.1
+        ],
+        [
+          "gpt-5.1-codex-mini",
+          0.08
+        ]
+      ]
+    },
+    "tool_weights": [
+      [
+        "Bash",
+        0.5
+      ],
+      [
+        "Read",
+        0.15
+      ],
+      [
+        "Edit",
+        0.14
+      ],
+      [
+        "Grep",
+        0.05
+      ],
+      [
+        "SendMessage",
+        0.03
+      ],
+      [
+        "Glob",
+        0.03
+      ],
+      [
+        "ToolSearch",
+        0.02
+      ],
+      [
+        "Write",
+        0.02
+      ],
+      [
+        "TodoWrite",
+        0.02
+      ],
+      [
+        "MultiEdit",
+        0.02
+      ],
+      [
+        "WebFetch",
+        0.01
+      ],
+      [
+        "AskUserQuestion",
+        0.01
+      ],
+      [
+        "mcp",
+        0.04
+      ]
+    ],
+    "mcp_tools": [
+      "mcp__github__create_issue",
+      "mcp__github__list_pull_requests",
+      "mcp__github__get_file_contents",
+      "mcp__github__merge_pull_request",
+      "mcp__github__search_code",
+      "mcp__linear__create_issue",
+      "mcp__linear__update_issue",
+      "mcp__linear__list_issues",
+      "mcp__linear__search_issues",
+      "mcp__sentry__list_issues",
+      "mcp__sentry__get_event",
+      "mcp__sentry__resolve_issue",
+      "mcp__postgres__query",
+      "mcp__postgres__describe_table",
+      "mcp__postgres__explain",
+      "mcp__slack__post_message",
+      "mcp__slack__list_channels",
+      "mcp__slack__search_messages",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_console_messages",
+      "mcp__figma__get_file",
+      "mcp__figma__export_frame",
+      "mcp__notion__search",
+      "mcp__notion__create_page",
+      "mcp__notion__update_block",
+      "mcp__datadog__query_metrics",
+      "mcp__datadog__list_monitors",
+      "mcp__datadog__get_logs",
+      "mcp__stripe__list_invoices",
+      "mcp__stripe__refund_charge",
+      "mcp__filesystem__read_file",
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__list_directory",
+      "mcp__search__web_search",
+      "mcp__search__fetch_url",
+      "mcp__docs__read_page",
+      "mcp__docs__list_pages",
+      "mcp__terraform__plan",
+      "mcp__terraform__state_list",
+      "mcp__k8s__list_pods",
+      "mcp__k8s__pod_logs"
+    ],
+    "codex_tool_names": {
+      "Bash": "exec_command",
+      "Edit": "apply_patch",
+      "Write": "apply_patch",
+      "MultiEdit": "apply_patch",
+      "TodoWrite": "update_plan",
+      "AskUserQuestion": "request_user_input"
+    },
+    "edit_tools": [
+      "Edit",
+      "MultiEdit",
+      "Write",
+      "apply_patch"
+    ],
+    "commands": [
+      "git status",
+      "git diff --stat",
+      "git log --oneline -10",
+      "git add -A && git commit -m 'wip' --no-verify",
+      "git push origin HEAD",
+      "git rebase origin/main",
+      "pytest -q",
+      "pytest tests/core -q --tb=short",
+      "uv run pytest -q",
+      "uv sync",
+      "uv lock --upgrade-package httpx",
+      "npm test -- --watch=false",
+      "npm run build",
+      "npm install",
+      "npm run typecheck",
+      "make lint",
+      "make test",
+      "ls -la src",
+      "grep -rn 'TODO' src/",
+      "rg -n 'def resolve' src",
+      "docker compose up -d",
+      "docker compose logs -f api",
+      "curl -sf http://127.0.0.1:8000/healthz",
+      "mypy src",
+      "ruff check .",
+      "ruff format --check .",
+      "alembic upgrade head",
+      "terraform plan -out tf.plan",
+      "kubectl get pods -n staging",
+      "go test ./..."
+    ],
+    "files": [
+      "src/app/server.py",
+      "src/app/models.py",
+      "src/app/config.py",
+      "src/app/http/middleware.py",
+      "src/app/http/routes.py",
+      "src/app/http/rate_limit.py",
+      "src/app/auth/tokens.py",
+      "src/app/auth/session.py",
+      "src/app/billing/invoice.py",
+      "src/app/billing/ledger.py",
+      "src/app/search/index.py",
+      "src/app/search/query.py",
+      "src/app/ingest/pipeline.py",
+      "src/app/ingest/schema.py",
+      "src/app/notify/dispatch.py",
+      "src/app/notify/templates.py",
+      "src/app/store/migrations.py",
+      "src/app/store/repository.py",
+      "tests/test_models.py",
+      "tests/test_routes.py",
+      "tests/test_rate_limit.py",
+      "tests/test_tokens.py",
+      "tests/test_invoice.py",
+      "tests/test_pipeline.py",
+      "tests/conftest.py",
+      "components/Card.tsx",
+      "components/DataTable.tsx",
+      "components/Sidebar.tsx",
+      "components/forms/LoginForm.tsx",
+      "components/forms/FieldSet.tsx",
+      "app/(dashboard)/page.tsx",
+      "app/(dashboard)/layout.tsx",
+      "app/settings/page.tsx",
+      "lib/api/client.ts",
+      "lib/api/hooks.ts",
+      "lib/format/currency.ts",
+      "styles/tokens.css",
+      "infra/main.tf",
+      "infra/modules/network.tf",
+      "deploy/staging.yaml",
+      "deploy/production.yaml",
+      ".github/workflows/ci.yml",
+      "docs/architecture.md",
+      "docs/runbook.md",
+      "README.md"
+    ],
+    "prompts": [
+      "Fix the failing test in the auth suite.",
+      "Add a retry to the flaky network call.",
+      "Refactor the config loader to use the new cascade.",
+      "Write a migration for the new usage table.",
+      "Bump the pinned dependency and re-run the gate.",
+      "Investigate why the build is slow on CI.",
+      "Add a changelog entry for this release.",
+      "Clean up the dead code in the old dashboard.",
+      "Wire up the new endpoint and add a test.",
+      "Reproduce the bug report and add a regression test.",
+      "Tighten the error message on the failed validation path.",
+      "Split the oversized module along its two concerns.",
+      "Cache the invoice lookup — the billing page does it four times per render.",
+      "Move the rate limiter behind a config flag and default it off.",
+      "The search index rebuild times out on staging. Find out why.",
+      "Add pagination to the notifications endpoint.",
+      "Port the login form to the new field components.",
+      "Our staging deploy drifted from production. Reconcile the manifests.",
+      "Document the ingest pipeline's retry semantics in the runbook.",
+      "Make the currency formatter locale-aware and test it against three locales.",
+      "Audit every place we read the session token and list what changes.",
+      "The CI workflow reinstalls node_modules on every job. Cache it."
+    ],
+    "replies": [
+      "Done — tests are green.",
+      "Fixed and verified locally.",
+      "Applied the change; the gate passes.",
+      "Reproduced it and added a regression test.",
+      "Cleaned up and re-ran the suite.",
+      "Shipped the change and updated the changelog.",
+      "Landed behind a flag, default off. The old path still works.",
+      "Root cause was the retry loop, not the network. Bounded it and added a test.",
+      "Split into two modules; the import graph is acyclic again.",
+      "That took three attempts — the first two broke a downstream consumer."
+    ]
+  }
+}

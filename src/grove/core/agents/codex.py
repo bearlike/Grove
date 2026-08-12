@@ -34,9 +34,18 @@ Grounding (verified against real on-host rollouts, codex 0.125.0):
   ``task_started`` means a turn is in flight (WORKING), all matched means the
   human has the move (WAITING). With no task events, fall back to the
   ``response_item`` tail (trailing unanswered ``function_call`` → WORKING, a
-  trailing assistant ``message`` → WAITING). Codex approval prompts are
-  interactive and never persisted, so there is no transcript-visible BLOCKED —
-  same as Claude permission prompts being hook-only.
+  trailing assistant ``message`` → WAITING). Codex *approval* prompts are
+  interactive and never persisted, same as Claude permission prompts being
+  hook-only — but a **question** is persisted, so BLOCKED is transcript-visible
+  here and outranks task pairing (next point).
+- **Questions are a native tool call, not an interactive prompt.** Codex asks
+  the human through ``request_user_input``, an ordinary ``function_call`` whose
+  JSON-string ``arguments`` carry the same ``questions[]`` batch shape Claude's
+  ``AskUserQuestion`` does, and whose ``function_call_output`` carries
+  ``{"answers": {<question id>: {"answers": [...]}}}``. The rollout is flushed
+  record-by-record as the turn runs (measured live on codex-cli 0.147.0), so a
+  call with no output yet IS a question standing on screen — which is what makes
+  a transcript-only BLOCKED honest for Codex where it is impossible for Claude.
 - **Reasoning is a black box.** ``response_item/reasoning`` is almost always
   ``encrypted_content`` (opaque base64) with an empty ``summary``/null
   ``content``; surface a reasoning marker only when ``summary`` carries readable
@@ -54,37 +63,45 @@ Grounding (verified against real on-host rollouts, codex 0.125.0):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-import shlex
+import sqlite3
 import subprocess
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from grove.core.agents.base import AgentVersionProbe
 from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
     AgentMessage,
     AgentQuestion,
+    CompactionBoundary,
     ContentBlock,
     DigestEntry,
     FileEdit,
     FinalResult,
     MessageRole,
     OrderedDigest,
+    QueuedMessage,
     SessionControl,
     SessionControls,
     SessionRef,
     SessionSummary,
     SessionTurn,
     TodoList,
+    TokenUsage,
+    ToolCall,
+    ToolOutcome,
     final_result_from_messages,
     latest_todo_from_messages,
+    tool_outcomes,
 )
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 
@@ -224,7 +241,9 @@ class _CodexHome:
         (``payload.git.branch``, 151/168 rollouts on the reference host).
         Best-effort: a malformed or vanished file is skipped, never raised; a
         rollout with no ``id`` in its meta is skipped (unidentifiable), but one
-        with no ``cwd`` still yields a ref with ``cwd=None``.
+        with no ``cwd`` still yields a ref with ``cwd=None``. ``size_bytes``
+        comes free too, off the same ``stat()`` call that already produces
+        ``mtime`` — a single ``stat_result`` answers both.
         """
         refs: list[SessionRef] = []
         for path in cls._iter_rollouts():
@@ -238,9 +257,12 @@ class _CodexHome:
             branch = git.get("branch") if isinstance(git, dict) else None
             branch = branch if isinstance(branch, str) and branch else None
             try:
-                mtime = path.stat().st_mtime
+                st = path.stat()
+                mtime = st.st_mtime
+                size_bytes: int | None = st.st_size
             except OSError:  # best-effort: a vanished file just sorts oldest
                 mtime = 0.0
+                size_bytes = None
             refs.append(
                 SessionRef(
                     session_id=session_id,
@@ -250,6 +272,7 @@ class _CodexHome:
                     birth=birth,
                     mtime=mtime,
                     git_branch=branch,
+                    size_bytes=size_bytes,
                 )
             )
         return tuple(sorted(refs, key=lambda ref: (-ref.mtime, ref.session_id)))
@@ -316,6 +339,114 @@ class _CodexHome:
     def _meta_cwd(cls, path: Path) -> str | None:
         value = cls._meta(path).get("cwd")
         return value if isinstance(value, str) and value else None
+
+
+class _CodexQueue:
+    """Resolves *what Codex is still holding* for a thread — a SQLite read.
+
+    Codex's queue is not in the rollout, and that is a census rather than a
+    search that came up empty: 194 rollouts / 208,777 records on the reference
+    host enumerate 28 distinct ``(type, payload.type)`` pairs, none of them
+    queue-shaped, and there are no sidecar files. It lives in
+    ``$CODEX_HOME/queue_1.sqlite``, table ``queued_items(id, thread_id,
+    payload_json, queue_order, created_at_ms, updated_at_ms)``, joined to a
+    session by ``thread_id``.
+
+    Two properties this class is built around:
+
+    * **The database is WAL and belongs to a running Codex**, so it is opened
+      strictly read-only (``?mode=ro``) — Grove never takes a write lock on
+      another process's live store, and a URI that cannot open simply answers
+      nothing.
+    * **A missing file or table is UNSUPPORTED, never an error.** Older Codex
+      builds ship neither, and a host that has never run Codex has no config
+      root at all; treating that as a failure would put a red state on every
+      workspace of a provider that is working perfectly.
+
+    The table was observed to EXIST and be EMPTY on the reference host, so
+    ``payload_json``'s shape is unmeasured — hence :meth:`_text`'s deliberate
+    fallback rather than a guessed key path.
+    """
+
+    FILENAME = "queue_1.sqlite"
+    TABLE = "queued_items"
+    TIMEOUT_SECONDS = 2.0
+    """Bounds a store held by a busy writer. Every caller is a per-request read
+    behind the executor, so a wedged sqlite must cost a bounded wait, not a
+    thread."""
+
+    @classmethod
+    def path(cls) -> Path:
+        """The queue database, resolved through the SAME config-root seam the
+        rollouts and prompts use — one definition of where Codex lives, so a
+        relocated ``$CODEX_HOME`` moves all three together."""
+        return _CodexHome.base_dir() / cls.FILENAME
+
+    @classmethod
+    def pending(cls, thread_id: str) -> tuple[QueuedMessage, ...]:
+        """Everything queued for ``thread_id``, in the harness's own
+        ``queue_order``. ``()`` for a store, table or thread that has nothing —
+        the three are indistinguishable here on purpose (see the class
+        docstring); the ``supported`` flag one layer up carries the distinction
+        that matters."""
+        path = cls.path()
+        if not thread_id or not path.exists():
+            return ()
+        try:
+            with contextlib.closing(
+                sqlite3.connect(
+                    f"file:{path}?mode=ro",
+                    uri=True,
+                    timeout=cls.TIMEOUT_SECONDS,
+                )
+            ) as conn:
+                rows = conn.execute(
+                    f"SELECT payload_json, created_at_ms FROM {cls.TABLE} "
+                    "WHERE thread_id = ? ORDER BY queue_order",
+                    (thread_id,),
+                ).fetchall()
+        except sqlite3.Error as exc:
+            # Includes the no-such-table case for a build predating the queue.
+            logger.debug("codex queue read failed for {}: {}", thread_id, exc)
+            return ()
+        return tuple(
+            QueuedMessage(text=cls._text(payload), sent_at=cls._at(created_ms), position=i)
+            for i, (payload, created_ms) in enumerate(rows)
+        )
+
+    @staticmethod
+    def _text(payload: Any) -> str:
+        """The message a payload row holds.
+
+        The column's shape is UNOBSERVED (the table was empty every time it was
+        read), so this reads the two shapes that would need no interpretation —
+        a bare JSON string, or an object carrying a ``text`` — and otherwise
+        hands back the stored value verbatim. Showing the raw payload is honest
+        where guessing a key path would silently show nothing the day the shape
+        is not what someone imagined.
+        """
+        if not isinstance(payload, str):
+            return ""
+        try:
+            decoded = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            return payload
+        if isinstance(decoded, str):
+            return decoded
+        if isinstance(decoded, dict):
+            value = decoded.get("text")
+            if isinstance(value, str):
+                return value
+        return payload
+
+    @staticmethod
+    def _at(created_ms: Any) -> datetime | None:
+        if not isinstance(created_ms, int):
+            return None
+        try:
+            return datetime.fromtimestamp(created_ms / 1000, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
 
 
 class _CodexControls:
@@ -592,8 +723,107 @@ class _RolloutLine:
             "custom_tool_call_output",
         )
 
+    @property
+    def is_exec_command_end(self) -> bool:
+        """A completed shell call's OWN measurement — ``event_msg``
+        ``exec_command_end`` — the status/tokens half of the dual-record rule
+        (never the conversation): it carries ``duration``/``exit_code`` for the
+        ``exec_command`` ``function_call`` sharing its ``call_id``, written once
+        the process exits.
+
+        **Version-gated, not universal — verified 2026-08-11 against every
+        rollout on this host.** Present (and at 100% coverage of the matching
+        ``exec_command`` calls) on codex-cli 0.122.0/0.125.0 only; ABSENT on
+        every older version sampled (0.93.0-0.121.x) and on the currently
+        installed 0.147.0, which replaced it with an unrelated shape
+        (``event_msg`` ``item_completed`` wrapping an ``item.type ==
+        "CommandExecution"``, keyed by the item's own id with no correlation
+        field back to the owning tool call found on this host) — see
+        agents/CLAUDE.md. Reading this record is therefore a real improvement
+        for rollouts written by the versions that emit it and a safe no-op
+        everywhere else, exactly like every other defensive read in this file.
+        """
+        return self.record_type == "event_msg" and self.payload_type == "exec_command_end"
+
+    def exec_command_end_metrics(self) -> tuple[str, int | None, int] | None:
+        """``(call_id, duration_ms, exit_code)`` for this line, or ``None`` for
+        any other line or a malformed record.
+
+        ``duration`` arrives as a Rust ``Duration`` struct — ``{"secs": int,
+        "nanos": int}``, NEVER a bare number — converted to milliseconds here so
+        every consumer of ``ToolCall.duration_ms`` shares one unit; a malformed
+        shape yields ``None`` rather than a fabricated duration.  ``exit_code``
+        is required (a plain int) for the whole record to count: 707/707 real
+        records measured on-host carry both fields together, so a call lacking
+        one alongside the other is unmeasured, not partially measured.
+        """
+        if not self.is_exec_command_end:
+            return None
+        call_id = self._payload.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return None
+        exit_code = self._payload.get("exit_code")
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            return None
+        return (call_id, self._exec_duration_ms(self._payload.get("duration")), exit_code)
+
+    @staticmethod
+    def _exec_duration_ms(value: Any) -> int | None:
+        """A Rust ``Duration`` struct (``{"secs": int, "nanos": int}``) → whole
+        milliseconds, or ``None`` on any other shape."""
+        if not isinstance(value, dict):
+            return None
+        secs = value.get("secs")
+        nanos = value.get("nanos")
+        if not isinstance(secs, int) or isinstance(secs, bool):
+            return None
+        if not isinstance(nanos, int) or isinstance(nanos, bool):
+            nanos = 0
+        return secs * 1000 + nanos // 1_000_000
+
+    @property
+    def is_compaction(self) -> bool:
+        """A compaction boundary — the harness replacing history with a summary.
+
+        The key is a TOP-LEVEL ``type:"compacted"`` record, present in every
+        codex-cli version on this host from 0.93.0 through 0.147.0 (132 records
+        across 40 real rollouts). The ``event_msg``/``context_compacted`` mirror
+        is deliberately NOT the key: it carries no content and is ABSENT
+        entirely in 0.147.0, so keying on it would go blind on the current
+        release — the one place the dual-record rule's ``event_msg`` half is not
+        merely redundant but wrong.
+        """
+        return self.record_type == "compacted"
+
+    def compaction_boundary(self) -> CompactionBoundary:
+        """This ``compacted`` line as a :class:`CompactionBoundary`.
+
+        Two fields are structurally unanswerable here, and both stay ``None``
+        rather than being guessed:
+
+        * **``trigger``** — no Codex version records one anywhere in the rollout,
+          so manual vs automatic is genuinely unknown. Defaulting it either way
+          would be indistinguishable on the wire from Claude's measured value.
+        * **``dropped_tokens``** — no per-compaction token accounting exists.
+
+        ``summary`` reads ``payload.message`` because that is where the field
+        lives, but it measured EMPTY on 132 of 132 real records: the
+        ``replacement_history`` beside it is encrypted, so ``""`` is a fact about
+        the format rather than a parse failure. Reading the field anyway costs
+        nothing and is what would surface a future Codex that fills it.
+        """
+        message = self._payload.get("message")
+        return CompactionBoundary(
+            trigger=None,
+            at=self.timestamp,
+            dropped_tokens=None,
+            summary=message if isinstance(message, str) else "",
+        )
+
     # ── spine mapping ─────────────────────────────────────────────────────────
-    def to_message(self) -> AgentMessage | None:
+    def to_message(
+        self, exec_metrics: Mapping[str, tuple[int | None, int]] | None = None
+    ) -> AgentMessage | None:
         """Map this rollout line onto one agentic-loop spine message, or ``None``
         for a line that is not a loop message (``event_msg`` status/tokens,
         ``session_meta``, ``turn_context``).
@@ -604,21 +834,36 @@ class _RolloutLine:
         ``custom_tool_call`` / ``tool_search_call`` → ``assistant`` (a ``tool_use``
         block); a ``reasoning`` → ``assistant`` (a ``thinking`` block, ``text``
         ``None`` when opaque); a call output → ``tool`` (a ``tool_result`` block).
-        Codex has no per-message id, no per-message usage (usage is cumulative,
-        on :class:`AgentActivity`), and no sub-agent threads — those stay unset."""
+        Usage rides its own ``token_count`` line, so it is stamped on by
+        :meth:`_RolloutParser.messages` rather than here; Codex has no
+        per-message id and no sub-agent threads, so those stay unset.
+
+        ``exec_metrics`` is the ``call_id`` → ``(duration_ms, exit_code)`` map
+        :meth:`_RolloutParser._exec_metrics` pre-scans once per parse — the same
+        shape ``token_count`` usage already uses, one native fact from a sibling
+        ``event_msg`` record landing on the ``response_item`` it belongs to.
+        ``None``/absent for every line that is not a resolved ``exec_command``
+        result, which is every line on a CLI version that never wrote
+        ``exec_command_end`` at all (see :attr:`is_exec_command_end`)."""
         role = self._spine_role()
         if role is None:
             return None
+        if role == "compaction":
+            # Contentless by contract: the payload cannot be a content block,
+            # and Codex's own replacement history is encrypted anyway.
+            return AgentMessage(
+                role=role, timestamp=self.timestamp, compaction=self.compaction_boundary()
+            )
         content: tuple[ContentBlock, ...]
         if role == "tool":
-            output = self._payload.get("output")
+            metrics = exec_metrics.get(self.call_id or "") if exec_metrics else None
             content = (
                 ContentBlock(
                     type="tool_result",
                     tool_use_id=self.call_id,
-                    # Coerced like the old answer map: a non-string output resolves
-                    # a question without inventing a body.
-                    text=output if isinstance(output, str) else "",
+                    text=self._output_text(self._payload.get("output")),
+                    duration_ms=metrics[0] if metrics else None,
+                    exit_code=metrics[1] if metrics else None,
                 ),
             )
         elif self.is_tool_call:
@@ -629,7 +874,36 @@ class _RolloutLine:
             content = (ContentBlock(type="text", text=self.message_text()),)
         return AgentMessage(role=role, content=content, timestamp=self.timestamp)
 
+    @staticmethod
+    def _output_text(output: Any) -> str:
+        """A ``function_call_output``'s body as text — SHAPE normalization only.
+
+        Codex writes ``output`` in two shapes, and the second is not rare:
+        measured over 9016 real outputs in the last 120 rollouts on this host,
+        **7064 are a bare string and 1952 are a content-block LIST** of
+        ``{"type": "input_text", "text": …}`` — the same two-shape split Claude's
+        ``tool_result.content`` has, which is why this mirrors
+        ``claude_code._Record._result_text`` rather than inventing a rule. Until
+        it did, every list-shaped output coerced to ``""`` and roughly a fifth of
+        Codex's tool responses reached the wire empty while the record held them.
+
+        Any dict carrying a string ``text`` contributes, whatever its ``type``
+        tag: an image part legitimately has no text and drops out, and matching
+        the tag would re-break the moment Codex renames it.
+        """
+        if isinstance(output, str):
+            return output
+        if isinstance(output, list):
+            return "\n".join(
+                part["text"]
+                for part in output
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            )
+        return ""
+
     def _spine_role(self) -> MessageRole | None:
+        if self.is_compaction:
+            return "compaction"
         if self.is_human_turn:
             return "user"
         if self.is_assistant or self.is_tool_call or self.is_reasoning:
@@ -671,6 +945,74 @@ class _RolloutLine:
     @property
     def is_task_complete(self) -> bool:
         return self.record_type == "event_msg" and self.payload_type == "task_complete"
+
+    def turn_context_model(self) -> str | None:
+        """``turn_context.model`` — the model announced for the turn that
+        FOLLOWS this line, or ``None`` for any other line.
+
+        The per-line sibling of :meth:`_RolloutParser.model`, which answers for
+        the session as a whole. Both exist because they answer different
+        questions: the session-level one names what the session ran, this one
+        lets a run whose model changed mid-session attribute each half to the
+        model that actually served it.
+        """
+        if self.record_type != "turn_context":
+            return None
+        payload = self.raw.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("model")
+        return value if isinstance(value, str) and value else None
+
+    def turn_usage(self) -> TokenUsage | None:
+        """``token_count.info.last_token_usage`` as a :class:`TokenUsage` — the
+        usage of the model request that just completed, or ``None`` for any
+        other line.
+
+        The PER-TURN sibling of :attr:`usage_tokens` (which reads the CUMULATIVE
+        ``total_token_usage``): attaching the cumulative total to a message would
+        multiply-count the session, since every report restates every earlier
+        turn.
+
+        Two field-semantics differences from Claude's ``usage`` object, both
+        normalized here so no downstream consumer needs a Codex branch:
+
+        - Codex's ``input_tokens`` INCLUDES ``cached_input_tokens`` (verified
+          on-host: ``total_tokens == input_tokens + output_tokens`` while cached
+          grows inside input), where ``TokenUsage.input`` is contracted as the
+          FRESH input the cost layer charges at the full rate. Left un-netted the
+          cached tokens would be billed twice — once as input, once as cache
+          read.
+        - ``reasoning_output_tokens`` maps onto ``TokenUsage.reasoning``, which
+          is informational only: like every provider that reports it, Codex
+          counts it INSIDE ``output_tokens``, and the price book deliberately
+          does not charge it as a fifth class.
+
+        An absent field stays ``None`` — a fabricated zero reads as a measured
+        zero.
+        """
+        if self.record_type != "event_msg" or self.payload_type != "token_count":
+            return None
+        info = self._payload.get("info")
+        if not isinstance(info, dict):
+            return None
+        last = info.get("last_token_usage")
+        if not isinstance(last, dict):
+            return None
+
+        def _int(key: str) -> int | None:
+            value = last.get(key)
+            return value if isinstance(value, int) else None
+
+        raw_input, cached = _int("input_tokens"), _int("cached_input_tokens")
+        fresh = raw_input - cached if raw_input is not None and cached is not None else raw_input
+        return TokenUsage(
+            input=fresh,
+            output=_int("output_tokens"),
+            cache_creation=_int("cache_write_input_tokens"),
+            cache_read=cached,
+            reasoning=_int("reasoning_output_tokens"),
+        )
 
     @property
     def usage_tokens(self) -> tuple[int, int] | None:
@@ -746,9 +1088,14 @@ class _EventState:
 
         Fallback (no task events but conversation exists): a trailing tool call
         with no result, or a trailing human turn, → WORKING; a trailing assistant
-        message → WAITING. There is no transcript-visible BLOCKED — Codex
-        approval prompts are interactive and never persisted (same as Claude
-        permission prompts being hook-only). Empty/missing → UNKNOWN.
+        message → WAITING. Empty/missing → UNKNOWN.
+
+        BLOCKED is decided by the caller, NOT here, and it outranks every answer
+        this method can give: a pending ``request_user_input`` sits inside an
+        unfinished turn, so task pairing legitimately reads WORKING for the whole
+        time the human is being asked. Codex *approval* prompts remain
+        interactive and unpersisted — they are still invisible to any transcript
+        reader.
         """
         if self._saw_task:
             if self._started <= self._completed:
@@ -785,6 +1132,9 @@ class _RolloutParser:
         # The last response_item that is a human turn, assistant reply, or tool
         # call — the tail the fallback status rule reads.
         tail: _RolloutLine | None = None
+        # Question calls whose ``function_call_output`` has not landed yet, keyed
+        # by call_id in ask order. See :meth:`_track_question`.
+        open_questions: dict[str, tuple[AgentQuestion, ...]] = {}
 
         for line in self._lines:
             ts = line.timestamp
@@ -803,6 +1153,11 @@ class _RolloutParser:
             elif line.is_tool_call:
                 tool_calls += 1
                 tail = line
+                self._track_question(line, open_questions)
+            elif line.is_tool_call_output and line.call_id:
+                # The answer (or an Esc-cancel / error string) resolves the whole
+                # group — the same group-level rule ``turns()`` applies.
+                open_questions.pop(line.call_id, None)
 
         # One selection helper, shared with `current_task_text()`, so the
         # capped field on this ~1 Hz-delivered activity and the uncapped
@@ -810,8 +1165,11 @@ class _RolloutParser:
         raw_task = self.current_task_text()
         current_task = _truncate(raw_task, _TASK_TEXT_CAP) if raw_task is not None else None
 
+        pending = tuple(q for group in open_questions.values() for q in group)
+
         return AgentActivity(
-            state=events.state(tail),
+            state=AgentActivityState.BLOCKED if pending else events.state(tail),
+            questions=pending,
             current_task=current_task,
             human_turns=len(buckets),
             assistant_replies=sum(buckets),
@@ -824,13 +1182,104 @@ class _RolloutParser:
             started_at=self.created_at(),
         )
 
+    @staticmethod
+    def _track_question(
+        line: _RolloutLine, open_questions: dict[str, tuple[AgentQuestion, ...]]
+    ) -> None:
+        """Record a question-shaped tool call as still open, if it is one.
+
+        Codex's ask-the-human tool (``request_user_input``) is an ordinary
+        ``function_call``, so the ONLY thing separating "the human is being
+        asked" from "the human already answered" is whether the matching
+        ``function_call_output`` has been written — and it is written whatever
+        happened (an answers object, an ``aborted by user after Ns`` string, an
+        unavailable-in-this-mode error), so a group with no output is genuinely
+        outstanding rather than merely un-normalizable.
+
+        Recognition goes through :meth:`AgentQuestion.recognizes` so "is this a
+        question" cannot drift between this status path and the turn renderer,
+        and normalization through the shared ``from_tool_call`` seam so there is
+        no second question shape. A call whose payload does not normalize is not
+        tracked: an activity that reported BLOCKED with nothing to render would
+        be a workspace the user cannot act on.
+        """
+        call_id = line.call_id
+        if call_id is None or not AgentQuestion.recognizes(line.tool_name()):
+            return
+        questions = AgentQuestion.from_tool_call(line.tool_name(), line.parsed_arguments(), call_id)
+        if questions:
+            open_questions[call_id] = questions
+
     def messages(self) -> tuple[AgentMessage, ...]:
         """The time-sorted rollout lines mapped onto the agentic-loop spine
         — the ONE representation :meth:`turns` and :meth:`digest` below
-        both project (DRY: one parse, many projections). ``event_msg`` status /
-        token lines and the ``session_meta`` / ``turn_context`` metadata map to
-        nothing."""
-        return tuple(msg for line in self._lines if (msg := line.to_message()) is not None)
+        both project (DRY: one parse, many projections). ``session_meta`` /
+        ``turn_context`` metadata and the ``event_msg`` mirrors map to nothing,
+        except ``token_count``, whose per-turn usage lands on the assistant
+        message it belongs to.
+
+        Codex records usage as its OWN line, written once the model request it
+        reports on has finished, so the owner is the newest assistant message
+        preceding it (the reply, tool call or reasoning that request produced).
+        Consuming the claim (``pending = None``) is what keeps a second report
+        from re-stamping an already-attributed message, and an absent
+        ``token_count`` leaves ``usage`` unset rather than zeroed.
+
+        ``exec_command_end`` (a completed shell call's own duration/exit-status
+        measurement) is the identical shape one step further: it is also an
+        ``event_msg`` sibling of a ``response_item``, so it is pre-scanned once
+        (:meth:`_exec_metrics`) and handed to :meth:`_RolloutLine.to_message`,
+        which stamps it onto the ``tool_result`` block it belongs to by
+        ``call_id`` — never a second pass over ``self._lines``.
+        """
+        exec_metrics = self._exec_metrics()
+        out: list[AgentMessage] = []
+        pending: int | None = None
+        model = self.model()
+        for line in self._lines:
+            usage = line.turn_usage()
+            if usage is not None:
+                if pending is not None:
+                    out[pending] = replace(out[pending], usage=usage)
+                    pending = None
+                continue
+            # `turn_context` announces the model for the turn that FOLLOWS it, so
+            # a session whose model was switched mid-run attributes each half
+            # correctly rather than to whichever value happened to be first.
+            turn_model = line.turn_context_model()
+            if turn_model is not None:
+                model = turn_model
+            message = line.to_message(exec_metrics)
+            if message is None:
+                continue
+            if message.role == "assistant":
+                pending = len(out)
+                # Usage without a model prices to nothing: the cost layer looks
+                # the rate up BY model, so an unnamed generation carries tokens
+                # and no cost however well the price book is configured. Codex
+                # names it per turn; it just never reached the spine.
+                message = replace(message, model=model)
+            out.append(message)
+        return tuple(out)
+
+    def _exec_metrics(self) -> dict[str, tuple[int | None, int]]:
+        """``call_id`` → ``(duration_ms, exit_code)`` for every completed
+        ``exec_command`` call this rollout measured natively.
+
+        One pass over ``self._lines`` reading only ``event_msg``
+        ``exec_command_end`` records (see :attr:`_RolloutLine.is_exec_command_end`
+        for the CLI-version gate); every other line contributes nothing. A
+        repeated ``call_id`` — not expected, Codex mints them per call — keeps
+        the LAST record, matching :func:`tool_outcomes`'s own last-write-wins
+        rule for a repeated id.
+        """
+        out: dict[str, tuple[int | None, int]] = {}
+        for line in self._lines:
+            entry = line.exec_command_end_metrics()
+            if entry is not None:
+                call_id, duration_ms, exit_code = entry
+                out[call_id] = (duration_ms, exit_code)
+        return out
 
     def digest(self) -> OrderedDigest:
         """Ordered ``user / assistant / tool`` skeleton; tool outputs stripped —
@@ -848,6 +1297,10 @@ class _RolloutParser:
                     elif block.type == "tool_use":
                         entries.append(DigestEntry("tool", block.tool_name or "tool"))
                     # thinking: excluded from the digest skeleton, as before.
+            elif message.role == "compaction" and message.compaction is not None:
+                # Headline only — the digest strips payloads by design, exactly
+                # as the Claude adapter does for the same entry.
+                entries.append(DigestEntry("compaction", message.compaction.headline()))
             # role == "tool": a result carrier — excluded from the skeleton.
         return OrderedDigest(tuple(entries[-_DIGEST_MAX_ENTRIES:]))
 
@@ -861,13 +1314,12 @@ class _RolloutParser:
         dropped.
         """
         messages = self.messages()
-        # Pre-scan every tool_result block for the call→output answer map so a
-        # question renders resolved wherever its output landed.
-        answered: dict[str, str | None] = {}
-        for message in messages:
-            for block in message.content:
-                if block.type == "tool_result" and block.tool_use_id is not None:
-                    answered[block.tool_use_id] = block.text
+        # Pre-scan every function_call_output for the call→outcome map so a
+        # question renders resolved and a tool entry knows its response, error
+        # flag and end time, wherever the output landed. The SAME
+        # `tool_outcomes` seam the Claude adapter uses — an unresolved call is
+        # what "still running" means in both files.
+        outcomes = tool_outcomes(messages)
         turns: list[SessionTurn] = []
         entries: list[DigestEntry] = []
         # ``current`` is the open turn's ``(user_text, started_at)`` — boxed so the
@@ -894,8 +1346,19 @@ class _RolloutParser:
                     _flush()
                 current[0] = (message.text(), message.timestamp)
             elif message.role == "assistant":
-                for entry in self._assistant_entries(message, answered):
+                for entry in self._assistant_entries(message, outcomes):
                     _add(entry, message.timestamp)
+            elif message.role == "compaction" and message.compaction is not None:
+                # An entry inside the turn it happened in, never a turn of its
+                # own — the same placement the Claude adapter gives it.
+                _add(
+                    DigestEntry(
+                        "compaction",
+                        message.compaction.headline(),
+                        compaction=message.compaction,
+                    ),
+                    message.timestamp,
+                )
             # role == "tool": a result carrier — feeds `answered`, no entry.
         if current[0] is not None or entries:
             _flush()
@@ -906,7 +1369,7 @@ class _RolloutParser:
 
     @staticmethod
     def _assistant_entries(
-        message: AgentMessage, answered: Mapping[str, str | None]
+        message: AgentMessage, outcomes: Mapping[str, ToolOutcome]
     ) -> list[DigestEntry]:
         """One assistant message's content projected to turn entries: prose text,
         readable reasoning (a ``thinking`` block, rendered as an assistant line —
@@ -915,7 +1378,14 @@ class _RolloutParser:
         call (Codex's ``apply_patch`` ``custom_tool_call`` or an MCP-bridged edit
         ``function_call``), a structured ``todo`` row for an ``update_plan`` call,
         else one plain ``tool`` entry. A question is stamped with its matching
-        output text (``answered``) at the group level."""
+        output text (``outcomes``) at the group level.
+
+        Every entry a tool call produced also carries that call's
+        :class:`ToolCall` — the identical rule the Claude adapter applies, off
+        the identical shared map, which is why "is this tool still running"
+        needed no Codex-specific branch: an open ``function_call`` with no
+        ``function_call_output`` for its ``call_id`` is exactly an unresolved
+        entry in ``outcomes``."""
         entries: list[DigestEntry] = []
         for block in message.content:
             if block.type in ("text", "thinking"):
@@ -924,27 +1394,32 @@ class _RolloutParser:
             elif block.type == "tool_use" and block.tool_name:
                 name = block.tool_name
                 cid = block.tool_use_id
+                call = ToolCall.from_block(block, outcomes, called_at=message.timestamp)
                 questions = AgentQuestion.from_tool_call(name, block.tool_input, cid or "")
                 if questions:
                     resolved = (
-                        (q.resolved(answered[cid]) for q in questions)
-                        if cid is not None and cid in answered
+                        (q.resolved(outcomes[cid].text) for q in questions)
+                        if cid is not None and cid in outcomes
                         else questions
                     )
-                    entries.extend(DigestEntry("question", q.prompt, question=q) for q in resolved)
+                    entries.extend(
+                        DigestEntry("question", q.prompt, question=q, tool=call) for q in resolved
+                    )
                 elif FileEdit.recognizes(name) and (
                     edits := FileEdit.from_tool_call(name, block.tool_input)
                 ):
                     entries.extend(
-                        DigestEntry("file_edit", f"{name} {e.path}".strip(), file_edit=e)
+                        DigestEntry("file_edit", f"{name} {e.path}".strip(), file_edit=e, tool=call)
                         for e in edits
                     )
                 elif TodoList.recognizes(name) and (
                     todos := TodoList.from_tool_call(name, block.tool_input)
                 ):
-                    entries.extend(DigestEntry("todo", lst.summary, todo=lst) for lst in todos)
+                    entries.extend(
+                        DigestEntry("todo", lst.summary, todo=lst, tool=call) for lst in todos
+                    )
                 else:
-                    entries.append(DigestEntry("tool", name))
+                    entries.append(DigestEntry("tool", name, tool=call))
         return entries
 
     def first_human_text(self) -> str | None:
@@ -1042,19 +1517,6 @@ _MODELS_PROBE_TIMEOUT = 5.0
 and offline; the bound only guards a wedged binary — best-effort never hangs."""
 
 
-def _binary_of(command: str) -> str:
-    """The executable (first shell token) of a launch command, or ``""``.
-
-    ``AgentSpec.command`` may carry flags (``codex --full-auto``); model
-    discovery needs only the binary. No var name is hard-coded — the binary
-    comes from config, honoring a renamed/aliased ``codex``."""
-    try:
-        parts = shlex.split(command)
-    except ValueError:  # unbalanced quotes in a hand-edited command
-        return ""
-    return parts[0] if parts else ""
-
-
 def _probe_codex_models(binary: str) -> str | None:
     """Raw stdout of ``<binary> debug models``, or ``None`` on any failure.
 
@@ -1118,6 +1580,14 @@ class CodexAdapter:
     kind = "codex"
     remote = False
     resumable = True
+    # The queue is a SQLite table under the config root (see `_CodexQueue`).
+    reports_queue = True
+    # `function_call_output` has no error key in any version, so a Codex tool
+    # result can never be anything but `is_error=False` — see the census in
+    # `_Line.blocks`. Re-measured 2026-08-11 over this host's whole store: the
+    # payload keys across 31,373 real records are exactly
+    # {type, call_id, output} (+ an id/metadata variant), zero error-shaped.
+    reports_tool_errors = False
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """Empty for a fresh run — Codex mints its own thread id, with no flag to
@@ -1160,10 +1630,33 @@ class CodexAdapter:
         ]
 
     def telemetry_env(self) -> dict[str, str]:
-        # Codex configures OpenTelemetry through `config.toml [otel]` (the
-        # `codex-otel` crate), NOT env vars — there is no env switch to inject,
-        # so the passthrough only ever hands Codex the OTLP endpoint/headers
-        # (harmless) and its native OTel is enabled config-side. No-op here.
+        """Empty — and deliberately so, not a gap waiting for a TOML writer.
+
+        Codex has no env switch at all: OTel is configured through
+        ``config.toml [otel]`` (the ``codex-otel`` crate). The tempting fix is
+        for Grove to write that TOML, and it is wrong three ways. **It would not
+        work**: Codex splits every event across two targets, sending prompts,
+        tool arguments and outputs to the OTLP *logs* stream and only lengths and
+        counts to traces — and LangFuse ingests traces, with no logs endpoint —
+        so a fully-enabled Codex trace is structurally, permanently blank. Grove
+        replays the rollout transcript instead, which is why this adapter's
+        ``read_messages`` is the Codex content path. **It would reach past this
+        session**: ``config.toml`` is the user's own global Codex config, so a
+        launch-time write changes every Codex run on the host, including ones
+        Grove never started — breaking "a session run without Grove is
+        unaffected". Adapters are read-only over the filesystem by contract;
+        ``onboarding.py`` is the one module that writes another tool's config,
+        through that tool's own CLI, and only when a human asks. **And it would
+        ship an egress default nobody chose**: ``metrics_exporter`` defaults to
+        ``statsig``, so turning the block on hands OpenAI product metrics unless
+        the same write also pins it off.
+
+        A per-launch ``-c otel.*`` override (the form ``offline_decoration``
+        uses) would dodge the global-config objection but not the first one, so
+        it buys blank traces and the metrics default. The residual is cosmetic:
+        ``passthrough_kinds`` still exports the OTLP endpoint/headers into a
+        Codex pane, which the Rust exporter never reads.
+        """
         return {}
 
     def available_models(self, command: str) -> tuple[str, ...]:
@@ -1176,8 +1669,14 @@ class CodexAdapter:
         picker falls back to a free-text field. The value is still forwarded
         verbatim on create, so an id absent from this list works fine.
         """
-        raw = _probe_codex_models(_binary_of(command))
+        raw = _probe_codex_models(AgentVersionProbe.binary_of(command))
         return _parse_codex_models(raw) if raw is not None else ()
+
+    def tool_version(self, command: str) -> str | None:
+        """``codex --version``, recorded verbatim (on-host: ``codex-cli
+        0.147.0`` — the distribution name is part of the vendor's own answer and
+        is kept rather than parsed off)."""
+        return AgentVersionProbe.version(command, "--version")
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         try:
@@ -1260,6 +1759,21 @@ class CodexAdapter:
         analog (``TASK_TOOL_NAMES`` never matches an ``update_plan`` call), so
         this is always the plain whole-list-per-call read."""
         return latest_todo_from_messages(self.read_messages(cwd, session_id))
+
+    def pending_queue(self, cwd: Path, session_id: str) -> tuple[QueuedMessage, ...]:
+        """What Codex is still holding for this session, in its own queue order.
+
+        Read from ``$CODEX_HOME/queue_1.sqlite`` (see :class:`_CodexQueue`), not
+        the rollout — Codex records nothing queue-shaped there, verified by
+        enumerating every record type in the whole store. ``cwd`` is unused: the
+        queue is keyed by thread id, which IS the session id, and the store is
+        config-root-global. Deliberately NOT memoized on the transcript's stat
+        signature the way the rollout projections are: this reads a different
+        file, and a queue that changes without the rollout growing is the normal
+        case (a message sits queued precisely because nothing is being written).
+        """
+        del cwd
+        return _CodexQueue.pending(session_id)
 
     def latest_task(self, cwd: Path, session_id: str) -> str | None:
         """The session's task text, uncapped — the same

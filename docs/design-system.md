@@ -1,4 +1,6 @@
-# Grove Design System
+# Grove Design System — the TUI
+
+> ↑ owner: [src/grove/tui](../src/grove/tui/CLAUDE.md) · [root](../CLAUDE.md) · the web front end has its own contract at [webapp/design-system.md](../webapp/design-system.md) — a different surface, deliberately not merged with this one. This file lives under `docs/` only because it predates that split; it is `exclude_docs`'d and is **not** published to the site.
 
 > The codified visual + interaction language of the Grove TUI: tokens,
 > layout, components, and the rules that make them feel like one product
@@ -77,7 +79,7 @@ this doc in the same PR.
 - [9. Theming & overrides](#9-theming--overrides)
 - [10. Glossary](#10-glossary)
 - [11. References & influences](#11-references--influences)
-- [12. Activity dashboard (webapp)](#12-activity-dashboard-webapp)
+- [12. Where the webapp's design system takes over](#12-where-the-webapps-design-system-takes-over)
 
 ---
 
@@ -137,10 +139,13 @@ ties back to a concrete decision in the codebase.
    semantic hue when nonzero. Label and value share the polarity hue
    so the pair reads as one chunk.
 6. **Each panel has a unique role-noun title.** `workspaces ·
-   summary · preview` — never `workspaces` next to `workspace`. The
-   preview container's tabs (`transcript` / `terminal`) name its two
-   content shapes; an earlier title `agent` was rejected as inaccurate
-   because the captured window can host any process.
+   summary · preview` — never `workspaces` next to `workspace`. A
+   panel whose title carries a count (`tickets N`) still counts as a
+   fixed role-noun: only the trailing number changes, so it can never
+   collide with another panel's name. The preview container's tabs
+   (`transcript` / `terminal`) name its two content shapes; an earlier
+   title `agent` was rejected as inaccurate because the captured
+   window can host any process.
 7. **Tier model = inset wells on an ambient canvas.** Panels
    (`$surface`) are darker than the screen root (`$background`). The
    highlighted row lifts to the lightest tier (`$panel`). Same axis in
@@ -518,6 +523,7 @@ in terminal-supported fonts.
 | `⇒` | U+21D2 | Pull-request segment (row card, peek rail) |
 | `■` | U+25A0 | Runtime: HOST (row card + dashboard tile, leading line 2) |
 | `▣` | U+25A3 | Runtime: CONTAINER (same) |
+| `‼` | U+203C | Task-phase `blocked` flag (trailing the phase segment) |
 
 **Adding a glyph:** prefer single-char Unicode in the General
 Punctuation, Geometric Shapes, or Miscellaneous Technical blocks.
@@ -550,6 +556,22 @@ legacy sets, `▣` needs a font with full Geometric Shapes (every modern
 programming font has it; Courier New does not). Prefer a filled glyph over a
 hollow one where you can: a hollow box is what a terminal draws for a MISSING
 character, so tofu and a real mark read the same.
+
+`‼` (U+203C, DOUBLE EXCLAMATION MARK) marks `PhaseClaim.blocked` — a flag
+carried BESIDE a task phase, never a seventh member of the phase ramp (see
+`grove.core.phase.PhaseClaim.blocked`'s own docstring for why: a stuck task
+still has a position, and folding it into the phase would make that position
+lie). It is a fifth glyph family, picked disjoint from the status/agent-state
+circles, the phase block ramp (`▁▂▄▆█✓`), the PR arrow and the runtime
+squares — verified against `MesloLGS NF` / `DejaVu Sans Mono`, the same
+reference families every other axis here checks coverage against, and pinned
+against every other axis and chrome glyph by
+`tests/tui/test_card_render.py`'s collision test. It renders TRAILING the
+phase segment (`<glyph> <label> N/M ‼`), never leading and never replacing
+the phase glyph itself — a reader needs *where the task stopped* before
+*that it stopped*, the same ordering `blocked_color()` in `_status.py`
+follows by reusing the agent-state axis's own amber rather than minting a
+new hue.
 
 ---
 
@@ -753,14 +775,17 @@ Grove's primary screen is the workspace list. Layout, top to bottom:
 │ │ │ WorkspaceCard (4 rows)   │ │ │ │  $secondary border          │ │
 │ │ │   line 1: ● title  · age │ │ │ └─────────────────────────────┘ │
 │ │ │   line 2: branch · agent │ │ │ ┌─────────────────────────────┐ │
-│ │ │           · status       │ │ │ │ #peek-tabs (`preview`)      │ │
-│ │ │                          │ │ │ │  transcript │ terminal tabs │ │
-│ │ └──────────────────────────┘ │ │ │  -live = $primary border    │ │
-│ │ ...                          │ │ │  -hidden: nothing to show   │ │
+│ │ │           · status       │ │ │ │ #card-tickets (`tickets N`) │ │
+│ │ └──────────────────────────┘ │ │ │  scrollable, max-height: 8  │ │
+│ │ ...                          │ │ │  -hidden: no ticket_refs    │ │
 │ └──────────────────────────────┘ │ └─────────────────────────────┘ │
-│   ↑ $surface bg, $secondary      │   ↑ same .grove-card chrome     │
-│     border, becomes $primary     │                                 │
-│     border on :focus             │                                 │
+│   ↑ $surface bg, $secondary      │ ┌─────────────────────────────┐ │
+│     border, becomes $primary     │ │ #peek-tabs (`preview`)      │ │
+│     border on :focus             │ │  transcript │ terminal tabs │ │
+│                                   │ │  -live = $primary border    │ │
+│                                   │ │  -hidden: nothing to show   │ │
+│                                   │ └─────────────────────────────┘ │
+│                                   │   ↑ same .grove-card chrome     │
 ├──────────────────────────────────┴─────────────────────────────────┤
 │ StatusBar — full-width bg ($primary clay default;                  │
 │             $warning amber on -attention; $panel neutral on -empty)│
@@ -958,7 +983,7 @@ The agent-state segment is the *agent axis* (what the session is doing: `startin
 
 **The runtime mark is the one axis that is never absent — silence is deliberately NOT the signal here.** `Placement` renders nothing for its `worktree` default because placement is an implementation detail; runtime is the isolation boundary — whether the agent can reach the host filesystem, the host network and the user's credentials — so both `host` and `container` carry a permanent mark, and "no mark" is never a state a reader has to interpret. It LEADS line 2 (a bare glyph, no `· ` connector, exactly as the status glyph leads line 1) for a mechanical reason as well as a semantic one: line 2 crops with an ellipsis on a narrow terminal, so a mark placed among the trailing qualifiers would be the first thing to vanish on precisely the workspaces a user is squinting at. Color reuses existing atoms rather than minting a hue — muted gray for host (the ambient default, the same atom the `root` tag uses), info cyan for container (noteworthy, never a warning) — which keeps amber and red free for the degradations that must stay distinct from a healthy mark: `⚠ container fallback` (a workspace that wanted a container, got the host, and had its isolation contract voided for life) and `⚠ no in-container tmux`. A fallback workspace therefore shows the host mark AND the amber badge; the two are never folded into one token. The glyph, label and dark hex all come from `grove.core.contracts.runtime_palette`, which the TUI imports and the web client mirrors under a drift test — one vocabulary, two clients, no convention to remember.
 
-**Issue pills and the pull-request segment are the INPUT/OUTCOME pair, not two flavors of the same list.** A `TicketRef` carries `kind` (`"issue"` default, or `"pull_request"`) — the card renders every issue first with the pre-existing plain `· <pill>` treatment (bold cyan, unchanged), then any pull request(s) with `⇒ <pill> <status>` instead. The `⇒` glyph (not another `· `) is the whole signal: a plain dot reads as "one more item in the list", the arrow reads as "leads to" — several issues typically resolve to ONE pull request, and the arrow names that relationship without a second row. The **entire** PR segment (glyph, pill, and status word) takes one color from `pr_status_color`, because a PR's real state is the single most informative token on the card once one exists: `open` → the same live lime `WorkspaceStatus.ACTIVE` uses (work still in flight), `merged` → the same muted gray `PAUSED`/`OFFLINE` use for "no live signal, nothing left to do" (visually terminal/settled, never confused with "still open"), `closed` → the same destructive red `ERROR` uses (this branch of work did not land). An unset/unrecognized status (a PR ref that exists before enrichment fills `status`) settles to muted gray rather than red — see `_status.pr_status_color`. A workspace with only issues (or no tickets at all) renders **byte-identical** to before this segment existed — pinned by `tests/tui/test_card_render.py::test_render_card_no_pr_ref_is_byte_identical_to_pre_pr_render` — same absence-is-the-default convention as agent state, phase, and the `root` tag. The peek rail's `_ticket_block` (read-deeply surface) applies the identical rule per-ref, so the row card and the rail can never disagree about what a PR's color means.
+**Issue pills and the pull-request segment are the INPUT/OUTCOME pair, not two flavors of the same list.** A `TicketRef` carries `kind` (`"issue"` default, or `"pull_request"`) — the card renders every issue first with the pre-existing plain `· <pill>` treatment (bold cyan, unchanged), then any pull request(s) with `⇒ <pill> <status>` instead. The `⇒` glyph (not another `· `) is the whole signal: a plain dot reads as "one more item in the list", the arrow reads as "leads to" — several issues typically resolve to ONE pull request, and the arrow names that relationship without a second row. The **entire** PR segment (glyph, pill, and status word) takes one color from `pr_status_color`, because a PR's real state is the single most informative token on the card once one exists: `open` → the same live lime `WorkspaceStatus.ACTIVE` uses (work still in flight), `merged` → the same muted gray `PAUSED`/`OFFLINE` use for "no live signal, nothing left to do" (visually terminal/settled, never confused with "still open"), `closed` → the same destructive red `ERROR` uses (this branch of work did not land). An unset/unrecognized status (a PR ref that exists before enrichment fills `status`) settles to muted gray rather than red — see `_status.pr_status_color`. A workspace with only issues (or no tickets at all) renders **byte-identical** to before this segment existed — pinned by `tests/tui/test_card_render.py::test_render_card_no_pr_ref_is_byte_identical_to_pre_pr_render` — same absence-is-the-default convention as agent state, phase, and the `root` tag. The peek rail's `_render_tickets_panel` (read-deeply surface, its own bounded panel — see [§6.5](#65-peekrail)) applies the identical rule per-ref, so the row card and the rail can never disagree about what a PR's color means.
 
 The `root` tag is a quiet qualifier, not a status token: muted and lowercase, it tells the user this workspace runs in the repo root with no isolated worktree. Worktree workspaces render nothing here, so the absence is the default. It sits after the ticket/PR segments and before any init-failed badge, so the badge stays the rightmost (most urgent) element on the row.
 
@@ -969,12 +994,24 @@ per cursor move. Focus is **only** in CSS; the renderer doesn't know.
 
 ### 6.5 PeekRail
 
-Right-side rail. A summary card stacked above a tabbed preview inside a
-`Vertical` with `padding: 0 1`.
+Right-side rail. A summary card, a bounded tickets panel, and a tabbed
+preview, stacked inside a `Vertical` with `padding: 0 1`.
 
 - `#card-workspace` (title `summary`) — the summary card. Border stays
   `$secondary`. Carries: live diff stats, init-failure badge,
   paused / offline / orphaned affordance lines, recent commits.
+- `#card-tickets` (title `tickets N`) — a `VerticalScroll` + one `Static`
+  (`#tickets-body`), same "one Static per pane" shape `#transcript-scroll`
+  uses. Hidden entirely (`-hidden`) when the selected workspace has no
+  `ticket_refs`, so a ticketless workspace's rail is unaffected. `height:
+  auto; max-height: 8;` bounds it to a modest slice of the rail regardless
+  of how many tickets are attached — content beyond the cap scrolls
+  internally rather than growing the panel. This panel exists because the
+  summary card is one `Static` with **no** scroll of its own: tickets used
+  to render inline there, and a workspace with several attached tickets
+  grew the card past the rail's visible height and pushed the stats /
+  description / affordance / commits blocks off screen with no way back to
+  them. See "Tickets panel content" below.
 - `#peek-tabs` (title `preview`) — a `TabbedContent` with the shared
   `.grove-card` chrome and two panes. Its tabs name the two content
   shapes (an earlier single-card title `agent` was rejected — the
@@ -1040,17 +1077,7 @@ Each surface is one `Static` with its own plain-text diff guard.
    (the dashboard's `_human_tokens` formatter — one formatter, two
    surfaces) and muted; the state label takes `agent_state_color`
    ([§4.8](#48-agent-state-tokens)), mirroring the row card's segment.
-3. **Associated tickets** (`_ticket_block`) — only if the workspace has any
-   `ticket_refs`; one line per ref. An issue (`kind == "issue"`, the
-   default) keeps the pill in `ref_color('info')` cyan, unstyled `status`
-   word. A pull request (`kind == "pull_request"`) leads with `PR_GLYPH`
-   (`⇒`) and takes `pr_status_color(ref.status)` on both the pill AND the
-   `status` value — the same open/merged/closed color rule [§6.4](#64-workspacecard)
-   documents for the row card's PR segment, so the two surfaces never
-   disagree about what a PR's color means. Title, `assignee`, and `url`
-   render identically for both kinds; absent fields are skipped, never
-   blank-filled.
-4. **Description** — only if the workspace has one. Plain default-fg
+3. **Description** — only if the workspace has one. Plain default-fg
    text, trimmed at 200 chars with an ellipsis. Skipped entirely when
    empty (no `(no description)` placeholder — visual noise on every
    workspace). Lives on the rail (not the row card) because the row
@@ -1058,17 +1085,41 @@ Each surface is one `Static` with its own plain-text diff guard.
    is the read-deeply affordance — and a free-form note belongs in the
    read-deeply zone. Markup characters in user input are rendered as
    literals (we use `Text.append`, not `Text.from_markup`).
-5. **Init failure** — only if `init_status == FAILED`. Two lines:
+4. **Init failure** — only if `init_status == FAILED`. Two lines:
    `✗ init failed` (bold red) and `log: <path>` (muted).
-6. **Affordance line** — exactly one of:
+5. **Affordance line** — exactly one of:
    - `‖ paused  press R to resume` (paused color = gray, bold key).
    - `○ offline  press o to respawn` (offline color = gray, bold key).
    - `⊘ worktree missing on disk  press k to clean up` (orphaned amber).
    - `error: <error_detail>` (when ERROR + has detail).
-7. **Recent commits** — `recent` heading (teal, bold) and a list of
+6. **Recent commits** — `recent` heading (teal, bold) and a list of
    `  <SHA[:8]>  <subject>  <age>`. Subject is trimmed at 56 chars.
    SHA + heading share the branch hue (teal) so the eye groups them as
    one column. Subject = default fg; age = muted.
+
+**Tickets panel content** (`#card-tickets`, only rendered when the
+workspace has any `ticket_refs`; pure render helper `_render_tickets_panel`,
+wired by `PeekRail._update_tickets`):
+
+- One line per ref, `no_wrap` + `overflow="ellipsis"` — a long title or a
+  large ref count crops per-row instead of growing the panel; the CSS
+  `max-height` cap is the second, coarser bound (whole rows scroll off
+  instead of being visible).
+- Each line leads with the same compact pill the row card shows
+  (`ticket_pill`). An issue (`kind == "issue"`, the default) keeps the
+  pill in `ref_color('info')` cyan, unstyled `status` word. A pull request
+  (`kind == "pull_request"`) leads with `PR_GLYPH` (`⇒`) and takes
+  `pr_status_color(ref.status)` on both the pill AND the `status` value —
+  the same open/merged/closed color rule [§6.4](#64-workspacecard)
+  documents for the row card's PR segment, so the two surfaces never
+  disagree about what a PR's color means.
+- Title and `assignee` render identically for both kinds; absent fields
+  are skipped, never blank-filled. `url` is deliberately **not** rendered
+  here — a full URL on every row was most of the original inline block's
+  bloat, and it isn't clickable in a terminal anyway.
+- The panel's border title is `tickets N` (fixed plural noun; the count
+  is what disambiguates one from several, so there's no singular-form
+  branch to keep in sync with the other panel titles).
 
 **Terminal pane content.**
 
@@ -1825,56 +1876,37 @@ linkability.
 
 ---
 
-## 12. Activity dashboard (webapp)
+## 12. Where the webapp's design system takes over
 
-The webapp collapsed to **one unified workspace surface** at `/`
-(`webapp/app/(shell)/page.tsx`, `webapp/components/workspace/`): the old
-separate home grid and activity wall were near-duplicates over the same
-stream, so they merged into a single attention-sorted flat grid of one
-`WorkspaceCard` (`/activity` now just redirects to `/`). It shares the
-TUI's tokens (status §4.3, agent-state §4.8) but has its own layout
-contract. Its one job is **glanceability without interaction**: a wall
-you read in five seconds from across the room.
+**The webapp has its own design system, and it is the authority for that surface:
+[`webapp/design-system.md`](../webapp/design-system.md).** It owns a type ramp, a
+three-tier content ramp, a four-rung surface ladder and its own colour rules —
+none of which this document governs, and none of which the TUI can express. This
+section exists only to name the ONE thing genuinely shared and the two intents
+that agree; do not read it as a summary of that document, and do not record a web
+decision here.
 
-The redesign is **compact, quiet-chrome shadcn**: Geist Sans/Mono
-self-hosted via next/font, a dense type scale (11px section labels →
-13px rows → 14px body), neutral graphite surfaces with saturated hue
-reserved for state only, and the brand terracotta held back for the
-logo + primary CTA. Webapp engineering detail (and the per-component
-typography/density tables) lives in `webapp/CLAUDE.md`. Four principles,
-in priority order:
+**What is actually shared is the cross-client VOCABULARY, not the look:** status
+(§4.3), agent state (§4.8) and runtime (§4.9). Those live in
+`grove.core.contracts` — `agent_palette`, `runtime_palette` — precisely so a
+drift test can hold the two clients together, which is a stronger guarantee than
+either document could give. The webapp's fleet surface at `/` streams from the
+same daemon SSE feed the TUI's Activity Dashboard reads.
 
-1. **Attention-first ordering.** One flat wall, no project bands. Cards
-   self-sort: action-required (blocked / waiting / error) first, then
-   working, then dormant — a stalled agent burns wall-clock until a
-   human answers; a working one needs nobody. The rank lives with the
-   tier policy (`lib/grove/activity-tier.ts` `activityRank`; comparator
-   `compareByAttention` beside it in `dashboard-filter.ts`) so a card's
-   treatment and its position can never drift. SSE-driven reorders
-   tween via auto-animate, which no-ops under `prefers-reduced-motion`.
-2. **Density / auto-fill.** The grid is
-   `repeat(auto-fill, minmax(17rem, 1fr))` — as many columns as the
-   viewport holds, rows packed from the top, no fixed breakpoint
-   ladder. Project identity is a compact per-card chip, never a group
-   header that wastes a band per repo.
-3. **Fixed card slot hierarchy.** Every card carries the SAME four
-   slots, top to bottom: (a) identity — agent brand badge · title ·
-   project chip · ONE state badge; (b) happening-now —
-   `current_task` (fallback: session self-name; error detail while in
-   error), plus "· N bg agents" while subagents run; (c) muted metrics
-   one-liner (turns · tools · tokens); (d) durable signal — last commit
-   subject + relative time. Anything else belongs on the detail page.
-   `blocked` is the loudest treatment on the wall: filled amber badge
-   reading "action required", plus the attention ring.
-4. **Accessibility.** Color is never the only signal — every state
-   badge pairs glyph + text label, with an `aria-label`; tier is also
-   encoded as opacity (dormant dims) and ring (attention). Visible
-   focus states on every interactive element; all motion honors
-   `prefers-reduced-motion`; label contrast stays AA by lighting only
-   the glyph with the state hue (the StatusBadge rule, §"webapp/CLAUDE.md").
+Two principles carry over from the TUI wall:
 
-This section pins only the surface's design language so future work
-stays consistent; the engineering detail stays in `webapp/CLAUDE.md`.
+1. **Attention-first ordering.** One flat wall, no project bands: a
+   workspace is often empty and often momentary, so grouping by repo mostly
+   produces headings. `needs_attention` and agent state drive sort and
+   badge treatment together, so a card's position and its urgency can never
+   drift apart.
+2. **Accessibility.** Color is never the only signal — every state badge
+   pairs a glyph or label with the hue, and focus states are visible on
+   every interactive element.
+
+Everything else about that surface — component anatomy, the card system, tokens,
+states — is in [`webapp/design-system.md`](../webapp/design-system.md), with the
+engineering detail in [`webapp/CLAUDE.md`](../webapp/CLAUDE.md).
 
 ---
 

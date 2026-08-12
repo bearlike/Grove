@@ -15,7 +15,7 @@ import pytest
 
 from grove.core import InitStatus, WorkspaceStatus
 from grove.core.config import GroveConfig
-from grove.core.contracts.phase_palette import DARK_PHASE_HEX
+from grove.core.contracts.phase_palette import DARK_BLOCKED_HEX, DARK_PHASE_HEX
 from grove.core.contracts.runtime_palette import DARK_RUNTIME_HEX
 from grove.core.errors import ConfigError
 from grove.core.manager import WorkspaceManager
@@ -23,6 +23,7 @@ from grove.core.phase import PHASE_ORDER
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import Runtime
 from grove.tui._status import (
+    blocked_color,
     init_status_color,
     phase_color,
     ref_color,
@@ -33,6 +34,7 @@ from grove.tui._status import (
 from grove.tui.app import GroveApp
 from grove.tui.theme import (
     ACTIVE_PULSE_TINT_HEX,
+    BLOCKED_HEX,
     GROVE_DARK,
     GROVE_LIGHT,
     PHASE_HEX,
@@ -176,6 +178,38 @@ def test_phase_done_leaves_the_ramp_for_muted_gray() -> None:
         done_hex = phase_color("done", dark=dark)
         offline_hex = status_color(WorkspaceStatus.OFFLINE, dark=dark)
         assert done_hex == offline_hex, f"done should reuse the muted-gray atom (dark={dark})"
+
+
+# ─── blocked flag (a FLAG beside a phase claim, not a TaskPhase member) ──────
+
+
+def test_tui_dark_blocked_hex_matches_the_cross_client_contract() -> None:
+    """`theme.BLOCKED_HEX[True]` must be sourced verbatim from
+    `contracts.phase_palette.DARK_BLOCKED_HEX` — the same "TUI↔web can't
+    drift by construction" guarantee `PHASE_HEX`'s dark side already has."""
+    assert BLOCKED_HEX[True] == DARK_BLOCKED_HEX
+    assert blocked_color(dark=True) == DARK_BLOCKED_HEX
+
+
+def test_blocked_is_not_a_phase_ramp_member() -> None:
+    """`blocked` co-occurs with any phase — it is a flag beside the claim, not
+    a phase in its own right (`grove.core.phase.TaskPhase` deliberately
+    excludes it) — so it must never be wedged into `PHASE_HEX` as a seventh
+    ramp entry, only its own single-color `BLOCKED_HEX` slot."""
+    for dark in (True, False):
+        assert set(PHASE_HEX[dark]) == set(PHASE_ORDER)
+        assert "blocked" not in PHASE_HEX[dark]
+
+
+def test_blocked_color_light_side_reuses_the_warning_amber_atom() -> None:
+    """The light side is TUI-only (mirrors `_LIGHT_PHASE_DONE` reusing the
+    muted-gray atom) — it composes the existing warning amber rather than
+    minting a new hue, the same "wants the human" semantic `WorkspaceStatus.
+    ORPHANED` already carries. Only the light side is pinned to a specific
+    atom here: the dark side is the cross-client wire contract and may pick
+    its own exact hex, verified above only for byte-identity with the
+    contract, not for which existing atom it happens to equal."""
+    assert blocked_color(dark=False) == status_color(WorkspaceStatus.ORPHANED, dark=False)
 
 
 # ─── theme name resolution ───────────────────────────────────────────────────

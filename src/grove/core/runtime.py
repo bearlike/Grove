@@ -503,7 +503,17 @@ class ContainerProvisioner:
         # workspace-teardown filter match nothing that existed.
         labels = ContainerRuntimeState.labels_for(workspace_id, project_slug=self._project_slug)
         share = self.share_plan(workspace_id, kind=kind)
-        egress = EgressPolicy.derive(self._cfg.container.egress, kind=kind, remote_urls=remote_urls)
+        egress = EgressPolicy.derive(
+            self._cfg.container.egress,
+            kind=kind,
+            remote_urls=remote_urls,
+            # The telemetry endpoint is a destination like any other, and the
+            # firewall is the layer that decides whether the exporter's packets
+            # leave. Passed here rather than restated in config so the address
+            # the agent exports to and the address the firewall admits are the
+            # same fact.
+            telemetry=self._cfg.telemetry,
+        )
         tmux = self.tmux_plan()
         netfilter = self.netfilter_payload(egress)
         decor = self.decor_plan()

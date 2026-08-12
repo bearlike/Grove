@@ -27,6 +27,7 @@ from grove.core.workspace import Runtime
 from grove.tui._status import (
     ACTIVE_PULSE_FRAMES,
     AGENT_STATE_GLYPH,
+    BLOCKED_GLYPH,
     PHASE_GLYPH,
     PR_GLYPH,
     STATUS_GLYPH,
@@ -34,6 +35,7 @@ from grove.tui._status import (
     agent_state_color,
     agent_state_glyph,
     agent_state_label,
+    blocked_color,
     chrome_color,
     phase_color,
     phase_glyph,
@@ -575,6 +577,39 @@ def test_render_card_phase_span_is_bold_and_phase_colored() -> None:
     )
 
 
+def test_render_card_blocked_phase_appends_the_flag_beside_the_phase() -> None:
+    """`blocked=True` is a FLAG riding beside the phase segment, not a
+    replacement — the phase glyph/label/progress must still render untouched,
+    with `BLOCKED_GLYPH` appended after it in `blocked_color`."""
+    report = _phase("implementing", blocked=True)
+    text = _render_card(_state(), dark=True, now=_NOW, phase=report)
+    unblocked_segment = (
+        f"{phase_glyph('implementing')} {phase_label('implementing')} 3/{len(PHASE_ORDER)}"
+    )
+    assert unblocked_segment in text.plain
+    assert f"{unblocked_segment} {BLOCKED_GLYPH}" in text.plain
+    hex_ = blocked_color(dark=True).lower()
+    found = False
+    for start, end, style in text.spans:
+        if text.plain[start:end] == f" {BLOCKED_GLYPH}":
+            style_str = str(style).lower()
+            if "bold" in style_str and hex_ in style_str:
+                found = True
+                break
+    assert found, (
+        f"blocked flag span should be 'bold {hex_}'; spans seen: "
+        f"{[(text.plain[s:e], str(st)) for s, e, st in text.spans]}"
+    )
+
+
+def test_render_card_unblocked_phase_omits_the_flag() -> None:
+    """Absence is the default: an unreported-blocked claim renders byte-
+    identical to before `blocked` existed, and the glyph never appears."""
+    report = _phase("implementing", blocked=False)
+    text = _render_card(_state(), dark=True, now=_NOW, phase=report)
+    assert BLOCKED_GLYPH not in text.plain
+
+
 def test_render_card_phase_none_is_byte_identical_to_pre_phase_render() -> None:
     """`phase=None` (and the omitted-param default) must render the exact
     same bytes AND spans as a card built with no phase param at all —
@@ -597,6 +632,16 @@ def test_render_card_phase_glyphs_do_not_collide_with_status_or_agent_state() ->
     phase_glyphs = set(PHASE_GLYPH.values())
     assert phase_glyphs.isdisjoint(status_glyphs)
     assert phase_glyphs.isdisjoint(agent_glyphs)
+
+
+def test_blocked_glyph_does_not_collide_with_any_other_axis() -> None:
+    """`BLOCKED_GLYPH` is a flag riding beside a phase claim, not a member of
+    any existing glyph family (status/agent-state circles, the phase block
+    ramp, the PR arrow, the runtime squares) — a fifth family, so it can never
+    be mistaken for one of them at a glance."""
+    other_glyphs = set(STATUS_GLYPH.values()) | set(AGENT_STATE_GLYPH.values())
+    other_glyphs |= set(PHASE_GLYPH.values()) | {PR_GLYPH}
+    assert BLOCKED_GLYPH not in other_glyphs
 
 
 # ─── runtime mark (the isolation axis) ───────────────────────────────────────
@@ -626,6 +671,22 @@ def test_render_card_runtime_glyphs_do_not_collide_with_any_other_axis_or_chrome
     assert runtime_glyphs.isdisjoint(chrome)
     # Two runtimes, two distinct marks — neither may borrow the other's.
     assert len(runtime_glyphs) == len(RUNTIME_GLYPH)
+
+
+def test_blocked_glyph_does_not_collide_with_runtime_squares_or_chrome() -> None:
+    """Same extended check `test_render_card_runtime_glyphs_do_not_collide_
+    with_any_other_axis_or_chrome` runs for runtime — the status bar's own
+    glyphs are not covered by an axis-only disjointness check."""
+    assert BLOCKED_GLYPH not in set(RUNTIME_GLYPH.values())
+    chrome = {
+        status_widget._GLYPH_REPO,
+        status_widget._GLYPH_BRANCH,
+        status_widget._GLYPH_FILTER,
+        status_widget._GLYPH_SELECT,
+        status_widget._GLYPH_DIVIDER,
+        status_widget._GLYPH_UPDATE,
+    }
+    assert BLOCKED_GLYPH not in chrome
 
 
 @pytest.mark.parametrize("runtime", [Runtime.HOST, Runtime.CONTAINER])
