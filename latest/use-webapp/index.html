@@ -998,6 +998,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1313,73 +1337,41 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="your-fleet-in-a-browser">Your fleet in a browser</h2>
-<p>Grove is a terminal program first. The web dashboard puts the same fleet on any device on your network,
-so you read a transcript, steer an agent, and create or tear down a workspace without a terminal. It
-drives the same engine as the <abbr title="Terminal User Interface">TUI</abbr> and the same workspaces an agent creates over <a href="../use-mcp/"><abbr title="Model Context Protocol">MCP</abbr></a>.</p>
-<p>The mental model is work in a session, switch sessions in a rail. Every route shares one shell, a rail
-on the left and a slim header.</p>
+<p>Grove is a terminal program first. The web dashboard puts the same fleet on any device: read a transcript, steer an agent, create or tear down a workspace.</p>
 <video preload="auto" poster="../img/posters/web-still.png">
   <source src="../videos/2-grove-web.mp4" type="video/mp4" />
 </video>
 
 <hr />
-<h2 id="the-landing-surface">The landing surface</h2>
-<p>The landing route (<code>/</code>) opens on a centered composer. Type a task, press <span class="keys"><kbd class="key-enter">Enter</kbd></span>, and Grove creates a
-workspace and drops you into it. A Recent strip of the latest workspaces sits below.</p>
-<p>A persisted <code>Hero | Overview</code> toggle sits above it. <strong>Hero</strong> is that composer and the default.
-<strong>Overview</strong> is the workspace-card grid, wearing the <abbr title="Terminal User Interface">TUI</abbr>'s status glyphs and colors. Each card
-(<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/workspace/card.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>card.tsx</span></a>) carries a state glyph, title, relative time and
-what is happening now, then:</p>
-<ul>
-<li>Any linked issue and pull request, the agent's reported
-  <a href="../features-status/#the-third-axis-task-phase">task phase</a>, and todo progress.</li>
-<li>Stats for branch, ahead, behind, dirty, runtime, turns, tool calls and tokens.</li>
-<li>A <strong>Live</strong> toggle while the agent works, mirroring its real terminal over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr> with colors and
-  box-drawing intact. Only one pane runs live at a time.</li>
-</ul>
-<p>Grid and rail ride a live event stream, so a fresh commit or state change lands in a second or two. The
-old <code>/activity</code> wall folded in here and now redirects.</p>
-<hr />
-<h2 id="the-session-rail">The session rail</h2>
-<p>A collapsible rail runs down the left of every route
-(<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/layout/session-rail.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>session-rail.tsx</span></a>), one flat cross-project thread list
-sorted by recency, with no repository sections and no scope switcher. Each row is two lines, a state dot
-with the title and age, then <code>project · branch · +N/−M</code>. A waiting or blocked session signals through its
-dot color and a row tint, never a separate group.</p>
-<p>One search box and one filter dropdown
-(<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/layout/sidebar-filter.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sidebar-filter.tsx</span></a>) sit above it. Toggle which
-agent states show, flip <strong>Needs attention only</strong>, check projects, and reveal unmapped sessions,
-history-only rows hidden by default. Every choice persists.</p>
-<p>The footer (<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/layout/workspace-sidebar.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>workspace-sidebar.tsx</span></a>) carries daemon
-health and live uptime, the version and any update nudge, the workspace count, and a user and host
-identity row, all of which used to sit in a bottom status bar, now gone.</p>
-<p>The header toggle or <span class="keys"><kbd class="key-bracket-left">[</kbd></span> hides the rail entirely, with no half-collapsed icon strip. A phone
-opens it as a drawer from the hamburger.</p>
-<hr />
-<h2 id="the-session-catalog">The Session Catalog</h2>
-<p>The rail shows sessions from the projects Grove knows about. <strong>Sessions</strong> in the header shows every agent
-session on the machine, whatever repo it ran in.</p>
-<p>Rows group by project, newest first, each with the agent kind, its git branch, when it last changed,
-whether Grove launched it or you started it by hand, and a live dot when a matching process still runs
-there. Open one and the conversation renders read-only. A session whose transcript never recorded where it
-ran lists dimmed, with a note on why it will not open.</p>
-<p>The screen reads a metadata scan, not a full transcript parse, so it stays fast with hundreds of sessions
-on disk. <a href="../features-activity/#session-history">Session history</a> covers the same catalog in the <abbr title="Terminal User Interface">TUI</abbr> and
-<abbr title="Command Line Interface">CLI</abbr>.</p>
-<hr />
-<h2 id="working-in-a-session">Working in a session</h2>
-<p>A session's detail page (<code>/w/[id]</code>) is three zones. The rail, a centered transcript column, and a tabbed
-work panel.</p>
+<h2 id="the-rail">The rail</h2>
+<p>A collapsible rail runs down the left of every route (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/shell/app-sidebar.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>app-sidebar.tsx</span></a>): a <strong>New workspace</strong> button, a search box and a filter menu, then the fleet as one flat list sorted by recency — each row an agent mark, title, <code>project · branch</code>, and a single trailing glyph for whatever is most urgent about that row (an attention mark, or how far along its task phase is). Below the list sit the destinations that are not "a workspace" — <strong>Usage</strong> and <strong>Sessions</strong> — and the account menu, which carries your identity, the theme toggle, and sign out. <span class="keys"><kbd class="key-bracket-left">[</kbd></span> hides the rail, a phone opens it as a drawer.</p>
+<p>The filter menu (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/fleet/fleet-filter.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>fleet-filter.tsx</span></a>) is the one place narrowing happens, reused by both the rail and the fleet grid: <strong>Needs attention</strong>, agent state, and project, each with a live count. A flat list rather than one grouped by project is deliberate — a Grove workspace is often empty and often momentary, so a heading per repo mostly reads "0, no workspaces yet."</p>
+<h2 id="the-fleet">The fleet</h2>
+<p>The landing route (<code>/</code>) is the fleet itself (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/fleet/fleet-dashboard.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>fleet-dashboard.tsx</span></a>): the same search and filter as the rail, above a grid of workspace cards, newest activity first.</p>
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace.png" alt="A Grove session page: the left session rail, a centered agent transcript column with a steer composer at its foot, and a work panel on the right with Terminal, Diff, and Info tabs" /></div>
-  <figcaption class="ms-shot__body">The three-zone session shell.</figcaption>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="Grove's fleet dashboard: a flat, attention-sorted grid of workspace cards behind a session rail listing every workspace by recency" /></div>
+  <figcaption class="ms-shot__body">The fleet, newest activity first.</figcaption>
 </figure>
 
-<p>The state-led title (<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/workspace/context-bar.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>context-bar.tsx</span></a>) is the
-header's one control and opens the session's one popover. <strong>Identity</strong> is branch and base, agent and model,
-placement. <strong>Changes</strong> is ahead, behind and dirty. <strong>Actions</strong> holds the reversible lifecycle verbs,
-<strong>Danger zone</strong> the destructive one.</p>
-<p>The work panel (<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/workspace/work-panel.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>work-panel.tsx</span></a>) carries four tabs:</p>
+<p>Each card (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/fleet/workspace-card.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>workspace-card.tsx</span></a>) answers three questions in reading order: what this is (title, repo, branch), what is happening (agent state, task phase, runtime, an attention badge when it needs you), and how much it has done (lines changed, commits ahead and behind, todo progress, linked tickets). Open one for the full transcript and work panel.</p>
+<h2 id="creating-a-workspace">Creating a workspace</h2>
+<p><strong>New workspace</strong>, in the rail or on the fleet page, opens a dialog (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/fleet/create-workspace-dialog.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>create-workspace-dialog.tsx</span></a>). Only the project, title and agent are required — everything else falls through to the <a href="../features-cascade/">configuration cascade</a>, which already holds better defaults than a form would:</p>
+<ul>
+<li><strong>Task</strong>, sent to the agent as its first message. Optional — you can also start it blank and type the first message once the workspace opens.</li>
+<li><strong>Agent</strong>, and a <strong>Model</strong> for agents that expose a catalog.</li>
+<li><strong>Runtime</strong>, <em>Host</em> or <em>Container</em>, defaulting to the project's own <code>container.enabled</code>.</li>
+<li><strong>Brief</strong>, whether Grove sends its own briefing to the agent, defaulting to the project's setting.</li>
+<li><strong>Branch</strong>, auto-named from the title, an existing local or remote branch, or a new name you choose.</li>
+<li><strong>Ticket</strong>, an issue id on Gitea, GitHub or Linear to link and <a href="../features-ticket-providers/">publish progress to</a>.</li>
+</ul>
+<h2 id="working-in-a-session">Working in a session</h2>
+<p>A workspace's detail page (<code>/w/[id]</code>) has three zones: rail, transcript, work panel.</p>
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-workspace.png" alt="A Grove workspace page: the left session rail, a centered agent transcript column with a steer composer at its foot, and a work panel on the right with Terminal, Changes, Files, Info and Controls tabs" /></div>
+  <figcaption class="ms-shot__body">The three-zone workspace shell.</figcaption>
+</figure>
+
+<p>The header (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/shell/shell-header.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>shell-header.tsx</span></a>) carries the workspace title, the agent's live status, an <strong>Interrupt</strong> button while it is running, and the pane switcher. The work panel (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/workspace/work-panel.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>work-panel.tsx</span></a>) has five tabs:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1390,78 +1382,86 @@ placement. <strong>Changes</strong> is ahead, behind and dirty. <strong>Actions<
 <tbody>
 <tr>
 <td><strong>Terminal</strong></td>
-<td>The agent's live tmux pane, colors and box-drawing intact, under a permanent live pulse.</td>
+<td>The agent's live tmux pane, colors and box-drawing intact, over its own <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr> stream.</td>
 </tr>
 <tr>
-<td><strong>Diff</strong></td>
-<td>The change summary plus the full commit list.</td>
+<td><strong>Changes</strong></td>
+<td>Divergence from the base branch, working-tree churn, and the commit list since the fork point.</td>
+</tr>
+<tr>
+<td><strong>Files</strong></td>
+<td>The per-file diffs the agent itself reported.</td>
 </tr>
 <tr>
 <td><strong>Info</strong></td>
-<td>Task phase, linked issue and pull request, metrics, agent and model, placement, runtime, timestamps.</td>
+<td>Task phase, linked tickets, activity metrics, identity, branch, timeline, and the lifecycle actions.</td>
 </tr>
 <tr>
 <td><strong>Controls</strong></td>
-<td>Slash commands, skills, <abbr title="Model Context Protocol">MCP</abbr> servers, and the model catalog with a switch action. Empty for an agent with no control surface.</td>
+<td>The model catalog with a switch, plus enumerated slash commands, skills, and configured <abbr title="Model Context Protocol">MCP</abbr> servers. Empty for an agent with none.</td>
 </tr>
 </tbody>
 </table></div>
-<p>On a wide screen the view switcher
-(<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/workspace/view-switcher.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>view-switcher.tsx</span></a>) puts transcript and panel side
-by side at a dragged ratio that sticks. It is never the default. Every other breakpoint opens single-pane,
-transcript-first, and <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-j">J</kbd></span> on macOS or <span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-j">J</kbd></span> elsewhere collapses the panel.</p>
+<p>A wide window's pane switcher splits transcript and panel side by side; narrower it opens single-pane, transcript first. Lifecycle — <strong>Pause</strong>, <strong>Resume</strong>, <strong>Respawn</strong>, <strong>Kill</strong> — lives on the Info tab, not the header: the engine's own gate is the real authority, and these buttons mirror it rather than assume it.</p>
 <hr />
 <h2 id="steering-the-agent">Steering the agent</h2>
-<p>The transcript (<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/chat/chat-panel.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>chat-panel.tsx</span></a>) shows your messages, the
-agent's replies, tool calls grouped into collapsible runs, and background notifications. The composer at
-its foot sends a follow-up to the running agent, the same as typing into the terminal.</p>
-<p><strong>The steer composer never disables while the agent is working.</strong> <span class="keys"><kbd class="key-enter">Enter</kbd></span> sends, <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-enter">Enter</kbd></span> makes
-a new line, and a circular <strong>Interrupt</strong> next to send stops the agent mid-turn.</p>
-<p>An <code>AskUserQuestion</code> renders inline as an interactive card
-(<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/workspace/question-card.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>question-card.tsx</span></a>). Single choice sends on tap. A
-multi-select, or a batch of questions, shows checkboxes, an explicit <strong>Submit</strong> and an "Other" free-text
-field. The card mirrors the terminal's answer grammar, so the same choice reaches the agent whichever
-surface you use.</p>
+<p>The transcript (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/workspace/thread.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>thread.tsx</span></a>) shows your messages, the agent's replies, and tool calls grouped into collapsible runs. The composer stays enabled while the agent works: <span class="keys"><kbd class="key-enter">Enter</kbd></span> sends, <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-enter">Enter</kbd></span> makes a new line, and the header's <strong>Interrupt</strong> stops it mid-turn — steering never waits for the composer's own send button to change into one.</p>
+<p>A live question from the agent renders as a card riding in the thread's own footer, a sibling of the message stream rather than a message itself (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/webapp/components/grove/workspace/pending-question.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>pending-question.tsx</span></a>): a single choice sends on tap, a multi-select or free-text question shows a <strong>Submit</strong>. An agent asking to proceed with its plan has no answer shape on the wire, so it renders read-only — you approve it the same way you would in the terminal.</p>
 <hr />
-<h2 id="creating-a-workspace-with-the-composer">Creating a workspace with the composer</h2>
-<p>The landing composer (<a href="https://github.com/bearlike/Grove/blob/c20cae9d/webapp/components/composer/composer.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>composer.tsx</span></a>) is the only way to
-start a workspace. Its first line becomes the title, the full text the agent's first task.</p>
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home-mobile.png" alt="The Grove web dashboard on a phone: the Hero composer and the recent-session strip, with the rail available behind the hamburger menu" /></div>
-  <figcaption class="ms-shot__body">On a phone, with the rail one tap behind the hamburger.</figcaption>
-</figure>
+<h2 id="the-session-catalog">The Session Catalog</h2>
+<p><strong>Sessions</strong> in the rail lists every agent session Grove can find on the machine, searchable by title, location, agent kind or branch. Open one with a known location and the conversation renders read only, with no composer mounted. <a href="../features-activity/#session-history">Session history</a> covers the same ground in the <abbr title="Terminal User Interface">TUI</abbr> and <abbr title="Command Line Interface">CLI</abbr>.</p>
+<hr />
+<h2 id="the-usage-audit">The usage audit</h2>
+<p><strong>Usage</strong> in the rail answers what the fleet actually spent. It is derived
+entirely from transcripts already on disk, so it needs no invoice from a
+provider and works with the network off.</p>
+<div class="swiper ms-shots">
+  <div class="swiper-wrapper">
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/webapp-usage.png" alt="Grove's usage audit: a coverage bar naming each indexed source, tiles for sessions, turns, tool calls, files changed, projects and accounts, a daily token heatmap, and a weekly mix chart split by agent">
+        <figcaption>Coverage, the headline tiles, a year of daily tokens, and the subscription windows.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/webapp-usage-detail.png" alt="The lower half of Grove's usage audit: a per-model breakdown with token counts and a table of the most recent sessions">
+        <figcaption>Further down: what each model cost you, and the sessions behind the totals.</figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="swiper-pagination"></div>
+  <div class="swiper-button-prev"></div>
+  <div class="swiper-button-next"></div>
+</div>
 
-<p>A chip row under the textarea sets the rest:</p>
-<ul>
-<li><strong>Agent</strong>, and a per-workspace <strong>Model</strong> for agents that take one, offered from the daemon's per-agent
-  catalog with a custom-id escape hatch.</li>
-<li><strong>Runtime</strong>, either <em>Host</em> or <em>Container</em>. <em>Default</em> follows the engine's <code>container.enabled</code> config.</li>
-<li>The repository, the base, and the <a href="../features-branch-provenance/">branch mode</a>, the same five every
-  Grove surface offers, plus <strong>Advanced</strong> for the base ref and a <em>skip init</em> toggle.</li>
-</ul>
-<p>A fullscreen toggle opens a Markdown editor with live preview, where <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-enter">Enter</kbd></span> or <span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-enter">Enter</kbd></span>
-creates. The composer speaks the <abbr title="Terminal User Interface">TUI</abbr> create modal's wire contract.</p>
-<p><strong>Lifecycle actions live in the session identity popover, not the composer.</strong> <em>Pause</em>, <em>Resume</em> and
-<em>Respawn</em> fire straight away. <em>Kill</em> confirms first, with a delete-branch checkbox whose default follows
-where the branch came from. Which verbs appear follows status and placement, the <abbr title="Terminal User Interface">TUI</abbr>'s matrix, and the
-engine gates every precondition.</p>
+<p>The tiles count sessions, turns, tool calls and their failures, files changed,
+projects and accounts. A daily heatmap puts a year of activity on one grid,
+breakdowns split any metric by provider, account, project, model, tool or token
+class, and a session table lists the runs behind the totals. Where you hold a
+subscription Grove can read, its windows appear beside the spend.</p>
+<p>Two numbers describe a session's length and they are not interchangeable. Clock
+time is the wall clock, the session's active intervals merged so concurrency
+counts once. Compute time sums the same intervals across the main thread and
+every sub-agent, so a session that ran six agents can bill more compute than it
+lasted. The Info tab shows both, and splits compute into model wait and tool
+time.</p>
+<p>Cost appears only where a price table and per-class token counts both exist, and
+says "not measured" otherwise rather than showing a fabricated zero. The same
+rule governs subscription windows: a plan Grove cannot read reports that it
+could not read it. See <a href="../features-telemetry/">telemetry and tracing</a> for the
+other half of this, where the same sessions become queryable traces.</p>
 <hr />
 <h2 id="running-it">Running it</h2>
-<p>The dashboard is two processes. The daemon exposes Grove's engine over HTTP, and the web app is the
-Next.js server the browser talks to. Build once, run both.</p>
+<p>The dashboard is two processes: a daemon exposing Grove's engine over HTTP, a Next.js app the browser talks to.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Build the web app once (repeat after each upgrade)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>webapp<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>build
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>webapp-build
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Run the two processes</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">     </span><span class="c1"># terminal 1, loopback, port 7421</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>npm<span class="w"> </span>run<span class="w"> </span>start<span class="w">          </span><span class="c1"># terminal 2 from webapp/, serves the build on 0.0.0.0:3000</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nb">cd</span><span class="w"> </span>webapp<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>start<span class="w">   </span><span class="c1"># terminal 2, serves the build on 0.0.0.0:3000</span>
 </span></code></pre></div>
-<p>Open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> on the same machine. The web app binds <code>0.0.0.0</code>, so any phone or laptop on
-the network reaches it at <code>http://&lt;machine-ip&gt;:3000</code>. If the daemon runs on another host or port, point
-the web app at it with <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local</code>. A new device has to
-<a href="../use-auth/">pair</a> with the host the first time it connects.</p>
-<p>The development server, wire-type codegen and test suites are contributor topics, documented in the
-<a href="https://github.com/bearlike/Grove/tree/current/webapp"><code>webapp/</code> README</a>.</p>
+<p>Open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> on the same machine, or <code>http://&lt;machine-ip&gt;:3000</code> from a phone. Point it at a remote daemon with <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local</code>. A new device must <a href="../use-auth/">pair</a> first. Dev server and tests are in the <a href="https://github.com/bearlike/Grove/tree/current/webapp"><code>webapp/</code> README</a>.</p>
 <hr />
 <h2 id="how-it-stays-loopback-only">How it stays loopback-only</h2>
 <pre class="mermaid"><code>flowchart TB
@@ -1470,42 +1470,27 @@ the web app at it with <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local<
     Daemon(["Daemon&lt;br/&gt;127.0.0.1:7421"])
     Browser --&gt;|http| Web
     Web --&gt;|"http, /api/grove/* (BFF proxy)"| Daemon</code></pre>
-<p>The browser only ever calls the web app's own origin at <code>/api/grove/*</code>, so everything stays same-origin
-and there is no CORS to configure. The Next.js server works as a backend-for-frontend, proxying those
-calls to the daemon at <code>GROVE_DAEMON_URL</code>, default <code>http://127.0.0.1:7421</code>, and attaching the paired
-session's token on the server side, so the daemon's token never reaches the browser.</p>
-<p>Picture the web app as a receptionist at a front desk who carries each request to the back office and
-brings the answer out. The daemon stays in that back office, bound to loopback, and never meets the public
-directly. That separation is the whole security story, and <a href="../use-auth/">authentication &amp; pairing</a> covers
-the rest.</p>
+<p>The browser only calls the web app's own origin at <code>/api/grove/*</code>, so everything stays same origin with no CORS to configure. The Next.js server proxies each call to the daemon, attaching the paired session's token server side. Picture the web app as a receptionist carrying each request to the back office. <a href="../use-auth/">Authentication &amp; pairing</a> covers the rest.</p>
 <hr />
 <h2 id="always-on-with-systemd">Always-on with systemd</h2>
-<p>To keep both processes running across reboots on a Linux host, build the web app and render the user units
-with it opted in.</p>
+<p>Build the web app, then render the user units with it opted in:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>webapp-build<span class="w">                 </span><span class="c1"># npm ci + npm run build</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd<span class="w">        </span><span class="c1"># write grove-daemon + grove-webapp units</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd-enable<span class="w"> </span><span class="c1"># reload, enable, start now</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>loginctl<span class="w"> </span>enable-linger<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$USER</span><span class="s2">&quot;</span><span class="w">    </span><span class="c1"># survive logout (remote hosts)</span>
 </span></code></pre></div>
-<p>The web app unit <code>Wants</code> the daemon rather than <code>Requires</code> it, so a daemon hiccup leaves the dashboard up
-to report "unreachable" instead of taking it down too. The service runs the production build and never
-rebuilds itself, so after pulling new source run
-<code>make webapp-build &amp;&amp; systemctl --user restart grove-webapp</code>. Ports override with
-<code>DAEMON_PORT=7777 WEBAPP_PORT=3030 WITH_WEBAPP=1 make systemd</code>.</p>
+<p>The web app unit <code>Wants</code> the daemon rather than <code>Requires</code> it, so a daemon hiccup reports "unreachable" without taking the dashboard down too. Run <code>make webapp-build &amp;&amp; systemctl --user restart grove-webapp</code> after pulling new source. Ports override with <code>DAEMON_PORT=7777 WEBAPP_PORT=3030 WITH_WEBAPP=1 make systemd</code>.</p>
 <hr />
 <h2 id="reaching-it-from-outside-the-network">Reaching it from outside the network</h2>
-<p>The daemon's loopback bind is deliberate, so there is no blessed way to expose it directly. To reach a
-remote host's dashboard, forward the web app's port over SSH.</p>
+<p>The daemon's loopback bind is deliberate, so there is no blessed way to expose it. Forward the web app's port over SSH:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ssh<span class="w"> </span>-N<span class="w"> </span>-L<span class="w"> </span><span class="m">3000</span>:127.0.0.1:3000<span class="w"> </span>you@remote-host
 </span></code></pre></div>
-<p>Then open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> on your own machine. A real tunnel in front of the web app works too,
-such as Tailscale, WireGuard, or an authenticated reverse proxy. Widening the daemon's bind is the wrong
-lever, because pairing assumes loopback. See the <a href="../use-auth/#the-security-model">security model</a>.</p>
+<p>Open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a> on your own machine. A real tunnel (Tailscale, WireGuard, a reverse proxy) works too. Widening the daemon's bind is the wrong lever. See the <a href="../use-auth/#the-security-model">security model</a>.</p>
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
 <li><a href="../use-auth/">Authentication &amp; pairing</a>: how a new device gets access.</li>
-<li><a href="../use-cli/"><abbr title="Command Line Interface">CLI</abbr></a>: <code>grove daemon serve</code> options and the <code>grove auth</code> group.</li>
+<li><a href="../use-cli/"><abbr title="Command Line Interface">CLI</abbr></a>: <code>grove daemon serve</code> and <code>grove auth</code>.</li>
 <li><a href="../features-activity/">Agent activity and sessions</a>: the signals behind the rail and terminal pane.</li>
 <li><a href="../features-status/">Status semantics</a>: what each glyph and color means.</li>
 <li><a href="https://github.com/bearlike/Grove/tree/current/webapp"><code>webapp/</code> README</a>: the contributor surface.</li>
@@ -2152,6 +2137,30 @@ lever, because pairing assumes loopback. See the <a href="../use-auth/#the-secur
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2421,27 +2430,27 @@ lever, because pairing assumes loopback. See the <a href="../use-auth/#the-secur
         </p>
         <div class="mewbo-toc__list">
             
-            <a href="#the-landing-surface"
+            <a href="#the-rail"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-landing-surface');">
-                The landing surface
+                onClick="deferSetActiveTocLink('#the-rail');">
+                The rail
             </a>
             
             
-            <a href="#the-session-rail"
+            <a href="#the-fleet"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-session-rail');">
-                The session rail
+                onClick="deferSetActiveTocLink('#the-fleet');">
+                The fleet
             </a>
             
             
-            <a href="#the-session-catalog"
+            <a href="#creating-a-workspace"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-session-catalog');">
-                The Session Catalog
+                onClick="deferSetActiveTocLink('#creating-a-workspace');">
+                Creating a workspace
             </a>
             
             
@@ -2461,11 +2470,19 @@ lever, because pairing assumes loopback. See the <a href="../use-auth/#the-secur
             </a>
             
             
-            <a href="#creating-a-workspace-with-the-composer"
+            <a href="#the-session-catalog"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#creating-a-workspace-with-the-composer');">
-                Creating a workspace with the composer
+                onClick="deferSetActiveTocLink('#the-session-catalog');">
+                The Session Catalog
+            </a>
+            
+            
+            <a href="#the-usage-audit"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#the-usage-audit');">
+                The usage audit
             </a>
             
             

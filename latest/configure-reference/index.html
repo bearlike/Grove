@@ -998,6 +998,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1350,7 +1374,7 @@
 <td><code>command</code></td>
 <td><code>string</code></td>
 <td><code>**required**</code></td>
-<td></td>
+<td>Shell command sent to the agent tmux window via send-keys.</td>
 </tr>
 <tr>
 <td><code>description</code></td>
@@ -1362,37 +1386,37 @@
 <td><code>env</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td></td>
+<td>Extra env vars <em>exported</em> into the agent's tmux window before launch.</td>
 </tr>
 <tr>
 <td><code>env_unset</code></td>
 <td><code>array&lt;string&gt;</code></td>
 <td><code>[]</code></td>
-<td></td>
+<td>Env vars <em>cleared</em> in the agent's tmux window before <code>env</code> is applied.  The hermetic half of the launch env: a tmux pane inherits the tmux server's environment, which inherited the daemon's, so an ambient value (a profile selector like <code>CLAUDE_CONFIG_DIR</code>) silently leaks daemon → server → pane → agent. Listing a var here <code>unset</code>s it at the pane boundary, so the agent starts from a known base and <code>env</code> — or, when <code>env</code> is silent, the tool's own default — decides instead of whatever the daemon happened to carry. Unset runs first, so a key present in both <code>env_unset</code> and <code>env</code> ends up exported. Pure mechanism, not policy: the launcher just clears whatever vars the config names — no var name is hard-coded anywhere — and a future container launcher applies the same <code>env</code> / <code>env_unset</code> set at create time.</td>
 </tr>
 <tr>
 <td><code>kind</code></td>
 <td><code>string</code></td>
 <td><code>'generic'</code></td>
-<td></td>
+<td>Which <code>AgentAdapter</code> introspects this agent's session for the Activity Dashboard. <code>claude_code</code> enables transcript-based activity tracking — live status, human-turn / reply counts, the session's self-generated title — and lets Grove mint a deterministic <code>--session-id</code> at launch. <code>codex</code> reads the same transcript signals from Codex <abbr title="Command Line Interface">CLI</abbr> rollout files, but the id is server-internal (no launch flag) so its session is adopted via discovery, not minted. <code>mewbo</code> introspects a remote orchestrator over <abbr title="Representational State Transfer">REST</abbr>. <code>generic</code> (the default) launches the command but tracks nothing: a plain shell, or any tool with no known transcript format. Mechanism, not policy — declare it per agent and it cascades like every other field.</td>
 </tr>
 <tr>
 <td><code>models</code></td>
 <td><code>array&lt;string&gt;</code></td>
 <td><code>[]</code></td>
-<td></td>
+<td>Curated model ids to OFFER for this agent in the create-form picker — a display/override seam, never a validated allowlist (any id is still forwarded verbatim on create; the provider boundary). Empty (the default) falls through to the adapter's live discovery: Codex reads <code>codex debug models</code>, Claude Code offers its stable <code>sonnet</code>/<code>opus</code>/<code>haiku</code> aliases, a remote/shell agent offers nothing. Set it to pin, restrict, reorder, or add gateway/custom ids — it cascades and merges by field like every other AgentSpec knob (mechanism, not policy). The engine (<code>agents.resolve_models</code>) caps the offered list at ten.</td>
 </tr>
 <tr>
 <td><code>name</code></td>
 <td><code>string</code></td>
 <td><code>**required**</code></td>
-<td></td>
+<td>Identifier used as the merge key when cascading agent lists across layers.</td>
 </tr>
 <tr>
 <td><code>tools_offline</code></td>
 <td><code>boolean</code></td>
 <td><code>False</code></td>
-<td></td>
+<td>Launch this agent with network-facing tools disallowed: Claude Code drops <code>WebFetch</code>/<code>WebSearch</code>, Codex flips its sandbox to workspace-write with networking off. Mechanism, not policy — a deployment that wants a hermetic/offline agent profile sets this per <code>AgentSpec</code> rather than Grove hard-coding a tool list; the adapter owns the actual flag shape (<code>AgentAdapter.offline_decoration</code>), same provider-boundary split as <code>model_decoration</code>. <code>generic</code>/<code>mewbo</code> have no local tool gate, so it's a no-op for those kinds.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1415,31 +1439,31 @@ a test-only escape hatch; production daemons leave it <code>true</code>.</p>
 <td><code>enabled</code></td>
 <td><code>boolean</code></td>
 <td><code>True</code></td>
-<td></td>
+<td>Master switch. <code>False</code> disables the dep entirely — only used by in-process tests that exercise paths unrelated to auth. Production must leave this <code>True</code>.</td>
 </tr>
 <tr>
 <td><code>pair_init_per_minute</code></td>
 <td><code>integer</code></td>
 <td><code>5</code></td>
-<td></td>
+<td>Per-source rate limit on <code>POST /auth/pair</code>. Bounds brute-force.</td>
 </tr>
 <tr>
 <td><code>pair_poll_per_minute</code></td>
 <td><code>integer</code></td>
 <td><code>60</code></td>
-<td></td>
+<td>Per-source rate limit on <code>GET /auth/pair/{id}</code>. Generous; the browser polls every 2 s during the approval wait.</td>
 </tr>
 <tr>
 <td><code>pairing_ttl_seconds</code></td>
 <td><code>integer</code></td>
 <td><code>300</code></td>
-<td></td>
+<td>How long a pairing code is valid for approval after creation.</td>
 </tr>
 <tr>
 <td><code>session_ttl_seconds</code></td>
 <td><code>integer</code></td>
 <td><code>2592000</code></td>
-<td></td>
+<td>Sliding session TTL. Each <code>validate()</code> extends <code>expires_at</code> by this many seconds, so a daily user never re-pairs; idle for the full window means the session ages out and the device must pair again.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1479,6 +1503,23 @@ later never changes a workspace that already exists.</p>
 </tbody>
 </table></div>
 <h2 id="builtin_agents"><code>builtin_agents</code></h2>
+<p>Whether Grove's own agents (<code>claude</code>, <code>codex</code>, <code>shell</code>) are offered
+alongside the ones you declare.</p>
+<p><code>true</code> (the default) is the standing contract: the built-ins are literally layer
+0 of the cascade, so declaring <code>agents</code> REFINES them and can never hide one
+by omission. That is right for a first-run install and wrong for an operator
+whose fleet runs its own curated profiles — the stock three still show up in
+every picker with no way to say no. Flip this to <code>false</code> and the roster is
+exactly what your layers declare; name a built-in (even bare
+<code>{"name": "claude"}</code>) to opt it back in and inherit its full built-in spec
+through the same merge-by-name. Forward-compatible by construction: a built-in
+added in a future Grove release stays hidden too, instead of appearing on
+upgrade.</p>
+<p>Hiding an agent removes it from <code>find_agent</code> as well, so <code>create</code> rejects
+it on every surface (<abbr title="Command Line Interface">CLI</abbr>/<abbr title="Model Context Protocol">MCP</abbr>/HTTP) and an existing workspace pinned to it can
+no longer resume/respawn — it gets the typed "no longer present in config"
+error. That blast radius is the point: the roster is one list, and hiding an
+agent is the operator saying nothing should run it anymore.</p>
 <h2 id="channels"><code>channels</code></h2>
 <p>Grove-managed Claude Code <em>channel</em> delivery (research preview).</p>
 <p>A channel is Claude Code's native seam for pushing a message a <strong>running,
@@ -1506,7 +1547,7 @@ the whole path degrades to a no-op, exactly like the hook <code>--settings</code
 <td><code>allowed_senders</code></td>
 <td><code>array&lt;string&gt;</code></td>
 <td><code>(none)</code></td>
-<td></td>
+<td>Sender allowlist for inbound channel deliveries. Each entry is a sender identifier (a Grove client/device label) permitted to POST a message into a running session's channel. <strong>Empty means allow all</strong> — enabling the feature is the deliberate opt-in, so a bare enable is permissive; populate this to RESTRICT which senders may drive a running agent. Mechanism, not policy: the server matches an inbound message's declared sender against this list.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
@@ -1560,37 +1601,37 @@ credentials.</p>
 <td><code>default_config</code></td>
 <td><code>string</code></td>
 <td><code>''</code></td>
-<td></td>
+<td>Path to the <code>devcontainer.json</code> Grove passes via <code>--config</code> for a repo that has no <code>.devcontainer/</code> of its own. Empty (default) uses the self-contained config packaged in the wheel. The file must stay self-contained — image + features only, no <code>build.dockerfile</code>, no <code>dockerComposeFile</code>, no local-path features — because a config outside the worktree cannot resolve config-directory-relative paths.</td>
 </tr>
 <tr>
 <td><code>docker_bin</code></td>
 <td><code>string</code></td>
 <td><code>'docker'</code></td>
-<td></td>
+<td>The container <abbr title="Command Line Interface">CLI</abbr> binary/path (<code>docker</code>, or an absolute path / drop-in shim). NOT the Podman-driver seam — a different runtime is a different <code>ContainerDriver</code> class, this only points at a docker-compatible <abbr title="Command Line Interface">CLI</abbr>.</td>
 </tr>
 <tr>
 <td><code>egress</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td>Where a containerized agent may reach on the network.  With credentials shared and permission prompts off, egress is the control that carries the weight: it bounds where a token can be <em>sent</em>. The list is <strong>derived, not restated</strong> — the planner (<code>core.container_policy</code>) unions the agent plane for the workspace's kind, the package plane, the repo's own git remotes and the Grove plane, so normal dev work needs zero config. <code>allow</code> is purely additive on top.  Documented ceilings, carried from the reference implementation this follows: UDP/53 stays open (DNS tunneling is not defended against) and name-based filtering loses to domain fronting. <code>open</code> is the supported, un-nagged no-firewall path — never a warning, never a refusal.</td>
+<td>Where a containerized agent may reach on the network.  With credentials shared and permission prompts off, egress is the control that carries the weight: it bounds where a token can be <em>sent</em>. The list is <strong>derived, not restated</strong> — the planner (<code>core.container_policy</code>) unions the agent plane for the workspace's kind, the package plane, the repo's own git remotes, the Grove plane and the telemetry endpoint's host, so normal dev work needs zero config. <code>allow</code> is purely additive on top.  The telemetry entry has no field of its own for the same reason the git remotes do not: the destination is already stated once, as the host the <code>telemetry</code> section resolves, and a second place to write it is a second place for it to be wrong. A self-hosted <abbr title="Local Area Network">LAN</abbr> endpoint is therefore covered by default — which matters because a firewalled OTLP export fails as silence, not as an error.  Documented ceilings, carried from the reference implementation this follows: UDP/53 stays open (DNS tunneling is not defended against) and name-based filtering loses to domain fronting. <code>open</code> is the supported, un-nagged no-firewall path — never a warning, never a refusal.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
 <td><code>boolean</code></td>
 <td><code>True</code></td>
-<td></td>
+<td>The cascade DEFAULT for a new workspace's runtime: <code>True</code> → <code>Runtime.CONTAINER</code>, <code>False</code> → <code>Runtime.HOST</code>. Only consulted at create; <code>resume</code>/<code>respawn</code> read the persisted <code>runtime</code> so flipping this never migrates an existing workspace.</td>
 </tr>
 <tr>
 <td><code>env_command</code></td>
 <td><code>string \| null</code></td>
 <td><code>None</code></td>
-<td></td>
+<td>Host command whose stdout is parsed as dotenv.  Exists so secrets never have to be materialized to disk: any command that prints dotenv to stdout works, and Grove knows nothing about any particular secret manager — naming one here would be policy in code. Mutually exclusive with <code>env_file</code>. Re-run at every consumption (deliberately not cached — a cache in a daemon holds secrets for days and serves rotated ones), so it must be idempotent and cheap.  <strong>Never honored from a committed layer</strong> — running it would be remote code execution on clone. See :class:<code>CommittedEnvSource</code>.</td>
 </tr>
 <tr>
 <td><code>env_file</code></td>
 <td><code>string \| null</code></td>
 <td><code>None</code></td>
-<td></td>
+<td>Dotenv file whose variables this section draws on.  Repo-relative or absolute, <code>~</code> expanded. Mutually exclusive with <code>env_command</code>. A configured-but-missing file is a HARD ERROR at the point of use — a silently-empty environment is the exact failure this feature exists to fix, and a workspace that boots without its credentials burns a whole session discovering that. The error is raised at the consumption boundary (<code>core.env_source</code>), not here, so the cascade can still persist a config for a repo whose file is not present yet.  <strong>A committed layer may only name a path INSIDE the repo</strong> — see :class:<code>CommittedEnvSource</code>.</td>
 </tr>
 <tr>
 <td><code>resources</code></td>
@@ -1602,7 +1643,7 @@ credentials.</p>
 <td><code>shell</code></td>
 <td><code>array&lt;string&gt;</code></td>
 <td><code>['bash', 'sh']</code></td>
-<td></td>
+<td>Interactive shells <code>grove shell</code> and the attach shell window try, in order.  A CHAIN rather than one name, because the shell is a property of somebody else's image and Grove cannot know it: <code>bash</code> is absent from Alpine-based and distroless-ish images that nonetheless ship <code>sh</code>, while a user whose image ships <code>zsh</code> or <code>fish</code> wants that one. The first entry that exists inside the container is exec'd; if none does, the pane says so and exits non-zero rather than silently substituting a shell nobody asked for — a baked-in final fallback would be exactly the policy-in-code this config exists to avoid.  Resolution happens INSIDE the container (<code>command -v</code>), not here: presence is a fact about the image, and probing it from the host would be a second <code>exec</code> answering a question the shell itself answers for free.</td>
 </tr>
 <tr>
 <td><code>tmux</code></td>
@@ -1614,7 +1655,7 @@ credentials.</p>
 <td><code>up_timeout_seconds</code></td>
 <td><code>number</code></td>
 <td><code>900.0</code></td>
-<td></td>
+<td>Wall-clock bound on one <code>devcontainer up</code> (and <code>build</code>). A cold build that pulls a base image and installs Features is legitimately minutes long, so this is generous — but it MUST stay inside every client's own deadline (<code>GroveClient._LIFECYCLE_TIMEOUT_S</code>), or the caller gives up on a create that then succeeds and leaves an orphaned container with no record.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1644,7 +1685,7 @@ never touched, so disabling is just flipping this back to <code>false</code>.</p
 <td><code>daemon_url</code></td>
 <td><code>string</code></td>
 <td><code>''</code></td>
-<td></td>
+<td>Base URL the hook's native <code>http</code> handler POSTs each event to.  Empty (the default) keeps the built-in loopback address, so the rendered settings stay byte-identical to a config that never mentions this. It is a knob because the address is only correct for an agent sharing the daemon's loopback: a runtime launched into its own network namespace — a container — reaches the daemon at a different host entirely, and an address a runtime cannot resolve is policy that has no business being fixed in code.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
@@ -1670,7 +1711,7 @@ never touched, so disabling is just flipping this back to <code>false</code>.</p
 <td><code>applies_to</code></td>
 <td><code>string</code></td>
 <td><code>'all'</code></td>
-<td></td>
+<td>Which workspace runtimes this script is for — a filter, not a runtime.  A host-side setup step is redundant (or actively wrong) when the devcontainer's own lifecycle hooks already do that work, and vice versa. Deliberately NOT named <code>runtime</code>: <code>workspace.Runtime</code> is <code>host|container</code> with no <code>all</code> member, and one name for two domains is exactly the confusion this codebase warns about. Default <code>"all"</code> is the historical behavior, so no existing config changes meaning.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
@@ -1682,19 +1723,19 @@ never touched, so disabling is just flipping this back to <code>false</code>.</p
 <td><code>fail_fast</code></td>
 <td><code>boolean</code></td>
 <td><code>True</code></td>
-<td></td>
+<td>If True, a non-zero exit rolls back the worktree+session+branch.</td>
 </tr>
 <tr>
 <td><code>inline</code></td>
 <td><code>string \| null</code></td>
 <td><code>None</code></td>
-<td></td>
+<td>Inline shell snippet. Mutually exclusive with <code>path</code>.</td>
 </tr>
 <tr>
 <td><code>path</code></td>
 <td><code>string \| null</code></td>
 <td><code>None</code></td>
-<td></td>
+<td>Repo-relative path to a script file. Mutually exclusive with <code>inline</code>.</td>
 </tr>
 <tr>
 <td><code>run_on_resume</code></td>
@@ -1747,73 +1788,73 @@ the status mirror, mirror without routing, or run both.</p>
 <td><code>agent</code></td>
 <td><code>string</code></td>
 <td><code>'claude'</code></td>
-<td></td>
+<td>Which configured agent an issue-ops-created workspace spawns. Must name an entry in <code>agents</code>; <code>create</code> raises (and the engine replies) if it doesn't. Defaults to the built-in <code>claude</code> agent — override per deployment to route issue work to a different tool. Mechanism, not policy.</td>
 </tr>
 <tr>
 <td><code>allowed_actors</code></td>
 <td><code>array&lt;string&gt;</code></td>
 <td><code>(none)</code></td>
-<td></td>
+<td>The opt-in WIDENING knob on the permission policy. By default a command is honored only when the forwarder asserts the commenter has repo write access; listing a login here lets that user drive issue-ops REGARDLESS of their repo permission (a trusted bot account, an external collaborator). Empty (default) keeps the strict write-access-only policy. Matched case-insensitively. Never a NARROWING knob — write access always suffices; this only adds to it.</td>
 </tr>
 <tr>
 <td><code>assign_bot</code></td>
 <td><code>boolean</code></td>
 <td><code>False</code></td>
-<td></td>
+<td>Mark what Grove is working ON THE TRACKER: assign the ticket provider's own account — whoever the configured token authenticates as — to every ticket a live workspace holds, so every Grove-managed issue is findable with the tracker's own assignee filter by people who never open Grove. Off by default: it writes to somebody else's tracker. Assigning needs repo write, which commenting does not; where the token cannot assign, the refusal is logged naming the ticket and never fails the workspace.  Assignment is an OUTPUT of Grove working a ticket and never an input: it is reconciled from the live fleet, and nothing here starts work. Turning this on cannot cause a workspace to be created — that is <code>pickup_enabled</code>, a separate opt-in.  The assignment is RELEASED when the workspace holding the ticket ends, so the board says who is working an issue now rather than who once did. Only assignments this daemon made are released — a ticket assigned to the bot by hand is left alone, and every other assignee is always untouched.</td>
 </tr>
 <tr>
 <td><code>deep_link_base_url</code></td>
 <td><code>string</code></td>
 <td><code>''</code></td>
-<td></td>
+<td>The webapp base (e.g. <code>https://grove.example.com</code>); a status comment deep-links to <code>{base}/w/{id}</code>. Reuses the <code>notifications</code> deep-link convention verbatim. Empty (default) omits the link.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
 <td><code>boolean</code></td>
 <td><code>False</code></td>
-<td></td>
+<td>Master switch for the OUTBOUND live status comment — the sticky per-workspace comment the publisher mirrors onto its ticket. Off by default; the daemon builds and binds the publisher only when this is <code>True</code>. Independent of inbound command routing, which opts in via the <abbr title="Continuous Integration">CI</abbr> workflow plus an enabled ticket provider (see the class docstring).</td>
 </tr>
 <tr>
 <td><code>pickup_backoff_seconds</code></td>
 <td><code>number</code></td>
 <td><code>300.0</code></td>
-<td></td>
+<td>How long one tracker is skipped after it fails or rate-limits a poll. Applies to the whole provider, not one ticket, because a 403 or a 429 is a statement about the credential or the budget rather than about the issue that happened to be asked for. Backoff does not compound — the next successful poll clears it.</td>
 </tr>
 <tr>
 <td><code>pickup_enabled</code></td>
 <td><code>boolean</code></td>
 <td><code>False</code></td>
-<td></td>
+<td>The assignee AS the inbound work queue: the daemon polls for open issues assigned to the provider's own account that no live workspace holds and that Grove has never been handed before, and starts a workspace for each. A human assigns the bot; a workspace appears. Off by default — this spawns real agents. Needs no <abbr title="Continuous Integration">CI</abbr> runner, which is what makes inbound automation reachable on a deployment that cannot host one.</td>
 </tr>
 <tr>
 <td><code>pickup_interval_seconds</code></td>
 <td><code>number</code></td>
 <td><code>60.0</code></td>
-<td></td>
+<td>How often the pickup poll asks each configured tracker for its assigned issues. A standing load on someone else's <abbr title="Application Programming Interface">API</abbr>, so it is a knob rather than a constant; a provider that errors or rate-limits is backed off for <code>pickup_backoff_seconds</code> regardless of this cadence.</td>
 </tr>
 <tr>
 <td><code>pickup_max_active</code></td>
 <td><code>integer</code></td>
 <td><code>3</code></td>
-<td></td>
+<td>How many pickup-started workspaces may be working at once, across every repo on the host. Assigning the bot to forty issues must not spawn forty agents: each tick counts the assigned tickets that already have a live workspace and starts at most enough to reach this ceiling. The rest are DEFERRED to the next tick and named in the log — never silently dropped.</td>
 </tr>
 <tr>
 <td><code>prompt_template</code></td>
 <td><code>string</code></td>
 <td><code>'You are handling tracker issue #{number}: "{title}".\n\nIssue description:\n{body}\n\nThread so far:\n{comments}\n\nHow you were engaged:\n{command_text}\n\nYour mandate:\n\n- Work autonomously through to an OPEN pull request. Read the issue, map the\n  affected components (read the nearest owning CLAUDE.md before editing),\n  implement the change, run the project\'s gates, open the PR, and reply on the\n  ticket saying what changed and where the PR is.\n- Where the ticket is underspecified, REPLY ON THE TICKET asking for exactly\n  what is missing, and say what you will assume if nobody answers. Do not stall\n  silently, and do not quietly guess at a requirement you could have asked\n  about.\n- Satisfy the stated goals faithfully and safely — the goals as written, not\n  the larger project you would rather do.\n- Stop and ask rather than take a risky or irreversible action: destroying\n  data, force-pushing a shared branch, or touching anything in production.\n\nIssue link: {url}\n'</code></td>
-<td></td>
+<td>The initial prompt a newly-created workspace boots on, with <code>{title}</code>, <code>{body}</code>, <code>{number}</code>, <code>{url}</code>, <code>{comments}</code> and <code>{command_text}</code> placeholders filled from the ticket. <code>{comments}</code> renders the whole comment thread in order, so the agent starts with the discussion rather than spending turns fetching it. One template serves both ways a workspace is started from a ticket — an <code>@grove</code> comment and an assignee pickup — and <code>{command_text}</code> says which, so a deployment tunes the agent's marching orders in one place. Cascades like all config; the built-in default states the autonomous issue→<abbr title="Pull Request">PR</abbr> mandate.</td>
 </tr>
 <tr>
 <td><code>trigger</code></td>
 <td><code>string</code></td>
 <td><code>'@grove'</code></td>
-<td></td>
+<td>The mention token that must OPEN a comment (word-boundary, first token) for the engine to act. A mention-style <code>@</code>-prefixed token by default — a bare <code>/</code> prefix collides with the forge's own markdown slash commands. Compared case-insensitively; everything after it is the command (a fixed verb or free prompt text).</td>
 </tr>
 <tr>
 <td><code>update_window_seconds</code></td>
 <td><code>number</code></td>
 <td><code>5.0</code></td>
-<td></td>
+<td>Coalescing window for the OUTBOUND status comment — at most one comment PATCH per workspace per window. Forges apply secondary rate limits to same-comment edit storms, so the publisher folds every render-relevant change into per-workspace state and flushes the merged result once the window elapses. <code>0</code> flushes every change (no coalescing).</td>
 </tr>
 </tbody>
 </table></div>
@@ -1836,19 +1877,19 @@ process, so the connection details are config rather than discovery.</p>
 <td><code>api_key_env</code></td>
 <td><code>string</code></td>
 <td><code>'MEWBO_API_KEY'</code></td>
-<td></td>
+<td>NAME of the environment variable holding the <abbr title="Application Programming Interface">API</abbr> key — never the key itself. Committed project config must stay secret-free (the repo and its config examples are published); the key lives only in the consuming process's environment.</td>
 </tr>
 <tr>
 <td><code>base_url</code></td>
 <td><code>string</code></td>
 <td><code>'http://127.0.0.1:5125'</code></td>
-<td></td>
+<td>Base URL of the Mewbo <abbr title="Representational State Transfer">REST</abbr> <abbr title="Application Programming Interface">API</abbr>.</td>
 </tr>
 <tr>
 <td><code>timeout_seconds</code></td>
 <td><code>number</code></td>
 <td><code>10.0</code></td>
-<td></td>
+<td>Per-request HTTP timeout for Mewbo <abbr title="Application Programming Interface">API</abbr> calls.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1858,7 +1899,9 @@ process, so the connection details are config rather than discovery.</p>
 every enabled channel:</p>
 <ul>
 <li><code>on</code> — a debounced rising edge into an agent state that wants the human:
-  <code>waiting</code> (turn finished), <code>blocked</code> (awaiting input), <code>error</code>.</li>
+  <code>waiting</code> (turn finished), <code>blocked</code> (awaiting input), <code>error</code>.
+  <code>waiting</code> additionally waits out <code>waiting_quiet_minutes</code> before it
+  pushes — see that field.</li>
 <li><code>on_question</code> — the agent posted a question. Deduped by question id, not
   debounced: a second question inside the quiet window is a second thing the
   human must answer, and it is the one push that must never be dropped.</li>
@@ -1883,13 +1926,13 @@ config.</p>
 <td><code>debounce_seconds</code></td>
 <td><code>number</code></td>
 <td><code>30.0</code></td>
-<td></td>
+<td>Per-workspace quiet window after a state fire — one buzz per attention episode, not one per WAITING↔WORKING tool round-trip. Questions are exempt (they dedupe by id instead).</td>
 </tr>
 <tr>
 <td><code>deep_link_base_url</code></td>
 <td><code>string</code></td>
 <td><code>'http://localhost:3000'</code></td>
-<td></td>
+<td>Where a notification's tap lands: <code>{base}/w/{id}</code>, the webapp's workspace route — where you can read the transcript <em>and answer the question</em>. Defaults to the webapp's own local origin (its <code>next start</code> port) because a push whose link goes nowhere is a dead end, and a single-host install is the overwhelming common case. Point it at your reachable origin (e.g. <code>https://grove.example.com</code>) to make the tap work from a phone; set it empty to render no link at all.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
@@ -1919,7 +1962,13 @@ config.</p>
 <td><code>on_question</code></td>
 <td><code>boolean</code></td>
 <td><code>True</code></td>
-<td></td>
+<td>Push when the agent asks the human something. The one trigger every harness can produce — a question is a transcript/hook <em>content</em> signal, while <code>blocked</code> is a <em>state</em> only some adapters ever reach.</td>
+</tr>
+<tr>
+<td><code>waiting_quiet_minutes</code></td>
+<td><code>number</code></td>
+<td><code>15.0</code></td>
+<td>How long a session must stay genuinely settled before a <code>waiting</code> push fires — the honest fallback for what "turn ended" cannot promise on its own. A WAITING transcript state means the top-level turn stopped generating, not that the task is done: Grove already tracks the in-session sub-agent count (<code>active_subagents</code>), the hook's live sub-agent fleet, and the harness's own steer queue, and a WAITING edge is held back while any of those is nonzero. None of them can see an arbitrary backgrounded shell command (<code>Bash ... run_in_background</code>) — Claude's tool call returns immediately and Grove gets no close event to watch for — so once every known tracker agrees nothing is left, the push still waits this long with nothing new observed before it fires, which is the proxy for the rest. <code>0</code> fires the instant the known trackers agree nothing is left, with no wait — the old behaviour.</td>
 </tr>
 <tr>
 <td><code>webhook</code></td>
@@ -1959,7 +2008,7 @@ exactly like the hook <code>--settings</code> / channel <code>--channels</code> 
 <td><code>default</code></td>
 <td><code>string</code></td>
 <td><code>'deny'</code></td>
-<td></td>
+<td>The decision the prompt tool returns while no interactive human/daemon relay is wired. <code>deny</code> is fail-closed (the safe default for an unattended agent); <code>allow</code> is the deliberate permissive opt-in for a trusted sandbox (a container workspace whose blast radius is bounded). Mechanism, not policy: the tool answers whatever this names, verbatim.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
@@ -2001,43 +2050,43 @@ cascade and merge like every other config value.</p>
 <td><code>base_url_env</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td></td>
+<td>Per-kind NAME of the env var that points that runtime at the proxy — the documented gateway seam each provider exposes (Claude: <code>ANTHROPIC_BASE_URL</code>; Codex: its <code>model_providers</code> base-url env). Never a URL literal here — :meth:<code>proxy_env</code> assembles <code>{name: proxy_url}</code>.</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>
 <td><code>boolean</code></td>
 <td><code>False</code></td>
-<td></td>
+<td>Master switch. <code>False</code> leaves launch env and traffic untouched.</td>
 </tr>
 <tr>
 <td><code>host</code></td>
 <td><code>string</code></td>
 <td><code>'127.0.0.1'</code></td>
-<td></td>
+<td>Loopback interface the proxy listens on — never a routable address; the proxy relays provider credentials, so it must stay same-host only.</td>
 </tr>
 <tr>
 <td><code>log_bodies</code></td>
 <td><code>boolean</code></td>
 <td><code>False</code></td>
-<td></td>
+<td>Content-gating: capture the REQUEST body into the telemetry event. Off by default — a captured body can hold prompt content, so opting in is deliberate. Response bodies are NEVER captured; only their token <code>usage</code> is extracted. Headers (auth included) are never captured or logged regardless.</td>
 </tr>
 <tr>
 <td><code>max_body_bytes</code></td>
 <td><code>integer</code></td>
 <td><code>8192</code></td>
-<td></td>
+<td>Truncation cap (bytes) applied to a captured request body when <code>log_bodies</code> is set — bounds the telemetry payload.</td>
 </tr>
 <tr>
 <td><code>port</code></td>
 <td><code>integer</code></td>
 <td><code>8788</code></td>
-<td></td>
+<td>Port the proxy listens on. The value :meth:<code>proxy_env</code> hands the agent is <code>http://{host}:{port}</code>.</td>
 </tr>
 <tr>
 <td><code>upstreams</code></td>
 <td><code>object</code></td>
 <td><code>(none)</code></td>
-<td></td>
+<td>Per-kind real upstream base URL the proxy forwards to (verbatim). The keys are the opt-in set; a kind absent here is not proxied.</td>
 </tr>
 </tbody>
 </table></div>
@@ -2048,9 +2097,22 @@ discipline): the three canonical values are env-var NAMES, never secret
 literals, so committed config stays publishable — the actual host/keys live
 only in the consuming process's environment. Off by default (mechanism, not
 policy); a deployment opts in by setting <code>enabled: true</code> and pointing the
-three <code>*_env</code> fields at whatever names its host actually exports (exact
-key names per environment are TBD — this holds regardless of what a given
-host calls them).</p>
+three <code>*_env</code> fields at whatever names its host actually exports.</p>
+<p><strong>Where those three values come from is the inherited
+:class:<code>EnvSourceConfig</code> question, and for telemetry it is usually the
+answer.</strong> Grove's own process is the exporter here, and the process that
+launches agents is typically a long-lived daemon started by a service
+manager: it read its environment once, at exec, and nothing exported in a
+shell afterwards can reach it. So a deployment that only exports the keys
+interactively gets a config that says <code>enabled: true</code> and exports
+nothing — silently. Point <code>telemetry.env_file</code> at a dotenv holding the
+three variables (<code>~/.config/grove/langfuse.env</code> is the conventional
+place) and every launch re-reads it, including after a key rotation::</p>
+<div class="language-text codehilite"><pre><span></span><code>{&quot;telemetry&quot;: {&quot;enabled&quot;: true, &quot;env_file&quot;: &quot;~/.config/grove/langfuse.env&quot;}}
+</code></pre></div>
+<p>Set that in your user config or <code>.grove/config.local.json</code>: a committed
+layer may only name a path inside the repository, and may not run an
+<code>env_command</code> at all (:class:<code>CommittedEnvSource</code>).</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -2062,34 +2124,70 @@ host calls them).</p>
 </thead>
 <tbody>
 <tr>
+<td><code>backfill</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>Explicit historical-export consent and profile selection.  Empty by default: usage discovery may index every reachable transcript, while an external telemetry write must name the exact provider roots it is allowed to read and export. Values use the same config-dir roots as agent profiles (for example <code>~/.codex</code>), keeping one profile vocabulary.</td>
+</tr>
+<tr>
+<td><code>content_owner</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>Which side emits each runtime's prompt/response CONTENT — per agent kind.  <strong>Exactly one owner per session, and it is chosen HERE.</strong> Grove always emits the context (workspace, branch, ticket, agent identity); content is the half two producers can both reach, because a harness's own baseline emitter and Grove read the very same transcript. Two owners means every turn appears twice under two unrelated trace trees; no owner means the words are simply absent. Neither shows up as an error anywhere.  Keyed by agent kind because the harnesses genuinely differ — one ships a baseline emitter today, another may never have one — so a single global switch could only ever be right for one of them. A kind that is not named here resolves to <code>external</code>, which is what keeps that baseline emitter working when Grove is absent or has crashed. Name a kind <code>grove</code> only where nothing else emits content for it::      {"telemetry": {"content_owner": {"codex": "grove"}}}  Deliberately NOT inferred. Grove cannot see another process's hook or plugin without probing across a boundary it does not own, and such a probe is wrong in both directions — a false positive drops all content, a false negative doubles it. Configuration is the one answer that is auditable, so <code>grove doctor</code> renders what this RESOLVES to rather than what it detects.  <strong>This and <code>reserved_env</code> are one policy, not two knobs.</strong> Naming a kind <code>grove</code> says Grove's replay IS that runtime's trace, so the launch also stops switching the runtime's own exporter on and forces its trace exporter off — otherwise the same session arrives twice, once as Grove's tree and once as the harness's inverted one, and the second carries no content a traces-only backend can read. Move a kind back to <code>external</code> to hand its own exporter back.</td>
+</tr>
+<tr>
 <td><code>enabled</code></td>
 <td><code>boolean</code></td>
 <td><code>False</code></td>
 <td></td>
 </tr>
 <tr>
+<td><code>env_command</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td>Host command whose stdout is parsed as dotenv.  Exists so secrets never have to be materialized to disk: any command that prints dotenv to stdout works, and Grove knows nothing about any particular secret manager — naming one here would be policy in code. Mutually exclusive with <code>env_file</code>. Re-run at every consumption (deliberately not cached — a cache in a daemon holds secrets for days and serves rotated ones), so it must be idempotent and cheap.  <strong>Never honored from a committed layer</strong> — running it would be remote code execution on clone. See :class:<code>CommittedEnvSource</code>.</td>
+</tr>
+<tr>
+<td><code>env_file</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td>Dotenv file whose variables this section draws on.  Repo-relative or absolute, <code>~</code> expanded. Mutually exclusive with <code>env_command</code>. A configured-but-missing file is a HARD ERROR at the point of use — a silently-empty environment is the exact failure this feature exists to fix, and a workspace that boots without its credentials burns a whole session discovering that. The error is raised at the consumption boundary (<code>core.env_source</code>), not here, so the cascade can still persist a config for a repo whose file is not present yet.  <strong>A committed layer may only name a path INSIDE the repo</strong> — see :class:<code>CommittedEnvSource</code>.</td>
+</tr>
+<tr>
 <td><code>host_env</code></td>
 <td><code>string</code></td>
 <td><code>'LANGFUSE_HOST'</code></td>
-<td></td>
+<td>NAME of the env var holding the Langfuse host (e.g. a self-hosted or <code>https://cloud.langfuse.com</code> URL) — never the URL itself. The default is Langfuse's own documented variable name; a deployment whose secret store exports something else (<code>LANGFUSE_BASE_URL</code> is a common alternative) names that here rather than renaming the variable.</td>
 </tr>
 <tr>
 <td><code>passthrough_kinds</code></td>
 <td><code>array&lt;string&gt;</code></td>
 <td><code>['claude_code', 'codex']</code></td>
-<td></td>
+<td>Which agent runtimes get the derived telemetry env exported into their launch env — an allow-list, mechanism not policy (mirrors <code>NotificationsConfig.on</code>'s "which transitions" shape). <code>mewbo</code> runs server-side (no local pane to export into) and a bare <code>generic</code> shell has no instrumentation to feed, so both are excluded by default; set explicitly to opt in.</td>
 </tr>
 <tr>
 <td><code>public_key_env</code></td>
 <td><code>string</code></td>
 <td><code>'LANGFUSE_PUBLIC_KEY'</code></td>
-<td></td>
+<td>NAME of the env var holding the Langfuse public key.</td>
+</tr>
+<tr>
+<td><code>receiver</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>The daemon's own OTLP/HTTP endpoint for a harness's native exporter.  Grove's other telemetry tiers describe a session from the outside — a frozen launch-time identity stamp and a replayed transcript. This is the one tier that can carry what only the harness's own exporter knows: Claude Code's beta <code>llm_request</code> span, for instance, is the sole place time-to-first-token appears at all — no transcript records it. Off by default, because mounting an HTTP endpoint on the daemon is a decision an operator makes deliberately; it is not a side effect of turning on the rest of this section.</td>
+</tr>
+<tr>
+<td><code>reserved_env</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>['OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_HEADERS', 'OTEL_EXPORTER_OTLP_PROTOCOL', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_HEADERS', 'OTEL_EXPORTER_OTLP_TRACES_PROTOCOL', 'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT', 'OTEL_EXPORTER_OTLP_METRICS_HEADERS', 'OTEL_EXPORTER_OTLP_METRICS_PROTOCOL', 'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT', 'OTEL_EXPORTER_OTLP_LOGS_HEADERS', 'OTEL_EXPORTER_OTLP_LOGS_PROTOCOL', 'OTEL_TRACES_EXPORTER', 'OTEL_METRICS_EXPORTER', 'OTEL_LOGS_EXPORTER']</code></td>
+<td>Environment variables Grove OWNS for every agent process it launches.  Grove composes an agent's launch environment, so it already decides whether that agent exports at all. These names make the decision total: for a runtime in <code>passthrough_kinds</code>, each one is either set by Grove or carried by nobody, and a value arriving from anywhere else — <code>agents[].env</code>, or the environment Grove itself was started with — does not reach the agent. It is replaced rather than honoured, and every replaced NAME is logged at the launch that replaced it, so the change is never silent.  <strong>A workspace's telemetry destination is configured through Grove</strong>, in this section: <code>env_file</code> / <code>env_command</code> may name any of these variables and whatever they carry stands, which is how a deployment points its workspaces at its own collector. Pointing the agent's own exporter somewhere Grove does not control is what this ends — one tap per workspace, so a trace tree does not arrive twice under two unrelated roots.  The default is the OpenTelemetry exporter vocabulary: which exporter runs per signal, and where it sends. Grove's identity stamp (<code>OTEL_RESOURCE_ATTRIBUTES</code>) and an inbound trace context are deliberately absent — they say who the agent is, not where its telemetry goes. Narrow the tuple to hand a name back to the agent; empty it to reserve nothing.</td>
 </tr>
 <tr>
 <td><code>secret_key_env</code></td>
 <td><code>string</code></td>
 <td><code>'LANGFUSE_SECRET_KEY'</code></td>
-<td></td>
+<td>NAME of the env var holding the Langfuse secret key — never the secret itself.</td>
 </tr>
 </tbody>
 </table></div>
@@ -2132,13 +2230,13 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>env_command</code></td>
 <td><code>string \| null</code></td>
 <td><code>None</code></td>
-<td></td>
+<td>Host command whose stdout is parsed as dotenv.  Exists so secrets never have to be materialized to disk: any command that prints dotenv to stdout works, and Grove knows nothing about any particular secret manager — naming one here would be policy in code. Mutually exclusive with <code>env_file</code>. Re-run at every consumption (deliberately not cached — a cache in a daemon holds secrets for days and serves rotated ones), so it must be idempotent and cheap.  <strong>Never honored from a committed layer</strong> — running it would be remote code execution on clone. See :class:<code>CommittedEnvSource</code>.</td>
 </tr>
 <tr>
 <td><code>env_file</code></td>
 <td><code>string \| null</code></td>
 <td><code>None</code></td>
-<td></td>
+<td>Dotenv file whose variables this section draws on.  Repo-relative or absolute, <code>~</code> expanded. Mutually exclusive with <code>env_command</code>. A configured-but-missing file is a HARD ERROR at the point of use — a silently-empty environment is the exact failure this feature exists to fix, and a workspace that boots without its credentials burns a whole session discovering that. The error is raised at the consumption boundary (<code>core.env_source</code>), not here, so the cascade can still persist a config for a repo whose file is not present yet.  <strong>A committed layer may only name a path INSIDE the repo</strong> — see :class:<code>CommittedEnvSource</code>.</td>
 </tr>
 <tr>
 <td><code>gitea</code></td>
@@ -2176,7 +2274,7 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>activity_threshold_seconds</code></td>
 <td><code>integer</code></td>
 <td><code>30</code></td>
-<td></td>
+<td>Age (seconds) of the last tmux pane_activity before a workspace flips Active → Idle. Used by <code>WorkspaceManager._reconcile_status</code>. Tighter values track real-time work but flicker for agents that pause to think; looser values smooth flicker but lag the badge. The original 5s default read every thinking/long-tool agent (no pane output for &gt;5s is routine) as Idle — and the status blend demotes a WORKING transcript to IDLE on that signal, so the flicker surfaced on every dashboard card.</td>
 </tr>
 <tr>
 <td><code>agent_window_name</code></td>
@@ -2200,19 +2298,19 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>peek_history_lines</code></td>
 <td><code>integer</code></td>
 <td><code>500</code></td>
-<td></td>
+<td>How many lines of tmux scrollback the pane snapshot captures (<code>-S -N</code>).  The live viewport is only ~40 rows, so without scrollback a long agent session previews as just its current screen — earlier output is never read. This is the captured/over-the-wire bound, not a viewport: each client (<abbr title="Terminal User Interface">TUI</abbr> rail, dashboard tile, webapp <code>&lt;pre&gt;</code>) tails or scrolls within it. Generous by default; raise to scroll further back, lower on slow links.</td>
 </tr>
 <tr>
 <td><code>peek_pane_refresh_seconds</code></td>
 <td><code>number</code></td>
 <td><code>0.25</code></td>
-<td></td>
+<td>Fast pane-only tick for the peek rail (<code>tmux capture-pane</code>).  Bounded subprocess work; keep low for snappier feel, raise on slow machines or when watching a large pane.</td>
 </tr>
 <tr>
 <td><code>peek_stats_refresh_seconds</code></td>
 <td><code>number</code></td>
 <td><code>3.0</code></td>
-<td></td>
+<td>Slower full-peek tick (git ahead/behind, diff stats, dirty count).  These don't change at sub-second granularity; rerunning them on every pane tick would burn IO without any user-visible benefit.</td>
 </tr>
 <tr>
 <td><code>session_prefix</code></td>
@@ -2230,7 +2328,7 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>steer_settle_ms</code></td>
 <td><code>integer</code></td>
 <td><code>200</code></td>
-<td></td>
+<td>Delay (ms) <code>tmux.send_text</code>/<code>send_keys</code> wait between typing steered text and sending the submitting Enter. The <abbr title="Terminal User Interface">TUI</abbr>'s bracketed paste buffers everything landing inside its accumulation window as literal text, so an Enter sent immediately after a paste can be coalesced into that same window and read as a literal newline rather than a lone submitting keypress — only a lone <code>return</code> keypress submits. Waiting this long first lets the window close before Enter lands. The same value also bounds the post-Enter verify-and-retry wait (one settle period is enough for the composer to render either the reset prompt or the still-pasted text). 0 disables both delays.</td>
 </tr>
 </tbody>
 </table></div>
@@ -2256,7 +2354,80 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>theme</code></td>
 <td><code>string</code></td>
 <td><code>'auto'</code></td>
+<td>Theme id. <code>auto</code>/<code>dark</code>/<code>light</code> map to the built-in Grove themes; any other string selects a user override registered from <code>${user_config_dir}/grove/themes/*.toml</code>. Validated at app startup by <code>grove.tui.theme.resolve_theme_name</code> — unknown ids raise <code>ConfigError</code> then, not here, so the cascade can persist a name even before its TOML file exists.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="usage"><code>usage</code></h2>
+<p>The historical usage audit — indexing, pricing, quota and insights.</p>
+<p>Reads the agent transcripts Grove can already reach and projects them into a
+private local cache so historical questions answer quickly. The cache holds
+metrics and metadata only: no prompt, response, reasoning, tool-result body
+or credential is ever written to it. It is derived, so deleting it is always
+safe and rebuilds on the next refresh.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>busy_timeout_ms</code></td>
+<td><code>integer</code></td>
+<td><code>5000</code></td>
+<td>How long a writer waits on SQLite's lock before <code>database is locked</code>. Up to three processes can write <code>usage.sqlite3</code> — the daemon, the <abbr title="Terminal User Interface">TUI</abbr>'s Usage screen and <code>grove usage backfill</code> — and SQLite's own default is 0, which raises on the first genuine cross-process collision instead of waiting. <code>0</code> restores that immediate-raise default.</td>
+</tr>
+<tr>
+<td><code>commands</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>How a shell tool call's time is attributed to the command that led it.  A <code>Bash</code> call carries a whole shell line, so the audit records the leading top-level executable and reports <em>time in shell calls led by X</em> — never <em>time spent in X</em>, which no measurement here can support. These knobs control how that executable's name is folded before it is ranked.</td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>boolean</code></td>
+<td><code>True</code></td>
 <td></td>
+</tr>
+<tr>
+<td><code>insights</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>Thresholds for the deterministic audit detectors.  Defaults are conservative: a detector would rather stay silent than rank a normal working pattern as a problem. Every one of these is config because a threshold baked into code is policy nobody can disagree with.</td>
+</tr>
+<tr>
+<td><code>max_breakdown_rows</code></td>
+<td><code>integer</code></td>
+<td><code>50</code></td>
+<td>Rows returned per breakdown dimension before the long tail is dropped. The response says when it truncated, so a capped list is never mistaken for a complete one.</td>
+</tr>
+<tr>
+<td><code>max_sessions_per_page</code></td>
+<td><code>integer</code></td>
+<td><code>100</code></td>
+<td>Upper bound on one page of the session audit table.</td>
+</tr>
+<tr>
+<td><code>pricing</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>Model prices used to estimate cost from token counts.  An estimate is never presented as billed cash: a subscription session's token cost is hypothetical, and the wire says so. Where a provider reports its own per-request cost, that figure wins and these prices are unused.</td>
+</tr>
+<tr>
+<td><code>quota</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>How subscription windows and billing posture are collected per account.  Grove reads each tool's OWN credential store at refresh time and calls the endpoint that credential selects. It never copies a secret into Grove's config or database, never refreshes or rewrites a provider credential, and never sends usage anywhere but that provider. A collection failure degrades the one account it belongs to and never affects launching an agent.</td>
+</tr>
+<tr>
+<td><code>retention_days</code></td>
+<td><code>integer \| null</code></td>
+<td><code>None</code></td>
+<td>Drop indexed events older than this on refresh. <code>null</code> keeps everything — the transcripts are the source of truth either way.</td>
 </tr>
 </tbody>
 </table></div>
@@ -2276,13 +2447,13 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>branch_prefix</code></td>
 <td><code>string</code></td>
 <td><code>'grove/'</code></td>
-<td></td>
+<td>Prefix prepended to every auto-created branch.</td>
 </tr>
 <tr>
 <td><code>root_template</code></td>
 <td><code>string</code></td>
 <td><code>'${repo}/.worktrees'</code></td>
-<td></td>
+<td>Template for the worktree parent dir; supports ${repo}, ${repo_name}, ~.</td>
 </tr>
 </tbody>
 </table></div>
@@ -2928,6 +3099,30 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -3346,6 +3541,14 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#ui');">
                 ui
+            </a>
+            
+            
+            <a href="#usage"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#usage');">
+                usage
             </a>
             
             

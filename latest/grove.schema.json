@@ -5,6 +5,7 @@
       "description": "One selectable agent in the new-workspace picker.",
       "properties": {
         "command": {
+          "description": "Shell command sent to the agent tmux window via send-keys.",
           "title": "Command",
           "type": "string"
         },
@@ -17,11 +18,13 @@
           "additionalProperties": {
             "type": "string"
           },
+          "description": "Extra env vars *exported* into the agent's tmux window before launch.",
           "title": "Env",
           "type": "object"
         },
         "env_unset": {
           "default": [],
+          "description": "Env vars *cleared* in the agent's tmux window before ``env`` is applied.\n\nThe hermetic half of the launch env: a tmux pane inherits the\ntmux server's environment, which inherited the daemon's, so an ambient value\n(a profile selector like ``CLAUDE_CONFIG_DIR``) silently leaks daemon \u2192 server\n\u2192 pane \u2192 agent. Listing a var here ``unset``s it at the pane boundary, so the\nagent starts from a known base and ``env`` \u2014 or, when ``env`` is silent, the\ntool's own default \u2014 decides instead of whatever the daemon happened to carry.\nUnset runs first, so a key present in both ``env_unset`` and ``env`` ends up\nexported. Pure mechanism, not policy: the launcher just clears whatever vars\nthe config names \u2014 no var name is hard-coded anywhere \u2014 and a future container\nlauncher applies the same ``env`` / ``env_unset`` set at create time.",
           "items": {
             "type": "string"
           },
@@ -30,6 +33,7 @@
         },
         "kind": {
           "default": "generic",
+          "description": "Which `AgentAdapter` introspects this agent's session for the Activity\nDashboard. `claude_code` enables transcript-based activity tracking \u2014 live\nstatus, human-turn / reply counts, the session's self-generated title \u2014 and\nlets Grove mint a deterministic `--session-id` at launch. `codex` reads the\nsame transcript signals from Codex CLI rollout files, but the id is\nserver-internal (no launch flag) so its session is adopted via discovery,\nnot minted. `mewbo` introspects a remote orchestrator over REST. `generic`\n(the default) launches the command but tracks nothing: a plain shell, or any\ntool with no known transcript format. Mechanism, not policy \u2014 declare it per\nagent and it cascades like every other field.",
           "enum": [
             "claude_code",
             "codex",
@@ -41,6 +45,7 @@
         },
         "models": {
           "default": [],
+          "description": "Curated model ids to OFFER for this agent in the create-form picker \u2014 a\ndisplay/override seam, never a validated allowlist (any id is still\nforwarded verbatim on create; the provider boundary). Empty (the default)\nfalls through to the adapter's live discovery: Codex reads ``codex debug\nmodels``, Claude Code offers its stable ``sonnet``/``opus``/``haiku``\naliases, a remote/shell agent offers nothing. Set it to pin, restrict,\nreorder, or add gateway/custom ids \u2014 it cascades and merges by field like\nevery other AgentSpec knob (mechanism, not policy). The engine\n(``agents.resolve_models``) caps the offered list at ten.",
           "items": {
             "type": "string"
           },
@@ -48,11 +53,13 @@
           "type": "array"
         },
         "name": {
+          "description": "Identifier used as the merge key when cascading agent lists across layers.",
           "title": "Name",
           "type": "string"
         },
         "tools_offline": {
           "default": false,
+          "description": "Launch this agent with network-facing tools disallowed: Claude\nCode drops ``WebFetch``/``WebSearch``, Codex flips its sandbox to\nworkspace-write with networking off. Mechanism, not policy \u2014 a deployment\nthat wants a hermetic/offline agent profile sets this per `AgentSpec`\nrather than Grove hard-coding a tool list; the adapter owns the actual\nflag shape (`AgentAdapter.offline_decoration`), same provider-boundary\nsplit as `model_decoration`. `generic`/`mewbo` have no local tool gate, so\nit's a no-op for those kinds.",
           "title": "Tools Offline",
           "type": "boolean"
         }
@@ -70,29 +77,34 @@
       "properties": {
         "enabled": {
           "default": true,
+          "description": "Master switch. ``False`` disables the dep entirely \u2014 only used by\nin-process tests that exercise paths unrelated to auth. Production\nmust leave this ``True``.",
           "title": "Enabled",
           "type": "boolean"
         },
         "pair_init_per_minute": {
           "default": 5,
+          "description": "Per-source rate limit on ``POST /auth/pair``. Bounds brute-force.",
           "minimum": 1,
           "title": "Pair Init Per Minute",
           "type": "integer"
         },
         "pair_poll_per_minute": {
           "default": 60,
+          "description": "Per-source rate limit on ``GET /auth/pair/{id}``. Generous; the\nbrowser polls every 2 s during the approval wait.",
           "minimum": 1,
           "title": "Pair Poll Per Minute",
           "type": "integer"
         },
         "pairing_ttl_seconds": {
           "default": 300,
+          "description": "How long a pairing code is valid for approval after creation.",
           "minimum": 30,
           "title": "Pairing Ttl Seconds",
           "type": "integer"
         },
         "session_ttl_seconds": {
           "default": 2592000,
+          "description": "Sliding session TTL. Each ``validate()`` extends ``expires_at`` by this\nmany seconds, so a daily user never re-pairs; idle for the full window\nmeans the session ages out and the device must pair again.",
           "minimum": 60,
           "title": "Session Ttl Seconds",
           "type": "integer"
@@ -119,6 +131,7 @@
       "description": "Grove-managed Claude Code *channel* delivery (research preview).\n\nA channel is Claude Code's native seam for pushing a message a **running,\ninteractive** session acts on (and relaying permission decisions), unlike a\nhook (status push, one way) or steering (raw pane keystrokes). When\n``enabled``, Grove launches ``claude_code`` agents with ``--channels\n<grove-channel-settings>`` so the agent connects to the Grove channel MCP\nserver; the daemon then POSTs queued messages to that server's loopback\nreceiver and the agent receives them as ``notifications/claude/channel``.\n\nOff by default on purpose: channels are an auth-gated Claude Code research\npreview, so this stays a deliberately-flipped mechanism knob (not policy).\nDisabling is just flipping ``enabled`` back \u2014 the launch flag disappears and\nthe whole path degrades to a no-op, exactly like the hook ``--settings``.",
       "properties": {
         "allowed_senders": {
+          "description": "Sender allowlist for inbound channel deliveries. Each entry is a sender\nidentifier (a Grove client/device label) permitted to POST a message into a\nrunning session's channel. **Empty means allow all** \u2014 enabling the feature\nis the deliberate opt-in, so a bare enable is permissive; populate this to\nRESTRICT which senders may drive a running agent. Mechanism, not policy: the\nserver matches an inbound message's declared sender against this list.",
           "items": {
             "type": "string"
           },
@@ -140,6 +153,7 @@
       "properties": {
         "share": {
           "default": "full",
+          "description": "Sharing level. Read from non-committed layers; a committed layer's value\napplies only when it TIGHTENS what the rest of the cascade resolved.",
           "enum": [
             "full",
             "projects",
@@ -150,6 +164,7 @@
         },
         "trust": {
           "default": true,
+          "description": "Whether the seeded agent configuration records the container's workspace\nfolder as already trusted, and its committed `.mcp.json` servers as already\napproved.\n\nOn by default because a container workspace is an *unattended* start: the\nagent runs in a directory the tool has never seen, and the tool asks \u2014 once,\ninteractively \u2014 whether that directory can be trusted. Nobody is at the\nterminal to answer, so the workspace simply never begins working. Turning\nthis off restores that prompt, which means a containerized agent will not\nstart on its own until a human attaches and answers it; the isolation the\ncontainer itself provides is unchanged either way.",
           "title": "Trust",
           "type": "boolean"
         }
@@ -162,26 +177,32 @@
       "description": "Run the agent inside a container instead of directly on the host.\n\n**Default-ON, deliberately reversing Grove's earlier \"containers are\nstrictly opt-in\" default.** The container is what lets an agent run fully\nautonomously (relaxed permissions) with its blast radius bounded to the\nworkspace, so it is the default new workspaces get; ``--runtime host`` is\nthe per-create escape hatch and the persisted ``WorkspaceState.runtime``\nmeans an existing workspace never moves. Turning it back off is a policy\nchoice about isolation, not a bug fix.\n\nEvery value cascades like the rest of the config; a future Podman driver\nreads the SAME submodel behind the same protocol \u2014 ``docker_bin`` names the\nCLI, it is not the driver-swap seam.\n\nThe inherited ``env_file`` / ``env_command`` knobs (:class:`EnvSourceConfig`)\nare resolved TWICE per workspace start: once to provision (the values reach\nthe project's lifecycle hooks via ``--secrets-file``) and once to launch (they\nreach the agent via the launch env). A missing file or a failing command is\nfatal at create, which is what keeps an agent from booting without its\ncredentials.",
       "properties": {
         "agent_config": {
-          "$ref": "#/$defs/ContainerAgentConfig"
+          "$ref": "#/$defs/ContainerAgentConfig",
+          "description": "How much of the host agent configuration the container shares."
         },
         "decor": {
-          "$ref": "#/$defs/ContainerDecorConfig"
+          "$ref": "#/$defs/ContainerDecorConfig",
+          "description": "Grove's tmux config + statusline bundle, mounted into every container."
         },
         "default_config": {
           "default": "",
+          "description": "Path to the ``devcontainer.json`` Grove passes via ``--config`` for a repo\nthat has no ``.devcontainer/`` of its own. Empty (default) uses the\nself-contained config packaged in the wheel. The file must stay\nself-contained \u2014 image + features only, no ``build.dockerfile``, no\n``dockerComposeFile``, no local-path features \u2014 because a config outside the\nworktree cannot resolve config-directory-relative paths.",
           "title": "Default Config",
           "type": "string"
         },
         "docker_bin": {
           "default": "docker",
+          "description": "The container CLI binary/path (``docker``, or an absolute path / drop-in\nshim). NOT the Podman-driver seam \u2014 a different runtime is a different\n``ContainerDriver`` class, this only points at a docker-compatible CLI.",
           "title": "Docker Bin",
           "type": "string"
         },
         "egress": {
-          "$ref": "#/$defs/EgressConfig"
+          "$ref": "#/$defs/EgressConfig",
+          "description": "Where the containerized agent may reach on the network."
         },
         "enabled": {
           "default": true,
+          "description": "The cascade DEFAULT for a new workspace's runtime: ``True`` \u2192\n``Runtime.CONTAINER``, ``False`` \u2192 ``Runtime.HOST``. Only consulted at\ncreate; ``resume``/``respawn`` read the persisted ``runtime`` so flipping\nthis never migrates an existing workspace.",
           "title": "Enabled",
           "type": "boolean"
         },
@@ -195,6 +216,7 @@
             }
           ],
           "default": null,
+          "description": "Host command whose stdout is parsed as dotenv.\n\nExists so secrets never have to be materialized to disk: any command that\nprints dotenv to stdout works, and Grove knows nothing about any particular\nsecret manager \u2014 naming one here would be policy in code. Mutually exclusive\nwith ``env_file``. Re-run at every consumption (deliberately not cached \u2014 a\ncache in a daemon holds secrets for days and serves rotated ones), so it must\nbe idempotent and cheap.\n\n**Never honored from a committed layer** \u2014 running it would be remote code\nexecution on clone. See :class:`CommittedEnvSource`.",
           "title": "Env Command"
         },
         "env_file": {
@@ -207,16 +229,19 @@
             }
           ],
           "default": null,
+          "description": "Dotenv file whose variables this section draws on.\n\nRepo-relative or absolute, ``~`` expanded. Mutually exclusive with\n``env_command``. A configured-but-missing file is a HARD ERROR at the point of\nuse \u2014 a silently-empty environment is the exact failure this feature exists to\nfix, and a workspace that boots without its credentials burns a whole session\ndiscovering that. The error is raised at the consumption boundary\n(``core.env_source``), not here, so the cascade can still persist a config for\na repo whose file is not present yet.\n\n**A committed layer may only name a path INSIDE the repo** \u2014 see\n:class:`CommittedEnvSource`.",
           "title": "Env File"
         },
         "resources": {
-          "$ref": "#/$defs/ResourcesConfig"
+          "$ref": "#/$defs/ResourcesConfig",
+          "description": "Per-container CPU / memory / pid caps."
         },
         "shell": {
           "default": [
             "bash",
             "sh"
           ],
+          "description": "Interactive shells ``grove shell`` and the attach shell window try, in order.\n\nA CHAIN rather than one name, because the shell is a property of somebody\nelse's image and Grove cannot know it: ``bash`` is absent from Alpine-based\nand distroless-ish images that nonetheless ship ``sh``, while a user whose\nimage ships ``zsh`` or ``fish`` wants that one. The first entry that exists\ninside the container is exec'd; if none does, the pane says so and exits\nnon-zero rather than silently substituting a shell nobody asked for \u2014 a\nbaked-in final fallback would be exactly the policy-in-code this config\nexists to avoid.\n\nResolution happens INSIDE the container (``command -v``), not here: presence\nis a fact about the image, and probing it from the host would be a second\n``exec`` answering a question the shell itself answers for free.",
           "items": {
             "type": "string"
           },
@@ -224,10 +249,12 @@
           "type": "array"
         },
         "tmux": {
-          "$ref": "#/$defs/ContainerTmuxConfig"
+          "$ref": "#/$defs/ContainerTmuxConfig",
+          "description": "Whether the agent runs under a tmux inside the container, and whose."
         },
         "up_timeout_seconds": {
           "default": 900.0,
+          "description": "Wall-clock bound on one ``devcontainer up`` (and ``build``). A cold build\nthat pulls a base image and installs Features is legitimately minutes long,\nso this is generous \u2014 but it MUST stay inside every client's own deadline\n(``GroveClient._LIFECYCLE_TIMEOUT_S``), or the caller gives up on a create\nthat then succeeds and leaves an orphaned container with no record.",
           "title": "Up Timeout Seconds",
           "type": "number"
         }
@@ -241,21 +268,25 @@
       "properties": {
         "enabled": {
           "default": true,
+          "description": "Mount and compose the bundle at all. ``False`` means no mount and\nnothing composed \u2014 the container gets bare default tmux chrome and no\nGrove statusline.",
           "title": "Enabled",
           "type": "boolean"
         },
         "payload": {
           "default": "",
+          "description": "Host directory holding the decor assets. Empty (default) uses Grove's\nown bundled copy shipped in the wheel. A value is an operator-supplied\nbundle, mounted read-only exactly like the built-in one and never written\nto \u2014 the escape hatch that keeps this mechanism rather than policy: Grove\nships one sane look, an operator can replace it wholesale.",
           "title": "Payload",
           "type": "string"
         },
         "statusline": {
           "default": true,
+          "description": "Compose the statusline into the agent's settings. Independent of\n``tmux_conf`` so an operator can take one without the other.",
           "title": "Statusline",
           "type": "boolean"
         },
         "tmux_conf": {
           "default": true,
+          "description": "Pass Grove's tmux config to the in-container tmux.",
           "title": "Tmux Conf",
           "type": "boolean"
         }
@@ -269,31 +300,37 @@
       "properties": {
         "enabled": {
           "default": true,
+          "description": "Run the agent under a container-side tmux when one is reachable.\n\n``False`` restores the bare ``devcontainer exec -- <agent>`` launch: the\nagent still runs, but its terminal dies with the host client and there is\nno reattach path.",
           "title": "Enabled",
           "type": "boolean"
         },
         "payload": {
           "default": "",
+          "description": "Host directory holding ``bin/<arch>/tmux`` plus a shared ``terminfo/``.\n\nEmpty (default) uses Grove's own cache, built on demand. A value is an\noperator-supplied bundle, mounted read-only exactly like the built one and\nnever verified beyond \"the file is there\" \u2014 it is the operator's build, and\nGrove never writes into it.\n\nThe per-architecture split is not optional even for a hand-built bundle: the\nbinary executes INSIDE the container, so an amd64 build cannot run in an\narm64 container, and one Grove host routinely serves both (an Apple Silicon\nmachine running an amd64 image, or the reverse under emulation). ``<arch>``\nis docker's platform name \u2014 ``amd64`` or ``arm64``. Compiled terminfo is\ncapability data rather than machine code, so one ``terminfo/`` serves every\narchitecture.",
           "title": "Payload",
           "type": "string"
         },
         "prefer_image": {
           "default": true,
+          "description": "Use the image's OWN tmux when the container has one, else Grove's bundle.\n\nPresence is detected once per provision through the same\n``devcontainer exec`` road the agent itself takes, so the probe sees the\nremote user's PATH rather than the image's default user's.",
           "title": "Prefer Image",
           "type": "boolean"
         },
         "session": {
           "default": "agent",
+          "description": "The in-container tmux session name ``new-session -A`` keys on.\n\nThis is a REATTACH IDENTITY, not a display name, which is why it is its own\nfield rather than a reuse of ``tmux.agent_window_name``: renaming the host\nwindow is cosmetic, while renaming this orphans a live agent's session\nbehind a newly-created empty one.",
           "title": "Session",
           "type": "string"
         },
         "shell_session": {
           "default": "shell",
+          "description": "The in-container tmux session an interactive shell attaches to.\n\nIts own field for the same reason :attr:`session` is one \u2014 a reattach\nidentity, not a display name \u2014 and separate FROM it because the shell and\nthe agent are two sessions on one in-container server: sharing a name would\ndrop a user into the agent's own pane. ``grove shell`` and the attach\nlayout's shell window both key on this, which is what makes them the same\npersistent shell rather than two.",
           "title": "Shell Session",
           "type": "string"
         },
         "term_fallback": {
           "default": "xterm-256color",
+          "description": "``TERM`` to retry an attach with when tmux refuses the client's own.\n\nEmpty DISABLES the retry \u2014 one field rather than a flag plus a value,\nbecause a bool and a string can express \"enabled with no TERM\", which means\nnothing.\n\nNeeded structurally, not defensively: an attach with a ``TERM`` no terminfo\ndatabase has is a hard refusal (``missing or unsuitable terminal``), and\nseveral real terminals (``wezterm``, ``contour``, ``wayst`` depending on the\ndistro) ship entries no ncurses release packages, so no bundle can ever\ncover everyone. Verified through a real pty with a real curses app that a\nsubstituted ``TERM`` renders, resizes on SIGWINCH, detaches and reattaches\ncorrectly \u2014 tmux and ncurses cannot tell a substituted value from a native\none. Grove SAYS so on stderr when it substitutes; a silent one would leave a\nuser debugging their own terminal's colours.",
           "title": "Term Fallback",
           "type": "string"
         }
@@ -303,7 +340,7 @@
     },
     "EgressConfig": {
       "additionalProperties": false,
-      "description": "Where a containerized agent may reach on the network.\n\nWith credentials shared and permission prompts off, egress is the control\nthat carries the weight: it bounds where a token can be *sent*. The list is\n**derived, not restated** \u2014 the planner (``core.container_policy``) unions\nthe agent plane for the workspace's kind, the package plane, the repo's own\ngit remotes and the Grove plane, so normal dev work needs zero config.\n``allow`` is purely additive on top.\n\nDocumented ceilings, carried from the reference implementation this follows:\nUDP/53 stays open (DNS tunneling is not defended against) and name-based\nfiltering loses to domain fronting. ``open`` is the supported, un-nagged\nno-firewall path \u2014 never a warning, never a refusal.",
+      "description": "Where a containerized agent may reach on the network.\n\nWith credentials shared and permission prompts off, egress is the control\nthat carries the weight: it bounds where a token can be *sent*. The list is\n**derived, not restated** \u2014 the planner (``core.container_policy``) unions\nthe agent plane for the workspace's kind, the package plane, the repo's own\ngit remotes, the Grove plane and the telemetry endpoint's host, so normal\ndev work needs zero config. ``allow`` is purely additive on top.\n\nThe telemetry entry has no field of its own for the same reason the git\nremotes do not: the destination is already stated once, as the host the\n``telemetry`` section resolves, and a second place to write it is a second\nplace for it to be wrong. A self-hosted LAN endpoint is therefore covered\nby default \u2014 which matters because a firewalled OTLP export fails as\nsilence, not as an error.\n\nDocumented ceilings, carried from the reference implementation this follows:\nUDP/53 stays open (DNS tunneling is not defended against) and name-based\nfiltering loses to domain fronting. ``open`` is the supported, un-nagged\nno-firewall path \u2014 never a warning, never a refusal.",
       "properties": {
         "agent_plane": {
           "additionalProperties": {
@@ -312,6 +349,7 @@
             },
             "type": "array"
           },
+          "description": "Per-kind agent endpoints. Provider facts with a cascade override, same\nshape as ``ProxyConfig.upstreams`` \u2014 a gateway deployment repoints them\nwithout touching code.",
           "propertyNames": {
             "enum": [
               "claude_code",
@@ -325,6 +363,7 @@
         },
         "allow": {
           "default": [],
+          "description": "Extra destinations (hostnames or CIDRs) added to the derived set.",
           "items": {
             "type": "string"
           },
@@ -335,6 +374,7 @@
           "default": [
             "host.docker.internal"
           ],
+          "description": "How the container reaches Grove itself (hook ingest, the daemon). The\nconnected-container default is what keeps status precise.",
           "items": {
             "type": "string"
           },
@@ -343,6 +383,7 @@
         },
         "mode": {
           "default": "allowlist",
+          "description": "``allowlist`` (default) applies the derived firewall; ``open`` applies\nnothing; ``deny`` permits only loopback and the workspace's own network.\nAnything but ``open`` **fails closed**: if the firewall verifiably failed to\napply, the container start fails. That is config integrity, not a permission\ngate \u2014 the agent's own flags are never inspected.",
           "enum": [
             "allowlist",
             "open",
@@ -352,6 +393,7 @@
           "type": "string"
         },
         "package_plane": {
+          "description": "Package indexes/registries reachable regardless of agent kind.",
           "items": {
             "type": "string"
           },
@@ -359,6 +401,7 @@
           "type": "array"
         },
         "range_sources": {
+          "description": "Providers that PUBLISH their address ranges, fetched at provision time.\nThe answer to a hostname whose DNS answer outlives its usefulness:\n`github.com` presents one A record with a 42-second TTL drawn from a large\npool, so an allowlist pinned at container start is authoritative for under\na minute and a coin flip for the rest of a multi-hour session \u2014 measured\nrotating from `140.82.116.3` to `20.29.134.23` inside 80 seconds.\n\nAdditive to the hostname planes above, never a replacement: a source that\nfails to fetch degrades to exactly today's behaviour rather than to nothing.\nConfig rather than code so the next provider that publishes ranges needs an\nentry, not a branch.",
           "items": {
             "$ref": "#/$defs/RangeSource"
           },
@@ -485,6 +528,7 @@
         },
         "markdown": {
           "default": true,
+          "description": "Send the rich body with ``client::display.contentType: text/markdown``.\nBoth official clients render CommonMark; turn it off for a client that does\nnot.",
           "title": "Markdown",
           "type": "boolean"
         },
@@ -494,6 +538,7 @@
             "minimum": 0,
             "type": "integer"
           },
+          "description": "Severity \u2192 Gotify priority, bounded like ``priority`` itself. The defaults\nhit Gotify's own Android thresholds: ``<=0`` min, ``1-3`` low (silent),\n``4-7`` default (vibrates), ``>=8`` high (heads-up + sound). So a pending\nquestion buzzes and a routine pause does not.",
           "propertyNames": {
             "enum": [
               "low",
@@ -507,6 +552,7 @@
         },
         "priority": {
           "default": 5,
+          "description": "Fallback priority for a severity with no entry in ``priorities``.",
           "maximum": 10,
           "minimum": 0,
           "title": "Priority",
@@ -539,6 +585,7 @@
       "properties": {
         "daemon_url": {
           "default": "",
+          "description": "Base URL the hook's native ``http`` handler POSTs each event to.\n\nEmpty (the default) keeps the built-in loopback address, so the rendered\nsettings stay byte-identical to a config that never mentions this. It is a\nknob because the address is only correct for an agent sharing the daemon's\nloopback: a runtime launched into its own network namespace \u2014 a container \u2014\nreaches the daemon at a different host entirely, and an address a runtime\ncannot resolve is policy that has no business being fixed in code.",
           "title": "Daemon Url",
           "type": "string"
         },
@@ -557,6 +604,7 @@
       "properties": {
         "applies_to": {
           "default": "all",
+          "description": "Which workspace runtimes this script is for \u2014 a filter, not a runtime.\n\nA host-side setup step is redundant (or actively wrong) when the\ndevcontainer's own lifecycle hooks already do that work, and vice versa.\nDeliberately NOT named `runtime`: `workspace.Runtime` is `host|container`\nwith no `all` member, and one name for two domains is exactly the confusion\nthis codebase warns about. Default `\"all\"` is the historical behavior, so no\nexisting config changes meaning.",
           "enum": [
             "all",
             "host",
@@ -572,6 +620,7 @@
         },
         "fail_fast": {
           "default": true,
+          "description": "If True, a non-zero exit rolls back the worktree+session+branch.",
           "title": "Fail Fast",
           "type": "boolean"
         },
@@ -585,6 +634,7 @@
             }
           ],
           "default": null,
+          "description": "Inline shell snippet. Mutually exclusive with `path`.",
           "title": "Inline"
         },
         "path": {
@@ -597,6 +647,7 @@
             }
           ],
           "default": null,
+          "description": "Repo-relative path to a script file. Mutually exclusive with `inline`.",
           "title": "Path"
         },
         "run_on_resume": {
@@ -629,10 +680,12 @@
       "properties": {
         "agent": {
           "default": "claude",
+          "description": "Which configured agent an issue-ops-created workspace spawns. Must name an\nentry in ``agents``; ``create`` raises (and the engine replies) if it doesn't.\nDefaults to the built-in ``claude`` agent \u2014 override per deployment to route\nissue work to a different tool. Mechanism, not policy.",
           "title": "Agent",
           "type": "string"
         },
         "allowed_actors": {
+          "description": "The opt-in WIDENING knob on the permission policy. By default a command is\nhonored only when the forwarder asserts the commenter has repo write access;\nlisting a login here lets that user drive issue-ops REGARDLESS of their repo\npermission (a trusted bot account, an external collaborator). Empty (default)\nkeeps the strict write-access-only policy. Matched case-insensitively. Never a\nNARROWING knob \u2014 write access always suffices; this only adds to it.",
           "items": {
             "type": "string"
           },
@@ -641,54 +694,64 @@
         },
         "assign_bot": {
           "default": false,
+          "description": "Mark what Grove is working ON THE TRACKER: assign the ticket provider's own\naccount \u2014 whoever the configured token authenticates as \u2014 to every ticket a\nlive workspace holds, so every Grove-managed issue is findable with the\ntracker's own assignee filter by people who never open Grove. Off by default:\nit writes to somebody else's tracker. Assigning needs repo write, which\ncommenting does not; where the token cannot assign, the refusal is logged\nnaming the ticket and never fails the workspace.\n\nAssignment is an OUTPUT of Grove working a ticket and never an input: it is\nreconciled from the live fleet, and nothing here starts work. Turning this on\ncannot cause a workspace to be created \u2014 that is ``pickup_enabled``, a\nseparate opt-in.\n\nThe assignment is RELEASED when the workspace holding the ticket ends, so the\nboard says who is working an issue now rather than who once did. Only\nassignments this daemon made are released \u2014 a ticket assigned to the bot by\nhand is left alone, and every other assignee is always untouched.",
           "title": "Assign Bot",
           "type": "boolean"
         },
         "deep_link_base_url": {
           "default": "",
+          "description": "The webapp base (e.g. ``https://grove.example.com``); a status comment\ndeep-links to ``{base}/w/{id}``. Reuses the ``notifications`` deep-link\nconvention verbatim. Empty (default) omits the link.",
           "title": "Deep Link Base Url",
           "type": "string"
         },
         "enabled": {
           "default": false,
+          "description": "Master switch for the OUTBOUND live status comment \u2014 the sticky\nper-workspace comment the publisher mirrors onto its ticket. Off by default;\nthe daemon builds and binds the publisher only when this is ``True``.\nIndependent of inbound command routing, which opts in via the CI workflow plus\nan enabled ticket provider (see the class docstring).",
           "title": "Enabled",
           "type": "boolean"
         },
         "pickup_backoff_seconds": {
           "default": 300.0,
+          "description": "How long one tracker is skipped after it fails or rate-limits a poll.\nApplies to the whole provider, not one ticket, because a 403 or a 429 is a\nstatement about the credential or the budget rather than about the issue that\nhappened to be asked for. Backoff does not compound \u2014 the next successful\npoll clears it.",
           "minimum": 0,
           "title": "Pickup Backoff Seconds",
           "type": "number"
         },
         "pickup_enabled": {
           "default": false,
+          "description": "The assignee AS the inbound work queue: the daemon polls for open issues\nassigned to the provider's own account that no live workspace holds and that\nGrove has never been handed before, and starts a workspace for each. A human\nassigns the bot; a workspace appears. Off by default \u2014 this spawns real\nagents. Needs no CI runner, which is what makes inbound automation reachable\non a deployment that cannot host one.",
           "title": "Pickup Enabled",
           "type": "boolean"
         },
         "pickup_interval_seconds": {
           "default": 60.0,
+          "description": "How often the pickup poll asks each configured tracker for its assigned\nissues. A standing load on someone else's API, so it is a knob rather than a\nconstant; a provider that errors or rate-limits is backed off for\n``pickup_backoff_seconds`` regardless of this cadence.",
           "minimum": 5,
           "title": "Pickup Interval Seconds",
           "type": "number"
         },
         "pickup_max_active": {
           "default": 3,
+          "description": "How many pickup-started workspaces may be working at once, across every\nrepo on the host. Assigning the bot to forty issues must not spawn forty\nagents: each tick counts the assigned tickets that already have a live\nworkspace and starts at most enough to reach this ceiling. The rest are\nDEFERRED to the next tick and named in the log \u2014 never silently dropped.",
           "minimum": 1,
           "title": "Pickup Max Active",
           "type": "integer"
         },
         "prompt_template": {
           "default": "You are handling tracker issue #{number}: \"{title}\".\n\nIssue description:\n{body}\n\nThread so far:\n{comments}\n\nHow you were engaged:\n{command_text}\n\nYour mandate:\n\n- Work autonomously through to an OPEN pull request. Read the issue, map the\n  affected components (read the nearest owning CLAUDE.md before editing),\n  implement the change, run the project's gates, open the PR, and reply on the\n  ticket saying what changed and where the PR is.\n- Where the ticket is underspecified, REPLY ON THE TICKET asking for exactly\n  what is missing, and say what you will assume if nobody answers. Do not stall\n  silently, and do not quietly guess at a requirement you could have asked\n  about.\n- Satisfy the stated goals faithfully and safely \u2014 the goals as written, not\n  the larger project you would rather do.\n- Stop and ask rather than take a risky or irreversible action: destroying\n  data, force-pushing a shared branch, or touching anything in production.\n\nIssue link: {url}\n",
+          "description": "The initial prompt a newly-created workspace boots on, with ``{title}``,\n``{body}``, ``{number}``, ``{url}``, ``{comments}`` and ``{command_text}``\nplaceholders filled from the ticket. ``{comments}`` renders the whole comment\nthread in order, so the agent starts with the discussion rather than spending\nturns fetching it. One template serves both ways a workspace is started from a\nticket \u2014 an ``@grove`` comment and an assignee pickup \u2014 and ``{command_text}``\nsays which, so a deployment tunes the agent's marching orders in one place.\nCascades like all config; the built-in default states the autonomous\nissue\u2192PR mandate.",
           "title": "Prompt Template",
           "type": "string"
         },
         "trigger": {
           "default": "@grove",
+          "description": "The mention token that must OPEN a comment (word-boundary, first token) for\nthe engine to act. A mention-style ``@``-prefixed token by default \u2014 a bare\n``/`` prefix collides with the forge's own markdown slash commands. Compared\ncase-insensitively; everything after it is the command (a fixed verb or free\nprompt text).",
           "title": "Trigger",
           "type": "string"
         },
         "update_window_seconds": {
           "default": 5.0,
+          "description": "Coalescing window for the OUTBOUND status comment \u2014 at most one\ncomment PATCH per workspace per window. Forges apply secondary rate limits to\nsame-comment edit storms, so the publisher folds every render-relevant change\ninto per-workspace state and flushes the merged result once the window\nelapses. ``0`` flushes every change (no coalescing).",
           "minimum": 0,
           "title": "Update Window Seconds",
           "type": "number"
@@ -738,16 +801,19 @@
       "properties": {
         "api_key_env": {
           "default": "MEWBO_API_KEY",
+          "description": "NAME of the environment variable holding the API key \u2014 never the key\nitself. Committed project config must stay secret-free (the repo and its\nconfig examples are published); the key lives only in the consuming\nprocess's environment.",
           "title": "Api Key Env",
           "type": "string"
         },
         "base_url": {
           "default": "http://127.0.0.1:5125",
+          "description": "Base URL of the Mewbo REST API.",
           "title": "Base Url",
           "type": "string"
         },
         "timeout_seconds": {
           "default": 10.0,
+          "description": "Per-request HTTP timeout for Mewbo API calls.",
           "title": "Timeout Seconds",
           "type": "number"
         }
@@ -755,18 +821,52 @@
       "title": "MewboConfig",
       "type": "object"
     },
+    "ModelPriceConfig": {
+      "additionalProperties": false,
+      "description": "What one model's tokens cost, per million tokens.\n\nPrices are yours to state because no price list Grove could ship stays\ncorrect: providers reprice, gateways mark up, and a stale built-in table\nwould produce confident wrong money. A model with no entry here reports its\ncost as unknown rather than as zero.",
+      "properties": {
+        "cache_read": {
+          "default": 0.0,
+          "description": "Price per million tokens served from a warm prompt cache \u2014 typically a\nsmall fraction of ``input``, which is why the audit never folds the two.",
+          "title": "Cache Read",
+          "type": "number"
+        },
+        "cache_write": {
+          "default": 0.0,
+          "description": "Price per million tokens written into the prompt cache, usually charged\nat a premium over ``input``.",
+          "title": "Cache Write",
+          "type": "number"
+        },
+        "input": {
+          "default": 0.0,
+          "description": "Price per million fresh (uncached) input tokens.",
+          "title": "Input",
+          "type": "number"
+        },
+        "output": {
+          "default": 0.0,
+          "description": "Price per million output tokens.",
+          "title": "Output",
+          "type": "number"
+        }
+      },
+      "title": "ModelPriceConfig",
+      "type": "object"
+    },
     "NotificationsConfig": {
       "additionalProperties": false,
-      "description": "Push notifications on workspace edges. Off by default.\n\nThree independent triggers, each with its own switch, all fanning out to\nevery enabled channel:\n\n- ``on`` \u2014 a debounced rising edge into an agent state that wants the human:\n  ``waiting`` (turn finished), ``blocked`` (awaiting input), ``error``.\n- ``on_question`` \u2014 the agent posted a question. Deduped by question id, not\n  debounced: a second question inside the quiet window is a second thing the\n  human must answer, and it is the one push that must never be dropped.\n- ``on_lifecycle`` \u2014 the workspace itself changed (it broke, it was\n  orphaned, its session vanished).\n\n``deep_link_base_url`` is the webapp base (e.g. ``https://grove.example.com``);\na notification deep-links to ``{base}/w/{id}`` so tapping it opens that\nworkspace. Mechanism, not policy: every value cascades like the rest of the\nconfig.",
+      "description": "Push notifications on workspace edges. Off by default.\n\nThree independent triggers, each with its own switch, all fanning out to\nevery enabled channel:\n\n- ``on`` \u2014 a debounced rising edge into an agent state that wants the human:\n  ``waiting`` (turn finished), ``blocked`` (awaiting input), ``error``.\n  ``waiting`` additionally waits out ``waiting_quiet_minutes`` before it\n  pushes \u2014 see that field.\n- ``on_question`` \u2014 the agent posted a question. Deduped by question id, not\n  debounced: a second question inside the quiet window is a second thing the\n  human must answer, and it is the one push that must never be dropped.\n- ``on_lifecycle`` \u2014 the workspace itself changed (it broke, it was\n  orphaned, its session vanished).\n\n``deep_link_base_url`` is the webapp base (e.g. ``https://grove.example.com``);\na notification deep-links to ``{base}/w/{id}`` so tapping it opens that\nworkspace. Mechanism, not policy: every value cascades like the rest of the\nconfig.",
       "properties": {
         "debounce_seconds": {
           "default": 30.0,
+          "description": "Per-workspace quiet window after a state fire \u2014 one buzz per attention\nepisode, not one per WAITING\u2194WORKING tool round-trip. Questions are exempt\n(they dedupe by id instead).",
           "minimum": 0,
           "title": "Debounce Seconds",
           "type": "number"
         },
         "deep_link_base_url": {
           "default": "http://localhost:3000",
+          "description": "Where a notification's tap lands: ``{base}/w/{id}``, the webapp's workspace\nroute \u2014 where you can read the transcript *and answer the question*. Defaults\nto the webapp's own local origin (its `next start` port) because a push whose\nlink goes nowhere is a dead end, and a single-host install is the overwhelming\ncommon case. Point it at your reachable origin (e.g.\n``https://grove.example.com``) to make the tap work from a phone; set it empty\nto render no link at all.",
           "title": "Deep Link Base Url",
           "type": "string"
         },
@@ -810,8 +910,16 @@
         },
         "on_question": {
           "default": true,
+          "description": "Push when the agent asks the human something. The one trigger every\nharness can produce \u2014 a question is a transcript/hook *content* signal, while\n``blocked`` is a *state* only some adapters ever reach.",
           "title": "On Question",
           "type": "boolean"
+        },
+        "waiting_quiet_minutes": {
+          "default": 15.0,
+          "description": "How long a session must stay genuinely settled before a ``waiting`` push\nfires \u2014 the honest fallback for what \"turn ended\" cannot promise on its own.\nA WAITING transcript state means the top-level turn stopped generating, not\nthat the task is done: Grove already tracks the in-session sub-agent count\n(``active_subagents``), the hook's live sub-agent fleet, and the harness's\nown steer queue, and a WAITING edge is held back while any of those is\nnonzero. None of them can see an arbitrary backgrounded shell command\n(``Bash ... run_in_background``) \u2014 Claude's tool call returns immediately and\nGrove gets no close event to watch for \u2014 so once every known tracker agrees\nnothing is left, the push still waits this long with nothing new observed\nbefore it fires, which is the proxy for the rest. ``0`` fires the instant the\nknown trackers agree nothing is left, with no wait \u2014 the old behaviour.",
+          "minimum": 0,
+          "title": "Waiting Quiet Minutes",
+          "type": "number"
         },
         "webhook": {
           "$ref": "#/$defs/WebhookChannelConfig"
@@ -826,6 +934,7 @@
       "properties": {
         "default": {
           "default": "deny",
+          "description": "The decision the prompt tool returns while no interactive human/daemon\nrelay is wired. ``deny`` is fail-closed (the safe default for an unattended\nagent); ``allow`` is the deliberate permissive opt-in for a trusted sandbox\n(a container workspace whose blast radius is bounded). Mechanism, not policy:\nthe tool answers whatever this names, verbatim.",
           "enum": [
             "allow",
             "deny"
@@ -850,6 +959,7 @@
           "additionalProperties": {
             "type": "string"
           },
+          "description": "Per-kind NAME of the env var that points that runtime at the proxy \u2014 the\ndocumented gateway seam each provider exposes (Claude:\n``ANTHROPIC_BASE_URL``; Codex: its ``model_providers`` base-url env). Never a\nURL literal here \u2014 :meth:`proxy_env` assembles ``{name: proxy_url}``.",
           "propertyNames": {
             "enum": [
               "claude_code",
@@ -863,27 +973,32 @@
         },
         "enabled": {
           "default": false,
+          "description": "Master switch. ``False`` leaves launch env and traffic untouched.",
           "title": "Enabled",
           "type": "boolean"
         },
         "host": {
           "default": "127.0.0.1",
+          "description": "Loopback interface the proxy listens on \u2014 never a routable address; the\nproxy relays provider credentials, so it must stay same-host only.",
           "title": "Host",
           "type": "string"
         },
         "log_bodies": {
           "default": false,
+          "description": "Content-gating: capture the REQUEST body into the telemetry event. Off by\ndefault \u2014 a captured body can hold prompt content, so opting in is deliberate.\nResponse bodies are NEVER captured; only their token ``usage`` is extracted.\nHeaders (auth included) are never captured or logged regardless.",
           "title": "Log Bodies",
           "type": "boolean"
         },
         "max_body_bytes": {
           "default": 8192,
+          "description": "Truncation cap (bytes) applied to a captured request body when\n``log_bodies`` is set \u2014 bounds the telemetry payload.",
           "minimum": 0,
           "title": "Max Body Bytes",
           "type": "integer"
         },
         "port": {
           "default": 8788,
+          "description": "Port the proxy listens on. The value :meth:`proxy_env` hands the agent is\n``http://{host}:{port}``.",
           "maximum": 65535,
           "minimum": 1,
           "title": "Port",
@@ -893,6 +1008,7 @@
           "additionalProperties": {
             "type": "string"
           },
+          "description": "Per-kind real upstream base URL the proxy forwards to (verbatim). The keys\nare the opt-in set; a kind absent here is not proxied.",
           "propertyNames": {
             "enum": [
               "claude_code",
@@ -914,6 +1030,7 @@
       "properties": {
         "keys": {
           "default": [],
+          "description": "Which top-level keys hold the CIDR arrays. Empty means every key whose\nvalue is an array of strings.",
           "items": {
             "type": "string"
           },
@@ -921,6 +1038,7 @@
           "type": "array"
         },
         "url": {
+          "description": "Where the JSON lives. Fetched from the HOST at provision time, where the\nnetwork is unrestricted \u2014 never from inside the container the firewall is\nabout to constrain.",
           "title": "Url",
           "type": "string"
         }
@@ -937,16 +1055,19 @@
       "properties": {
         "cpus": {
           "default": "",
+          "description": "``docker update --cpus`` value (``4``, ``1.5``). Empty = uncapped.\nA string, not a float: it is passed through verbatim and compose's\n``deploy.resources.limits.cpus`` is a string there too.",
           "title": "Cpus",
           "type": "string"
         },
         "memory": {
           "default": "",
+          "description": "``docker update --memory`` value (``8g``, ``512m``). Empty = uncapped.",
           "title": "Memory",
           "type": "string"
         },
         "pids": {
           "default": 0,
+          "description": "``docker update --pids-limit`` value. ``0`` = uncapped (a fork-bomb cap\nis cheap insurance for an autonomous agent, but it is policy, not default).",
           "title": "Pids",
           "type": "integer"
         }
@@ -954,17 +1075,108 @@
       "title": "ResourcesConfig",
       "type": "object"
     },
-    "TelemetryConfig": {
+    "TelemetryBackfillConfig": {
       "additionalProperties": false,
-      "description": "LangFuse credentials + OpenTelemetry passthrough knobs.\n\nSecret-free like every other integration submodel (the ``mewbo.api_key_env``\ndiscipline): the three canonical values are env-var NAMES, never secret\nliterals, so committed config stays publishable \u2014 the actual host/keys live\nonly in the consuming process's environment. Off by default (mechanism, not\npolicy); a deployment opts in by setting ``enabled: true`` and pointing the\nthree ``*_env`` fields at whatever names its host actually exports (exact\nkey names per environment are TBD \u2014 this holds regardless of what a given\nhost calls them).",
+      "description": "Explicit historical-export consent and profile selection.\n\nEmpty by default: usage discovery may index every reachable transcript,\nwhile an external telemetry write must name the exact provider roots it is\nallowed to read and export. Values use the same config-dir roots as agent\nprofiles (for example ``~/.codex``), keeping one profile vocabulary.",
       "properties": {
+        "content": {
+          "default": "none",
+          "enum": [
+            "none",
+            "messages",
+            "all"
+          ],
+          "title": "Content",
+          "type": "string"
+        },
         "enabled": {
           "default": false,
           "title": "Enabled",
           "type": "boolean"
         },
+        "profiles": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "propertyNames": {
+            "enum": [
+              "claude_code",
+              "codex",
+              "generic",
+              "mewbo"
+            ]
+          },
+          "title": "Profiles",
+          "type": "object"
+        }
+      },
+      "title": "TelemetryBackfillConfig",
+      "type": "object"
+    },
+    "TelemetryConfig": {
+      "additionalProperties": false,
+      "description": "LangFuse credentials + OpenTelemetry passthrough knobs.\n\nSecret-free like every other integration submodel (the ``mewbo.api_key_env``\ndiscipline): the three canonical values are env-var NAMES, never secret\nliterals, so committed config stays publishable \u2014 the actual host/keys live\nonly in the consuming process's environment. Off by default (mechanism, not\npolicy); a deployment opts in by setting ``enabled: true`` and pointing the\nthree ``*_env`` fields at whatever names its host actually exports.\n\n**Where those three values come from is the inherited\n:class:`EnvSourceConfig` question, and for telemetry it is usually the\nanswer.** Grove's own process is the exporter here, and the process that\nlaunches agents is typically a long-lived daemon started by a service\nmanager: it read its environment once, at exec, and nothing exported in a\nshell afterwards can reach it. So a deployment that only exports the keys\ninteractively gets a config that says ``enabled: true`` and exports\nnothing \u2014 silently. Point ``telemetry.env_file`` at a dotenv holding the\nthree variables (``~/.config/grove/langfuse.env`` is the conventional\nplace) and every launch re-reads it, including after a key rotation::\n\n    {\"telemetry\": {\"enabled\": true, \"env_file\": \"~/.config/grove/langfuse.env\"}}\n\nSet that in your user config or ``.grove/config.local.json``: a committed\nlayer may only name a path inside the repository, and may not run an\n``env_command`` at all (:class:`CommittedEnvSource`).",
+      "properties": {
+        "backfill": {
+          "$ref": "#/$defs/TelemetryBackfillConfig"
+        },
+        "content_owner": {
+          "additionalProperties": {
+            "enum": [
+              "external",
+              "grove"
+            ],
+            "type": "string"
+          },
+          "description": "Which side emits each runtime's prompt/response CONTENT \u2014 per agent kind.\n\n**Exactly one owner per session, and it is chosen HERE.** Grove always emits\nthe context (workspace, branch, ticket, agent identity); content is the half\ntwo producers can both reach, because a harness's own baseline emitter and\nGrove read the very same transcript. Two owners means every turn appears\ntwice under two unrelated trace trees; no owner means the words are simply\nabsent. Neither shows up as an error anywhere.\n\nKeyed by agent kind because the harnesses genuinely differ \u2014 one ships a\nbaseline emitter today, another may never have one \u2014 so a single global\nswitch could only ever be right for one of them. A kind that is not named\nhere resolves to ``external``, which is what keeps that baseline emitter\nworking when Grove is absent or has crashed. Name a kind ``grove`` only\nwhere nothing else emits content for it::\n\n    {\"telemetry\": {\"content_owner\": {\"codex\": \"grove\"}}}\n\nDeliberately NOT inferred. Grove cannot see another process's hook or plugin\nwithout probing across a boundary it does not own, and such a probe is wrong\nin both directions \u2014 a false positive drops all content, a false negative\ndoubles it. Configuration is the one answer that is auditable, so\n``grove doctor`` renders what this RESOLVES to rather than what it detects.\n\n**This and ``reserved_env`` are one policy, not two knobs.** Naming a kind\n``grove`` says Grove's replay IS that runtime's trace, so the launch also\nstops switching the runtime's own exporter on and forces its trace exporter\noff \u2014 otherwise the same session arrives twice, once as Grove's tree and\nonce as the harness's inverted one, and the second carries no content a\ntraces-only backend can read. Move a kind back to ``external`` to hand its\nown exporter back.",
+          "propertyNames": {
+            "enum": [
+              "claude_code",
+              "codex",
+              "generic",
+              "mewbo"
+            ]
+          },
+          "title": "Content Owner",
+          "type": "object"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "env_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Host command whose stdout is parsed as dotenv.\n\nExists so secrets never have to be materialized to disk: any command that\nprints dotenv to stdout works, and Grove knows nothing about any particular\nsecret manager \u2014 naming one here would be policy in code. Mutually exclusive\nwith ``env_file``. Re-run at every consumption (deliberately not cached \u2014 a\ncache in a daemon holds secrets for days and serves rotated ones), so it must\nbe idempotent and cheap.\n\n**Never honored from a committed layer** \u2014 running it would be remote code\nexecution on clone. See :class:`CommittedEnvSource`.",
+          "title": "Env Command"
+        },
+        "env_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Dotenv file whose variables this section draws on.\n\nRepo-relative or absolute, ``~`` expanded. Mutually exclusive with\n``env_command``. A configured-but-missing file is a HARD ERROR at the point of\nuse \u2014 a silently-empty environment is the exact failure this feature exists to\nfix, and a workspace that boots without its credentials burns a whole session\ndiscovering that. The error is raised at the consumption boundary\n(``core.env_source``), not here, so the cascade can still persist a config for\na repo whose file is not present yet.\n\n**A committed layer may only name a path INSIDE the repo** \u2014 see\n:class:`CommittedEnvSource`.",
+          "title": "Env File"
+        },
         "host_env": {
           "default": "LANGFUSE_HOST",
+          "description": "NAME of the env var holding the Langfuse host (e.g. a self-hosted or\n``https://cloud.langfuse.com`` URL) \u2014 never the URL itself. The default is\nLangfuse's own documented variable name; a deployment whose secret store\nexports something else (``LANGFUSE_BASE_URL`` is a common alternative)\nnames that here rather than renaming the variable.",
           "title": "Host Env",
           "type": "string"
         },
@@ -973,6 +1185,7 @@
             "claude_code",
             "codex"
           ],
+          "description": "Which agent runtimes get the derived telemetry env exported into their\nlaunch env \u2014 an allow-list, mechanism not policy (mirrors\n``NotificationsConfig.on``'s \"which transitions\" shape). ``mewbo`` runs\nserver-side (no local pane to export into) and a bare ``generic`` shell has\nno instrumentation to feed, so both are excluded by default; set explicitly\nto opt in.",
           "items": {
             "enum": [
               "claude_code",
@@ -987,16 +1200,79 @@
         },
         "public_key_env": {
           "default": "LANGFUSE_PUBLIC_KEY",
+          "description": "NAME of the env var holding the Langfuse public key.",
           "title": "Public Key Env",
           "type": "string"
         },
+        "receiver": {
+          "$ref": "#/$defs/TelemetryReceiverConfig",
+          "description": "The daemon's own OTLP/HTTP ingest endpoint \u2014 independent of ``enabled``\nabove, which gates Grove's own *export*. A harness may export directly to\nthe receiver with this section otherwise off."
+        },
+        "reserved_env": {
+          "default": [
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+            "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+            "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+            "OTEL_TRACES_EXPORTER",
+            "OTEL_METRICS_EXPORTER",
+            "OTEL_LOGS_EXPORTER"
+          ],
+          "description": "Environment variables Grove OWNS for every agent process it launches.\n\nGrove composes an agent's launch environment, so it already decides whether\nthat agent exports at all. These names make the decision total: for a\nruntime in ``passthrough_kinds``, each one is either set by Grove or carried\nby nobody, and a value arriving from anywhere else \u2014 ``agents[].env``, or\nthe environment Grove itself was started with \u2014 does not reach the agent.\nIt is replaced rather than honoured, and every replaced NAME is logged at\nthe launch that replaced it, so the change is never silent.\n\n**A workspace's telemetry destination is configured through Grove**, in this\nsection: ``env_file`` / ``env_command`` may name any of these variables and\nwhatever they carry stands, which is how a deployment points its workspaces\nat its own collector. Pointing the agent's own exporter somewhere Grove does\nnot control is what this ends \u2014 one tap per workspace, so a trace tree does\nnot arrive twice under two unrelated roots.\n\nThe default is the OpenTelemetry exporter vocabulary: which exporter runs\nper signal, and where it sends. Grove's identity stamp\n(``OTEL_RESOURCE_ATTRIBUTES``) and an inbound trace context are deliberately\nabsent \u2014 they say who the agent is, not where its telemetry goes. Narrow the\ntuple to hand a name back to the agent; empty it to reserve nothing.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Reserved Env",
+          "type": "array"
+        },
         "secret_key_env": {
           "default": "LANGFUSE_SECRET_KEY",
+          "description": "NAME of the env var holding the Langfuse secret key \u2014 never the secret\nitself.",
           "title": "Secret Key Env",
           "type": "string"
         }
       },
       "title": "TelemetryConfig",
+      "type": "object"
+    },
+    "TelemetryReceiverConfig": {
+      "additionalProperties": false,
+      "description": "The daemon's own OTLP/HTTP endpoint for a harness's native exporter.\n\nGrove's other telemetry tiers describe a session from the outside \u2014 a\nfrozen launch-time identity stamp and a replayed transcript. This is the\none tier that can carry what only the harness's own exporter knows: Claude\nCode's beta ``llm_request`` span, for instance, is the sole place\ntime-to-first-token appears at all \u2014 no transcript records it. Off by\ndefault, because mounting an HTTP endpoint on the daemon is a decision an\noperator makes deliberately; it is not a side effect of turning on the\nrest of this section.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Mount the receiver on the daemon. With this off, the daemon serves no\nOTLP endpoint and every other field here is inert.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "path": {
+          "default": "/otlp",
+          "description": "Where the receiver is mounted under the daemon's own address. Point a\nharness's ``OTEL_EXPORTER_OTLP_ENDPOINT`` (or a signal-specific\n``_TRACES_ENDPOINT``) at this path to feed it.",
+          "title": "Path",
+          "type": "string"
+        },
+        "queue_capacity": {
+          "default": 256,
+          "description": "Export batches the receiver holds before it starts shedding.\n\nSized in batches, not spans, because a batch is the unit a sender retries.\nA burst beyond this capacity is dropped and logged rather than queued\nwithout bound \u2014 an unbounded queue would let a telemetry spike take the\ndaemon down with it.",
+          "title": "Queue Capacity",
+          "type": "integer"
+        },
+        "workers": {
+          "default": 2,
+          "description": "Threads that transform accepted batches off the daemon's event loop.\n\nThe work is CPU-bound protobuf walking, so more workers smooth latency\nrather than raise throughput; they exist to keep this work off the loop\nthat also serves every dashboard and SSE stream, not to parallelize it.",
+          "title": "Workers",
+          "type": "integer"
+        }
+      },
+      "title": "TelemetryReceiverConfig",
       "type": "object"
     },
     "TicketsConfig": {
@@ -1013,6 +1289,7 @@
             }
           ],
           "default": null,
+          "description": "Host command whose stdout is parsed as dotenv.\n\nExists so secrets never have to be materialized to disk: any command that\nprints dotenv to stdout works, and Grove knows nothing about any particular\nsecret manager \u2014 naming one here would be policy in code. Mutually exclusive\nwith ``env_file``. Re-run at every consumption (deliberately not cached \u2014 a\ncache in a daemon holds secrets for days and serves rotated ones), so it must\nbe idempotent and cheap.\n\n**Never honored from a committed layer** \u2014 running it would be remote code\nexecution on clone. See :class:`CommittedEnvSource`.",
           "title": "Env Command"
         },
         "env_file": {
@@ -1025,6 +1302,7 @@
             }
           ],
           "default": null,
+          "description": "Dotenv file whose variables this section draws on.\n\nRepo-relative or absolute, ``~`` expanded. Mutually exclusive with\n``env_command``. A configured-but-missing file is a HARD ERROR at the point of\nuse \u2014 a silently-empty environment is the exact failure this feature exists to\nfix, and a workspace that boots without its credentials burns a whole session\ndiscovering that. The error is raised at the consumption boundary\n(``core.env_source``), not here, so the cascade can still persist a config for\na repo whose file is not present yet.\n\n**A committed layer may only name a path INSIDE the repo** \u2014 see\n:class:`CommittedEnvSource`.",
           "title": "Env File"
         },
         "gitea": {
@@ -1046,6 +1324,7 @@
       "properties": {
         "activity_threshold_seconds": {
           "default": 30,
+          "description": "Age (seconds) of the last tmux pane_activity before a workspace flips\nActive \u2192 Idle. Used by `WorkspaceManager._reconcile_status`. Tighter\nvalues track real-time work but flicker for agents that pause to think;\nlooser values smooth flicker but lag the badge. The original 5s default\nread every thinking/long-tool agent (no pane output for >5s is routine)\nas Idle \u2014 and the status blend demotes a WORKING transcript to IDLE on\nthat signal, so the flicker surfaced on every dashboard card.",
           "minimum": 1,
           "title": "Activity Threshold Seconds",
           "type": "integer"
@@ -1067,17 +1346,20 @@
         },
         "peek_history_lines": {
           "default": 500,
+          "description": "How many lines of tmux scrollback the pane snapshot captures (`-S -N`).\n\nThe live viewport is only ~40 rows, so without scrollback a long agent\nsession previews as just its current screen \u2014 earlier output is never\nread. This is the captured/over-the-wire bound, not a viewport: each\nclient (TUI rail, dashboard tile, webapp `<pre>`) tails or scrolls within\nit. Generous by default; raise to scroll further back, lower on slow links.",
           "minimum": 1,
           "title": "Peek History Lines",
           "type": "integer"
         },
         "peek_pane_refresh_seconds": {
           "default": 0.25,
+          "description": "Fast pane-only tick for the peek rail (`tmux capture-pane`).\n\nBounded subprocess work; keep low for snappier feel, raise on slow\nmachines or when watching a large pane.",
           "title": "Peek Pane Refresh Seconds",
           "type": "number"
         },
         "peek_stats_refresh_seconds": {
           "default": 3.0,
+          "description": "Slower full-peek tick (git ahead/behind, diff stats, dirty count).\n\nThese don't change at sub-second granularity; rerunning them on every\npane tick would burn IO without any user-visible benefit.",
           "title": "Peek Stats Refresh Seconds",
           "type": "number"
         },
@@ -1093,6 +1375,7 @@
         },
         "steer_settle_ms": {
           "default": 200,
+          "description": "Delay (ms) `tmux.send_text`/`send_keys` wait between typing steered\ntext and sending the submitting Enter. The TUI's bracketed paste\nbuffers everything landing inside its accumulation window as literal\ntext, so an Enter sent immediately after a paste can be coalesced into\nthat same window and read as a literal newline rather than a lone\nsubmitting keypress \u2014 only a lone `return` keypress submits. Waiting\nthis long first lets the window close before Enter lands. The same\nvalue also bounds the post-Enter verify-and-retry wait (one settle\nperiod is enough for the composer to render either the reset prompt or\nthe still-pasted text). 0 disables both delays.",
           "minimum": 0,
           "title": "Steer Settle Ms",
           "type": "integer"
@@ -1114,11 +1397,269 @@
         },
         "theme": {
           "default": "auto",
+          "description": "Theme id. `auto`/`dark`/`light` map to the built-in Grove themes;\nany other string selects a user override registered from\n`${user_config_dir}/grove/themes/*.toml`. Validated at app startup\nby `grove.tui.theme.resolve_theme_name` \u2014 unknown ids raise\n`ConfigError` then, not here, so the cascade can persist a name even\nbefore its TOML file exists.",
           "title": "Theme",
           "type": "string"
         }
       },
       "title": "UIConfig",
+      "type": "object"
+    },
+    "UsageCommandsConfig": {
+      "additionalProperties": false,
+      "description": "How a shell tool call's time is attributed to the command that led it.\n\nA `Bash` call carries a whole shell line, so the audit records the leading\ntop-level executable and reports *time in shell calls led by X* \u2014 never\n*time spent in X*, which no measurement here can support. These knobs\ncontrol how that executable's name is folded before it is ranked.",
+      "properties": {
+        "aliases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Executable names folded onto one row. The defaults fold only spellings\nof the SAME program.\n\nThree collapses a reader often expects are deliberately absent, because\neach would hide the cost it exists to reveal. `npm`/`npx` and `rg`/`grep`\nare different programs with different performance. And `uv run python \u2026`\nis credited to `uv`, not `python`, because uv's own dependency resolution\nis real time the invocation spent \u2014 folding it onto the interpreter\nreports that overhead as if the code had been running.",
+          "title": "Aliases",
+          "type": "object"
+        },
+        "basename": {
+          "default": true,
+          "description": "Fold an absolute path to its final component, so `/usr/bin/git` and\n`git` are one row rather than two spellings of one tool.",
+          "title": "Basename",
+          "type": "boolean"
+        },
+        "censored_at_ms": {
+          "default": 600000,
+          "description": "A measured duration at or above this is reported as CENSORED rather\nthan as cost. Real durations cluster tightly just above 600 s because that\nis the harness's own default timeout ceiling: the number says when the tool\ngave up, not how long the command needed. `0` disables the flag.",
+          "minimum": 0,
+          "title": "Censored At Ms",
+          "type": "integer"
+        },
+        "version_suffix_pattern": {
+          "default": "(?<=[A-Za-z])\\d+(?:\\.\\d+)+$",
+          "description": "Trailing version fragment stripped from an executable's name, so\n`python3.12` ranks as `python`. Deliberately requires a DOT: a bare\ntrailing digit run is part of the name far more often than it is a version\n(`base64`, `bzip2`, `sha256sum`), and stripping it invents tools that do\nnot exist. Set to something that matches nothing to disable.",
+          "title": "Version Suffix Pattern",
+          "type": "string"
+        }
+      },
+      "title": "UsageCommandsConfig",
+      "type": "object"
+    },
+    "UsageConfig": {
+      "additionalProperties": false,
+      "description": "The historical usage audit \u2014 indexing, pricing, quota and insights.\n\nReads the agent transcripts Grove can already reach and projects them into a\nprivate local cache so historical questions answer quickly. The cache holds\nmetrics and metadata only: no prompt, response, reasoning, tool-result body\nor credential is ever written to it. It is derived, so deleting it is always\nsafe and rebuilds on the next refresh.",
+      "properties": {
+        "busy_timeout_ms": {
+          "default": 5000,
+          "description": "How long a writer waits on SQLite's lock before ``database is locked``.\nUp to three processes can write ``usage.sqlite3`` \u2014 the daemon, the TUI's\nUsage screen and ``grove usage backfill`` \u2014 and SQLite's own default is 0,\nwhich raises on the first genuine cross-process collision instead of\nwaiting. ``0`` restores that immediate-raise default.",
+          "minimum": 0,
+          "title": "Busy Timeout Ms",
+          "type": "integer"
+        },
+        "commands": {
+          "$ref": "#/$defs/UsageCommandsConfig"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "insights": {
+          "$ref": "#/$defs/UsageInsightsConfig"
+        },
+        "max_breakdown_rows": {
+          "default": 50,
+          "description": "Rows returned per breakdown dimension before the long tail is dropped.\nThe response says when it truncated, so a capped list is never mistaken for\na complete one.",
+          "maximum": 500,
+          "minimum": 1,
+          "title": "Max Breakdown Rows",
+          "type": "integer"
+        },
+        "max_sessions_per_page": {
+          "default": 100,
+          "description": "Upper bound on one page of the session audit table.",
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Max Sessions Per Page",
+          "type": "integer"
+        },
+        "pricing": {
+          "$ref": "#/$defs/UsagePricingConfig"
+        },
+        "quota": {
+          "$ref": "#/$defs/UsageQuotaConfig"
+        },
+        "retention_days": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Drop indexed events older than this on refresh. ``null`` keeps\neverything \u2014 the transcripts are the source of truth either way.",
+          "title": "Retention Days"
+        }
+      },
+      "title": "UsageConfig",
+      "type": "object"
+    },
+    "UsageInsightsConfig": {
+      "additionalProperties": false,
+      "description": "Thresholds for the deterministic audit detectors.\n\nDefaults are conservative: a detector would rather stay silent than rank a\nnormal working pattern as a problem. Every one of these is config because a\nthreshold baked into code is policy nobody can disagree with.",
+      "properties": {
+        "concentration_share": {
+          "default": 0.5,
+          "description": "Share of tokens or active time one project, account or model must hold\nbefore concentration is worth naming.",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Concentration Share",
+          "type": "number"
+        },
+        "edit_churn_edits": {
+          "default": 4,
+          "description": "Mutations to one file inside a session before it is called churn.",
+          "minimum": 2,
+          "title": "Edit Churn Edits",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "min_occurrences": {
+          "default": 3,
+          "description": "How many times a pattern must recur before it is reported at all.",
+          "minimum": 2,
+          "title": "Min Occurrences",
+          "type": "integer"
+        },
+        "retry_window_seconds": {
+          "default": 300,
+          "description": "Repeats of the same failing call within this window count as one retry\nloop rather than as independent failures.",
+          "minimum": 1,
+          "title": "Retry Window Seconds",
+          "type": "integer"
+        },
+        "slow_operation_ms": {
+          "default": 60000,
+          "description": "A generation or tool call above this duration is a slow-operation\ncandidate \u2014 reported only where the evidence supports a real duration.",
+          "minimum": 1,
+          "title": "Slow Operation Ms",
+          "type": "integer"
+        }
+      },
+      "title": "UsageInsightsConfig",
+      "type": "object"
+    },
+    "UsagePricingConfig": {
+      "additionalProperties": false,
+      "description": "Model prices used to estimate cost from token counts.\n\nAn estimate is never presented as billed cash: a subscription session's\ntoken cost is hypothetical, and the wire says so. Where a provider reports\nits own per-request cost, that figure wins and these prices are unused.",
+      "properties": {
+        "currency": {
+          "default": "USD",
+          "description": "ISO 4217 code the prices below are quoted in.",
+          "title": "Currency",
+          "type": "string"
+        },
+        "models": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelPriceConfig"
+          },
+          "description": "Model id (as the tool reports it) to its price. Matched on exact id\nfirst, then on the longest configured id that prefixes it, so a dated\nrelease inherits its family's price without a new entry per snapshot.",
+          "title": "Models",
+          "type": "object"
+        }
+      },
+      "title": "UsagePricingConfig",
+      "type": "object"
+    },
+    "UsageQuotaConfig": {
+      "additionalProperties": false,
+      "description": "How subscription windows and billing posture are collected per account.\n\nGrove reads each tool's OWN credential store at refresh time and calls the\nendpoint that credential selects. It never copies a secret into Grove's\nconfig or database, never refreshes or rewrites a provider credential, and\nnever sends usage anywhere but that provider. A collection failure degrades\nthe one account it belongs to and never affects launching an agent.",
+      "properties": {
+        "burn_over_percent": {
+          "default": 100.0,
+          "description": "Projected usage at reset above which a window is called `over` \u2014 on\ncourse to exhaust before it resets. Held apart from `burn_tight_percent` so\n\"spending faster than I meant to\" and \"will run out\" stay two verdicts, and\nsettable above 100 for a workload that treats the limit as advisory.",
+          "exclusiveMinimum": 0,
+          "title": "Burn Over Percent",
+          "type": "number"
+        },
+        "burn_tight_percent": {
+          "default": 85.0,
+          "description": "Projected usage at reset, as a percentage of the window, above which a\nwindow is called `tight` rather than on track. Grove extrapolates the pace\nso far to the window's own reset and compares it here; a lower number asks\nto be warned earlier. No provider is contacted to work this out.",
+          "exclusiveMinimum": 0,
+          "title": "Burn Tight Percent",
+          "type": "number"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Collect quota for the explicitly selected ``profiles`` below.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Account id to display name, so an operator can tell two profiles apart\nwithout Grove ever storing an email address.",
+          "title": "Labels",
+          "type": "object"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Subscription profiles whose quota may be collected and displayed.\n\nEmpty is the safe default: Grove still indexes activity from every profile,\nbut shows no subscription quota until the operator lists roots under their\nprovider. The provider-keyed map cascades naturally and a higher layer can\nclear one provider with an empty list. Duplicate or symlinked roots collapse\nto one account id, so one subscription is never shown twice. Credentials\nare read in place and never copied into config or the usage database.",
+          "propertyNames": {
+            "enum": [
+              "claude_code",
+              "codex"
+            ]
+          },
+          "title": "Profiles",
+          "type": "object"
+        },
+        "retry_floor_seconds": {
+          "default": 120,
+          "description": "Wait after the FIRST auth or rate-limit failure before retrying that\naccount, doubling with each further failure. Last-good data keeps rendering,\nmarked stale, in the meantime. A provider that sends its own ``Retry-After``\nis obeyed instead whenever it asks for longer.",
+          "minimum": 10,
+          "title": "Retry Floor Seconds",
+          "type": "integer"
+        },
+        "retry_max_seconds": {
+          "default": 3600,
+          "description": "Ceiling on that doubling. A limit nobody has lifted is not worth asking\nabout more than once an hour, and a fixed floor against one is still a\nrequest every floor, forever \u2014 which is what a rate limiter reads as\ncontinuing to knock.",
+          "minimum": 60,
+          "title": "Retry Max Seconds",
+          "type": "integer"
+        },
+        "timeout_seconds": {
+          "default": 10.0,
+          "description": "Bound on each credential read and each provider request.",
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "ttl_seconds": {
+          "default": 900,
+          "description": "How long a good reading is served before a provider whose read costs a\nrequest is asked again.\n\nEvery Grove process on this host shares one probe ledger, so a dashboard, a\nterminal UI and a `grove usage` run inside one window together cost one\nrequest rather than three. Fifteen minutes still samples a five-hour window\ntwenty times and a weekly one hundreds of times, while pages are opened far\nmore often than either moves. A provider whose quota is a file its own tool\nalready wrote is not governed by this at all: there is no budget to protect\nthere, and holding its answer back would only make it older.",
+          "minimum": 30,
+          "title": "Ttl Seconds",
+          "type": "integer"
+        },
+        "window_seconds": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Window label to its length in seconds, for providers that publish a reset\ninstant but never say how long the window is.\n\nA burn rate needs a window START, and a start is only derivable from a reset\nplus a duration. Anthropic's usage endpoint reports the reset and no\nduration, so without this every Claude window reads `unknown` however much\nof it has been spent. Empty by default and consulted ONLY where the provider\nsaid nothing: Grove will not assert a boundary on a provider's behalf,\nbecause these have moved before and a guessed denominator produces a\nconfident projection off a number nobody published. Naming one here is you\nasserting it, which is a different thing from Grove assuming it.",
+          "title": "Window Seconds",
+          "type": "object"
+        }
+      },
+      "title": "UsageQuotaConfig",
       "type": "object"
     },
     "WebhookChannelConfig": {
@@ -1136,6 +1677,7 @@
             "minimum": 1,
             "type": "integer"
           },
+          "description": "Severity \u2192 priority on ntfy's 1-5 scale (5 = max, 3 = default), and bounded\nto it: ntfy **rejects** an out-of-range priority outright, so an unvalidated\nvalue here would silently drop the notification at the far end. A sink that\nreads the JSON itself can ignore the field \u2014 the raw ``severity`` string is in\nthe body too.",
           "propertyNames": {
             "enum": [
               "low",
@@ -1160,6 +1702,7 @@
         },
         "topic": {
           "default": "",
+          "description": "ntfy topic; included in the JSON body only when set (ntfy requires it).",
           "title": "Topic",
           "type": "string"
         },
@@ -1178,11 +1721,13 @@
       "properties": {
         "branch_prefix": {
           "default": "grove/",
+          "description": "Prefix prepended to every auto-created branch.",
           "title": "Branch Prefix",
           "type": "string"
         },
         "root_template": {
           "default": "${repo}/.worktrees",
+          "description": "Template for the worktree parent dir; supports ${repo}, ${repo_name}, ~.",
           "title": "Root Template",
           "type": "string"
         }
@@ -1214,6 +1759,7 @@
     },
     "builtin_agents": {
       "default": true,
+      "description": "Whether Grove's own agents (``claude``, ``codex``, ``shell``) are offered\nalongside the ones you declare.\n\n``true`` (the default) is the standing contract: the built-ins are literally layer\n0 of the cascade, so declaring ``agents`` REFINES them and can never hide one\nby omission. That is right for a first-run install and wrong for an operator\nwhose fleet runs its own curated profiles \u2014 the stock three still show up in\nevery picker with no way to say no. Flip this to ``false`` and the roster is\nexactly what your layers declare; name a built-in (even bare\n``{\"name\": \"claude\"}``) to opt it back in and inherit its full built-in spec\nthrough the same merge-by-name. Forward-compatible by construction: a built-in\nadded in a future Grove release stays hidden too, instead of appearing on\nupgrade.\n\nHiding an agent removes it from ``find_agent`` as well, so ``create`` rejects\nit on every surface (CLI/MCP/HTTP) and an existing workspace pinned to it can\nno longer resume/respawn \u2014 it gets the typed \"no longer present in config\"\nerror. That blast radius is the point: the roster is one list, and hiding an\nagent is the operator saying nothing should run it anymore.",
       "title": "Builtin Agents",
       "type": "boolean"
     },
@@ -1262,6 +1808,9 @@
     },
     "ui": {
       "$ref": "#/$defs/UIConfig"
+    },
+    "usage": {
+      "$ref": "#/$defs/UsageConfig"
     },
     "worktree": {
       "$ref": "#/$defs/WorktreeConfig"

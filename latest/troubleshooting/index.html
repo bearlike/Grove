@@ -998,6 +998,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1313,242 +1337,152 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="fixes-for-common-symptoms">Fixes for common symptoms</h2>
-<p>Common failures, their causes, and the fix.</p>
+<p>Each entry names what you see, why it happens, and what to do.</p>
 <h2 id="fresh-install-crashes-with-failed-to-initialise-configuration-handler">Fresh install crashes with <code>Failed to initialise configuration handler</code></h2>
-<p><strong>Symptom.</strong> Right after install, <code>grove</code> exits with a CRITICAL log line:
-<code>Failed to initialise configuration handler ...
-GROVE_CONFIG_LOCAL_FILE_PATH field required</code>. The traceback names
-<code>grove/entrypoints/base.py</code>.</p>
-<p><strong>Cause.</strong> Wrong package. PyPI's <code>grove</code> is an unrelated log-collection
-framework that <code>uv tool install grove</code> (or <code>pipx</code>, <code>pip</code>) installs
-instead.</p>
-<p><strong>Fix.</strong></p>
+<p><code>grove</code> exits with a CRITICAL line naming <code>GROVE_CONFIG_LOCAL_FILE_PATH</code> and
+<code>grove/entrypoints/base.py</code>. You installed the wrong package. PyPI's <code>grove</code> is
+an unrelated log-collection framework.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>tool<span class="w"> </span>uninstall<span class="w"> </span>grove
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;grove[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
 </span></code></pre></div>
-<p>Confirm with <code>grove version</code> and <code>grove debug</code> (config and state paths).</p>
+<p>Confirm with <code>grove version</code> and <code>grove debug</code>.</p>
 <h2 id="tmux-not-found"><code>tmux</code> not found</h2>
-<p><strong>Symptom.</strong> <code>TmuxError: tmux binary not found on PATH</code>, or the <abbr title="Terminal User Interface">TUI</abbr>
-refuses to launch.</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li><code>tmux</code> is not installed.</li>
-<li>Windows-native: the <abbr title="Terminal User Interface">TUI</abbr> needs tmux, and tmux only runs inside WSL2.</li>
-</ul>
-<p><strong>Fix.</strong></p>
-<ul>
-<li>Linux: <code>apt install tmux</code>. macOS: <code>brew install tmux</code>.</li>
-<li>Windows: install WSL2 (<code>wsl --install</code>) and run <code>grove</code> from inside.
-  <code>grove version</code>, <code>grove debug</code>, and <code>grove config show</code> still work.</li>
-</ul>
+<p><code>TmuxError: tmux binary not found on PATH</code>, or the <abbr title="Terminal User Interface">TUI</abbr> refuses to launch.
+Either tmux is missing, or you are on Windows, where it only runs inside
+WSL2.</p>
+<p>Install with <code>apt install tmux</code> or <code>brew install tmux</code>. On Windows run
+<code>wsl --install</code> and launch <code>grove</code> from inside. The read-only subcommands
+(<code>grove version</code>, <code>grove debug</code>, <code>grove config show</code>) work either way.</p>
 <h2 id="worktree-creation-fails">Worktree creation fails</h2>
-<p><strong>Symptom.</strong> <code>BranchError</code>, <code>BranchConflict</code>, or <code>BranchAlreadyCheckedOut</code>.</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li>Branch already exists locally, checked out elsewhere.</li>
-<li>Branch name conflicts with an existing path or ref.</li>
-<li><code>git worktree add</code> failed for another reason: a lock file or permissions.</li>
-</ul>
-<p><strong>Fix.</strong></p>
-<ul>
-<li><code>git worktree list</code> confirms the branch is not attached.
-  <code>git worktree prune</code> clears one deleted from disk without pruning.</li>
-<li>Permission errors: verify <code>worktree.root_template</code>'s parent is writable.</li>
-<li><em>Track remote</em> failed: <code>git fetch &amp;&amp; git branch -r</code> confirms the
-  remote branch exists.</li>
-</ul>
+<p><code>BranchError</code>, <code>BranchConflict</code>, or <code>BranchAlreadyCheckedOut</code>. The branch
+already exists and is checked out elsewhere, its name collides with an
+existing path or ref, or <code>git worktree add</code> hit a lock file or permission
+problem.</p>
+<p><code>git worktree list</code> confirms the branch is not attached, and
+<code>git worktree prune</code> clears one deleted from disk. For permission errors,
+check that <code>worktree.root_template</code>'s parent is writable. If <em>Track remote</em>
+failed, <code>git fetch &amp;&amp; git branch -r</code> confirms the remote branch exists.</p>
 <h2 id="init-script-fails-or-times-out">Init script fails or times out</h2>
-<p><strong>Symptom.</strong> Workspace lands in <code>ERROR</code> (<code>fail_fast: false</code>, outcome
-FAILED or TIMEOUT) or rolls back entirely (<code>fail_fast: true</code>).</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li>The script exited non-zero, ran past <code>init_script.timeout_seconds</code>,
-  or its <code>shell</code> (bash, sh, zsh) is not installed.</li>
-<li>The daemon's <code>systemd --user</code> unit predates Grove's PATH fix,
-  resolving stale binaries over your pyenv, nvm, or asdf toolchain.</li>
-</ul>
-<p><strong>Fix.</strong></p>
-<ul>
-<li>A <code>fail_fast</code> failure keeps the init log, ending in the stderr that
-  survives rollback.</li>
-<li>Stale daemon PATH: re-run <code>make systemd</code>
-  (<code>packaging/systemd/README.md</code>), then
-  <code>systemctl --user restart grove-daemon</code>.</li>
-<li>Attach the <code>init</code> tmux window before it completes, or resume with
-  <code>run_on_resume: true</code>.</li>
-<li>Reproduce standalone: <code>cd /tmp/test &amp;&amp; bash -lc "$(jq -r '.init_script.inline'
-  /path/to/.grove/config.json)"</code>. Bump <code>timeout_seconds</code> if slow.</li>
-</ul>
-<h2 id="pause-refuses-on-a-dirty-worktree">Pause refuses on a dirty worktree</h2>
-<p><strong>Symptom.</strong> <code>DirtyWorktreeError</code> flashed on the status bar. The
-workspace stays RUNNING.</p>
-<p><strong>Cause.</strong> <code>pause</code> removes the worktree directory, which would
-silently lose uncommitted work.</p>
-<p><strong>Fix.</strong> Switch to the <code>shell</code> window (<code>Ctrl-B 0/1</code>), commit or stash
-(<code>git commit -am '…'</code> or <code>git stash push -u</code>), detach, then press
-<span class="keys"><kbd class="key-p">P</kbd></span> again.</p>
-<h2 id="agent-window-auto-closed-workspace-shows-offline">Agent window auto-closed, workspace shows OFFLINE</h2>
-<p><strong>Symptom.</strong> A workspace that was ACTIVE flips to OFFLINE. The
-contextual footer offers <span class="keys"><kbd class="key-o">O</kbd></span> (respawn) and <span class="keys"><kbd class="key-k">K</kbd></span> (kill) only.</p>
-<p><strong>Cause.</strong> The tmux session vanished: a terminal restart, host reboot,
-<code>tmux kill-server</code>, or the agent exiting with nothing left to hold the
-window.</p>
-<p><strong>Fix.</strong> Press <span class="keys"><kbd class="key-o">O</kbd></span> to respawn. Grove rebuilds the tmux session with
-the same windows and command. If the worktree is also gone, the
-workspace is ORPHANED and only <code>kill</code> remains.</p>
-<h2 id="config-file-is-not-loaded">Config file is not loaded</h2>
-<p><strong>Symptom.</strong> Changes to <code>.grove/config.json</code> do not take effect.
-<code>grove config show</code> does not reflect them.</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li>Wrong cascade layer: a user-layer setting the project layer overrides.</li>
-<li>JSON syntax error. Grove failed validation silently and fell back
-  to defaults.</li>
-<li>File at the wrong path.</li>
-</ul>
-<p><strong>Fix.</strong></p>
-<ul>
-<li><code>grove debug</code> prints every path Grove checks and confirms
-  <code>config_loaded: true</code>.</li>
-<li><code>grove config show</code> shows the merged result and which layer wins.</li>
-<li>See <a href="../features-cascade/">configuration cascade</a>.</li>
-</ul>
-<h2 id="json-schema-autocomplete-not-working">JSON Schema autocomplete not working</h2>
-<p><strong>Symptom.</strong> The IDE does not autocomplete <code>.grove/config.json</code> keys.</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li>The <code>$schema</code> path does not resolve, or the schema file has not
-  been written yet (fresh install).</li>
-<li>The IDE does not read JSON Schema from <code>$schema</code>.</li>
-</ul>
-<p><strong>Fix.</strong></p>
-<ul>
-<li><code>grove config schema</code> rewrites
-  <code>${user_config_dir}/grove/config.schema.json</code>.</li>
-<li>Use an absolute <code>$schema</code> path. A relative one breaks across worktrees.</li>
-<li>Confirm the IDE reads JSON Schema: built in for VS Code and
-  JetBrains, <code>redhat.vscode-yaml</code> otherwise.</li>
-</ul>
-<h2 id="workspace-shows-orphaned">Workspace shows ORPHANED</h2>
-<p><strong>Symptom.</strong> <code>kill</code> is the only available action.</p>
-<p><strong>Cause.</strong> The worktree directory was removed from disk while the
-workspace was still running, and <code>respawn</code> needs one to rebuild from.</p>
-<p><strong>Fix.</strong> <code>kill</code> removes the workspace and tears down any remaining
-tmux session. If the branch still exists, create a fresh workspace
-against it via the create modal's <em>Existing local</em> path.</p>
-<h2 id="workspace-shows-a-blank-transcript-wrong-session">Workspace shows a blank transcript / wrong session</h2>
-<p><strong>Symptom.</strong> A workspace's transcript is empty, or replays a conversation
-that is not the one running in its pane.</p>
-<p><strong>Cause.</strong> The Grove-minted session died and a successor started in the
-same directory, but the pane-verified adoption gate rejected it, since
-the transcript's birth and the live pane disagreed. See
-<a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a> and
-<a href="../features-activity/#adoption-and-recovery">Session adoption and recovery</a>.</p>
-<p><strong>Fix.</strong></p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>WORKSPACE<span class="w"> </span>SESSION
+<p>The workspace lands in <code>ERROR</code> under <code>fail_fast: false</code>, or rolls back
+entirely under <code>fail_fast: true</code>. The script exited non-zero, ran past
+<code>init_script.timeout_seconds</code>, or its <code>shell</code> is not installed. A daemon
+unit predating Grove's PATH fix also resolves stale binaries over your
+pyenv, nvm, or asdf toolchain.</p>
+<p>A <code>fail_fast</code> failure keeps the init log, ending in the stderr that
+survives rollback. For a stale daemon PATH, re-run <code>make systemd</code> and
+<code>systemctl --user restart grove-daemon</code>. Attach the <code>init</code> tmux window
+before it completes, or resume with <code>run_on_resume: true</code>. To reproduce
+standalone:</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>/tmp/test<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>bash<span class="w"> </span>-lc<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.init_script.inline&#39;</span><span class="w"> </span>/path/to/.grove/config.json<span class="k">)</span><span class="s2">&quot;</span>
 </span></code></pre></div>
-<p>Or the <abbr title="Terminal User Interface">TUI</abbr>'s <span class="keys"><kbd class="key-x">X</kbd></span> key, or the web dashboard's session-picker remap
-picker.</p>
+<h2 id="pause-refuses-on-a-dirty-worktree">Pause refuses on a dirty worktree</h2>
+<p><code>DirtyWorktreeError</code> flashes on the status bar and the workspace stays
+RUNNING, because <code>pause</code> removes the worktree directory and would silently
+lose uncommitted work.</p>
+<p>Switch to the <code>shell</code> window (<code>Ctrl-B 0/1</code>), commit or stash, detach, then
+press <span class="keys"><kbd class="key-p">P</kbd></span> again.</p>
+<h2 id="agent-window-auto-closed-workspace-shows-offline">Agent window auto-closed, workspace shows OFFLINE</h2>
+<p>An ACTIVE workspace flips to OFFLINE and the footer offers only <span class="keys"><kbd class="key-o">O</kbd></span> and
+<span class="keys"><kbd class="key-k">K</kbd></span>. The tmux session vanished: a terminal restart, a host reboot,
+<code>tmux kill-server</code>, or the agent exiting.</p>
+<p>Press <span class="keys"><kbd class="key-o">O</kbd></span> to respawn. Grove rebuilds the session with the same windows
+and command. If the worktree is gone too, the workspace is ORPHANED and
+only <code>kill</code> remains.</p>
+<h2 id="config-file-is-not-loaded">Config file is not loaded</h2>
+<p>Changes to <code>.grove/config.json</code> do not take effect and <code>grove config show</code>
+does not reflect them. Usually a higher cascade layer overrides yours, a
+JSON syntax error sent Grove back to defaults, or the file sits at the
+wrong path.</p>
+<p><code>grove debug</code> prints every path Grove checks and confirms
+<code>config_loaded: true</code>. <code>grove config show</code> shows the merged result and
+which layer wins. See the <a href="../features-cascade/">configuration cascade</a>.</p>
+<h2 id="json-schema-autocomplete-not-working">JSON Schema autocomplete not working</h2>
+<p>The IDE does not autocomplete <code>.grove/config.json</code>. Either <code>$schema</code> does not
+resolve, the schema file has not been written yet, or the IDE does not read JSON
+Schema at all.</p>
+<p><code>grove config schema</code> rewrites <code>${user_config_dir}/grove/config.schema.json</code>. Use
+an absolute <code>$schema</code> path, since a relative one breaks across worktrees. VS Code
+and JetBrains read JSON Schema natively; elsewhere install <code>redhat.vscode-yaml</code>.</p>
+<h2 id="workspace-shows-orphaned">Workspace shows ORPHANED</h2>
+<p><code>kill</code> is the only action offered, because the worktree directory was removed
+while the workspace was running and <code>respawn</code> needs one to rebuild from.</p>
+<p><code>kill</code> removes the workspace and tears down any remaining tmux session. If the
+branch survives, create a fresh workspace against it through the create modal's
+<em>Existing local</em> path.</p>
+<h2 id="workspace-shows-a-blank-transcript-or-the-wrong-session">Workspace shows a blank transcript or the wrong session</h2>
+<p>The transcript is empty, or replays a conversation that is not the one in the
+pane. The Grove-minted session died and a successor started in the same
+directory, but the pane-verified adoption gate rejected it because the
+transcript's birth and the live pane disagreed. See
+<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a> and
+<a href="../features-activity/#adoption-and-recovery">session adoption</a>.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>WORKSPACE<span class="w"> </span>SESSION
+</span></code></pre></div>
+<p>The <abbr title="Terminal User Interface">TUI</abbr>'s <span class="keys"><kbd class="key-x">X</kbd></span> key and the dashboard's session picker do the same.</p>
 <h2 id="a-grove-update-killed-my-other-tmux-sessions">A Grove update killed my other tmux sessions</h2>
-<p><strong>Symptom.</strong> Restarting or updating Grove's daemon tears down every
-tmux session on the box, not just Grove's own.</p>
-<p><strong>Cause.</strong> The <code>grove-daemon</code> unit predates the <code>KillMode=process</code> fix.
-The daemon forks the shared default tmux server into its own cgroup,
-and systemd's default <code>KillMode=control-group</code> kills that whole
-cgroup, tmux included, on every restart.</p>
+<p>Restarting the daemon tears down every tmux session on the box. The
+<code>grove-daemon</code> unit predates the <code>KillMode=process</code> fix: the daemon forks the
+shared tmux server into its own cgroup, and systemd's default
+<code>KillMode=control-group</code> kills that whole cgroup on every restart.</p>
 <div class="admonition warning">
 <p class="admonition-title">Check before you restart</p>
-<p>An unfixed unit makes every daemon restart destructive to unrelated
-tmux sessions.</p>
+<p>An unfixed unit makes every daemon restart destructive to unrelated tmux
+sessions.</p>
 </div>
-<p><strong>Fix.</strong></p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>systemd
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>systemctl<span class="w"> </span>--user<span class="w"> </span>daemon-reload
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>systemd
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>systemctl<span class="w"> </span>--user<span class="w"> </span>daemon-reload
 </span></code></pre></div>
-<p>See <a href="https://github.com/bearlike/Grove/blob/c20cae9d/packaging/CLAUDE.md" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>packaging</span></a>.</p>
+<p>See <a href="https://github.com/bearlike/Grove/blob/010d5ce7/packaging/CLAUDE.md" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>packaging</span></a>.</p>
 <h2 id="no-agent-state-on-the-dashboard">No agent state on the dashboard</h2>
-<p><strong>Symptom.</strong> A workspace shows on the <a href="../features-activity/">Activity
-Dashboard</a> with no agent state, turn or token
-counts, or session history, only the active/idle signal.</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li>No <code>kind</code> set, or <code>kind: "generic"</code>: launches, never introspected.</li>
-<li>No adapter for the <code>kind</code>. Grove ships adapters for Claude Code,
-  Codex <abbr title="Command Line Interface">CLI</abbr>, and remote Mewbo. Anything else gets terminal-output
-  activity only.</li>
-</ul>
-<p><strong>Fix.</strong> Set <code>kind</code> to <code>claude_code</code>, <code>codex</code>, or <code>mewbo</code> and confirm
-with <code>grove config show</code>. See
+<p>A workspace appears on the <a href="../features-activity/">Activity Dashboard</a> with only
+the active/idle signal, no turn or token counts and no session history. Either
+<code>kind</code> is unset or <code>generic</code>, which launches without introspection, or there is
+no adapter for the <code>kind</code> you named. Grove ships adapters for Claude Code, Codex
+<abbr title="Command Line Interface">CLI</abbr>, and remote Mewbo.</p>
+<p>Set <code>kind</code> to <code>claude_code</code>, <code>codex</code>, or <code>mewbo</code> and confirm with
+<code>grove config show</code>. See
 <a href="../configure-agents/#telling-grove-what-kind-of-agent-it-is">Agents</a>.
-<code>grove sessions list</code> finds sessions regardless of <code>kind</code>.</p>
+<code>grove sessions list</code> finds sessions whatever the <code>kind</code>.</p>
 <h2 id="web-dashboard-shows-unreachable">Web dashboard shows "unreachable"</h2>
-<p><strong>Symptom.</strong> The dashboard loads but the status bar reads "unreachable",
-or no workspaces ever appear.</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li>The daemon is not running, or is bound to a different host or port
-  than the web app expects.</li>
-<li>A systemd-hosted web app points at a stopped daemon, or a stale
-  <code>GROVE_DAEMON_URL</code>.</li>
-</ul>
-<p><strong>Fix.</strong></p>
-<ul>
-<li>Start the daemon: <code>grove daemon serve</code> (default port <code>7421</code>).</li>
-<li>Probe it: <code>curl http://127.0.0.1:7421/healthz</code> should return
-  <code>{"status":"ok",…}</code>.</li>
-<li>Non-default daemon: set <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local</code>
-  (or the unit's <code>DAEMON_PORT</code> / <code>DAEMON_URL</code> variables) and restart.</li>
-<li>See <a href="../use-webapp/">web dashboard</a>.</li>
-</ul>
+<p>The dashboard loads but the status bar reads "unreachable", or no workspaces ever
+appear. The daemon is not running, is bound to a different host or port than the
+web app expects, or <code>GROVE_DAEMON_URL</code> is stale.</p>
+<p>Start it with <code>grove daemon serve</code> (default port <code>7421</code>) and probe with
+<code>curl http://127.0.0.1:7421/healthz</code>, which returns <code>{"status":"ok",…}</code>. For a
+non-default daemon, set <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local</code> or the unit's
+<code>DAEMON_PORT</code> / <code>DAEMON_URL</code>, then restart. See
+<a href="../use-webapp/">web dashboard</a>.</p>
 <h2 id="pairing-code-expired-or-a-device-keeps-asking-to-pair">Pairing code expired, or a device keeps asking to pair</h2>
-<p><strong>Symptom.</strong> The browser shows "code expired", or a previously paired
-device is bounced back to the pairing screen.</p>
-<p><strong>Causes.</strong></p>
-<ul>
-<li>A pairing code lives five minutes. Approving later fails.</li>
-<li>The session was revoked with <code>grove auth revoke</code>, or its thirty-day
-  window lapsed unused.</li>
-</ul>
-<p><strong>Fix.</strong></p>
-<ul>
-<li>Request and approve a fresh code promptly: the <abbr title="Terminal User Interface">TUI</abbr> modal, or
-  <code>grove auth pending</code> then <code>grove auth approve &lt;id&gt;</code>.</li>
-<li>Tidy sessions with <code>grove auth sessions</code> and <code>grove auth revoke</code>.</li>
-<li>See <a href="../use-auth/">authentication &amp; pairing</a>.</li>
-</ul>
+<p>The browser shows "code expired", or a paired device is bounced back to the
+pairing screen. A code lives five minutes, and a session ends when
+<code>grove auth revoke</code> runs or its thirty-day window lapses unused.</p>
+<p>Request and approve a fresh code promptly, through the <abbr title="Terminal User Interface">TUI</abbr> modal or
+<code>grove auth pending</code> then <code>grove auth approve &lt;id&gt;</code>. Tidy up with
+<code>grove auth sessions</code> and <code>grove auth revoke</code>. See
+<a href="../use-auth/">authentication and pairing</a>.</p>
 <h2 id="old-ui-or-behavior-after-an-update">Old UI or behavior after an update</h2>
-<p><strong>Symptom.</strong> You pulled new code or upgraded Grove, but a surface still
-shows the old version: a new endpoint 404s, the <abbr title="Terminal User Interface">TUI</abbr> looks unchanged, or
-the dashboard lacks a feature you merged.</p>
-<p><strong>Cause.</strong> Grove runs as three long-lived surfaces, each refreshing on
-its own. Updating the package does not restart what is running.</p>
-<p><strong>Fix.</strong></p>
-<ul>
-<li><strong><abbr title="Command Line Interface">CLI</abbr> and <abbr title="Terminal User Interface">TUI</abbr>.</strong> Relaunch <code>grove</code>.</li>
-<li><strong>Daemon.</strong> <code>systemctl --user restart grove-daemon</code> (or stop and
-  re-run <code>grove daemon serve</code>).</li>
-<li><strong>Web dashboard.</strong> Rebuild and restart it. The prod server serves a
-  pre-built bundle, so new routes stay silently absent otherwise.</li>
-</ul>
-<p>A checkout install is editable, so reinstall only when dependencies
-change.</p>
+<p>A surface still shows the old version after you pull: a new endpoint 404s, the
+<abbr title="Terminal User Interface">TUI</abbr> looks unchanged, or the dashboard lacks a feature you merged. Grove runs as
+several long-lived surfaces and updating the package does not restart what is
+already running.</p>
+<p>Relaunch <code>grove</code> for the <abbr title="Command Line Interface">CLI</abbr> and <abbr title="Terminal User Interface">TUI</abbr>. Restart the daemon with
+<code>systemctl --user restart grove-daemon</code>. Rebuild the dashboard and then restart
+it, since the production server serves a pre-built bundle and new routes stay
+silently absent otherwise. A checkout install is editable, so reinstall only when
+dependencies change.</p>
 <h2 id="grove-mcp-reports-no-module-named-mcp"><code>grove-mcp</code> reports <code>No module named 'mcp'</code></h2>
-<p><strong>Symptom.</strong> The <abbr title="Model Context Protocol">MCP</abbr> server fails to start with <code>ModuleNotFoundError: No
-module named 'mcp'</code>.</p>
-<p><strong>Cause.</strong> The <abbr title="Model Context Protocol">MCP</abbr> <abbr title="Software Development Kit">SDK</abbr> is optional. The lean <code>grove[daemon]</code> install
-omits it, so the always-present <code>grove-mcp</code> script cannot import it.</p>
-<p><strong>Fix.</strong> Install <code>grove[mcp]</code> or <code>grove[all]</code>, for example
-<code>uv tool install --reinstall "grove[all] @
-git+https://github.com/bearlike/Grove"</code>. The <abbr title="Model Context Protocol">MCP</abbr> client respawns the
-server per connection, so no restart is needed once installed. See
-<a href="../use-mcp/"><abbr title="Model Context Protocol">MCP</abbr> server</a>.</p>
+<p>The <abbr title="Model Context Protocol">MCP</abbr> server fails to start. The <abbr title="Software Development Kit">SDK</abbr> is optional and the lean <code>grove[daemon]</code>
+install omits it, leaving the always-present <code>grove-mcp</code> script unable to import
+it.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span>--reinstall<span class="w"> </span><span class="s2">&quot;grove[all] @ git+https://github.com/bearlike/Grove&quot;</span>
+</span></code></pre></div>
+<p>The <abbr title="Model Context Protocol">MCP</abbr> client respawns the server per connection, so nothing needs restarting
+once it is installed. See <a href="../use-mcp/"><abbr title="Model Context Protocol">MCP</abbr> server</a>.</p>
 <h2 id="windows-native-limitations">Windows-native limitations</h2>
-<p><strong>Symptom.</strong> <code>grove</code> runs on Windows but the <abbr title="Terminal User Interface">TUI</abbr> does not show
-workspaces, or fails on tmux operations.</p>
-<p><strong>Cause.</strong> tmux does not run natively on Windows.</p>
-<p><strong>Fix.</strong> Install WSL2 and run <code>grove</code> from inside it. The
-Windows-native build still supports the read-only subcommands (<code>grove
-version</code>, <code>grove config show</code>, <code>grove debug</code>).</p>
+<p><code>grove</code> runs but the <abbr title="Terminal User Interface">TUI</abbr> shows no workspaces, or fails on tmux operations,
+because tmux does not run natively on Windows.</p>
+<p>Install WSL2 and run <code>grove</code> from inside it. The Windows-native build still
+supports the read-only subcommands.</p>
   </div>
   
   <script>
@@ -2191,6 +2125,30 @@ version</code>, <code>grove config show</code>, <code>grove debug</code>).</p>
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2532,11 +2490,11 @@ version</code>, <code>grove config show</code>, <code>grove debug</code>).</p>
             </a>
             
             
-            <a href="#workspace-shows-a-blank-transcript-wrong-session"
+            <a href="#workspace-shows-a-blank-transcript-or-the-wrong-session"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#workspace-shows-a-blank-transcript-wrong-session');">
-                Workspace shows a blank transcript / wrong session
+                onClick="deferSetActiveTocLink('#workspace-shows-a-blank-transcript-or-the-wrong-session');">
+                Workspace shows a blank transcript or the wrong session
             </a>
             
             

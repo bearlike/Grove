@@ -998,6 +998,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1312,16 +1336,11 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <h2 id="every-region-and-key">Every region and key</h2>
-<p>The <abbr title="Terminal User Interface">TUI</abbr> is the primary way to drive Grove. This page names every region and
-key.</p>
+    <h2 id="screen-anatomy">Screen anatomy</h2>
 <video preload="auto" poster="../img/posters/terminal-still.png">
   <source src="../videos/1-grove-terminal.mp4" type="video/mp4" />
 </video>
 
-<h2 id="screen-anatomy">Screen anatomy</h2>
-<p>The list screen has three vertical zones, a status bar, and a contextual
-footer.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI showing four workspaces in mixed states with a live peek rail" /></div>
   <figcaption class="ms-shot__body">Header, filter bar (slash-toggled), workspace list left, peek rail right, status bar and footer at bottom.</figcaption>
@@ -1329,24 +1348,18 @@ footer.</p>
 
 <ul>
 <li><strong>Header.</strong> Repo name, count chip.</li>
-<li><strong>Filter bar.</strong> Hidden until <span class="keys"><kbd class="key-slash">/</kbd></span>, narrows by title, branch, or agent.
+<li><strong>Filter bar.</strong> Hidden until <span class="keys"><kbd class="key-slash">/</kbd></span>, narrows title, branch, agent.
   <span class="keys"><kbd class="key-escape">Esc</kbd></span> clears.</li>
-<li><strong>Workspace list.</strong> Left zone, one card per row: status glyph, title,
-  agent, branch, a stat strip (ahead, behind, dirty) in polarity-aware
-  colours, and, when readable, the agent's state (<code>▶ working</code>,
-  <code>◑ waiting</code>) and reported <a href="../features-status/#the-third-axis-task-phase">task phase</a>.</li>
-<li><strong>Peek rail.</strong> Right zone: a summary card (branch, stats, age, commits,
-  and when live, model, turn/reply/tool-call counts, tokens, agent state)
-  above a two-tab preview, transcript (grouped turns) and terminal (live
-  tmux, four ticks a second). Detail on <a href="../features-peek/">the peek rail</a>.</li>
-<li><strong>Status bar.</strong> Fleet left, workspace right. Colour tracks state: clay
-  default, amber on attention, neutral when empty.</li>
-<li><strong>Contextual footer.</strong> Global keys left, selection keys right.</li>
+<li><strong>Workspace list.</strong> Row: status glyph, title, agent, branch, stat strip,
+  state (<code>▶ working</code>, <code>◑ waiting</code>), and
+  <a href="../features-status/#the-third-axis-task-phase">task phase</a>.</li>
+<li><strong>Peek rail.</strong> Summary, then linked tickets, then transcript and terminal
+  tabs (<a href="../features-peek/">detail</a>).</li>
+<li><strong>Status bar.</strong> Fleet left, workspace right, coloured by state.</li>
+<li><strong>Footer.</strong> Global and selection keys.</li>
 </ul>
 <h2 id="keybindings">Keybindings</h2>
-<p>Global keys apply at any time. Selection keys act on the highlighted
-workspace and dim when they do not fit its status.</p>
-<p>Global keys:</p>
+<p>Global keys work anytime. Selection keys act on the highlighted row.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1361,15 +1374,15 @@ workspace and dim when they do not fit its status.</p>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-d">D</kbd></span></td>
-<td>Open the <a href="../features-activity/">Activity Dashboard</a>, the cross-project wall.</td>
+<td>Open the <a href="../features-activity/">Activity Dashboard</a>.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span></td>
-<td>Switch project, jump to another repository the daemon knows.</td>
+<td>Switch project.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-r">R</kbd></span></td>
-<td>Refresh the list and peek rail.</td>
+<td>Refresh.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-slash">/</kbd></span></td>
@@ -1377,7 +1390,7 @@ workspace and dim when they do not fit its status.</p>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-question">?</kbd></span></td>
-<td>Help modal, an on-screen reference for every key.</td>
+<td>Help modal, key reference.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-q">Q</kbd></span></td>
@@ -1385,7 +1398,6 @@ workspace and dim when they do not fit its status.</p>
 </tr>
 </tbody>
 </table></div>
-<p>Selection keys:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1396,59 +1408,55 @@ workspace and dim when they do not fit its status.</p>
 <tbody>
 <tr>
 <td><span class="keys"><kbd class="key-enter">Enter</kbd></span> / <span class="keys"><kbd class="key-a">A</kbd></span></td>
-<td>Attach to the selected workspace.</td>
+<td>Attach.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-m">M</kbd></span></td>
-<td>Send a message, steer the running agent without attaching.</td>
+<td>Steer without attaching.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-e">E</kbd></span></td>
-<td>Edit the workspace's title and description.</td>
+<td>Edit title and description.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-s">S</kbd></span></td>
-<td>Browse the workspace's recorded agent sessions.</td>
+<td>Browse recorded sessions.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-x">X</kbd></span></td>
-<td>Remap session. Re-point at a live or recovered session, e.g. after <code>/clear</code> rotates the id. See <a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/tui/screens/remap_session.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>screens/remap_session.py</span></a>.</td>
+<td>Remap to a live or recovered session, e.g. after <code>/clear</code> rotates the id (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/tui/screens/remap_session.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>remap_session.py</span></a>).</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-p">P</kbd></span></td>
-<td>Pause, removes the worktree, keeps the branch.</td>
+<td>Pause, removes worktree, keeps branch.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-r">R</kbd></span></td>
-<td>Resume, recreates the worktree from the branch and restarts tmux.</td>
+<td>Resume, recreates worktree, restarts tmux.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-o">O</kbd></span></td>
-<td>Respawn an OFFLINE workspace whose tmux session vanished.</td>
+<td>Respawn an OFFLINE workspace.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-k">K</kbd></span></td>
-<td>Kill, removes the worktree and tmux session, deletes the branch by default for Grove-created branches.</td>
+<td>Kill, removes worktree and tmux, deletes Grove-created branches.</td>
 </tr>
 </tbody>
 </table></div>
-<p>A PAUSED row dims attach and pause, OFFLINE lights respawn, ORPHANED leaves
-only kill. The rule lives in one function in
-<a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/tui/screens/list.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>src/grove/tui/screens/list.py</span></a>, so the footer never drifts from what
-is runnable.</p>
+<p>PAUSED dims attach and pause, OFFLINE lights respawn, ORPHANED leaves only
+kill (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/tui/screens/list.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>list.py</span></a>).</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-filter.svg" alt="Filter bar narrowed to workspaces matching "auth"" /></div>
   <figcaption class="ms-shot__body">Filter bar in action, matched substring-style across title, branch, and agent.</figcaption>
 </figure>
 
-<h2 id="the-activity-dashboard-screen">The Activity Dashboard screen</h2>
-<p>Press <span class="keys"><kbd class="key-d">D</kbd></span> for the Activity Dashboard: every workspace across every
-repository the daemon knows, one tile each, grouped by project.</p>
+<h2 id="activity-dashboard">Activity Dashboard</h2>
+<p>Press <span class="keys"><kbd class="key-d">D</kbd></span>: every workspace, one tile each, grouped by project.</p>
 <ul>
-<li>Tiles size by urgency: quiet is a compact three-row tile, working,
-  waiting, blocked, or erroring gets a taller tile with a live terminal tail.</li>
-<li>Each tile carries branch, agent and model, diff and ahead-behind counts,
-  turn and token totals, and the agent's one-line summary.</li>
+<li>Tiles size by urgency: quiet is compact, working, waiting, blocked, or
+  erroring gets a taller tile with a live terminal tail.</li>
+<li>Each tile: branch, agent, model, diff, ahead-behind, tokens, summary.</li>
 </ul>
 <div class="table-wrapper"><table>
 <thead>
@@ -1460,11 +1468,11 @@ repository the daemon knows, one tile each, grouped by project.</p>
 <tbody>
 <tr>
 <td><span class="keys"><kbd class="key-l">L</kbd></span></td>
-<td>Cycle the lens: all, needs attention, active.</td>
+<td>Cycle lens: all, needs attention, active.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-g">G</kbd></span></td>
-<td>Toggle grouping: by project, or one flat wall.</td>
+<td>Toggle grouping: by project, or flat.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-r">R</kbd></span></td>
@@ -1476,51 +1484,42 @@ repository the daemon knows, one tile each, grouped by project.</p>
 </tr>
 </tbody>
 </table></div>
-<p>Tile meaning and attention sorting are on
-<a href="../features-activity/">agent activity and sessions</a>.</p>
-<h2 id="the-project-switcher">The project switcher</h2>
-<p>Press <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span> to hop repositories without leaving the <abbr title="Terminal User Interface">TUI</abbr>.</p>
+<p>Tile meaning: <a href="../features-activity/">activity and sessions</a>.</p>
+<h2 id="project-switcher">Project switcher</h2>
+<p>Press <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span> to hop repositories.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-project-switcher.svg" alt="Project switcher listing two repositories with workspace counts and a current tag" /></div>
   <figcaption class="ms-shot__body">Project switcher. Type to narrow, arrows to move, <code>Enter</code> to switch, current repo tagged.</figcaption>
 </figure>
 
 <ul>
-<li>Lists every known repository with its workspace count, current one
-  tagged.</li>
-<li>Filter input holds focus, arrows move the highlight, <span class="keys"><kbd class="key-enter">Enter</kbd></span> switches,
-  <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
-<li>A cheap read keeps it instant across many repos. Navigation chooser, not
-  the dashboard. For live status, <span class="keys"><kbd class="key-d">D</kbd></span>.</li>
+<li>Lists every repository with its workspace count. Filter holds focus,
+  <span class="keys"><kbd class="key-enter">Enter</kbd></span> switches, <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
+<li>A cheap, instant chooser, not a dashboard. <span class="keys"><kbd class="key-d">D</kbd></span> for live status.</li>
 </ul>
 <h2 id="steering-an-agent">Steering an agent</h2>
-<p>Press <span class="keys"><kbd class="key-m">M</kbd></span>, type a follow-up, and press <span class="keys"><kbd class="key-enter">Enter</kbd></span> to steer the selected
-workspace's agent without attaching.</p>
+<p>Press <span class="keys"><kbd class="key-m">M</kbd></span>, type a follow-up, <span class="keys"><kbd class="key-enter">Enter</kbd></span> to steer.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-steer.svg" alt="Send-message modal with a follow-up typed to a running agent" /></div>
   <figcaption class="ms-shot__body">Steer modal. A quick redirect to a running agent, no attach required.</figcaption>
 </figure>
 
 <ul>
-<li>Delivery follows the agent: local agents get it typed into their tmux
-  pane, remote agents such as Mewbo get it over the remote <abbr title="Application Programming Interface">API</abbr>. Either way
-  you stay on the list.</li>
-<li><span class="keys"><kbd class="key-m">M</kbd></span> lights up only for a running agent, and Grove flashes the reason
-  rather than failing silently if it cannot take the message.</li>
+<li>Delivery follows the agent: local gets it typed into tmux, remote over
+  the remote <abbr title="Application Programming Interface">API</abbr>.</li>
+<li><span class="keys"><kbd class="key-m">M</kbd></span> lights up only for a running agent, else Grove flashes why.</li>
 </ul>
 <h2 id="the-sessions-browser">The sessions browser</h2>
-<p>Press <span class="keys"><kbd class="key-s">S</kbd></span> for a workspace's recorded sessions on the left and
-turn-by-turn history on the right.</p>
+<p>Press <span class="keys"><kbd class="key-s">S</kbd></span> to browse recorded sessions.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-sessions.svg" alt="Sessions browser with a session list on the left and turn history on the right" /></div>
   <figcaption class="ms-shot__body">Sessions browser: sessions left, selected session's turns right.</figcaption>
 </figure>
 
 <ul>
-<li>Each row carries state, turn count, model, and whether Grove or you
-  started the agent.</li>
-<li>Highlight a session and its turns fill the right pane, tool calls
-  collapsed into single grouped rows.</li>
+<li>Each row: state, turn count, model, who started the agent.</li>
+<li>Highlight a session: its turns fill the right pane, tool calls collapsed
+  into groups.</li>
 </ul>
 <div class="table-wrapper"><table>
 <thead>
@@ -1532,7 +1531,7 @@ turn-by-turn history on the right.</p>
 <tbody>
 <tr>
 <td><span class="keys"><kbd class="key-t">T</kbd></span></td>
-<td>Toggle tool detail: collapsed into one row, or expanded per call.</td>
+<td>Toggle tool detail, collapsed or expanded.</td>
 </tr>
 <tr>
 <td><span class="keys"><kbd class="key-r">R</kbd></span></td>
@@ -1544,9 +1543,8 @@ turn-by-turn history on the right.</p>
 </tr>
 </tbody>
 </table></div>
-<p>Recorded history does not stream, so the screen has no live tick. It reads
-straight from disk, so transcripts outlive their worktrees, readable even
-for a paused or orphaned workspace.</p>
+<p>Recorded history reads from disk, not live: transcripts outlive their
+worktrees.</p>
 <h2 id="modals">Modals</h2>
 <h3 id="create">Create</h3>
 <p><span class="keys"><kbd class="key-n">N</kbd></span> opens an eight-step modal.</p>
@@ -1556,38 +1554,30 @@ for a paused or orphaned workspace.</p>
 </figure>
 
 <ol>
-<li><strong>Agent.</strong> Radio list of every agent the cascade resolved.</li>
-<li><strong>Runtime.</strong> Host or Container, marking the cascade default
-   (<code>container.enabled</code>).</li>
-<li><strong>First-turn brief.</strong> Cascade default, On, or Off, same as <code>--brief</code> on
-   the <a href="../use-cli/"><abbr title="Command Line Interface">CLI</abbr></a>. On briefs the agent toward <code>working-in-grove</code>.</li>
-<li><strong>Model</strong> (blank = agent default). Free text, e.g. <code>sonnet</code> or <code>gpt-5.5</code>,
-   unvalidated and forwarded verbatim, same as <code>grove create --model</code>. See
-   <a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/tui/screens/create.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>screens/create.py</span></a>.</li>
-<li><strong>Title.</strong> Free text, pre-fills from the chosen branch name.</li>
-<li><strong>Branch source.</strong> <em>Auto</em> (Grove names it), <em>New named</em> (you type it),
-   <em>Existing local</em> (from your branches), <em>Track remote</em> (a remote-only
-   branch, tracked locally), or <em>Root</em> (no worktree, repo root, current
-   branch). See <a href="../features-workspace-lifecycle/#root-workspaces">root workspaces</a>
-   and <a href="../features-branch-provenance/">branch provenance</a>.</li>
-<li><strong>Skip init script.</strong> Skips the <a href="../configure-init-scripts/">init script</a>
-   for this create, checked by default under <em>Root</em> since init scripts
-   bootstrap fresh worktrees. Uncheck it if not.</li>
-<li><strong>Confirm</strong> with <span class="keys"><kbd class="key-enter">Enter</kbd></span>. <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
+<li><strong>Agent.</strong> Radio list of agents the cascade resolved.</li>
+<li><strong>Runtime.</strong> Host or Container (<code>container.enabled</code> default).</li>
+<li><strong>First-turn brief.</strong> Cascade default, On, or Off (<code>--brief</code> on
+   <a href="../use-cli/"><abbr title="Command Line Interface">CLI</abbr></a>).</li>
+<li><strong>Model</strong> (blank = default). Free text like <code>sonnet</code>, unvalidated,
+   forwarded verbatim (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/tui/screens/create.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>create.py</span></a>).</li>
+<li><strong>Title.</strong> Free text, pre-fills from branch name.</li>
+<li><strong>Branch source.</strong> <em>Auto</em>, <em>New named</em>, <em>Existing local</em>, <em>Track remote</em>,
+   or <em>Root</em>: <a href="../features-workspace-lifecycle/#root-workspaces">root workspaces</a>,
+   <a href="../features-branch-provenance/">branch provenance</a>.</li>
+<li><strong>Skip init script.</strong> Skips the <a href="../configure-init-scripts/">init script</a>,
+   default checked under <em>Root</em>.</li>
+<li><strong>Confirm</strong> with <span class="keys"><kbd class="key-enter">Enter</kbd></span>, <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
 </ol>
 <h3 id="edit">Edit</h3>
-<p><span class="keys"><kbd class="key-e">E</kbd></span> edits a workspace's title and description, metadata only, so the
-worktree directory and tmux session keep their original names.</p>
+<p><span class="keys"><kbd class="key-e">E</kbd></span> edits title and description, metadata only.</p>
 <h3 id="kill-confirmation">Kill confirmation</h3>
-<p><span class="keys"><kbd class="key-k">K</kbd></span> opens a confirm modal with a branch-deletion toggle, defaulted from the
-workspace's <code>branch_provenance</code>: GROVE_CREATED deletes it, USER_ATTACHED keeps
-it, either flippable. Grove never touches remote branches, so remote deletion
-needs <code>git push --delete</code> from your shell.</p>
+<p><span class="keys"><kbd class="key-k">K</kbd></span> opens a confirm modal with a <code>branch_provenance</code> deletion toggle:
+GROVE_CREATED deletes, USER_ATTACHED keeps, either flippable. Remote
+deletion needs <code>git push --delete</code>.</p>
 <h3 id="pause-confirmation">Pause confirmation</h3>
-<p><span class="keys"><kbd class="key-p">P</kbd></span> opens a smaller confirm modal, naming the branch retained and warning
-if uncommitted changes would block the pause.</p>
+<p><span class="keys"><kbd class="key-p">P</kbd></span> opens a smaller confirm modal naming the retained branch.</p>
 <h3 id="help">Help</h3>
-<p><span class="keys"><kbd class="key-question">?</kbd></span> opens a read-only key reference grouped by zone, any key dismisses.</p>
+<p><span class="keys"><kbd class="key-question">?</kbd></span> opens a read-only key reference. Any key dismisses.</p>
 <div class="swiper ms-shots">
   <div class="swiper-wrapper">
     <div class="swiper-slide">
@@ -1621,18 +1611,16 @@ if uncommitted changes would block the pause.</p>
 </div>
 
 <h3 id="pairing">Pairing</h3>
-<p>With the <a href="../use-webapp/">web dashboard</a>, a new browser's pairing request
-pops a modal showing the device label and a code to confirm. Approve with
-<span class="keys"><kbd class="key-a">A</kbd></span>, deny with <span class="keys"><kbd class="key-d">D</kbd></span>. Full handshake and the <code>grove auth</code> commands for
-headless hosts are on <a href="../use-auth/">authentication &amp; pairing</a>.</p>
+<p>A new <a href="../use-webapp/">web dashboard</a> pairing request pops a modal with a
+device label and code. Approve with <span class="keys"><kbd class="key-a">A</kbd></span>, deny with <span class="keys"><kbd class="key-d">D</kbd></span>. See
+<a href="../use-auth/">authentication &amp; pairing</a>.</p>
 <h2 id="theme">Theme</h2>
-<p>Grove ships three built-in themes: <code>dark</code>, <code>light</code>, and <code>auto</code> (follows
-Textual's reported terminal polarity). User overrides land at
-<code>${user_config_dir}/grove/themes/&lt;name&gt;.toml</code>, referenced by name in
-<code>ui.theme</code>.</p>
+<p>Grove ships <code>dark</code>, <code>light</code>, and <code>auto</code> (follows the terminal's polarity).
+Overrides land at <code>${user_config_dir}/grove/themes/&lt;name&gt;.toml</code>, referenced
+by <code>ui.theme</code>.</p>
 <h2 id="mouse-vs-keyboard">Mouse vs keyboard</h2>
-<p>Both work. Clicking selects a row, hover outlines it, and every action also
-has a keyboard binding.</p>
+<p>Both work. Clicking selects a row, hover outlines it, every action has a
+keybinding.</p>
   </div>
   
   <script>
@@ -2275,6 +2263,30 @@ has a keyboard binding.</p>
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2544,14 +2556,6 @@ has a keyboard binding.</p>
         </p>
         <div class="mewbo-toc__list">
             
-            <a href="#screen-anatomy"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#screen-anatomy');">
-                Screen anatomy
-            </a>
-            
-            
             <a href="#keybindings"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -2560,19 +2564,19 @@ has a keyboard binding.</p>
             </a>
             
             
-            <a href="#the-activity-dashboard-screen"
+            <a href="#activity-dashboard"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-activity-dashboard-screen');">
-                The Activity Dashboard screen
+                onClick="deferSetActiveTocLink('#activity-dashboard');">
+                Activity Dashboard
             </a>
             
             
-            <a href="#the-project-switcher"
+            <a href="#project-switcher"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-project-switcher');">
-                The project switcher
+                onClick="deferSetActiveTocLink('#project-switcher');">
+                Project switcher
             </a>
             
             

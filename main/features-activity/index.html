@@ -998,6 +998,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1291,7 +1315,7 @@
           
           <a data-slot="button" id="next-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
-            href="../features-notifications/">
+            href="../features-telemetry/">
             <span class="sr-only">Next</span>
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -1313,47 +1337,32 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="watch-the-whole-fleet">Watch the whole fleet</h2>
-<p>Run one agent and you watch it. Run six and you cannot. Five are fine,
-one has sat on a permission prompt for twenty minutes, and the only way
-to find out is cycling every tmux window.</p>
-<p>Grove watches for you instead, reading what each agent is doing and
-putting the fleet on one wall that answers one question: who needs me
-right now?</p>
-<h2 id="two-views-one-system">Two views, one system</h2>
-<p>Grove tracks agents on two time scales, each with its own surface.</p>
-<ul>
-<li><strong>Live activity</strong>: the present tense, what every agent is doing
-  right now, across every project.</li>
-<li><strong>Session history</strong>: the past tense, what happened and what you
-  asked for.</li>
-</ul>
-<p>Both are read-only, built from transcripts and git state on disk.
-Steering an agent from the dashboard sends a fresh follow-up, never a
-rewrite of the record.</p>
+<p>Run six agents and you cannot watch them. Five are fine, one has sat on a
+permission prompt for twenty minutes, and finding out means cycling every tmux
+window. Grove reads what each agent is doing and puts the fleet on one wall that
+answers one question: who needs me right now?</p>
+<p>It tracks two time scales. <strong>Live activity</strong> is what every agent is doing now,
+across every project. <strong>Session history</strong> is what happened. Both are read-only,
+built from transcripts and git state on disk, so steering from the dashboard
+sends a fresh follow-up rather than rewriting the record.</p>
 <h2 id="the-activity-dashboard">The Activity Dashboard</h2>
 <p>Press <span class="keys"><kbd class="key-d">D</kbd></span> in the <abbr title="Terminal User Interface">TUI</abbr>, or open the <a href="../use-webapp/">web dashboard</a>
 home: the same wall, every agent session across every repository the
 daemon knows about, attention-first.</p>
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="The web dashboard's Hero composer as the default home surface, with the flat session rail on the left listing every agent session across projects" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="Grove's fleet dashboard: a flat, attention-sorted grid of workspace cards behind a session rail listing every workspace by recency" /></div>
   <figcaption class="ms-shot__body">The wall in the browser, attention-first.</figcaption>
 </figure>
 
-<p>In the browser, the wall is the home surface (<code>/activity</code> redirects
-there):</p>
-<ul>
-<li>A persisted Hero/Overview toggle swaps the default composer for a
-  repo-grouped grid, project chip per card.</li>
-<li>Both stream over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr> within a second, with a poll fallback for
-  drops. A filter narrows the flat, recency-sorted rail by project,
-  state, or attention, and your choice persists.</li>
-<li>Each card carries the agent and state, workspace title and project, a
-  one-line agent summary, a turns-tools-tokens metrics line, and the
-  last commit's relative time. A working card's <em>Live</em> toggle mirrors
-  that agent's terminal inline over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr>, one pane at a time.</li>
-</ul>
-<p>In the <abbr title="Terminal User Interface">TUI</abbr>, tiles group by project. Quiet ones stay compact, and a
-working, waiting, blocked, or erroring one expands to a terminal tail.</p>
+<p>In the browser the fleet grid is the home surface (<code>/</code>), one flat wall rather
+than sectioned by repo. It streams over <abbr title="Server-Sent Events, a one-way stream of updates over HTTP">SSE</abbr> within a second with a poll
+fallback, and a filter narrows the recency-sorted rail and grid by project,
+state or attention. Each card carries the agent and state, workspace title and
+project, a one-line summary, a diff and commit-divergence line, todo progress,
+and linked tickets. Open a card for the agent's live terminal, on the
+workspace's own Terminal tab.</p>
+<p>In the <abbr title="Terminal User Interface">TUI</abbr>, tiles group by project. Quiet ones stay compact, and a working,
+waiting, blocked or erroring one expands to a terminal tail.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-dashboard.svg" alt="The TUI Activity Dashboard: agent tiles grouped by project, working and waiting tiles promoted with token metrics and a live pane tail" /></div>
   <figcaption class="ms-shot__body">The same wall in the terminal.</figcaption>
@@ -1374,19 +1383,15 @@ working, waiting, blocked, or erroring one expands to a terminal tail.</p>
 <li><strong>Recent commits.</strong> The last few commits on the branch.</li>
 </ol>
 <p>The same state shows on the workspace list and the <a href="../features-peek/">peek
-rail</a> (model, turns, tokens). It differs from
-<a href="../features-status/">workspace status</a>: a workspace can be ACTIVE
-while its agent is WAITING. Status describes the workspace, agent
-state the conversation inside it, and the dashboard shows both.</p>
+rail</a>. It is not
+<a href="../features-status/">workspace status</a>, and a workspace can be ACTIVE while its
+agent is WAITING. Status describes the workspace, agent state describes the
+conversation inside it, and the dashboard shows both.</p>
 <h2 id="attention-never-dims">Attention never dims</h2>
-<p>Tiles render in three tiers, driving both brightness and order.</p>
-<ul>
-<li><strong>Active</strong>: full brightness, pulsing glyph.</li>
-<li><strong>Attention</strong> (waiting, blocked, error): full brightness, accent
-  color. These need you, so they never dim and sort to the front.</li>
-<li><strong>Dormant</strong> (idle, offline, starting): dimmed, alive but nothing to
-  say.</li>
-</ul>
+<p>Tiles render in three tiers that drive both brightness and order. <strong>Active</strong> is
+full brightness with a pulsing glyph. <strong>Attention</strong> (waiting, blocked, error) is
+full brightness in accent color, and sorts to the front because it needs you.
+<strong>Dormant</strong> (idle, offline, starting) dims: alive, nothing to say.</p>
 <p>Bright means look here. Dim means all quiet.</p>
 <h2 id="which-agents-grove-can-read">Which agents Grove can read</h2>
 <p>Every agent entry declares a <code>kind</code>, the adapter that introspects it.</p>
@@ -1397,27 +1402,23 @@ state the conversation inside it, and the dashboard shows both.</p>
 <li><code>mewbo</code>: introspects a remote session over its <abbr title="Representational State Transfer">REST</abbr> <abbr title="Application Programming Interface">API</abbr>.</li>
 <li><code>generic</code>: default, falls back to the terminal-output signal.</li>
 </ul>
-<p>The built-in <code>claude</code> and <code>codex</code> agents ship with their matching kind.
-Declaring one is one line in the agent spec. See
+<p>The built-in <code>claude</code> and <code>codex</code> agents ship with their matching kind, and
+declaring one is a single line in the agent spec. See
 <a href="../configure-agents/#telling-grove-what-kind-of-agent-it-is">Agents</a>.</p>
-<p>Set <code>hooks.enabled: true</code> for exact state: a status hook pushes Claude
-Code's lifecycle state as it changes, instead of polling.
-<code>.claude/settings.json</code> stays untouched, and turning it off is one
-flag.</p>
+<p>Set <code>hooks.enabled: true</code> for exact state, where a status hook pushes Claude
+Code's lifecycle as it changes instead of polling. <code>.claude/settings.json</code> stays
+untouched and turning it off is one flag.</p>
 <h2 id="the-agents-own-todo-list">The agent's own todo list</h2>
-<p>Claude Code's <code>TodoWrite</code>, Codex's <code>update_plan</code>, and Mewbo's task
-board each give an agent a running checklist. Grove parses it from the
-transcript for the <a href="../issue-ops/">issue-ops</a> sticky comment, and now
-surfaces it everywhere: <code>grove show</code> prints it, <abbr title="Terminal User Interface">TUI</abbr> and web cards show
-a bounded count (<code>4/7 done</code>), and <code>grove_get_workspace_todo</code> hands the
-raw items to an <abbr title="Model Context Protocol">MCP</abbr> client. It is read-only. See <a href="../features-status/#the-third-axis-task-phase">task
-phase</a> for the agent's
-counterpart: the todo list is inferred, task phase is stated directly.</p>
+<p>Claude Code's <code>TodoWrite</code>, Codex's <code>update_plan</code>, and Mewbo's task board each
+give an agent a running checklist. Grove parses it from the transcript and
+surfaces it everywhere: <code>grove show</code> prints it, <abbr title="Terminal User Interface">TUI</abbr> and web cards show a bounded
+count (<code>4/7 done</code>), the <a href="../issue-ops/">issue-ops</a> sticky comment renders it, and
+<code>grove_get_workspace_todo</code> hands an <abbr title="Model Context Protocol">MCP</abbr> client the raw items. It is read-only.
+The <a href="../features-status/#the-third-axis-task-phase">task phase</a> is its
+counterpart: a todo list is inferred, a phase is stated.</p>
 <h2 id="session-history">Session history</h2>
-<p>Live state tells you what is happening. Sessions tell you what
-happened. Grove discovers every recorded session for a project, across
-the repo root and every worktree.</p>
-<p><code>grove sessions</code> is the front door, the <code>git log</code> of agent
+<p>Grove discovers every recorded session for a project, across the repo root and
+every worktree. <code>grove sessions</code> is the front door, the <code>git log</code> of agent
 conversations:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w">                </span><span class="c1"># every session, newest first</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>7b3f2c1a<span class="w">       </span><span class="c1"># one conversation, as turns</span>
@@ -1433,33 +1434,31 @@ tagged as Grove's, and hand-started ones show up labeled as such.</p>
 user on the box, so Grove never trusts a bare session id.
 Adoption is pane-verified: the candidate's transcript birth and the
 workspace's tmux pane must agree before Grove treats it as live (see
-<a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a> and
-<a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>manager.py</span></a>). Resume runs the same check. If the Grove-minted session dies and a
+<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a> and
+<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>manager.py</span></a>). Resume runs the same check. If the Grove-minted session dies and a
 successor gets gate-rejected, the pointer goes stale and the
 transcript reads blank.
 Fix it with <code>grove sessions remap WORKSPACE SESSION</code>, the <abbr title="Terminal User Interface">TUI</abbr>'s <span class="keys"><kbd class="key-x">X</kbd></span>
 key, or the web remap picker.</p>
 <h3 id="the-session-catalog-every-session-on-this-host">The Session Catalog: every session on this host</h3>
-<p>Most of your agent history lives outside this project. Every
-repository you have pointed Claude Code or Codex at holds its own
-transcripts, and Grove already knows how to read them, but never
-looked past its own configured projects.</p>
-<p><code>grove sessions list --host</code> removes that limit, scanning every
-session store on the machine:</p>
+<p>Most of your agent history lives outside this project. Every repository you have
+pointed Claude Code or Codex at holds its own transcripts, and
+<code>grove sessions list --host</code> scans every session store on the machine:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--host<span class="w">              </span><span class="c1"># every repo on this host</span>
 </span></code></pre></div>
-<p>The table gains <code>PROJECT</code> and <code>BRANCH</code> columns, plus a live marker on
-rows with a matching agent process. Agent kind, last-modified time, and
-who launched it stay unchanged. The <a href="../use-webapp/#the-session-catalog">web dashboard's Sessions
-screen</a> and the <abbr title="Terminal User Interface">TUI</abbr>'s <code>h</code> key show
-the catalog.</p>
-<p>The scan reads only each transcript's first few lines, never the whole
-file, staying fast across hundreds of sessions. A transcript missing a
-working directory, or pointing at a non-git directory, still shows up
-rather than being dropped. The catalog is read-only. No verb adopts a
-session found this way into a workspace.</p>
+<p>The table gains <code>PROJECT</code> and <code>BRANCH</code> columns plus a live marker on rows with a
+matching agent process. The <a href="../use-webapp/#the-session-catalog">web dashboard's Sessions
+screen</a> and the <abbr title="Terminal User Interface">TUI</abbr>'s <code>h</code> key show the same
+catalog.</p>
+<p>The scan reads each transcript's first few lines rather than the whole file, so
+it stays fast across hundreds of sessions. A transcript missing a working
+directory, or pointing at a non-git directory, still shows up rather than being
+dropped. The catalog is read-only, and no verb adopts a session found this way
+into a workspace.</p>
 <h2 id="see-also">See also</h2>
 <ul>
+<li><a href="../features-telemetry/">Telemetry and tracing</a>: the same sessions as
+  queryable OpenTelemetry traces, months after the fact.</li>
 <li><a href="../use-tui/"><abbr title="Terminal User Interface">TUI</abbr> tour</a>: the dashboard screen and its keys.</li>
 <li><a href="../use-webapp/">Web dashboard</a>: the live grid and the transcript.</li>
 <li><a href="../use-cli/#grove-sessions"><abbr title="Command Line Interface">CLI</abbr></a>: <code>grove sessions list</code>, <code>show</code>, <code>dump</code>.</li>
@@ -1508,8 +1507,8 @@ session found this way into a workspace.</p>
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 ml-auto shadow-none"
-        href="../features-notifications/">
-        <span class="max-[500px]:hidden">Push Notifications</span>
+        href="../features-telemetry/">
+        <span class="max-[500px]:hidden">Telemetry & Tracing</span>
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
             class="tabler-icon tabler-icon-arrow-right ">
@@ -2111,6 +2110,30 @@ session found this way into a workspace.</p>
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2379,14 +2402,6 @@ session found this way into a workspace.</p>
             On This Page
         </p>
         <div class="mewbo-toc__list">
-            
-            <a href="#two-views-one-system"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#two-views-one-system');">
-                Two views, one system
-            </a>
-            
             
             <a href="#the-activity-dashboard"
                 class="mewbo-toc__link"

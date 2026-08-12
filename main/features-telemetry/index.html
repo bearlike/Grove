@@ -19,7 +19,7 @@
 
 
 
-<title>TUI Tour · Grove</title>
+<title>Telemetry & Tracing · Grove</title>
 
 
 
@@ -29,18 +29,18 @@
 
 
 
-<link rel="canonical" href="https://bearlike.github.io/Grove/main/use-tui/">
+<link rel="canonical" href="https://bearlike.github.io/Grove/main/features-telemetry/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
 
-<meta property="og:title" content="TUI Tour">
+<meta property="og:title" content="Telemetry & Tracing">
 
 
 
 
 
-<meta property="og:url" content="https://bearlike.github.io/Grove/main/use-tui/">
+<meta property="og:url" content="https://bearlike.github.io/Grove/main/features-telemetry/">
 
 
 
@@ -51,7 +51,7 @@
 
 <!-- Twitter Card -->
 
-<meta name="twitter:title" content="TUI Tour">
+<meta name="twitter:title" content="Telemetry & Tracing">
 
 
 
@@ -655,7 +655,7 @@
     <button data-slot="collapsible-trigger" data-sidebar="menu-button" data-size="default" data-active="false"
         class="peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-h-8 text-[0.8rem] font-normal leading-tight"
         type="button" aria-expanded="true"
-        data-state="open"
+        data-state="closed"
         onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
 
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15.033 9.44a.647.647 0 0 1 0 1.12l-4.065 2.352a.645.645 0 0 1-.968-.56V7.648a.645.645 0 0 1 .967-.56zM12 17v4m-4 0h8"/><rect width="20" height="14" x="2" y="3" rx="2"/></g></svg>
@@ -676,8 +676,8 @@
             
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="true" data-sidebar="menu-button"
-        data-size="default" href="./"
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../use-tui/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></g></svg>
@@ -856,7 +856,7 @@
     <button data-slot="collapsible-trigger" data-sidebar="menu-button" data-size="default" data-active="false"
         class="peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-h-8 text-[0.8rem] font-normal leading-tight"
         type="button" aria-expanded="true"
-        data-state="closed"
+        data-state="open"
         onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
 
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594zM20 2v4m2-2h-4"/><circle cx="4" cy="20" r="2"/></g></svg>
@@ -997,8 +997,8 @@
             
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="../features-telemetry/"
+    <a data-slot="sidebar-menu-button" data-active="true" data-sidebar="menu-button"
+        data-size="default" href="./"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         
@@ -1280,7 +1280,7 @@
     <div class="flex flex-col gap-2">
       <div id="page-header" class="flex items-start justify-between">
         <h1 class="scroll-m-20 text-4xl font-semibold tracking-tight sm:text-3xl xl:text-4xl">
-          TUI Tour
+          Telemetry & Tracing
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
@@ -1301,7 +1301,7 @@
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
-            href="../configure-reference/">
+            href="../features-activity/">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
               class="tabler-icon tabler-icon-arrow-left">
@@ -1315,7 +1315,7 @@
           
           <a data-slot="button" id="next-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
-            href="../use-cli/">
+            href="../features-notifications/">
             <span class="sr-only">Next</span>
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -1336,291 +1336,130 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <h2 id="screen-anatomy">Screen anatomy</h2>
-<video preload="auto" poster="../img/posters/terminal-still.png">
-  <source src="../videos/1-grove-terminal.mp4" type="video/mp4" />
-</video>
-
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI showing four workspaces in mixed states with a live peek rail" /></div>
-  <figcaption class="ms-shot__body">Header, filter bar (slash-toggled), workspace list left, peek rail right, status bar and footer at bottom.</figcaption>
-</figure>
-
-<ul>
-<li><strong>Header.</strong> Repo name, count chip.</li>
-<li><strong>Filter bar.</strong> Hidden until <span class="keys"><kbd class="key-slash">/</kbd></span>, narrows title, branch, agent.
-  <span class="keys"><kbd class="key-escape">Esc</kbd></span> clears.</li>
-<li><strong>Workspace list.</strong> Row: status glyph, title, agent, branch, stat strip,
-  state (<code>▶ working</code>, <code>◑ waiting</code>), and
-  <a href="../features-status/#the-third-axis-task-phase">task phase</a>.</li>
-<li><strong>Peek rail.</strong> Summary, then linked tickets, then transcript and terminal
-  tabs (<a href="../features-peek/">detail</a>).</li>
-<li><strong>Status bar.</strong> Fleet left, workspace right, coloured by state.</li>
-<li><strong>Footer.</strong> Global and selection keys.</li>
-</ul>
-<h2 id="keybindings">Keybindings</h2>
-<p>Global keys work anytime. Selection keys act on the highlighted row.</p>
+    <h2 id="one-session-one-trace">One session, one trace</h2>
+<p>Grove reads transcripts to tell you what an agent is doing right now. Telemetry
+answers the other question: what did the fleet do last month? Every session
+becomes an OpenTelemetry trace, shipped to
+<a href="https://langfuse.com">LangFuse</a>, where a conversation stops being a file you
+scroll and becomes a row you can query.</p>
+<p>Grove is a gateway on that path, not a passenger. A harness that exports its own
+spans produces a flat pile with no idea which repository it ran in. Grove stamps
+identity on every span, pins one vocabulary across agents, and rebuilds the
+parent and child shape a raw export throws away. One session, one trace.</p>
+<h2 id="turn-it-on">Turn it on</h2>
+<p>Telemetry ships in the <code>telemetry</code> extra, which <code>grove[all]</code> includes. Point the
+config at the environment variables that carry your credentials. Grove reads the
+variable <em>names</em> from config and the values from the environment, so no secret
+is ever written to a config file:</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;telemetry&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;host_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;LANGFUSE_HOST&quot;</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">&quot;public_key_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;LANGFUSE_PUBLIC_KEY&quot;</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">&quot;secret_key_env&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;LANGFUSE_SECRET_KEY&quot;</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Use <code>telemetry.env_file</code> to load those variables from a file, or
+<code>telemetry.env_command</code> to fetch them from a secrets manager at startup. With
+<code>enabled: false</code>, which is the default, the exporter never loads and the packages
+sit inert.</p>
+<h2 id="what-grove-puts-on-a-span">What Grove puts on a span</h2>
+<p>A raw harness span knows the model and the token counts. It does not know the
+workspace, the branch, or the ticket, because the harness was never told. Grove
+composes that identity into <code>OTEL_RESOURCE_ATTRIBUTES</code> when it launches the
+agent, so every span the process emits carries it:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
-<th>Key</th>
-<th>Action</th>
+<th>Attribute</th>
+<th>What it answers</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><span class="keys"><kbd class="key-n">N</kbd></span></td>
-<td>Create a workspace.</td>
+<td><code>grove.workspace.id</code>, <code>grove.repo</code>, <code>grove.project</code></td>
+<td>Where did this run?</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-d">D</kbd></span></td>
-<td>Open the <a href="../features-activity/">Activity Dashboard</a>.</td>
+<td><code>grove.branch</code>, <code>grove.base_branch</code>, <code>grove.worktree</code></td>
+<td>Against what code?</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span></td>
-<td>Switch project.</td>
+<td><code>grove.agent.kind</code>, <code>grove.agent.version</code></td>
+<td>Which harness, which version?</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-r">R</kbd></span></td>
-<td>Refresh.</td>
+<td><code>grove.runtime</code>, <code>grove.placement</code></td>
+<td>On the host, or in a container?</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-slash">/</kbd></span></td>
-<td>Filter. Type to narrow, <span class="keys"><kbd class="key-escape">Esc</kbd></span> clears.</td>
+<td><code>grove.ticket.ids</code></td>
+<td>Which tickets was it attached to?</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-question">?</kbd></span></td>
-<td>Help modal, key reference.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-q">Q</kbd></span></td>
-<td>Quit.</td>
+<td><code>langfuse.session.id</code></td>
+<td>The join key, see below.</td>
 </tr>
 </tbody>
 </table></div>
-<div class="table-wrapper"><table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><span class="keys"><kbd class="key-enter">Enter</kbd></span> / <span class="keys"><kbd class="key-a">A</kbd></span></td>
-<td>Attach.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-m">M</kbd></span></td>
-<td>Steer without attaching.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-e">E</kbd></span></td>
-<td>Edit title and description.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-s">S</kbd></span></td>
-<td>Browse recorded sessions.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-x">X</kbd></span></td>
-<td>Remap to a live or recovered session, e.g. after <code>/clear</code> rotates the id (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/tui/screens/remap_session.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>remap_session.py</span></a>).</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-p">P</kbd></span></td>
-<td>Pause, removes worktree, keeps branch.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-r">R</kbd></span></td>
-<td>Resume, recreates worktree, restarts tmux.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-o">O</kbd></span></td>
-<td>Respawn an OFFLINE workspace.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-k">K</kbd></span></td>
-<td>Kill, removes worktree and tmux, deletes Grove-created branches.</td>
-</tr>
-</tbody>
-</table></div>
-<p>PAUSED dims attach and pause, OFFLINE lights respawn, ORPHANED leaves only
-kill (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/tui/screens/list.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>list.py</span></a>).</p>
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-filter.svg" alt="Filter bar narrowed to workspaces matching "auth"" /></div>
-  <figcaption class="ms-shot__body">Filter bar in action, matched substring-style across title, branch, and agent.</figcaption>
-</figure>
-
-<h2 id="activity-dashboard">Activity Dashboard</h2>
-<p>Press <span class="keys"><kbd class="key-d">D</kbd></span>: every workspace, one tile each, grouped by project.</p>
+<p>That last one is the hinge. Grove emits its own spans and the agent emits its
+own, from two different processes that share no context. Both carry the same
+<code>langfuse.session.id</code>, so LangFuse files them under one session rather than two
+unrelated traces.</p>
+<h2 id="receiving-the-harnesss-own-traces">Receiving the harness's own traces</h2>
+<p>Claude Code and Codex can export OTLP directly. Grove can be the collector they
+export to, which lets it rewrite what arrives before it lands:</p>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;telemetry&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&quot;receiver&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/otlp&quot;</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The daemon then serves <code>POST /v1/traces</code> under that path, accepting protobuf or
+JSON. Spans queue and drain on a small dedicated worker pool, never on the
+request loop, so a burst from a twenty agent fleet cannot stall the dashboard. If
+the queue fills, Grove sheds and says so through OTLP's own <code>partial_success</code>
+field rather than dropping work silently.</p>
+<p>Arriving traces are grouped by trace id and handed to the first transform that
+claims them. The Claude Code transform recognises its own spans by
+instrumentation scope, finds the turn root, reparents the sub-agent spawn tree
+onto it, flags errored tool calls, and rewrites names and attributes into
+Grove's vocabulary. A trace no transform claims passes through untouched.</p>
+<p>The receiver is off by default and the daemon binds to loopback, so nothing is
+exposed by turning it on.</p>
+<h2 id="one-exporter-never-two">One exporter, never two</h2>
+<p>An agent that already has <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> set in your shell will
+happily export to your own collector while Grove exports the same session
+somewhere else. You get two partial traces and no error.</p>
+<p>Grove reserves the OTLP exporter variables for any agent it launches, listed
+explicitly in <code>telemetry.reserved_env</code> rather than matched by prefix, so
+<code>OTEL_RESOURCE_ATTRIBUTES</code> and <code>TRACEPARENT</code> survive. A displaced value logs one
+warning naming the variable, never its contents. Where Grove owns a harness's
+content it also forces that harness's own trace exporter off, because the <abbr title="Software Development Kit">SDK</abbr>
+default for an unset exporter is <code>otlp</code>, not <code>none</code>.</p>
+<h2 id="the-vocabulary">The vocabulary</h2>
+<p>Span names and attributes follow the OpenTelemetry GenAI semantic conventions
+(<code>gen_ai.operation.name</code>, <code>gen_ai.input.messages</code>, the usage token keys) so a
+Claude session and a Codex session are comparable rather than merely adjacent.
+Grove pins those key names as constants and a test asserts they still equal the
+<abbr title="Software Development Kit">SDK</abbr>'s own values, because the upstream module they come from is not yet stable
+and moves between releases.</p>
+<h2 id="backfilling-history">Backfilling history</h2>
+<p><code>grove usage backfill --telemetry</code> replays sessions that predate telemetry being
+turned on. Exporting old sessions writes to a system outside this machine, so it
+is gated three ways: the <code>--telemetry</code> flag, an explicit <code>--yes</code>, and the set of
+profiles named in <code>telemetry.backfill.profiles</code>. A <code>--settled-minutes</code> window
+excludes sessions still being written to, and <code>--dry-run</code> plans the whole export
+without writing anything. Without <code>--telemetry</code>, the same command only rebuilds
+the local usage projection and touches nothing outside this machine.</p>
+<h2 id="see-also">See also</h2>
 <ul>
-<li>Tiles size by urgency: quiet is compact, working, waiting, blocked, or
-  erroring gets a taller tile with a live terminal tail.</li>
-<li>Each tile: branch, agent, model, diff, ahead-behind, tokens, summary.</li>
+<li><a href="../features-activity/">Agent activity and sessions</a>: the live half of the
+  same signal.</li>
+<li><a href="../configure-reference/">Configuration reference</a>: every <code>telemetry</code> key.</li>
+<li><a href="../configure-agents/">Agents</a>: declaring an agent's <code>kind</code>.</li>
 </ul>
-<div class="table-wrapper"><table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><span class="keys"><kbd class="key-l">L</kbd></span></td>
-<td>Cycle lens: all, needs attention, active.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-g">G</kbd></span></td>
-<td>Toggle grouping: by project, or flat.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-r">R</kbd></span></td>
-<td>Refresh.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-d">D</kbd></span> / <span class="keys"><kbd class="key-escape">Esc</kbd></span> / <span class="keys"><kbd class="key-q">Q</kbd></span></td>
-<td>Back to the list.</td>
-</tr>
-</tbody>
-</table></div>
-<p>Tile meaning: <a href="../features-activity/">activity and sessions</a>.</p>
-<h2 id="project-switcher">Project switcher</h2>
-<p>Press <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-p">P</kbd></span> to hop repositories.</p>
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-project-switcher.svg" alt="Project switcher listing two repositories with workspace counts and a current tag" /></div>
-  <figcaption class="ms-shot__body">Project switcher. Type to narrow, arrows to move, <code>Enter</code> to switch, current repo tagged.</figcaption>
-</figure>
-
-<ul>
-<li>Lists every repository with its workspace count. Filter holds focus,
-  <span class="keys"><kbd class="key-enter">Enter</kbd></span> switches, <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
-<li>A cheap, instant chooser, not a dashboard. <span class="keys"><kbd class="key-d">D</kbd></span> for live status.</li>
-</ul>
-<h2 id="steering-an-agent">Steering an agent</h2>
-<p>Press <span class="keys"><kbd class="key-m">M</kbd></span>, type a follow-up, <span class="keys"><kbd class="key-enter">Enter</kbd></span> to steer.</p>
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-steer.svg" alt="Send-message modal with a follow-up typed to a running agent" /></div>
-  <figcaption class="ms-shot__body">Steer modal. A quick redirect to a running agent, no attach required.</figcaption>
-</figure>
-
-<ul>
-<li>Delivery follows the agent: local gets it typed into tmux, remote over
-  the remote <abbr title="Application Programming Interface">API</abbr>.</li>
-<li><span class="keys"><kbd class="key-m">M</kbd></span> lights up only for a running agent, else Grove flashes why.</li>
-</ul>
-<h2 id="the-sessions-browser">The sessions browser</h2>
-<p>Press <span class="keys"><kbd class="key-s">S</kbd></span> to browse recorded sessions.</p>
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-sessions.svg" alt="Sessions browser with a session list on the left and turn history on the right" /></div>
-  <figcaption class="ms-shot__body">Sessions browser: sessions left, selected session's turns right.</figcaption>
-</figure>
-
-<ul>
-<li>Each row: state, turn count, model, who started the agent.</li>
-<li>Highlight a session: its turns fill the right pane, tool calls collapsed
-  into groups.</li>
-</ul>
-<div class="table-wrapper"><table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><span class="keys"><kbd class="key-t">T</kbd></span></td>
-<td>Toggle tool detail, collapsed or expanded.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-r">R</kbd></span></td>
-<td>Refresh the session list.</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-escape">Esc</kbd></span> / <span class="keys"><kbd class="key-q">Q</kbd></span></td>
-<td>Back to the list.</td>
-</tr>
-</tbody>
-</table></div>
-<p>Recorded history reads from disk, not live: transcripts outlive their
-worktrees.</p>
-<h2 id="modals">Modals</h2>
-<h3 id="create">Create</h3>
-<p><span class="keys"><kbd class="key-n">N</kbd></span> opens an eight-step modal.</p>
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal showing branch source variants and agent picker" /></div>
-  <figcaption class="ms-shot__body">Create modal. Branch source on the left, agent picker, title input.</figcaption>
-</figure>
-
-<ol>
-<li><strong>Agent.</strong> Radio list of agents the cascade resolved.</li>
-<li><strong>Runtime.</strong> Host or Container (<code>container.enabled</code> default).</li>
-<li><strong>First-turn brief.</strong> Cascade default, On, or Off (<code>--brief</code> on
-   <a href="../use-cli/"><abbr title="Command Line Interface">CLI</abbr></a>).</li>
-<li><strong>Model</strong> (blank = default). Free text like <code>sonnet</code>, unvalidated,
-   forwarded verbatim (<a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/tui/screens/create.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>create.py</span></a>).</li>
-<li><strong>Title.</strong> Free text, pre-fills from branch name.</li>
-<li><strong>Branch source.</strong> <em>Auto</em>, <em>New named</em>, <em>Existing local</em>, <em>Track remote</em>,
-   or <em>Root</em>: <a href="../features-workspace-lifecycle/#root-workspaces">root workspaces</a>,
-   <a href="../features-branch-provenance/">branch provenance</a>.</li>
-<li><strong>Skip init script.</strong> Skips the <a href="../configure-init-scripts/">init script</a>,
-   default checked under <em>Root</em>.</li>
-<li><strong>Confirm</strong> with <span class="keys"><kbd class="key-enter">Enter</kbd></span>, <span class="keys"><kbd class="key-escape">Esc</kbd></span> cancels.</li>
-</ol>
-<h3 id="edit">Edit</h3>
-<p><span class="keys"><kbd class="key-e">E</kbd></span> edits title and description, metadata only.</p>
-<h3 id="kill-confirmation">Kill confirmation</h3>
-<p><span class="keys"><kbd class="key-k">K</kbd></span> opens a confirm modal with a <code>branch_provenance</code> deletion toggle:
-GROVE_CREATED deletes, USER_ATTACHED keeps, either flippable. Remote
-deletion needs <code>git push --delete</code>.</p>
-<h3 id="pause-confirmation">Pause confirmation</h3>
-<p><span class="keys"><kbd class="key-p">P</kbd></span> opens a smaller confirm modal naming the retained branch.</p>
-<h3 id="help">Help</h3>
-<p><span class="keys"><kbd class="key-question">?</kbd></span> opens a read-only key reference. Any key dismisses.</p>
-<div class="swiper ms-shots">
-  <div class="swiper-wrapper">
-    <div class="swiper-slide">
-      <figure>
-        <img loading="lazy" src="../img/screenshots/tui-edit-modal.svg" alt="Edit workspace modal with title and description fields">
-        <figcaption>Edit modal (<code>e</code>): title and description are metadata, worktree path and session name stay fixed.</figcaption>
-      </figure>
-    </div>
-    <div class="swiper-slide">
-      <figure>
-        <img loading="lazy" src="../img/screenshots/tui-kill-confirm.svg" alt="Kill confirm modal">
-        <figcaption>Kill confirm (<code>k</code>): checkbox default reflects whether Grove created the branch.</figcaption>
-      </figure>
-    </div>
-    <div class="swiper-slide">
-      <figure>
-        <img loading="lazy" src="../img/screenshots/tui-pause-confirm.svg" alt="Pause confirm modal">
-        <figcaption>Pause confirm (<code>p</code>): Grove refuses a dirty worktree, commit or stash first.</figcaption>
-      </figure>
-    </div>
-    <div class="swiper-slide">
-      <figure>
-        <img loading="lazy" src="../img/screenshots/tui-help.svg" alt="Help modal">
-        <figcaption>Help modal (<code>?</code>): pulled from the same <code>DEFAULT_BINDINGS</code> tuple the footer reads.</figcaption>
-      </figure>
-    </div>
-  </div>
-  <div class="swiper-pagination"></div>
-  <div class="swiper-button-prev"></div>
-  <div class="swiper-button-next"></div>
-</div>
-
-<h3 id="pairing">Pairing</h3>
-<p>A new <a href="../use-webapp/">web dashboard</a> pairing request pops a modal with a
-device label and code. Approve with <span class="keys"><kbd class="key-a">A</kbd></span>, deny with <span class="keys"><kbd class="key-d">D</kbd></span>. See
-<a href="../use-auth/">authentication &amp; pairing</a>.</p>
-<h2 id="theme">Theme</h2>
-<p>Grove ships <code>dark</code>, <code>light</code>, and <code>auto</code> (follows the terminal's polarity).
-Overrides land at <code>${user_config_dir}/grove/themes/&lt;name&gt;.toml</code>, referenced
-by <code>ui.theme</code>.</p>
-<h2 id="mouse-vs-keyboard">Mouse vs keyboard</h2>
-<p>Both work. Clicking selects a row, hover outlines it, every action has a
-keybinding.</p>
   </div>
   
   <script>
@@ -1646,7 +1485,7 @@ keybinding.</p>
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 shadow-none"
-        href="../configure-reference/">
+        href="../features-activity/">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
             class="tabler-icon tabler-icon-arrow-left ">
@@ -1654,14 +1493,14 @@ keybinding.</p>
             <path d="M5 12l6 6"></path>
             <path d="M5 12l6 -6"></path>
         </svg>
-        <span class="max-[500px]:hidden">Configuration Reference</span>
+        <span class="max-[500px]:hidden">Agent Activity & Sessions</span>
     </a>
     
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 ml-auto shadow-none"
-        href="../use-cli/">
-        <span class="max-[500px]:hidden">CLI</span>
+        href="../features-notifications/">
+        <span class="max-[500px]:hidden">Push Notifications</span>
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
             class="tabler-icon tabler-icon-arrow-right ">
@@ -1920,7 +1759,7 @@ keybinding.</p>
     <button data-slot="collapsible-trigger" data-sidebar="menu-button" data-size="default" data-active="false"
         class="peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-h-8 text-[0.8rem] font-normal leading-tight"
         type="button" aria-expanded="true"
-        data-state="open"
+        data-state="closed"
         onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
 
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15.033 9.44a.647.647 0 0 1 0 1.12l-4.065 2.352a.645.645 0 0 1-.968-.56V7.648a.645.645 0 0 1 .967-.56zM12 17v4m-4 0h8"/><rect width="20" height="14" x="2" y="3" rx="2"/></g></svg>
@@ -1941,8 +1780,8 @@ keybinding.</p>
             
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="true" data-sidebar="menu-button"
-        data-size="default" href="./"
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../use-tui/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></g></svg>
@@ -2121,7 +1960,7 @@ keybinding.</p>
     <button data-slot="collapsible-trigger" data-sidebar="menu-button" data-size="default" data-active="false"
         class="peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-h-8 text-[0.8rem] font-normal leading-tight"
         type="button" aria-expanded="true"
-        data-state="closed"
+        data-state="open"
         onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
 
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594zM20 2v4m2-2h-4"/><circle cx="4" cy="20" r="2"/></g></svg>
@@ -2262,8 +2101,8 @@ keybinding.</p>
             
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="../features-telemetry/"
+    <a data-slot="sidebar-menu-button" data-active="true" data-sidebar="menu-button"
+        data-size="default" href="./"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         
@@ -2556,111 +2395,59 @@ keybinding.</p>
         </p>
         <div class="mewbo-toc__list">
             
-            <a href="#keybindings"
+            <a href="#turn-it-on"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#keybindings');">
-                Keybindings
+                onClick="deferSetActiveTocLink('#turn-it-on');">
+                Turn it on
             </a>
             
             
-            <a href="#activity-dashboard"
+            <a href="#what-grove-puts-on-a-span"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#activity-dashboard');">
-                Activity Dashboard
+                onClick="deferSetActiveTocLink('#what-grove-puts-on-a-span');">
+                What Grove puts on a span
             </a>
             
             
-            <a href="#project-switcher"
+            <a href="#receiving-the-harnesss-own-traces"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#project-switcher');">
-                Project switcher
+                onClick="deferSetActiveTocLink('#receiving-the-harnesss-own-traces');">
+                Receiving the harness's own traces
             </a>
             
             
-            <a href="#steering-an-agent"
+            <a href="#one-exporter-never-two"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#steering-an-agent');">
-                Steering an agent
+                onClick="deferSetActiveTocLink('#one-exporter-never-two');">
+                One exporter, never two
             </a>
             
             
-            <a href="#the-sessions-browser"
+            <a href="#the-vocabulary"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-sessions-browser');">
-                The sessions browser
+                onClick="deferSetActiveTocLink('#the-vocabulary');">
+                The vocabulary
             </a>
             
             
-            <a href="#modals"
+            <a href="#backfilling-history"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#modals');">
-                Modals
+                onClick="deferSetActiveTocLink('#backfilling-history');">
+                Backfilling history
             </a>
             
             
-            <a href="#create"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#create');">
-                Create
-            </a>
-            
-            <a href="#edit"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#edit');">
-                Edit
-            </a>
-            
-            <a href="#kill-confirmation"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#kill-confirmation');">
-                Kill confirmation
-            </a>
-            
-            <a href="#pause-confirmation"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#pause-confirmation');">
-                Pause confirmation
-            </a>
-            
-            <a href="#help"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#help');">
-                Help
-            </a>
-            
-            <a href="#pairing"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#pairing');">
-                Pairing
-            </a>
-            
-            
-            
-            <a href="#theme"
+            <a href="#see-also"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#theme');">
-                Theme
-            </a>
-            
-            
-            <a href="#mouse-vs-keyboard"
-                class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#mouse-vs-keyboard');">
-                Mouse vs keyboard
+                onClick="deferSetActiveTocLink('#see-also');">
+                See also
             </a>
             
             

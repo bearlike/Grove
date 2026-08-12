@@ -998,6 +998,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1966,6 +1990,12 @@ kind or growing a duplicate row.</p>
 (title/status) is the daemon's on-demand fetch, never persisted here, so
 attach stays pure and offline-safe. Permitted in any status except
 ORPHANED (same gate as <code>update</code> — a doomed record gains nothing).</p>
+<p>Seeds the phase file with an entry for the newly attached key
+(:meth:<code>PhaseFile.seed</code>, best-effort) right after the store save, so an
+agent that attaches a ticket mid-task finds the key already there
+instead of composing it. Deliberately NOT mirrored on
+:meth:<code>detach_ticket</code> — see that method's docstring, and
+:meth:<code>PhaseFile.seed</code>'s, for why a detached entry is left standing.</p>
 
 
     </div>
@@ -1984,10 +2014,39 @@ ORPHANED (same gate as <code>update</code> — a doomed record gains nothing).</
     <div class="doc doc-contents ">
 
         <p>Comprehensive commit history for a workspace, newest first.</p>
-<p><code>git log base..branch</code> — every commit done in this workspace
-since the branch diverged from <code>base_branch</code>. Distinct from
-<code>peek.recent_commits</code> which walks all of branch history (no
-fork-point filter) and is capped at 3 for the <abbr title="Terminal User Interface">TUI</abbr>'s tight rail.</p>
+<p><code>git log &lt;diff_base&gt;..branch</code> — every commit made in this workspace
+since it was created. The anchor is the commit recorded at create
+(<code>WorkspaceState.diff_base</code>), NOT the base branch: for a ROOT
+workspace the branch and the base branch are the same ref, so the
+branch-derived range collapsed to empty however much work was done.
+Distinct from <code>peek.recent_commits</code> which walks all of branch history
+(no fork-point filter) and is capped at 3 for the <abbr title="Terminal User Interface">TUI</abbr>'s tight rail.</p>
+<p><strong>A record with no recorded anchor is answered by TIME, not by a ref.</strong>
+<code>diff_base</code>'s fallback is <code>base_branch</code>, and this is the one consumer
+for which that degradation does not survive contact with ROOT placement:
+a root workspace's <code>base_branch</code> is the literal <code>"HEAD"</code>, so the range
+collapses to empty however much work happened, and the card then prints
+a confident false claim ("no commits on this branch yet") rather than a
+degraded one. Reproduced on this repo's own root workspace: <strong>0 commits
+from the ref range against 106 from the <code>--since</code> form</strong>. So a null
+anchor takes <code>branch_commits_since(branch, created_at)</code> — a recorded
+fact answering a different, well-posed question — and the answer says
+which question it was via <code>CommitScope</code>, because the count errs high.
+With an anchor present nothing changes: <code>diff_base</code> IS <code>base_commit</code>
+there, so the call is byte-identical to what it always was.</p>
+<p>A merge-base backfill stays refused, for the reason this module already
+records: it would be indistinguishable on the wire from a recorded fact.
+A timestamp is not, and never claims to be the anchor.</p>
+<p><strong>The window is taken only where the ref range CANNOT answer, which is
+a property of the refs and not of the record's shape.</strong> On a legacy
+Grove-created branch <code>base_branch</code> is a real, different ref and the
+range is exact, so trading it for a window that can over-report would
+lose precision this method already had. The test is therefore whether
+the two ends resolve to the same commit — true for root placement (where
+<code>base_branch</code> is the literal <code>"HEAD"</code>), and the one condition under
+which the answer is <em>structurally</em> zero rather than measured. An
+unresolvable base is degenerate for the same reason: <code>branch_commits</code>
+could only raise on it.</p>
 <p>Best-effort: degrades to <code>()</code> on git failure, mirroring the
 peek-helpers' never-raise contract for read paths. The daemon's
 <code>GET /workspaces/{id}/commits</code> is the wire shape consumers
@@ -2633,6 +2692,64 @@ no such agent" are different answers a user acts on differently.</p>
 <div class="doc doc-object doc-function">
 
 
+<h3 id="grove.core.WorkspaceManager.pending_queue" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">pending_queue</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">QueuedMessage</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>What the harness is holding for this workspace but has not delivered
+— the engine seam <code>GET /workspaces/{id}/queue</code> reads.</p>
+<p>The :meth:<code>latest_todo</code> sibling in every respect that matters, and for
+the same reasons. Resolution is :meth:<code>_todo_session_id</code>, NOT
+<code>agent_session_id</code>: codex mints no id at all and a rotated claude id
+is a dead pointer, so keying on the mint would exclude a whole provider
+by construction — the exact bug the todo route already documents.
+<code>AgentSessionNotFound</code> is raised only when neither the mint nor
+discovery names a session, so a caller that NAMED a workspace can tell
+404 from "a session exists and nothing is queued" (an empty tuple, a
+real answer). The adapter read stays best-effort on its own.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.WorkspaceManager.pending_queue_for" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">pending_queue_for</span><span class="p">(</span><span class="n">state</span><span class="p">:</span> <span class="n">WorkspaceState</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">QueuedMessage</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>:meth:<code>pending_queue</code> for a state a caller ALREADY holds reconciled —
+the :meth:<code>latest_todo_for</code> split, for the identical reason.</p>
+<p>Degrades to <code>()</code> for a sessionless workspace rather than raising (the
+404-vs-empty distinction is the <em>id</em> seam's contract), does NO discovery
+of its own (a scan per workspace per ~1 Hz tick is the daemon-CPU bug the
+transcript cache exists to prevent), and reads
+<code>transcript_scan_cwds[0]</code> because a filesystem adapter resolves a
+session by globbing its id — and because the codex arm ignores <code>cwd</code>
+outright, its queue being keyed by thread id in a config-root-global
+store.</p>
+<p>Scoped, like every adapter read here: an unscoped read on a
+profile-pinned workspace resolves the wrong config dir and answers
+empty, which on this axis is indistinguishable from "nothing queued".</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="grove.core.WorkspaceManager.phase" class="doc doc-heading">
             <code class="codehilite language-python"><span class="n">phase</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PhaseReport</span> <span class="o">|</span> <span class="kc">None</span></code>
 
@@ -2890,19 +3007,30 @@ that, everything is guarded.</p>
 
 
 <h3 id="grove.core.WorkspaceManager.set_phase" class="doc doc-heading">
-            <code class="codehilite language-python"><span class="n">set_phase</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">phase</span><span class="p">:</span> <span class="n">TaskPhase</span><span class="p">,</span> <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PhaseReport</span></code>
+            <code class="codehilite language-python"><span class="n">set_phase</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">phase</span><span class="p">:</span> <span class="n">TaskPhase</span><span class="p">,</span> <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">blocked</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">ticket</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PhaseReport</span></code>
 
 </h3>
 
 
     <div class="doc doc-contents ">
 
-        <p>Record a phase claim for a workspace — the <abbr title="Command Line Interface">CLI</abbr> verb / <abbr title="Model Context Protocol">MCP</abbr> tool seam.</p>
+        <p>Record a phase claim for a workspace, or for one of its tickets —
+the <abbr title="Command Line Interface">CLI</abbr> verb / <abbr title="Model Context Protocol">MCP</abbr> tool seam.</p>
 <p>The in-workspace agent never comes through here; it writes the file
 directly (that is the whole point of the file channel). This is for an
-orchestrator or a human setting or correcting a workspace's phase from
-outside, so it is LOUD where :meth:<code>phase_for</code> is best-effort — a caller
-that asked to write is entitled to know it did not happen.</p>
+orchestrator or a human setting or correcting a claim from outside, so
+it is LOUD where :meth:<code>phase_for</code> is best-effort — a caller that asked
+to write is entitled to know it did not happen.</p>
+<p><code>ticket</code>, when given, MUST be one of <code>state.ticket_refs</code>' own
+<code>.key</code> — never validated against free text, because a key this
+workspace never attached would seed a per-ticket claim the store, the
+sticky publisher and every other joiner can never reach. Checked
+against a FRESH read of the store (never a caller-cached list), so a
+detach that raced this call is honoured rather than silently
+overwritten. Raises :class:<code>TicketNotAttached</code>, naming both the
+rejected key and the workspace's actual attached keys, before touching
+the file. Omit it to set the workspace's own claim, unchanged from
+before.</p>
 <p>No event is emitted: the phase is derived per poll tick from the file
 rather than persisted on the record, so the existing
 <code>session_activity</code> delta already streams it (the fingerprint carries
@@ -3061,6 +3189,48 @@ workspace is ORPHANED (worktree gone; record headed for kill).
 Emits an <code>"updated"</code> event with <code>title_changed</code> /
 <code>description_changed</code> flags so subscribers know what shifted
 without diffing themselves.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.WorkspaceManager.working_diff" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">working_diff</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">WORKING_DIFF_MAX_BYTES</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WorkspaceDiff</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Every file this workspace has changed since it was created.</p>
+<p><strong>Scope is the worktree against the recorded creation anchor
+(<code>WorkspaceState.base_commit</code>), INCLUDING untracked files</strong> — so a
+file the agent committed an hour ago is still in the answer. Anchoring
+on <code>HEAD</code> instead made the patch go blank the moment the agent
+committed, which is precisely when a reviewer wants it, and it is the
+<em>only</em> axis a ROOT workspace has: there the branch IS the base branch,
+so the committed-vs-base stats collapse to zero.</p>
+<p>The anchor is a fact recorded once, never a range re-derived here — the
+base branch moving on afterwards must not change what this workspace is
+credited with. A record written before the anchor existed falls back to
+<code>HEAD</code>, i.e. exactly the historical uncommitted-only patch; that is the
+honest degradation, not a fabricated baseline. <strong>This is why the patch's
+file count no longer matches <code>peek</code>'s <code>dirty_files</code></strong> once anything has
+been committed: that counter deliberately stays the <em>uncommitted</em> churn
+signal the activity stream fingerprints.</p>
+<p>Untracked files are appended as individual all-additions patches
+because <code>git diff</code> omits them entirely (see <code>untracked_patch</code> for why
+the index is never touched to get them).</p>
+<p>Bounded by <code>max_bytes</code>, cut at a whole-file boundary so the result is
+always a parseable patch, with <code>truncated</code> saying so. A caller wanting
+one file passes <code>path</code> — the per-file form is what lets a client read a
+big tree one file at a time instead of raising the cap.</p>
+<p>Never raises: an unreadable worktree is <code>available=False</code> with a
+reason, which is a materially different answer from an empty patch.</p>
 
 
     </div>
@@ -3889,6 +4059,13 @@ reasoning as :meth:<code>transcripts</code>.</p>
 Grove doesn't manage (a hand-made worktree, or the repo root with no ROOT
 workspace). <code>provenance</code> is <code>grove_launched</code> only when the id matches
 a workspace's minted <code>agent_session_id</code>.</p>
+<p><code>duration</code> is the wall clock and the compute total (see
+:func:<code>~grove.core.session_duration.duration_of</code>), derived here from the
+message spine because this scope is already parsing the transcript.
+<code>None</code> means the spine could not be read at all — never <em>no work</em>, which
+is a <code>DurationView</code> whose own fields are null. It is the same number
+:class:<code>CatalogEntry</code> reads out of the durable cache, from the same
+function, so the two scopes cannot disagree about one session.</p>
 
 
 
@@ -3980,6 +4157,41 @@ a workspace's minted <code>agent_session_id</code>.</p>
 every session-(re)creation path (resume/respawn) so they can't drift on
 the nested-cwd rule. <code>project_subpath == ""</code> collapses to the
 worktree root — the historical behavior.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="grove.core.WorkspaceState.diff_base" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">diff_base</span><span class="p">:</span> <span class="nb">str</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>The revision the COMMITTED "since created" reads measure from.</p>
+<p>One definition for the three callers that share the question — the
+commit log, the line stats on the peek rail, and the same stats on the
+activity stream — so they cannot drift on which anchor they used.</p>
+<p>The recorded <code>base_commit</code> when there is one, because "since the
+workspace was created" is anchored in TIME: the base branch moving on
+afterwards must not change what this workspace is credited with, and a
+range derived from a live branch name silently re-answers the question
+on every read. The fallback to <code>base_branch</code> is the honest
+degradation for a record written before the anchor existed — the
+historical behavior exactly, including its root-placement blind spot.</p>
+<p>Deliberately NOT read by <code>ahead_behind</code>: "behind" asks how far the
+base BRANCH has moved since, which a frozen commit can only ever
+answer zero.</p>
 
     </div>
 
@@ -4109,6 +4321,41 @@ recovers it. Deduped when the subpath is empty (the flat-workspace common
 case), so the second entry only exists for a genuinely nested project.
 <code>agent_cwd</code> first — the primary project cwd; callers that need
 newest-first across the union re-sort by mtime.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="grove.core.WorkspaceState.telemetry_session_id" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">telemetry_session_id</span><span class="p">:</span> <span class="nb">str</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>The id every emitter must key this run's traces by.</p>
+<p>Grove and the agent trace independently and never share a trace id, so a
+Langfuse <em>session</em> is the only thing that reassembles one run — and it
+reassembles only what agrees on this value. The agent's half is stamped
+into <code>OTEL_RESOURCE_ATTRIBUTES</code> at launch and frozen there for the life
+of the process, so this is what that stamp said, not a better answer
+learned later: a spine that keys by anything else publishes a second,
+half-empty session beside the real one.</p>
+<p>Prefer the harness's own session id, which is what its native exporters
+and its transcript exporter already use (<code>claude_code</code> takes a
+<code>--session-id</code> Grove mints, so all three agree). Fall back to the tmux
+session for a harness that mints its own id and offers no way to supply
+one (<code>codex</code>), where Grove's own identity is the only value that exists
+at the moment the stamp has to be written.</p>
 
     </div>
 
@@ -4606,6 +4853,11 @@ real feature branch is never lost to a tear-down.</p>
         <p>One commit row, as the peek pane wants to render it.</p>
 <p><code>committed_at</code> is a timezone-aware datetime; humanizing to "2 minutes ago"
 is the client's job — keeping policy out of the engine.</p>
+<p><code>scope</code> says which question the list this row came from answered; it
+describes the RANGE, not the commit, and every row of one list carries the
+same value. It defaults to None (no anchoring question asked) so records
+and call sites written before it existed stay honest rather than inheriting
+a claim.</p>
 
 
 
@@ -5765,6 +6017,12 @@ truncate for the textarea, the engine is the source of truth.</p>
 
 
         <p>Wire mirror of <code>grove.core.workspace.CommitSummary</code>.</p>
+<p><code>scope</code> describes the RANGE the list came from, not the commit, so every
+row of one response carries the same value — a bare-array response has
+nowhere else to put a property of the whole answer, and an envelope would be
+a breaking shape change for both shipped consumers. Defaults to <code>None</code> so
+a client that has not been taught the field decodes unchanged, and so that
+a list which asked no anchoring question makes no claim.</p>
 
 
 
@@ -6647,6 +6905,30 @@ response can include them in the JSON payload.</p>
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -7248,6 +7530,20 @@ response can include them in the JSON payload.</p>
                 peek_pane
             </a>
             
+            <a href="#grove.core.WorkspaceManager.pending_queue"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.pending_queue');">
+                pending_queue
+            </a>
+            
+            <a href="#grove.core.WorkspaceManager.pending_queue_for"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.pending_queue_for');">
+                pending_queue_for
+            </a>
+            
             <a href="#grove.core.WorkspaceManager.phase"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
@@ -7344,6 +7640,13 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.update');">
                 update
+            </a>
+            
+            <a href="#grove.core.WorkspaceManager.working_diff"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.working_diff');">
+                working_diff
             </a>
             
             
@@ -7582,6 +7885,13 @@ response can include them in the JSON payload.</p>
                 agent_cwd
             </a>
             
+            <a href="#grove.core.WorkspaceState.diff_base"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.diff_base');">
+                diff_base
+            </a>
+            
             <a href="#grove.core.WorkspaceState.grove_owns_branch"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
@@ -7608,6 +7918,13 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.scan_cwds');">
                 scan_cwds
+            </a>
+            
+            <a href="#grove.core.WorkspaceState.telemetry_session_id"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.telemetry_session_id');">
+                telemetry_session_id
             </a>
             
             <a href="#grove.core.WorkspaceState.transcript_scan_cwds"

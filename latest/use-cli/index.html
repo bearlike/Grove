@@ -998,6 +998,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1313,37 +1337,30 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="every-command-and-flag">Every command and flag</h2>
-<p>Every verb runs the same engine as the <abbr title="Terminal User Interface">TUI</abbr>, so the <abbr title="Command Line Interface">CLI</abbr>, <abbr title="Terminal User Interface">TUI</abbr>, web dashboard, and
-<abbr title="Model Context Protocol">MCP</abbr> are at feature parity.</p>
+<p>Every verb runs the same engine as the <abbr title="Terminal User Interface">TUI</abbr>, at feature parity.</p>
 <h2 id="the-contract">The contract</h2>
 <ul>
-<li><strong>Scope.</strong> Most commands resolve the repo by walking up from <code>cwd</code>, so any
-  linked worktree works. <code>daemon</code>, <code>auth</code>, <code>fleet</code>, and <code>tickets owned</code> are
-  host-wide, since one daemon serves every repo and pairing lives in a host-wide
-  session store.</li>
-<li><strong>Workspace resolution.</strong> A WORKSPACE argument takes an exact id or a unique
-  prefix. An ambiguous prefix exits <code>1</code> and lists the candidates.</li>
-<li><strong>JSON first.</strong> <code>ls</code>, <code>fleet</code>, and <code>debug</code> are JSON-native, <code>sessions list</code>
-  and <code>sessions show</code> take <code>--json</code>, <code>sessions dump</code> is JSON by default. Field
-  names are a stable contract, so parse them, not the tables.</li>
-<li><strong>Exit codes.</strong> <code>0</code> succeeds. <code>1</code> is a typed Grove error on stderr, such as no
-  git repository, a config that failed to load, a session ref matching nothing,
-  or a malformed id. <code>2</code> is the argument parser rejecting an unknown flag or a
-  missing required argument.</li>
-<li><strong>Non-interactive.</strong> No pagers, and no prompt but the <code>grove kill</code>
-  confirmation <code>--yes</code> skips.</li>
+<li><strong>Scope.</strong> Most commands resolve the repo from <code>cwd</code> upward. <code>daemon</code>,
+  <code>auth</code>, <code>fleet</code>, and <code>tickets owned</code> are host-wide.</li>
+<li><strong>Workspace resolution.</strong> A WORKSPACE argument takes an exact id or a
+  unique prefix, and an ambiguous one exits <code>1</code> and lists the candidates.</li>
+<li><strong>JSON first.</strong> <code>ls</code>, <code>fleet</code>, and <code>debug</code> are JSON-native. <code>sessions list</code>
+  and <code>sessions show</code> take <code>--json</code>, <code>sessions dump</code> defaults to it.</li>
+<li><strong>Exit codes.</strong> <code>0</code> succeeds. <code>1</code> is a typed Grove error. <code>2</code> is a bad flag
+  or a missing argument.</li>
+<li><strong>Non-interactive.</strong> No pagers, and no prompt but <code>grove kill</code>'s
+  confirmation, which <code>--yes</code> skips.</li>
 </ul>
 <h2 id="grove"><code>grove</code></h2>
-<p>Launch the <abbr title="Terminal User Interface">TUI</abbr> for the repo found from <code>cwd</code>, against the merged config, or
-exit <code>1</code> outside a git repository. See the <a href="../use-tui/"><abbr title="Terminal User Interface">TUI</abbr> tour</a>. It also
-carries Typer's <code>--install-completion</code> and <code>--show-completion</code>.</p>
+<p>Launches the <abbr title="Terminal User Interface">TUI</abbr> for the repo found from <code>cwd</code>, or exits <code>1</code> outside one. See
+the <a href="../use-tui/"><abbr title="Terminal User Interface">TUI</abbr> tour</a>. Also carries Typer's <code>--install-completion</code> and
+<code>--show-completion</code>.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">cd</span><span class="w"> </span>/path/to/my-project
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove
 </span></code></pre></div>
 <h2 id="read-commands">Read commands</h2>
 <h3 id="grove-ls"><code>grove ls</code></h3>
-<p>This repo's workspaces as JSON, one record each, in creation order. No
-options.</p>
+<p>This repo's workspaces as JSON, one record each, in creation order.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>grove<span class="w"> </span>ls
 </span></code></pre></div>
 <div class="language-json codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">[</span>
@@ -1359,23 +1376,21 @@ options.</p>
 </span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">]</span>
 </span></code></pre></div>
 <p><code>status</code> is Grove's reconciled view, one of <code>active</code>, <code>idle</code>, <code>paused</code>,
-<code>offline</code>, <code>orphaned</code>, or <code>error</code>. See <a href="../features-status/">status
-semantics</a> for each recovery path.</p>
+<code>offline</code>, <code>orphaned</code>, or <code>error</code>. See <a href="../features-status/">status semantics</a>.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Every workspace that needs attention, without opening the TUI.</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>grove<span class="w"> </span>ls<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.[] | select(.status==&quot;offline&quot; or .status==&quot;orphaned&quot; or .status==&quot;error&quot;) | &quot;\(.status)\t\(.title)\t\(.branch)&quot;&#39;</span>
 </span></code></pre></div>
 <h3 id="grove-fleet"><code>grove fleet</code></h3>
 <p>Every workspace on this host as JSON, with lifecycle status, blended agent
-activity, task phase, and ticket refs. Same shape as the daemon's activity feed
-and the <code>grove_get_fleet_status</code> <abbr title="Model Context Protocol">MCP</abbr> tool.</p>
+activity, task phase, and ticket refs.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>grove<span class="w"> </span>fleet
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>grove<span class="w"> </span>fleet<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.projects[].workspaces[] | select(.needs_attention)&#39;</span>
 </span></code></pre></div>
 <h3 id="grove-show"><code>grove show</code></h3>
 <p>One workspace's identity, git ahead/behind/diff/dirty, agent state and turn
-counts, reported <a href="../features-status/#the-third-axis-task-phase">task phase</a> and
-todo list, recent transcript turns, and a live pane snapshot. The peek rail as a
-command, and it mutates nothing.</p>
+counts, <a href="../features-status/#the-third-axis-task-phase">task phase</a> and todo
+list, recent transcript turns, and a live pane snapshot. The peek rail as a
+command.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>grove<span class="w"> </span>show<span class="w"> </span><span class="o">[</span>WORKSPACE<span class="o">]</span><span class="w"> </span><span class="o">[</span>--last/-l<span class="w"> </span>N<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
@@ -1403,10 +1418,9 @@ command, and it mutates nothing.</p>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>grove<span class="w"> </span>show<span class="w"> </span>a1b2<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span><span class="w">  </span><span class="c1"># by id prefix, last 5 turns</span>
 </span></code></pre></div>
 <h3 id="grove-phase"><code>grove phase</code></h3>
-<p>Set or read a workspace's <a href="../features-status/#the-third-axis-task-phase">task
-phase</a>, how far through its task
-the agent reports itself to be. Setting writes the file Grove names as
-<code>GROVE_PHASE_FILE</code>, the channel available everywhere.</p>
+<p>Sets or reads a workspace's <a href="../features-status/#the-third-axis-task-phase">task
+phase</a>, writing the file named
+by <code>GROVE_PHASE_FILE</code>, the channel available everywhere.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>grove<span class="w"> </span>phase<span class="w"> </span>&lt;phase&gt;<span class="w"> </span><span class="o">[</span>--note<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>WORKSPACE<span class="o">]</span><span class="w">   </span><span class="c1"># set</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>grove<span class="w"> </span>phase<span class="w"> </span><span class="o">[</span>WORKSPACE<span class="o">]</span><span class="w">                         </span><span class="c1"># read</span>
 </span></code></pre></div>
@@ -1442,9 +1456,8 @@ the agent reports itself to be. Setting writes the file Grove names as
 </span></code></pre></div>
 <h3 id="grove-sessions"><code>grove sessions</code></h3>
 <p>The sessions recorded for this project, a kind of <code>git log</code> for agent
-conversations. Every worktree is scanned and transcripts outlive worktrees, so
-Grove workspaces, hand-made worktrees, the repo root and paused workspaces all
-appear in one read-only place. The subcommands form a cost ladder.</p>
+conversations. Transcripts outlive worktrees, so paused ones show up too. The
+subcommands form a cost ladder, cheapest first.</p>
 <h4 id="grove-sessions-list"><code>grove sessions list</code></h4>
 <p>Every session across this project's worktrees, newest first.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--host<span class="o">]</span><span class="w"> </span><span class="o">[</span>--agent<span class="w"> </span>KIND<span class="o">]</span><span class="w"> </span><span class="o">[</span>-w<span class="w"> </span>PREFIX<span class="o">]</span><span class="w"> </span><span class="o">[</span>--since<span class="w"> </span>WINDOW<span class="o">]</span><span class="w"> </span><span class="o">[</span>-n<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
@@ -1498,8 +1511,8 @@ appear in one read-only place. The subcommands form a cost ladder.</p>
 </tbody>
 </table></div>
 <p><code>STATE</code> is computed from the transcript, one of <code>starting</code>, <code>working</code>,
-<code>waiting</code>, <code>blocked</code>, <code>idle</code>, <code>error</code>, or <code>unknown</code>. <code>waiting</code> and <code>blocked</code>
-want a human.</p>
+<code>waiting</code>, <code>blocked</code>, <code>idle</code>, <code>error</code>, or <code>unknown</code>. <code>waiting</code> or <code>blocked</code>
+wants a human.</p>
 <div class="language-text codehilite"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>SESSION    AGENT        WORKSPACE            STATE     TURNS MODIFIED         TITLE / PROMPT
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>7b3f2c1a   claude_code  Forecast cache       waiting      14 2 minutes ago   Add an LRU layer to the forecast client
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>a91e0d34   claude_code  Radar overlay        working       6 just now        Wire the radar tiles onto the map
@@ -1544,9 +1557,8 @@ want a human.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>7b3f2c1a<span class="w"> </span>--last<span class="w"> </span><span class="m">3</span>
 </span></code></pre></div>
 <h4 id="grove-sessions-dump"><code>grove sessions dump</code></h4>
-<p>Raw native records, the main transcript plus any sub-agent files, for exact
-<code>tool_result</code> payloads or token accounting. Megabytes are possible, so <code>list</code>
-and <code>show --last N</code> are cheaper for catching up.</p>
+<p>Raw native records, the main transcript plus any sub-agent files. Megabytes
+are possible, so <code>list</code> and <code>show</code> are cheaper for catching up.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--jsonl<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
@@ -1573,11 +1585,10 @@ and <code>show --last N</code> are cheaper for catching up.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>7b3f2c1a<span class="w"> </span>--jsonl<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;select(.type==&quot;assistant&quot;)&#39;</span>
 </span></code></pre></div>
 <h4 id="grove-sessions-remap"><code>grove sessions remap</code></h4>
-<p>Implemented in <a href="https://github.com/bearlike/Grove/blob/c20cae9d/src/grove/tui/cli_sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>cli_sessions.py</span></a>. Pin an
-existing session as a workspace's tracked primary, after a <code>/clear</code> rotated the
-id or the process crashed, or to adopt a hand-started session. Re-running the
-same pair is a no-op, and success prints the workspace id, title, and tracked
-session id.</p>
+<p>Implemented in <a href="https://github.com/bearlike/Grove/blob/010d5ce7/src/grove/tui/cli_sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>cli_sessions.py</span></a>. Pins an
+existing session as a workspace's tracked primary, after a <code>/clear</code> rotated
+the id or to adopt a hand-started session. Re-running the same pair is a
+no-op.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>WORKSPACE<span class="w"> </span>SESSION
 </span></code></pre></div>
 <div class="table-wrapper"><table>
@@ -1602,8 +1613,7 @@ session id.</p>
 </span></code></pre></div>
 <h2 id="lifecycle-commands">Lifecycle commands</h2>
 <h3 id="grove-create"><code>grove create</code></h3>
-<p>Create a workspace, meaning a git worktree, a branch, a tmux session, and a
-running agent.</p>
+<p>A git worktree, a branch, a tmux session, and a running agent.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>grove<span class="w"> </span>create<span class="w"> </span>TITLE<span class="w"> </span>--agent/-a<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--model/-m<span class="w"> </span>ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--runtime<span class="w"> </span>host<span class="p">|</span>container<span class="o">]</span><span class="w"> </span><span class="o">[</span>branch<span class="w"> </span>flags<span class="o">]</span><span class="w"> </span><span class="o">[</span>--base<span class="w"> </span>REF<span class="o">]</span><span class="w"> </span><span class="o">[</span>--description/-d<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--no-init<span class="o">]</span><span class="w"> </span><span class="o">[</span>--prompt/-p<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--brief/--no-brief<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
@@ -1668,9 +1678,8 @@ running agent.</p>
 </tr>
 </tbody>
 </table></div>
-<p>The branch flags are mutually exclusive, and omitting them all auto-names a
-branch from the title slug. Success prints the workspace id, title, agent,
-branch, worktree path, and tmux session name.</p>
+<p>The branch flags are mutually exclusive. Omitting them all auto-names a branch
+from the title slug.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Auto branch (title slug → grove/fix-login-YYYYMMDD-HHmmss)</span>
 </span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;fix login&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude
 </span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
@@ -1690,15 +1699,13 @@ branch, worktree path, and tmux session name.</p>
 </span><span id="__span-19-17"><a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;add cache&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--prompt<span class="w"> </span><span class="s2">&quot;add an LRU cache in front of the API client&quot;</span>
 </span></code></pre></div>
 <h3 id="grove-message"><code>grove message</code></h3>
-<p>Steer a running workspace's agent, the <abbr title="Terminal User Interface">TUI</abbr> steer modal's path. With no live
-pane to deliver to, the engine raises a clean error.</p>
+<p>Steers a running workspace's agent, the <abbr title="Terminal User Interface">TUI</abbr>'s steer modal.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>grove<span class="w"> </span>message<span class="w"> </span>WORKSPACE<span class="w"> </span>TEXT
 </span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>grove<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span><span class="s2">&quot;now add a test for the empty case&quot;</span>
 </span></code></pre></div>
 <h3 id="grove-pause"><code>grove pause</code></h3>
-<p>Remove the worktree and tmux session, keeping the branch <code>grove resume</code>
-rebuilds from later. Without <code>--force</code>, Grove refuses to pause a workspace with
-uncommitted changes, so no work is silently discarded.</p>
+<p>Removes the worktree and tmux session, keeping the branch <code>grove resume</code>
+rebuilds from. <code>--force</code> is required with uncommitted changes.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>grove<span class="w"> </span>pause<span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--force/-f<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
@@ -1719,22 +1726,21 @@ uncommitted changes, so no work is silently discarded.</p>
 </span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>grove<span class="w"> </span>pause<span class="w"> </span>a1b2<span class="w"> </span>--force<span class="w">    </span><span class="c1"># discard uncommitted changes</span>
 </span></code></pre></div>
 <h3 id="grove-resume"><code>grove resume</code></h3>
-<p>Rebuild a paused workspace's worktree from its branch, and relaunch tmux and
+<p>Rebuilds a paused workspace's worktree from its branch, relaunching tmux and
 the agent.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>grove<span class="w"> </span>resume<span class="w"> </span>WORKSPACE
 </span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>grove<span class="w"> </span>resume<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-respawn"><code>grove respawn</code></h3>
-<p>Recreate a vanished tmux session when the worktree still exists, which <code>resume</code>
-does not cover. For a container workspace it reattaches to the agent still
-running inside, rather than launching a new one.</p>
+<p>Recreates a vanished tmux session when the worktree still exists, which
+<code>resume</code> does not cover. For a container it reattaches to the running agent.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>grove<span class="w"> </span>respawn<span class="w"> </span>WORKSPACE
 </span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>grove<span class="w"> </span>respawn<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-kill"><code>grove kill</code></h3>
-<p>Destroy a workspace. The tmux session and worktree go, remote branches are
-never touched, and the local branch follows provenance, so Grove-created
-branches are deleted and <code>--checkout</code> branches kept.</p>
+<p>Destroys a workspace. Tmux session and worktree go, remote branches stay
+untouched, and the local branch follows provenance. Grove-created branches
+are deleted, <code>--checkout</code> branches kept.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--delete-branch<span class="w"> </span><span class="p">|</span><span class="w"> </span>--keep-branch<span class="o">]</span><span class="w"> </span><span class="o">[</span>--yes/-y<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
@@ -1763,27 +1769,24 @@ branches are deleted and <code>--checkout</code> branches kept.</p>
 </span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>a1b2<span class="w"> </span>--keep-branch<span class="w"> </span>-y<span class="w">   </span><span class="c1"># keep branch, no prompt</span>
 </span></code></pre></div>
 <h3 id="grove-attach"><code>grove attach</code></h3>
-<p>Attach your terminal to a workspace's tmux session, replacing the current
-process with <code>tmux attach</code>, or <code>tmux switch-client</code> from inside tmux. Detach
-with Ctrl-b d.</p>
+<p>Your terminal to a workspace's tmux session, replacing the current process
+with <code>tmux attach</code>, or <code>switch-client</code> from inside tmux. Detach with Ctrl-b
+d.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>grove<span class="w"> </span>attach<span class="w"> </span>WORKSPACE
 </span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>grove<span class="w"> </span>attach<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-shell"><code>grove shell</code></h3>
-<p>An interactive shell inside a container workspace's container, at the agent's
-working directory, replacing the current process like <code>grove attach</code>. It runs
-under the container's own tmux, so the shell, its history and anything running
-survive between visits.</p>
+<p>An interactive shell inside a container workspace, at the agent's working
+directory, replacing the current process like <code>grove attach</code>. Runs under the
+container's own tmux, so it survives between visits.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>grove<span class="w"> </span>shell<span class="w"> </span>WORKSPACE
 </span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>grove<span class="w"> </span>shell<span class="w"> </span>a1b2
 </span></code></pre></div>
-<p>A host workspace has no container, so <code>grove shell</code> says so and points at
-<code>grove attach</code>. Which shell runs is <code>container.shell</code>, a chain tried in order,
-<code>bash</code> then <code>sh</code> by default because plenty of base images ship only the
-second.</p>
+<p>A host workspace has no container, so <code>grove shell</code> points at <code>grove attach</code>.
+<code>container.shell</code> picks which shell runs, <code>bash</code> then <code>sh</code>.</p>
 <h3 id="grove-agent"><code>grove agent</code></h3>
-<p>Several agents in one containerized workspace's container, each in its own
-persistent tmux session, and only when you ask.</p>
+<p>Several agents in one containerized workspace, each in its own persistent
+tmux session.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>grove<span class="w"> </span>agent<span class="w"> </span>list<span class="w"> </span>WORKSPACE
 </span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>grove<span class="w"> </span>agent<span class="w"> </span>add<span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--agent<span class="w"> </span>NAME<span class="o">]</span><span class="w"> </span><span class="o">[</span>--name<span class="w"> </span>SLOT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--model<span class="w"> </span>ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--prompt<span class="w"> </span>TEXT<span class="o">]</span>
 </span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>grove<span class="w"> </span>agent<span class="w"> </span>attach<span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT
@@ -1794,26 +1797,22 @@ persistent tmux session, and only when you ask.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>grove<span class="w"> </span>agent<span class="w"> </span>add<span class="w"> </span>a1b2<span class="w"> </span>--agent<span class="w"> </span>codex<span class="w"> </span>--name<span class="w"> </span>reviewer
 </span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>grove<span class="w"> </span>agent<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span>reviewer<span class="w"> </span><span class="s2">&quot;review the last three commits&quot;</span>
 </span></code></pre></div>
-<p><code>add</code> names slots <code>agent-2</code>, <code>agent-3</code>, and so on unless you pass <code>--name</code>, and
+<p><code>add</code> auto-names slots <code>agent-2</code>, <code>agent-3</code>, unless you pass <code>--name</code>, and
 runs the workspace's own agent unless you pass <code>--agent</code>. <code>list</code> reads the
-container, so it shows what is really running. <code>kill</code> refuses the workspace's
-own agent, which belongs to <code>grove pause</code>, <code>grove respawn</code>, and <code>grove kill</code>.
-Every verb needs a containerized workspace with a reachable tmux.</p>
+container, showing what is really running. <code>kill</code> refuses the workspace's
+own agent, still <code>grove pause</code> and <code>grove kill</code>'s job.</p>
 <h3 id="grove-code"><code>grove code</code></h3>
-<p>Open a container workspace in VS Code, attached to the running container via
-the Dev Containers extension. Needs the <code>code</code> <abbr title="Command Line Interface">CLI</abbr> on <code>PATH</code> and a <code>container</code>
-runtime. See <a href="../features-containers/#opening-it-in-vs-code">Container
-Workspaces</a> for the dual-editing
-rule.</p>
+<p>A container workspace in VS Code via the Dev Containers extension. Needs the
+<code>code</code> <abbr title="Command Line Interface">CLI</abbr> on <code>PATH</code> and a <code>container</code> runtime. See <a href="../features-containers/#opening-it-in-vs-code">Container
+Workspaces</a> for the
+dual-editing rule.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>grove<span class="w"> </span>code<span class="w"> </span>WORKSPACE
 </span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>grove<span class="w"> </span>code<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-tickets"><code>grove tickets</code></h3>
-<p>Attach, list, and detach the issues and pull requests linked to a workspace,
-and hand an issue to the fleet. <code>attach</code>, <code>detach</code>, <code>handover</code>, and <code>handback</code>
-take one free-text <code>ref</code>, a URL, <code>#42</code>, a bare <code>42</code>, or <code>owner/repo#42</code>, with
-provider and issue-vs-<abbr title="Pull Request">PR</abbr> inferred from it. An id matching two enabled trackers
-raises rather than guessing.</p>
+<p>Attaches, lists, and detaches issues and pull requests, and hands an issue to
+the fleet. Most subcommands take one free-text <code>ref</code>, a URL, <code>#42</code>, a bare
+<code>42</code>, or <code>owner/repo#42</code>.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
 </span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
 </span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>detach<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
@@ -1825,71 +1824,67 @@ raises rather than guessing.</p>
 </span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span><span class="s1">&#39;#42&#39;</span><span class="w"> </span>-w<span class="w"> </span>a1b2
 </span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>list
 </span></code></pre></div>
-<p><code>--workspace</code> is inferred from the current worktree when omitted, the shape an
-agent linking its workspace to the <abbr title="Pull Request">PR</abbr> it opened uses most. <code>attach</code> and <code>detach</code>
-are idempotent, so re-attaching a ref, or correcting a wrong guess, fixes in
-place rather than duplicating.</p>
+<p><code>--workspace</code> is inferred from the worktree. <code>attach</code> and <code>detach</code> are
+idempotent, so a repeat corrects a wrong guess.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handover<span class="w"> </span><span class="m">42</span><span class="w">   </span><span class="c1"># assign Grove&#39;s account, start a workspace on it</span>
 </span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>owned<span class="w">         </span><span class="c1"># every ticket Grove holds, host-wide, and whether work is live</span>
 </span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handback<span class="w"> </span><span class="m">42</span><span class="w">   </span><span class="c1"># unassign, leaving any workspace alone</span>
 </span></code></pre></div>
-<p><code>handover</code> records the durable marker the poll uses, so no second workspace
-starts for that ticket. <code>handback</code> keeps that marker, so the poll does not take
-the ticket straight back, and stopping the work stays <code>grove kill</code>'s job. See
-<a href="../features-ticket-providers/">ticket providers</a>.</p>
+<p><code>handover</code> records the marker the poll uses so no second workspace starts.
+<code>handback</code> keeps that marker so the poll does not reclaim it. Stopping the
+work is still <code>grove kill</code>'s job. See <a href="../features-ticket-providers/">ticket
+providers</a>.</p>
 <h2 id="admin-commands">Admin commands</h2>
 <h3 id="grove-config-show"><code>grove config show</code></h3>
-<p>The merged effective config for this repo, as JSON, after the six-layer cascade
+<p>The merged effective config for this repo, as JSON, after the cascade
 resolves.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>grove<span class="w"> </span>config<span class="w"> </span>show
 </span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a>grove<span class="w"> </span>config<span class="w"> </span>show<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.worktree.root_template&#39;</span>
 </span></code></pre></div>
 <h3 id="grove-config-add-project"><code>grove config add-project</code></h3>
-<p>Register a git repo (default <code>cwd</code>) in the user config's known-projects list,
-so it appears in cross-project surfaces with zero workspaces and no
-<code>.grove/config.json</code>.</p>
+<p>Registers a git repo (default <code>cwd</code>) in the user config's known-projects
+list, so it appears in cross-project surfaces with zero workspaces and no
+config of its own.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>grove<span class="w"> </span>config<span class="w"> </span>add-project
 </span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a>grove<span class="w"> </span>config<span class="w"> </span>add-project<span class="w"> </span>/path/to/other-project
 </span></code></pre></div>
 <h3 id="grove-config-init"><code>grove config init</code></h3>
-<p>Scaffold a project config at <code>&lt;repo&gt;/.grove/config.json</code>, refusing to clobber
-an existing file without <code>-f</code>. The stub covers the worktree root and branch
-prefix, a single <code>claude</code> agent, and a disabled init script, with its <code>$schema</code>
-pointed at the JSON Schema it writes beside your user config.</p>
+<p>A project config at <code>&lt;repo&gt;/.grove/config.json</code>, refusing to clobber an
+existing file without <code>-f</code>. The stub covers the worktree root and branch
+prefix, a single <code>claude</code> agent, and a disabled init script.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w">                    </span><span class="c1"># writes .grove/config.json</span>
 </span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w"> </span>-f<span class="w">                 </span><span class="c1"># overwrite an existing config</span>
 </span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w"> </span>--with-onboarding<span class="w">  </span><span class="c1"># also install skills + register the MCP server</span>
 </span></code></pre></div>
 <h3 id="grove-skills-install"><code>grove skills install</code></h3>
-<p>Copy Grove's bundled skills into Claude and Codex skill directories.</p>
+<p>Grove's bundled skills, copied into Claude and Codex skill directories.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w">                          </span><span class="c1"># asks where to install</span>
 </span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w"> </span>--target<span class="w"> </span>project<span class="w">         </span><span class="c1"># user | project | all</span>
 </span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w"> </span>-t<span class="w"> </span>user<span class="w"> </span>--agent<span class="w"> </span>claude<span class="w">   </span><span class="c1"># claude | codex | all</span>
 </span></code></pre></div>
 <h3 id="grove-mcp-install"><code>grove mcp install</code></h3>
-<p>Register this install as an <abbr title="Model Context Protocol">MCP</abbr> server via <code>claude mcp add</code> or <code>codex mcp add</code>,
-with the same <code>--target</code> and <code>--agent</code> flags.</p>
+<p>This install as an <abbr title="Model Context Protocol">MCP</abbr> server via <code>claude mcp add</code> or <code>codex mcp add</code>, with
+the same <code>--target</code> and <code>--agent</code> flags.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>grove<span class="w"> </span>mcp<span class="w"> </span>install
 </span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>grove<span class="w"> </span>mcp<span class="w"> </span>install<span class="w"> </span>--target<span class="w"> </span>project<span class="w"> </span>--agent<span class="w"> </span>claude
 </span></code></pre></div>
 <h3 id="grove-init-devcontainer"><code>grove init devcontainer</code></h3>
-<p>Scaffold <code>.devcontainer/devcontainer.json</code> from Grove's packaged default
-container config, the remedy every "default container" notice points at. A repo
-with no <code>.devcontainer/</code> still runs containerized, just not on a project-owned
-config. See <a href="../features-containers/">Container Workspaces</a>.</p>
+<p><code>.devcontainer/devcontainer.json</code> from Grove's packaged default container
+config, the remedy every "default container" notice points at. See
+<a href="../features-containers/">Container Workspaces</a>.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>grove<span class="w"> </span>init<span class="w"> </span>devcontainer<span class="w">          </span><span class="c1"># writes .devcontainer/devcontainer.json</span>
 </span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>grove<span class="w"> </span>init<span class="w"> </span>devcontainer<span class="w"> </span>--force<span class="w">  </span><span class="c1"># overwrite an existing one</span>
 </span></code></pre></div>
 <h3 id="grove-config-schema"><code>grove config schema</code></h3>
-<p>Write the JSON Schema next to the user config and nothing else. Useful after an
-upgrade, when the config model may have gained fields.</p>
+<p>The JSON Schema, written next to the user config and nothing else. Useful
+after an upgrade, when the config model may have gained fields.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>grove<span class="w"> </span>config<span class="w"> </span>schema<span class="w">           </span><span class="c1"># write to disk</span>
 </span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>grove<span class="w"> </span>config<span class="w"> </span>schema<span class="w"> </span>--stdout<span class="w">  </span><span class="c1"># print to stdout instead</span>
 </span></code></pre></div>
 <h3 id="grove-daemon-serve"><code>grove daemon serve</code></h3>
 <p>The HTTP daemon behind the <a href="../use-webapp/">web dashboard</a>, serving every repo
-Grove knows about from one process. Normally the <a href="../use-webapp/#always-on-with-systemd">systemd user
-service</a> keeps it up.</p>
+from one process. The <a href="../use-webapp/#always-on-with-systemd">systemd user
+service</a> normally keeps it up.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">              </span><span class="c1"># 127.0.0.1:7421</span>
 </span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w"> </span>--port<span class="w"> </span><span class="m">7777</span>
 </span></code></pre></div>
@@ -1920,16 +1915,13 @@ service</a> keeps it up.</p>
 </tbody>
 </table></div>
 <h3 id="grove-auth"><code>grove auth</code></h3>
-<p>Pairing requests and active sessions, against the host's session store, from
-any directory. See <a href="../use-auth/">authentication</a> for the pairing story.</p>
+<p>Pairing requests and active sessions. See <a href="../use-auth/">authentication</a>.</p>
 <ul>
 <li><code>grove auth pending</code> lists requests waiting for approval.</li>
-<li><code>grove auth approve &lt;challenge-id&gt;</code> approves one, and the device picks up its
-  token on its next poll.</li>
+<li><code>grove auth approve &lt;challenge-id&gt;</code> approves one.</li>
 <li><code>grove auth deny &lt;challenge-id&gt;</code> rejects one.</li>
 <li><code>grove auth sessions</code> lists active sessions.</li>
-<li><code>grove auth revoke &lt;session-id&gt;</code> cuts one off, and that device pairs again to
-  return.</li>
+<li><code>grove auth revoke &lt;session-id&gt;</code> cuts one off.</li>
 </ul>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>grove<span class="w"> </span>auth<span class="w"> </span>pending
 </span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a><span class="c1"># 7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f  code=BFCD-GH23  label=&#39;My Tablet&#39;  state=pending  expires_at=...</span>
@@ -1939,25 +1931,22 @@ any directory. See <a href="../use-auth/">authentication</a> for the pairing sto
 </span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6" href="#__codelineno-43-6"></a>grove<span class="w"> </span>auth<span class="w"> </span>revoke<span class="w"> </span>9d21f0e4-1a2b-4c3d-8e5f-6a7b8c9d0e1f
 </span></code></pre></div>
 <h3 id="grove-doctor"><code>grove doctor</code></h3>
-<p>Check the host against what Grove's container runtime needs, the Docker daemon,
-Compose v2, and <code>@devcontainers/cli</code>, with an actionable hint per failure. Grove
-runs it before deciding a workspace can containerize.</p>
+<p>The host against what Grove's container runtime needs, the Docker daemon,
+Compose v2, and <code>@devcontainers/cli</code>, with a hint per failure.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>grove<span class="w"> </span>doctor<span class="w">           </span><span class="c1"># human-readable table</span>
 </span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a>grove<span class="w"> </span>doctor<span class="w"> </span>--json<span class="w">    </span><span class="c1"># for scripts</span>
 </span></code></pre></div>
-<p>Exit code is <code>0</code> only when every required check passes. The two advisory rows,
-<code>in-container tmux</code> and <code>container firewall</code>, are bundles Grove builds for
-itself on the next containerized create, so a missing one is a state you pass
-through, not a fault.</p>
+<p>Exit code <code>0</code> means every required check passed. The two advisory rows,
+<code>in-container tmux</code> and <code>container firewall</code>, are bundles Grove builds
+itself, so a missing one is not a fault.</p>
 <h3 id="grove-version"><code>grove version</code></h3>
-<p>Print the installed Grove version.</p>
+<p>The installed Grove version.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>grove<span class="w"> </span>version
 </span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a><span class="c1"># grove 0.1.0</span>
 </span></code></pre></div>
 <h3 id="grove-debug"><code>grove debug</code></h3>
 <p>The resolved paths Grove would use for this repo, plus whether the config
-loaded cleanly. Run it first when something is "not loading". Values are
-<code>grove config show</code>'s job.</p>
+loaded cleanly. Run it first when something "isn't loading".</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>grove<span class="w"> </span>debug
 </span></code></pre></div>
 <div class="language-json codehilite"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a><span class="p">{</span>
@@ -1971,18 +1960,16 @@ loaded cleanly. Run it first when something is "not loading". Values are
 </span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9" href="#__codelineno-47-9"></a><span class="p">}</span>
 </span></code></pre></div>
 <h2 id="grove_debug1"><code>GROVE_DEBUG=1</code></h2>
-<p>Flip the logger's stderr handler from <code>WARNING</code> to <code>DEBUG</code>. Every <code>git</code> and
-<code>tmux</code> subprocess invocation, cascade merge, and state-file read becomes visible
-on stderr, which keeps stdout JSON pipeable.</p>
+<p>Flips the logger's stderr handler from <code>WARNING</code> to <code>DEBUG</code>, so every <code>git</code>
+and <code>tmux</code> invocation, cascade merge, and state-file read becomes visible,
+keeping stdout JSON pipeable.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a><span class="nv">GROVE_DEBUG</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>grove<span class="w"> </span>ls
 </span></code></pre></div>
 <h2 id="using-the-cli-from-an-agent">Using the <abbr title="Command Line Interface">CLI</abbr> from an agent</h2>
 <p>A coding agent with shell access inside a Grove-managed worktree has the full
-command surface, to read what siblings have been doing and, when authorized, to
-drive the same fleet.</p>
+command surface, reading what siblings are doing and, when authorized,
+driving the same fleet.</p>
 <h3 id="discover-what-is-happening">Discover what is happening</h3>
-<p><code>grove ls</code> gives the workspaces and their status, <code>grove sessions list</code> the
-conversations across them.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a><span class="c1"># Every workspace in this project, with its reconciled status.</span>
 </span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a>grove<span class="w"> </span>ls
 </span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3" href="#__codelineno-49-3"></a>
@@ -1996,10 +1983,8 @@ conversations across them.</p>
 </span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11" href="#__codelineno-49-11"></a><span class="s1">      .[] | select(.git_branch != $me)</span>
 </span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12" href="#__codelineno-49-12"></a><span class="s1">      | &quot;\(.session_id[0:8])  \(.state)  \(.workspace_title // &quot;-&quot;)  \(.title // .last_prompt // &quot;&quot;)&quot;&#39;</span>
 </span></code></pre></div>
-<h3 id="read-context-cheaply-and-bound-the-token-cost">Read context cheaply, and bound the token cost</h3>
-<p>Stop at the first rung that answers your question. <code>list</code> is one line per
-session, <code>show &lt;id&gt; --last N</code> one conversation's tail at a fraction of the
-tokens, <code>dump &lt;id&gt;</code> the raw records.</p>
+<h3 id="read-context-cheaply">Read context cheaply</h3>
+<p>Stop at the first rung that answers your question.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a><span class="c1"># Cheapest: scan the list, filtered to recent activity.</span>
 </span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span>1h
 </span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a>
@@ -2009,8 +1994,7 @@ tokens, <code>dump &lt;id&gt;</code> the raw records.</p>
 </span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7" href="#__codelineno-50-7"></a><span class="c1"># Expensive, last resort: redirect to a file, not your context.</span>
 </span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8" href="#__codelineno-50-8"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>a91e0d34<span class="w"> </span>--jsonl<span class="w"> </span>&gt;<span class="w"> </span>/tmp/a91e0d34.jsonl
 </span></code></pre></div>
-<h3 id="create-and-steer-workspaces-from-a-script">Create and steer workspaces from a script</h3>
-<p>The lifecycle verbs run from any shell.</p>
+<h3 id="create-and-steer-from-a-script">Create and steer from a script</h3>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a><span class="c1"># Spin up a new workspace with an initial task.</span>
 </span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;add retry logic&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a><span class="w">  </span>--prompt<span class="w"> </span><span class="s2">&quot;wrap the API client&#39;s fetch method with exponential backoff&quot;</span>
@@ -2027,8 +2011,8 @@ tokens, <code>dump &lt;id&gt;</code> the raw records.</p>
 <h3 id="rules-of-thumb">Rules of thumb</h3>
 <ul>
 <li>Pass <code>--json</code> whenever you parse the result. Tables are for humans.</li>
-<li>Treat a non-zero exit as "no data", meaning not found, ambiguous prefix, or no
-  git repository.</li>
+<li>Treat a non-zero exit as "no data", meaning not found, ambiguous prefix, or
+  no git repository.</li>
 <li>Redirect <code>dump</code> to a file, not your context, and use <code>--since</code> and <code>-w</code> to
   shrink a result first.</li>
 </ul>
@@ -2685,6 +2669,30 @@ tokens, <code>dump &lt;id&gt;</code> the raw records.</p>
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-telemetry/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Telemetry & Tracing
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -3219,18 +3227,18 @@ tokens, <code>dump &lt;id&gt;</code> the raw records.</p>
                 Discover what is happening
             </a>
             
-            <a href="#read-context-cheaply-and-bound-the-token-cost"
+            <a href="#read-context-cheaply"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#read-context-cheaply-and-bound-the-token-cost');">
-                Read context cheaply, and bound the token cost
+                onClick="deferSetActiveTocLink('#read-context-cheaply');">
+                Read context cheaply
             </a>
             
-            <a href="#create-and-steer-workspaces-from-a-script"
+            <a href="#create-and-steer-from-a-script"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#create-and-steer-workspaces-from-a-script');">
-                Create and steer workspaces from a script
+                onClick="deferSetActiveTocLink('#create-and-steer-from-a-script');">
+                Create and steer from a script
             </a>
             
             <a href="#rules-of-thumb"
