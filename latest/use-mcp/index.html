@@ -1337,10 +1337,15 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="let-an-agent-drive-grove">Let an agent drive Grove</h2>
-<p>Grove ships an <abbr title="Model Context Protocol">MCP</abbr> server, <code>grove-mcp</code>: a radio to the daemon's control tower. An assistant tunes in and can list, create, steer, and tear down workspaces without touching git or tmux, through the same daemon <abbr title="Application Programming Interface">API</abbr> the <abbr title="Terminal User Interface">TUI</abbr> and dashboard use. Grove's safety rules apply unchanged. Your git stays yours.</p>
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" /></div>
+  <figcaption class="ms-shot__body">The Grove MCP tools as seen from Claude Code.</figcaption>
+</figure>
+
+<p>Grove exposes the daemon <abbr title="Application Programming Interface">API</abbr> to an assistant. Your git stays yours.</p>
 <hr />
 <h2 id="choosing-a-range">Choosing a range</h2>
-<p>Both transports serve the identical tools, differing in who starts the process and who may reach it.</p>
+<p>Use stdio locally. Use Streamable HTTP for remote or hosted harnesses.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1377,14 +1382,11 @@
 </tr>
 </tbody>
 </table></div>
-<p>Start with stdio. HTTP adds a port, an inbound token, and safe routing. Both reach the same daemon, so run one of each if needed.</p>
 <hr />
 <h2 id="same-machine-stdio">Same machine: stdio</h2>
-<p>The client spawns the process: no token or port to protect. Install the <code>mcp</code> extra and start the daemon:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;grove[all]&#39;</span><span class="w">   </span><span class="c1"># or &#39;grove[mcp]&#39; for just the MCP server</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">         </span><span class="c1"># or run the packaged systemd user service</span>
 </span></code></pre></div>
-<p>Register it with your client:</p>
 <div class="language-json codehilite"><span class="filename">mcp.json</span><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&quot;grove&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -1396,26 +1398,23 @@
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="p">}</span>
 </span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Claude Code does it in one command:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>claude<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>grove<span class="w"> </span>--<span class="w"> </span>grove-mcp
 </span></code></pre></div>
-<p><code>grove mcp install</code> writes that registration through each harness's own <code>mcp add</code>, for Claude Code and Codex over stdio.</p>
 <hr />
 <h2 id="another-machine-http">Another machine: HTTP</h2>
-<p>Pass <code>--transport streamable-http</code> and <code>grove-mcp</code> faces the network instead, reaching the daemon over loopback or an SSH forward. The daemon itself still binds loopback, per the <a href="../use-auth/#the-security-model">security model</a>:</p>
+<p>HTTP accepts remote callers while the daemon remains loopback-only.</p>
 <pre class="mermaid"><code>flowchart TB
     Harness(["Remote harness"])
     MCP(["grove-mcp&lt;br/&gt;:7431"])
     Daemon(["grove-daemon&lt;br/&gt;:7421"])
     Harness --&gt;|"HTTP + Bearer, wrap in TLS or a tunnel yourself"| MCP
     MCP --&gt;|loopback| Daemon</code></pre>
-<p>Start it:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GROVE_MCP_TOKEN</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="s2">&quot;</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>grove-mcp<span class="w"> </span>--transport<span class="w"> </span>streamable-http<span class="w"> </span>--host<span class="w"> </span><span class="m">127</span>.0.0.1<span class="w"> </span>--port<span class="w"> </span><span class="m">7431</span>
 </span></code></pre></div>
-<p><code>http</code> is an alias for <code>streamable-http</code>, Claude Code's own name for it. The endpoint mounts at <code>/mcp</code> unless <code>--path</code> moves it, printed to stderr on startup along with its scope.</p>
+<p>HTTP defaults to port <code>7431</code> at <code>/mcp</code>.</p>
 <h3 id="two-tokens-two-directions">Two tokens, two directions</h3>
-<p>Two credentials point in opposite directions, never the same string.</p>
+<p>Callers send <code>Authorization: Bearer &lt;GROVE_MCP_TOKEN&gt;</code>.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1437,17 +1436,10 @@
 </tr>
 </tbody>
 </table></div>
-<p>Callers present the inbound token as <code>Authorization: Bearer &lt;GROVE_MCP_TOKEN&gt;</code>.</p>
-<div class="admonition warning">
-<p class="admonition-title">The inbound token is not optional</p>
-<p>An open port hands full workspace lifecycle control to anyone reaching it, <code>grove_kill_workspace</code> included, so <code>grove-mcp</code> fails closed: without <code>GROVE_MCP_TOKEN</code> it refuses to bind, exits <code>2</code>, and prints the fix. There is deliberately no <code>--insecure</code> escape hatch, since an opt-out flag survives into production.</p>
-</div>
 <h3 id="connecting-a-client">Connecting a client</h3>
-<p>One command registers it:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>claude<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>--transport<span class="w"> </span>http<span class="w"> </span>grove<span class="w"> </span>http://&lt;host&gt;:7431/mcp<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--header<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$GROVE_MCP_TOKEN</span><span class="s2">&quot;</span>
 </span></code></pre></div>
-<p>That writes this entry:</p>
 <div class="language-json codehilite"><span class="filename">mcp.json</span><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">&quot;grove&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -1460,33 +1452,24 @@
 </span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="p">}</span>
 </span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Claude Code interpolates <code>${VAR}</code> in headers, keeping tokens out of the file. A static bearer header wins over OAuth.</p>
 <h3 id="where-it-is-safe-to-run">Where it is safe to run</h3>
-<p>The transport is plain HTTP, so the bearer token crosses in cleartext: fine on a trusted <abbr title="Local Area Network">LAN</abbr>, WireGuard, Tailscale, or behind a TLS-terminating proxy, never the open internet. Bind loopback and forward the port instead, the lever the <a href="../use-webapp/#reaching-it-from-outside-the-network">dashboard</a> uses:</p>
+<p>Use HTTP only behind a trusted <abbr title="Local Area Network">LAN</abbr>, tunnel, VPN, or TLS proxy:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>ssh<span class="w"> </span>-N<span class="w"> </span>-L<span class="w"> </span><span class="m">7431</span>:127.0.0.1:7431<span class="w"> </span>you@grove-host.internal
 </span></code></pre></div>
-<p>The harness then points at <code>http://127.0.0.1:7431/mcp</code> locally, reaching for <code>--host 0.0.0.0</code> only once a VPN or TLS proxy fronts it.</p>
-<p><code>GROVE_MCP_ALLOWED_HOSTS</code> and <code>GROVE_MCP_ALLOWED_ORIGINS</code> each take a comma-separated list, switching on DNS-rebinding protection, off by default: only named <code>Host</code> headers are accepted, so a page on another domain cannot rebind onto your port.</p>
+<p>Use <code>--host 0.0.0.0</code> only behind a VPN or TLS proxy. <code>GROVE_MCP_ALLOWED_HOSTS</code> and <code>GROVE_MCP_ALLOWED_ORIGINS</code> are DNS-rebinding allowlists.</p>
 <h3 id="read-only-exposure">Read-only exposure</h3>
-<p><code>--read-only</code> (or <code>GROVE_MCP_READ_ONLY=1</code>) registers only the tools that observe, marked in the <a href="#tools">tool table</a>: a tool an agent can see is one it will eventually try, so withheld tools leave the surface rather than being refused at call time. Works at either range.</p>
+<p><code>--read-only</code> registers only non-mutating tools.</p>
 <hr />
 <h2 id="hosting-it-as-a-service">Hosting it as a service</h2>
-<p>A stdio server needs no supervision, but an HTTP one is long-lived, so Grove ships an opt-in systemd unit:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">WITH_MCP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">WITH_MCP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd-enable
 </span></code></pre></div>
-<p>That renders <code>grove-mcp.service</code>, bound to <code>127.0.0.1:7431</code> unless <code>MCP_HOST</code>/<code>MCP_PORT</code> override it, reading its token from a file rather than baking a secret into the unit:</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>install<span class="w"> </span>-m<span class="w"> </span><span class="m">600</span><span class="w"> </span>/dev/null<span class="w"> </span>~/.config/grove/mcp.env
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;GROVE_MCP_TOKEN=</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.config/grove/mcp.env
 </span></code></pre></div>
-<p>Missing that file, the service starts and exits <code>2</code> with the reason in <code>journalctl --user -u grove-mcp -f</code>: fail-closed working, not a packaging bug.</p>
-<div class="admonition tip">
-<p class="admonition-title">Tip</p>
-<p>A hosted HTTP server needs a restart after a Grove upgrade, like the daemon. A stdio server needs none: your client respawns it.</p>
-</div>
 <hr />
 <h2 id="configuration">Configuration</h2>
-<p>A <abbr title="Command Line Interface">CLI</abbr> flag wins, the environment comes next, and a built-in default fills the gap.</p>
+<p>Flags override environment variables, which override defaults.</p>
 <h3 id="talking-to-the-daemon-outbound">Talking to the daemon (outbound)</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1561,7 +1544,6 @@
 </tr>
 </tbody>
 </table></div>
-<p>All but <code>GROVE_MCP_READ_ONLY</code> are inert under stdio, which binds no socket and authenticates no caller. Read-only shapes registration instead, applies at either range, and can only tighten it: an environment variable that set it survives an omitted <code>--read-only</code>.</p>
 <h3 id="which-file-holds-what">Which file holds what</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1594,11 +1576,6 @@
 </tr>
 </tbody>
 </table></div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Grove's <a href="../configure-reference/">config cascade</a> carries no <code>mcp</code> section, on purpose: the server is a client of the daemon, not part of it, and runs on a machine with no Grove config at all. It reads only flags and environment variables, kept in <code>mcp.env</code> for a hosted server.</p>
-</div>
-<p>The cascade still decides which projects exist, which agents <code>grove_list_agents</code> offers, and what <code>grove_create_workspace</code> builds: configure the fleet there, the radio here.</p>
 <hr />
 <h2 id="tools">Tools</h2>
 <p>A ✓ marks a tool that survives <code>--read-only</code>.</p>
@@ -1639,6 +1616,11 @@
 <tr>
 <td><code>grove_list_sessions</code></td>
 <td>Agent sessions on this host, newest first, including ones Grove never launched. <code>repo_root</code> narrows to a project and fills the otherwise-null <code>activity</code>, <code>size_bytes</code> and prompt fields.</td>
+<td>✓</td>
+</tr>
+<tr>
+<td><code>grove_recollect_session</code></td>
+<td>Every direct user query from one complete session, oldest first. Pass the <code>session_id</code>, <code>adapter_kind</code> as <code>kind</code>, and <code>cwd</code> from <code>grove_list_sessions</code>; optional <code>last</code> keeps only the final N. Use it to recover instructions before a context compaction.</td>
 <td>✓</td>
 </tr>
 <tr>
@@ -1708,21 +1690,14 @@
 </tr>
 <tr>
 <td><code>grove_set_workspace_phase</code></td>
-<td>Set the phase. Params: <code>workspace_id</code>, <code>phase</code> (<code>scoping</code>, <code>planning</code>, <code>implementing</code>, <code>verifying</code>, <code>delivering</code>, <code>done</code>), optional <code>note</code>.</td>
+<td>Set the phase. Params: <code>workspace_id</code>, <code>phase</code> (<code>scoping</code>, <code>planning</code>, <code>implementing</code>, <code>verifying</code>, <code>delivering</code>, <code>done</code>), optional <code>note</code>, optional <code>ticket</code> (a <code>provider:id</code> such as <code>gitea:498</code> to report against one attached ticket instead of the workspace), optional <code>blocked</code> (stuck on this step).</td>
 <td></td>
 </tr>
 </tbody>
 </table></div>
-<p>Every response is structured JSON with explicit status fields and stable workspace ids.</p>
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" /></div>
-  <figcaption class="ms-shot__body">The Grove MCP tools as seen from Claude Code.</figcaption>
-</figure>
-
 <hr />
 <h2 id="using-grove-from-mewbo">Using Grove from Mewbo</h2>
-<p>Mewbo can adopt Grove as its durable workspace backend, its hypervisor calling the tools above while Grove stays the system of record for worktrees, branches, sessions, and lifecycle state. Grove owns the control plane, Mewbo owns scheduling, skills, and conversation, pointing its <abbr title="Model Context Protocol">MCP</abbr> pool at either range.</p>
-<p>To run Mewbo, or any agent, inside a workspace, define it as a regular agent in your project config:</p>
+<p>Point Mewbo's <abbr title="Model Context Protocol">MCP</abbr> pool at either transport. Define it as a regular project agent:</p>
 <div class="language-json codehilite"><span class="filename">.grove/config.json</span><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;agents&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="p">{</span>
@@ -1733,7 +1708,7 @@
 </span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span><span class="p">]</span>
 </span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>See <a href="../configure-agents/">Agents</a> for the config reference, and <a href="../features-workspace-lifecycle/">Workspace Lifecycle</a> for what pause, respawn, and kill mean.</p>
+<p>See <a href="../configure-agents/">Agents</a> and <a href="../features-workspace-lifecycle/">Workspace Lifecycle</a>.</p>
   </div>
   
   <script>

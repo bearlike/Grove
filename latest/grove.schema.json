@@ -1,5 +1,34 @@
 {
   "$defs": {
+    "AgentCwdsConfig": {
+      "additionalProperties": false,
+      "description": "Named directories, relative to the repo root, an agent may start in.\n\nA repository is often several projects, and in a large monorepo each\ndirectory belongs to a different team. This is the labelled set a create\nsurface offers so nobody types a path, plus which one applies when a create\nnames none.\n\nOnly the AGENT SESSION's working directory moves. The git worktree, the\nbranch and the init script stay anchored at the repository root, which is\nwhat lets several directories of one repo be distinct projects sharing one\nworktree family.\n\nEvery path is relative and stays relative, so the set is portable: it\ndescribes the repository's own layout rather than one machine's disks, and\na committed project config carries it to everyone who clones. Absolute\npaths and anything climbing out of the repo are refused here, at the point\nof definition, rather than at the create that would have used them.",
+      "properties": {
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The label a create with no working directory named resolves to. ``None``\n(the default) keeps the historical behaviour: the agent starts at the\nworktree root. Must name an entry.",
+          "title": "Default"
+        },
+        "entries": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Label \u2192 repo-relative POSIX path. A label is what a person picks from a\ndropdown; the path is what reaches the wire, so renaming a label never\ninvalidates a workspace that already exists. Insertion order is the\npresentation order every picker uses.",
+          "title": "Entries",
+          "type": "object"
+        }
+      },
+      "title": "AgentCwdsConfig",
+      "type": "object"
+    },
     "AgentSpec": {
       "additionalProperties": false,
       "description": "One selectable agent in the new-workspace picker.",
@@ -45,7 +74,7 @@
         },
         "models": {
           "default": [],
-          "description": "Curated model ids to OFFER for this agent in the create-form picker \u2014 a\ndisplay/override seam, never a validated allowlist (any id is still\nforwarded verbatim on create; the provider boundary). Empty (the default)\nfalls through to the adapter's live discovery: Codex reads ``codex debug\nmodels``, Claude Code offers its stable ``sonnet``/``opus``/``haiku``\naliases, a remote/shell agent offers nothing. Set it to pin, restrict,\nreorder, or add gateway/custom ids \u2014 it cascades and merges by field like\nevery other AgentSpec knob (mechanism, not policy). The engine\n(``agents.resolve_models``) caps the offered list at ten.",
+          "description": "Curated model ids to OFFER for this agent in the create-form picker \u2014 a\ndisplay/override seam, never a validated allowlist (any id is still\nforwarded verbatim on create; the provider boundary). Empty (the default)\nfalls through to the adapter's live discovery: Codex reads ``codex debug\nmodels``, Claude Code offers its stable ``fable``/``opus``/``sonnet``/\n``haiku`` aliases, a remote/shell agent offers nothing. Set it to pin,\nrestrict, reorder, or add gateway/custom ids \u2014 it cascades and merges by\nfield like every other AgentSpec knob (mechanism, not policy). A curated\nlist here is never trimmed, however long: only live discovery is capped\nat ten, since nobody chose what a tool happens to publish. A gateway\nbehind one agent can publish twenty or more models under a shared prefix,\nand naming every one of them here is what puts all of them in the\npicker.",
           "items": {
             "type": "string"
           },
@@ -120,6 +149,18 @@
         "enabled": {
           "default": true,
           "title": "Enabled",
+          "type": "boolean"
+        },
+        "instructions": {
+          "default": "",
+          "description": "Your own text, appended to the brief every agent in this repo is handed.\n\nGrove's own brief says where the agent is and which skill carries the rules.\nThis is where a team adds what only they know: the review conventions, the\ntracker etiquette, the one command that must be run before pushing. It rides\nthe same first-turn delivery, so it reaches a containerized agent that can\nreach neither the daemon nor the ``grove`` command.\n\nIt cascades like everything else, so a machine-wide default set once in the\nuser config applies to every project, and a repository's own\n``.grove/config.json`` refines it for the people working in that repository.\n\nKeep it short. It is spent on the first turn of every session of every\nworkspace, and a long one costs more attention than it buys. Anything a\nreader could look up on demand belongs in the repository's own guidance\nfiles, which the agent is already standing in.",
+          "title": "Instructions",
+          "type": "string"
+        },
+        "self_naming": {
+          "default": true,
+          "description": "Ask an agent whose workspace has no description to write one, and to\nreplace a generated title with a real one.\n\nA workspace created without a title is named after a short generated id, on\nthe promise that it stays renameable \u2014 but nothing was renaming it, so a\nfleet ended up named after hashes that say nothing about what each agent is\ndoing. The agent is the one participant that learns the answer, usually\nwithin its first few turns.\n\nThe nudge is added only for a workspace whose description is empty, so one\na person already described is never asked to re-describe itself.",
+          "title": "Self Naming",
           "type": "boolean"
         }
       },
@@ -1075,6 +1116,21 @@
       "title": "ResourcesConfig",
       "type": "object"
     },
+    "TLSConfig": {
+      "additionalProperties": false,
+      "description": "Additional certificate authority roots for Grove's outbound TLS clients.",
+      "properties": {
+        "ca_path": {
+          "default": "",
+          "description": "A PEM CA bundle file or OpenSSL-hashed CA directory trusted alongside the\noperating system's roots.\n\nUse this when Grove must reach a private forge, gateway, or collector whose\nroot CA cannot be installed in the operating system store. Empty (the\ndefault) uses only the operating system roots. A named path is checked when\nGrove starts; a missing or unreadable path stops startup instead of silently\nfalling back to the default trust set.",
+          "title": "Ca Path",
+          "type": "string",
+          "x-env-var": "GROVE_TLS_CA_PATH"
+        }
+      },
+      "title": "TLSConfig",
+      "type": "object"
+    },
     "TelemetryBackfillConfig": {
       "additionalProperties": false,
       "description": "Explicit historical-export consent and profile selection.\n\nEmpty by default: usage discovery may index every reachable transcript,\nwhile an external telemetry write must name the exact provider roots it is\nallowed to read and export. Values use the same config-dir roots as agent\nprofiles (for example ``~/.codex``), keeping one profile vocabulary.",
@@ -1596,6 +1652,10 @@
           "title": "Enabled",
           "type": "boolean"
         },
+        "gateway": {
+          "$ref": "#/$defs/UsageQuotaGatewayConfig",
+          "description": "Optional aggregate source, resolved through this quota configuration cascade."
+        },
         "labels": {
           "additionalProperties": {
             "type": "string"
@@ -1662,6 +1722,26 @@
       "title": "UsageQuotaConfig",
       "type": "object"
     },
+    "UsageQuotaGatewayConfig": {
+      "additionalProperties": false,
+      "description": "One aggregate quota endpoint that holds subscriptions from several vendors.\n\nThe bearer token stays in the consuming process environment; configuring an\nendpoint never puts a credential into a cascadeable file. An empty URL leaves\nthis optional source inactive.",
+      "properties": {
+        "base_url": {
+          "default": "",
+          "description": "The gateway endpoint to GET once for every aggregate quota refresh.",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "token_env": {
+          "default": "GROVE_QUOTA_GATEWAY_TOKEN",
+          "description": "Name of the environment variable carrying the gateway bearer token.",
+          "title": "Token Env",
+          "type": "string"
+        }
+      },
+      "title": "UsageQuotaGatewayConfig",
+      "type": "object"
+    },
     "WebhookChannelConfig": {
       "additionalProperties": false,
       "description": "Generic JSON webhook channel \u2014 the \"mechanism, not policy\" sink.\n\nPOSTs the notification as JSON to ``url``. ntfy's JSON-publish API works\ndirectly: set ``topic`` and point ``url`` at the ntfy base. ``token_env`` (a\nNAME, never the secret) adds a ``Bearer`` header when set.",
@@ -1715,6 +1795,110 @@
       "title": "WebhookChannelConfig",
       "type": "object"
     },
+    "WorkspaceDefaults": {
+      "additionalProperties": false,
+      "description": "Pre-filled answers for the new-workspace form.\n\nEvery field is optional and ``None`` means \"no saved default\" \u2014 the field\nfalls through to whatever the existing per-field cascade already resolved\n(``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's\nown default for model). Title is deliberately absent: it names one task,\nnever a default. So are concrete branch/remote names, for the same reason.",
+      "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent"
+        },
+        "base_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Ref"
+        },
+        "branch_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "auto",
+                "new",
+                "existing",
+                "remote",
+                "root"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Mode"
+        },
+        "brief": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brief"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "enum": [
+                "host",
+                "container"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "skip_init": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skip Init"
+        }
+      },
+      "title": "WorkspaceDefaults",
+      "type": "object"
+    },
     "WorktreeConfig": {
       "additionalProperties": false,
       "description": "Where worktrees live and how branches are named.",
@@ -1744,6 +1928,9 @@
       "title": "$Schema",
       "type": "string"
     },
+    "agent_cwds": {
+      "$ref": "#/$defs/AgentCwdsConfig"
+    },
     "agents": {
       "items": {
         "$ref": "#/$defs/AgentSpec"
@@ -1768,6 +1955,9 @@
     },
     "container": {
       "$ref": "#/$defs/ContainerConfig"
+    },
+    "defaults": {
+      "$ref": "#/$defs/WorkspaceDefaults"
     },
     "hooks": {
       "$ref": "#/$defs/HooksConfig"
@@ -1802,6 +1992,9 @@
     },
     "tickets": {
       "$ref": "#/$defs/TicketsConfig"
+    },
+    "tls": {
+      "$ref": "#/$defs/TLSConfig"
     },
     "tmux": {
       "$ref": "#/$defs/TmuxConfig"

@@ -1380,6 +1380,23 @@ rewrites it in place rather than posting a feed.</p>
   a link to the session transcript.</li>
 </ul>
 <p><a href="../issue-ops/">Issue ops</a> covers the body in detail.</p>
+<h2 id="several-tickets-one-workspace">Several tickets, one workspace</h2>
+<p>A workspace can serve more than one attached ticket, and each one gets its
+own phase claim rather than sharing the workspace's single answer. The issue
+a pull request closes can read <code>verifying</code> while the pull request itself
+already reads <code>delivering</code>, and each ticket's own comment carries only its
+own claim. See <a href="../features-status/#the-third-axis-task-phase">task phase</a>
+for how an agent reports one, and <code>--ticket</code>/<code>--blocked</code> on
+<a href="../use-cli/#grove-phase"><code>grove phase</code></a> for setting one from outside the
+workspace.</p>
+<p>The ticket list on a workspace ranks by the same rule everywhere it renders,
+so the <abbr title="Terminal User Interface">TUI</abbr>, the web dashboard and the sticky comment never disagree about
+what belongs at the top. Pull requests rank above issues. Within each, open
+ranks above draft, above anything settled. Within that, the ticket furthest
+along its own phase ranks first, then one marked <code>done</code>, then one nobody has
+reported against yet. A ticket marked <code>done</code> ranks below one still in
+progress even if it was the one updated moments ago, because the rank tracks
+progress, not recency.</p>
 <h2 id="the-assignee-is-the-work-queue">The assignee is the work queue</h2>
 <p>Grove uses the tracker's own assignee field in both directions, off by
 default.</p>
@@ -1403,7 +1420,15 @@ assignment is the record of who did it.</p>
 <h2 id="deriving-refs-from-the-branch-name">Deriving refs from the branch name</h2>
 <p>On create, and again on adopting an existing branch, Grove parses the
 branch through every enabled provider. Each match becomes a <code>ticket_ref</code>
-on the workspace, and fetches nothing until you open a ticket's detail.</p>
+on the workspace.</p>
+<p>A ref is <strong>stored bare</strong> — the provider, the id and whether it is an issue or
+a pull request. A title, a status and an assignee are fetched on demand, and
+never persisted, so a ticket renamed on the tracker is never shown stale.
+Grove asks the tracker when a surface actually needs those details: the
+terminal UI when you select the workspace, the web workspace page when it
+opens, and issue-ops when it refreshes a ticket's comment. <strong>Nothing polls a
+tracker in the background</strong>, so an unreachable tracker costs you titles and
+nothing else.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -2487,6 +2512,14 @@ on your tracker moves.</p>
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#working-the-ticket');">
                 Working the ticket
+            </a>
+            
+            
+            <a href="#several-tickets-one-workspace"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#several-tickets-one-workspace');">
+                Several tickets, one workspace
             </a>
             
             

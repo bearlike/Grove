@@ -1400,6 +1400,16 @@ add <code>--break-system-packages</code>, or use pipx instead.</p>
 </div>
 </div>
 </div>
+<h3 id="tab-completion-optional">Tab completion (optional)</h3>
+<p>One command teaches your shell to complete Grove, including live values:
+workspace ids, your configured agents, each agent's models, branches and
+sessions.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>grove<span class="w"> </span>completions<span class="w"> </span>install<span class="w">     </span><span class="c1"># zsh, bash or fish</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nb">exec</span><span class="w"> </span><span class="nv">$SHELL</span><span class="w">                   </span><span class="c1"># start a new shell to pick it up</span>
+</span></code></pre></div>
+<p>It writes one file where your shell already looks and never edits your
+rc file. See <a href="../use-cli/#tab-completion">tab completion</a> for what
+completes where, and what to do if nothing happens when you press TAB.</p>
 <h2 id="configure-it">Configure it</h2>
 <p>Grove runs on defaults you can tune later, from two files that layer
 together. The <strong>project config</strong> at <code>&lt;repo&gt;/.grove/config.json</code>
@@ -1412,7 +1422,7 @@ layer wins on a shared option.</p>
 <p class="admonition-title">Let an agent configure it for you</p>
 <p>Hand this prompt to Claude Code, Codex, or any coding agent to
 configure it with you.</p>
-<div class="language-text codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
 </span></code></pre></div>
 </div>
 <div class="admonition note">
@@ -1425,13 +1435,13 @@ layers.</p>
 </div>
 <hr />
 <h2 id="first-run">First run</h2>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nb">cd</span><span class="w"> </span>path/to/your/git/repo
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w">      </span><span class="c1"># writes .grove/config.json with sensible defaults</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>grove<span class="w">                  </span><span class="c1"># launch the TUI</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">cd</span><span class="w"> </span>path/to/your/git/repo
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w">      </span><span class="c1"># writes .grove/config.json with sensible defaults</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>grove<span class="w">                  </span><span class="c1"># launch the TUI</span>
 </span></code></pre></div>
 <p>A fresh repo lands on the empty state, prompting a first workspace.</p>
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-empty.svg" alt="Grove TUI empty state" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-empty.png" alt="Grove TUI empty state" /></div>
   <figcaption class="ms-shot__body">Empty state. Keys available are listed in the footer.</figcaption>
 </figure>
 
@@ -1440,16 +1450,16 @@ Grove resolves the branch, creates the worktree, runs the init script if
 configured, spawns a tmux session with <code>agent</code> and <code>shell</code> windows, and
 sends in the agent's command.</p>
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.png" alt="Create workspace modal" /></div>
   <figcaption class="ms-shot__body">Create modal. Picking a branch source activates only that variant's inputs.</figcaption>
 </figure>
 
 <p>Press <span class="keys"><kbd class="key-enter">Enter</kbd></span> (or <span class="keys"><kbd class="key-a">A</kbd></span>) to attach, <code>Ctrl-B d</code> to detach. The workspace
 keeps running, and the activity rail flips ACTIVE/IDLE on its own.</p>
 <h2 id="verify">Verify</h2>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>grove<span class="w"> </span>version<span class="w">          </span><span class="c1"># prints the installed version</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>grove<span class="w"> </span>debug<span class="w">            </span><span class="c1"># prints the resolved config + state paths</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>grove<span class="w"> </span>ls<span class="w">               </span><span class="c1"># JSON list of this repo&#39;s workspaces</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>grove<span class="w"> </span>version<span class="w">          </span><span class="c1"># prints the installed version</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>grove<span class="w"> </span>debug<span class="w">            </span><span class="c1"># prints the resolved config + state paths</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>grove<span class="w"> </span>ls<span class="w">               </span><span class="c1"># JSON list of this repo&#39;s workspaces</span>
 </span></code></pre></div>
 <p>Set <code>GROVE_DEBUG=1</code> for verbose loguru output on stderr, with one
 <code>initialized &lt;path&gt;</code> line per directory created on first run.</p>
@@ -2412,6 +2422,15 @@ keeps running, and the activity rail flips ACTIVE/IDLE on its own.</p>
                 onClick="deferSetActiveTocLink('#install');">
                 Install
             </a>
+            
+            
+            <a href="#tab-completion-optional"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#tab-completion-optional');">
+                Tab completion (optional)
+            </a>
+            
             
             
             <a href="#configure-it"

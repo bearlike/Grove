@@ -1356,6 +1356,49 @@
 <td><code>tickets.gitea.base_url</code></td>
 <td><code>GROVE_GITEA_BASE_URL</code></td>
 </tr>
+<tr>
+<td><code>tls.ca_path</code></td>
+<td><code>GROVE_TLS_CA_PATH</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="agent_cwds"><code>agent_cwds</code></h2>
+<p>Named directories, relative to the repo root, an agent may start in.</p>
+<p>A repository is often several projects, and in a large monorepo each
+directory belongs to a different team. This is the labelled set a create
+surface offers so nobody types a path, plus which one applies when a create
+names none.</p>
+<p>Only the AGENT SESSION's working directory moves. The git worktree, the
+branch and the init script stay anchored at the repository root, which is
+what lets several directories of one repo be distinct projects sharing one
+worktree family.</p>
+<p>Every path is relative and stays relative, so the set is portable: it
+describes the repository's own layout rather than one machine's disks, and
+a committed project config carries it to everyone who clones. Absolute
+paths and anything climbing out of the repo are refused here, at the point
+of definition, rather than at the create that would have used them.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>default</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td>The label a create with no working directory named resolves to. <code>None</code> (the default) keeps the historical behaviour: the agent starts at the worktree root. Must name an entry.</td>
+</tr>
+<tr>
+<td><code>entries</code></td>
+<td><code>object</code></td>
+<td><code>(none)</code></td>
+<td>Label → repo-relative POSIX path. A label is what a person picks from a dropdown; the path is what reaches the wire, so renaming a label never invalidates a workspace that already exists. Insertion order is the presentation order every picker uses.</td>
+</tr>
 </tbody>
 </table></div>
 <h2 id="agents-list-of-agentspec"><code>agents</code> (list of <code>AgentSpec</code>)</h2>
@@ -1404,7 +1447,7 @@
 <td><code>models</code></td>
 <td><code>array&lt;string&gt;</code></td>
 <td><code>[]</code></td>
-<td>Curated model ids to OFFER for this agent in the create-form picker — a display/override seam, never a validated allowlist (any id is still forwarded verbatim on create; the provider boundary). Empty (the default) falls through to the adapter's live discovery: Codex reads <code>codex debug models</code>, Claude Code offers its stable <code>sonnet</code>/<code>opus</code>/<code>haiku</code> aliases, a remote/shell agent offers nothing. Set it to pin, restrict, reorder, or add gateway/custom ids — it cascades and merges by field like every other AgentSpec knob (mechanism, not policy). The engine (<code>agents.resolve_models</code>) caps the offered list at ten.</td>
+<td>Curated model ids to OFFER for this agent in the create-form picker — a display/override seam, never a validated allowlist (any id is still forwarded verbatim on create; the provider boundary). Empty (the default) falls through to the adapter's live discovery: Codex reads <code>codex debug models</code>, Claude Code offers its stable <code>fable</code>/<code>opus</code>/<code>sonnet</code>/ <code>haiku</code> aliases, a remote/shell agent offers nothing. Set it to pin, restrict, reorder, or add gateway/custom ids — it cascades and merges by field like every other AgentSpec knob (mechanism, not policy). A curated list here is never trimmed, however long: only live discovery is capped at ten, since nobody chose what a tool happens to publish. A gateway behind one agent can publish twenty or more models under a shared prefix, and naming every one of them here is what puts all of them in the picker.</td>
 </tr>
 <tr>
 <td><code>name</code></td>
@@ -1499,6 +1542,18 @@ later never changes a workspace that already exists.</p>
 <td><code>boolean</code></td>
 <td><code>True</code></td>
 <td></td>
+</tr>
+<tr>
+<td><code>instructions</code></td>
+<td><code>string</code></td>
+<td><code>''</code></td>
+<td>Your own text, appended to the brief every agent in this repo is handed.  Grove's own brief says where the agent is and which skill carries the rules. This is where a team adds what only they know: the review conventions, the tracker etiquette, the one command that must be run before pushing. It rides the same first-turn delivery, so it reaches a containerized agent that can reach neither the daemon nor the <code>grove</code> command.  It cascades like everything else, so a machine-wide default set once in the user config applies to every project, and a repository's own <code>.grove/config.json</code> refines it for the people working in that repository.  Keep it short. It is spent on the first turn of every session of every workspace, and a long one costs more attention than it buys. Anything a reader could look up on demand belongs in the repository's own guidance files, which the agent is already standing in.</td>
+</tr>
+<tr>
+<td><code>self_naming</code></td>
+<td><code>boolean</code></td>
+<td><code>True</code></td>
+<td>Ask an agent whose workspace has no description to write one, and to replace a generated title with a real one.  A workspace created without a title is named after a short generated id, on the promise that it stays renameable — but nothing was renaming it, so a fleet ended up named after hashes that say nothing about what each agent is doing. The agent is the one participant that learns the answer, usually within its first few turns.  The nudge is added only for a workspace whose description is empty, so one a person already described is never asked to re-describe itself.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1656,6 +1711,67 @@ credentials.</p>
 <td><code>number</code></td>
 <td><code>900.0</code></td>
 <td>Wall-clock bound on one <code>devcontainer up</code> (and <code>build</code>). A cold build that pulls a base image and installs Features is legitimately minutes long, so this is generous — but it MUST stay inside every client's own deadline (<code>GroveClient._LIFECYCLE_TIMEOUT_S</code>), or the caller gives up on a create that then succeeds and leaves an orphaned container with no record.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="defaults"><code>defaults</code></h2>
+<p>Pre-filled answers for the new-workspace form.</p>
+<p>Every field is optional and <code>None</code> means "no saved default" — the field
+falls through to whatever the existing per-field cascade already resolved
+(<code>container.enabled</code> for runtime, <code>brief.enabled</code> for brief, the agent's
+own default for model). Title is deliberately absent: it names one task,
+never a default. So are concrete branch/remote names, for the same reason.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agent</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>base_ref</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>branch_mode</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>brief</code></td>
+<td><code>boolean \| null</code></td>
+<td><code>None</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>runtime</code></td>
+<td><code>string \| null</code></td>
+<td><code>None</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>skip_init</code></td>
+<td><code>boolean \| null</code></td>
+<td><code>None</code></td>
+<td></td>
 </tr>
 </tbody>
 </table></div>
@@ -2255,6 +2371,26 @@ cascade (user → committed <code>.grove/config.json</code> → machine-local
 <td><code>object</code></td>
 <td><code>(none)</code></td>
 <td>Linear provider settings (<code>provider: "linear"</code>).  Linear keys are alphanumeric (<code>ENG-123</code>), so there is no numeric <code>branch_prefix</code> — the team key IS the discriminator. <code>team_key</code> scopes both branch parsing (only <code>{team_key}-N</code> keys are claimed) and the <code>get_ticket</code> lookup; leave it unset to match any uppercase key on parse.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tls"><code>tls</code></h2>
+<p>Additional certificate authority roots for Grove's outbound TLS clients.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ca_path</code></td>
+<td><code>string</code></td>
+<td><code>''</code></td>
+<td>A PEM CA bundle file or OpenSSL-hashed CA directory trusted alongside the operating system's roots.  Use this when Grove must reach a private forge, gateway, or collector whose root CA cannot be installed in the operating system store. Empty (the default) uses only the operating system roots. A named path is checked when Grove starts; a missing or unreadable path stops startup instead of silently falling back to the default trust set.</td>
 </tr>
 </tbody>
 </table></div>
@@ -3400,6 +3536,14 @@ safe and rebuilds on the next refresh.</p>
             </a>
             
             
+            <a href="#agent_cwds"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#agent_cwds');">
+                agent_cwds
+            </a>
+            
+            
             <a href="#agents-list-of-agentspec"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -3445,6 +3589,14 @@ safe and rebuilds on the next refresh.</p>
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#container');">
                 container
+            </a>
+            
+            
+            <a href="#defaults"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#defaults');">
+                defaults
             </a>
             
             
@@ -3525,6 +3677,14 @@ safe and rebuilds on the next refresh.</p>
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#tickets');">
                 tickets
+            </a>
+            
+            
+            <a href="#tls"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#tls');">
+                tls
             </a>
             
             

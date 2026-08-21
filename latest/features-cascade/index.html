@@ -1409,6 +1409,27 @@ Windows, <code>~/Library/Application Support</code> on macOS.</p>
 <p>The merge runs once per <abbr title="Command Line Interface">CLI</abbr> invocation and once per <abbr title="Terminal User Interface">TUI</abbr> launch. Pydantic
 validates the result once, with <code>extra="forbid"</code>, so a typo in any layer
 raises loudly.</p>
+<h2 id="workspace-defaults-put-the-user-first">Workspace defaults put the user first</h2>
+<p><code>defaults</code> is the one exception to Grove's project-last rule. A workspace
+form is a private workbench: the repository can suggest its usual setup, but
+it must not replace a preference you made for this machine.</p>
+<p>For <code>defaults</code> only, the order from lowest to highest is:</p>
+<ol>
+<li>built-in fallback</li>
+<li>project committed (<code>.grove/config.json</code>)</li>
+<li>project-local (<code>.grove/config.local.json</code>)</li>
+<li>user (<code>${user_config_dir}/grove/config.json</code>)</li>
+<li>declared environment variables, where a field has one</li>
+<li><code>GROVE_&lt;SECTION&gt;__&lt;FIELD&gt;</code> environment variables</li>
+<li><abbr title="Command Line Interface">CLI</abbr> flags</li>
+</ol>
+<p>The inversion is field-by-field. A committed project default is a team's
+suggestion, not a mandate. A project value still applies when the user layer
+leaves that field unset. Environment and <abbr title="Command Line Interface">CLI</abbr> overrides remain above user,
+so an operator can still make a deployment or one-shot choice win.</p>
+<p>Use <strong>Save as defaults</strong> in the new-workspace modal to write these answers.
+See <a href="../configure-project/#new-workspace-defaults">new-workspace defaults</a> for
+the fields and storage scopes.</p>
 <h2 id="lists-merge-by-name-only-agents">Lists merge by name (only <code>agents</code>)</h2>
 <p>Every other list (<code>ui.keybindings</code>, for example) replaces wholesale.
 <code>agents</code> is special:</p>
@@ -2494,6 +2515,14 @@ and no list wiped.</p>
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#seven-layers');">
                 Seven layers
+            </a>
+            
+            
+            <a href="#workspace-defaults-put-the-user-first"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#workspace-defaults-put-the-user-first');">
+                Workspace defaults put the user first
             </a>
             
             

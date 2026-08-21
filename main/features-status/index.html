@@ -1589,6 +1589,11 @@ launch environment as <code>GROVE_PHASE_FILE</code>.</p>
   the file's mtime.</li>
 <li>Excluded from git automatically, and a malformed file is ignored
   silently, never surfaced as an error.</li>
+<li>Working several attached tickets at once? Add a <code>tickets</code> map keyed
+  <code>provider:id</code>; each entry is that ticket's own claim, published to
+  that ticket's own comment, independent of the workspace's.</li>
+<li><code>blocked</code> is a flag beside a phase, at either level, never a seventh
+  phase: it says the agent is stuck on the step, not which step.</li>
 </ul>
 <p>Writing a file, not calling an <abbr title="Application Programming Interface">API</abbr>, is deliberate. A containerized
 agent reaches neither the loopback bound daemon nor the absent <code>grove</code>
@@ -1599,7 +1604,9 @@ at once, for any harness, with no workspace id to know.</p>
 gets three more optional surfaces.</p>
 <ul>
 <li><strong><abbr title="Command Line Interface">CLI</abbr></strong>: <code>grove phase &lt;phase&gt; --note "..."</code>, inferring the workspace
-  from your directory like <code>grove show</code>.
+  from your directory like <code>grove show</code>. Add <code>--ticket provider:id</code> to
+  scope the claim to one attached ticket, or <code>--blocked</code> to flag the
+  current step as stuck.
   <a href="../use-cli/#grove-phase"><abbr title="Command Line Interface">CLI</abbr>: <code>grove phase</code></a>.</li>
 <li><strong><abbr title="Model Context Protocol">MCP</abbr></strong>: <code>grove_set_workspace_phase</code> and <code>grove_get_workspace_phase</code>.
   <a href="../use-mcp/#tools"><abbr title="Model Context Protocol">MCP</abbr> tools</a>.</li>

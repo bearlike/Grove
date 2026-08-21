@@ -1338,6 +1338,11 @@
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="every-command-and-flag">Every command and flag</h2>
 <p>Every verb runs the same engine as the <abbr title="Terminal User Interface">TUI</abbr>, at feature parity.</p>
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/demos/cli-completion.gif" alt="Pressing TAB through grove commands and model names in a terminal, with each completion list drawn from live values" /></div>
+  <figcaption class="ms-shot__body">Completion reads live values: workspace ids, your configured agents, each agent's models, branches and sessions. See <a href="#tab-completion">tab completion</a>.</figcaption>
+</figure>
+
 <h2 id="the-contract">The contract</h2>
 <ul>
 <li><strong>Scope.</strong> Most commands resolve the repo from <code>cwd</code> upward. <code>daemon</code>,
@@ -1353,12 +1358,14 @@
 </ul>
 <h2 id="grove"><code>grove</code></h2>
 <p>Launches the <abbr title="Terminal User Interface">TUI</abbr> for the repo found from <code>cwd</code>, or exits <code>1</code> outside one. See
-the <a href="../use-tui/"><abbr title="Terminal User Interface">TUI</abbr> tour</a>. Also carries Typer's <code>--install-completion</code> and
-<code>--show-completion</code>.</p>
+the <a href="../use-tui/"><abbr title="Terminal User Interface">TUI</abbr> tour</a>. See <a href="#tab-completion">tab completion</a> for
+<code>grove completions</code>.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">cd</span><span class="w"> </span>/path/to/my-project
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove
 </span></code></pre></div>
 <h2 id="read-commands">Read commands</h2>
+<p><code>grove recollect</code> is also available here as the top-level spelling of
+<a href="#grove-sessions-recollect-and-grove-recollect"><code>grove sessions recollect</code></a>.</p>
 <h3 id="grove-ls"><code>grove ls</code></h3>
 <p>This repo's workspaces as JSON, one record each, in creation order.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>grove<span class="w"> </span>ls
@@ -1417,12 +1424,11 @@ command.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>grove<span class="w"> </span>show<span class="w">            </span><span class="c1"># from inside a worktree, infers the workspace</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>grove<span class="w"> </span>show<span class="w"> </span>a1b2<span class="w"> </span>-l<span class="w"> </span><span class="m">5</span><span class="w">  </span><span class="c1"># by id prefix, last 5 turns</span>
 </span></code></pre></div>
-<h3 id="grove-phase"><code>grove phase</code></h3>
-<p>Sets or reads a workspace's <a href="../features-status/#the-third-axis-task-phase">task
-phase</a>, writing the file named
-by <code>GROVE_PHASE_FILE</code>, the channel available everywhere.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>grove<span class="w"> </span>phase<span class="w"> </span>&lt;phase&gt;<span class="w"> </span><span class="o">[</span>--note<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>WORKSPACE<span class="o">]</span><span class="w">   </span><span class="c1"># set</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>grove<span class="w"> </span>phase<span class="w"> </span><span class="o">[</span>WORKSPACE<span class="o">]</span><span class="w">                         </span><span class="c1"># read</span>
+<h3 id="grove-edit"><code>grove edit</code></h3>
+<p>Renames a workspace or changes its description. Metadata only: the worktree
+path, the tmux session and the branch are set once at create time and never
+move, so renaming a workspace never breaks a client already attached to it.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>grove<span class="w"> </span>edit<span class="w"> </span><span class="o">[</span>WORKSPACE<span class="o">]</span><span class="w"> </span><span class="o">[</span>--title<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--description<span class="w"> </span>TEXT<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1434,9 +1440,67 @@ by <code>GROVE_PHASE_FILE</code>, the channel available everywhere.</p>
 </thead>
 <tbody>
 <tr>
+<td><code>WORKSPACE</code></td>
+<td>inferred from cwd</td>
+<td>Id or unique prefix, resolved as in <code>grove show</code>.</td>
+</tr>
+<tr>
+<td><code>--title</code>, <code>-t</code></td>
+<td>none</td>
+<td>New title, 1 to 120 characters.</td>
+</tr>
+<tr>
+<td><code>--description</code>, <code>-d</code></td>
+<td>none</td>
+<td>New description. Pass an empty string to clear it.</td>
+</tr>
+<tr>
+<td><code>--json</code></td>
+<td>off</td>
+<td>Emit the updated workspace record as JSON.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Omitting both <code>--title</code> and <code>--description</code> is a refusal, not a silent no-op:
+an edit that changes nothing still looks like it worked.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>grove<span class="w"> </span>edit<span class="w"> </span>--title<span class="w"> </span><span class="s2">&quot;quota gateway&quot;</span><span class="w">    </span><span class="c1"># from inside the worktree</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>grove<span class="w"> </span>edit<span class="w"> </span>a1b2<span class="w"> </span>-d<span class="w"> </span><span class="s2">&quot;spike, do not merge&quot;</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>grove<span class="w"> </span>edit<span class="w"> </span>--description<span class="w"> </span><span class="s2">&quot;&quot;</span><span class="w">           </span><span class="c1"># clear the description</span>
+</span></code></pre></div>
+<p>A workspace <code>grove create</code> starts with no title of its own is named after a
+generated id, on the promise that it stays renameable. This is that promise
+kept from the command line, the same write path the <abbr title="Terminal User Interface">TUI</abbr>'s edit modal and the
+web dashboard use.</p>
+<h3 id="grove-phase"><code>grove phase</code></h3>
+<p>Sets or reads a workspace's <a href="../features-status/#the-third-axis-task-phase">task
+phase</a>, writing the file named
+by <code>GROVE_PHASE_FILE</code>, the channel available everywhere.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>grove<span class="w"> </span>phase<span class="w"> </span><span class="o">[</span>REF<span class="o">]</span><span class="w"> </span><span class="o">[</span>PHASE<span class="o">]</span><span class="w"> </span><span class="o">[</span>--note<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--ticket<span class="w"> </span>PROVIDER:ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--blocked<span class="o">]</span><span class="w">   </span><span class="c1"># set</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>grove<span class="w"> </span>phase<span class="w"> </span><span class="o">[</span>REF<span class="o">]</span><span class="w">                                                            </span><span class="c1"># read</span>
+</span></code></pre></div>
+<p><code>REF</code> and <code>PHASE</code> are both optional positionals, and either can stand alone.
+A bare phase word infers the workspace from your directory, the shape an
+agent reporting its own progress uses most. Give a workspace id or prefix
+first when you mean a different workspace, or when a phase word alone would
+be ambiguous with the literal <code>show</code>.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Argument / option</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>REF</code></td>
+<td>inferred from cwd</td>
+<td>Workspace id or unique prefix. With no second argument this token may instead be the phase itself.</td>
+</tr>
+<tr>
 <td><code>PHASE</code></td>
 <td>(none)</td>
-<td><code>scoping</code>, <code>planning</code>, <code>implementing</code>, <code>verifying</code>, <code>delivering</code>, or <code>done</code>. Omit to read instead of set.</td>
+<td><code>scoping</code>, <code>planning</code>, <code>implementing</code>, <code>verifying</code>, <code>delivering</code>, or <code>done</code>. Omit both arguments, or pass the literal <code>show</code>, to just print the current phase.</td>
 </tr>
 <tr>
 <td><code>--note</code></td>
@@ -1444,23 +1508,35 @@ by <code>GROVE_PHASE_FILE</code>, the channel available everywhere.</p>
 <td>One-line note, 200 characters or less.</td>
 </tr>
 <tr>
-<td><code>WORKSPACE</code></td>
-<td>inferred from cwd</td>
-<td>Id or unique prefix, resolved as in <code>grove show</code>.</td>
+<td><code>--ticket</code></td>
+<td>none</td>
+<td>Scope this claim to one attached ticket's <code>provider:id</code> key, for a workspace working several tickets at once, instead of the workspace as a whole.</td>
+</tr>
+<tr>
+<td><code>--blocked</code></td>
+<td>off</td>
+<td>Flag the phase as stuck on this step, not just at it. A flag beside the phase, never a replacement for it.</td>
 </tr>
 </tbody>
 </table></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>grove<span class="w"> </span>phase<span class="w"> </span>implementing<span class="w"> </span>--note<span class="w"> </span><span class="s2">&quot;wiring the parser&quot;</span><span class="w">   </span><span class="c1"># from inside the worktree</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>grove<span class="w"> </span>phase<span class="w">                                           </span><span class="c1"># read the current phase back</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>grove<span class="w"> </span>phase<span class="w"> </span>verifying<span class="w"> </span>a1b2<span class="w">                             </span><span class="c1"># set another workspace&#39;s phase by id</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>grove<span class="w"> </span>phase<span class="w"> </span>planning<span class="w">                          </span><span class="c1"># from inside the worktree, no note</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>grove<span class="w"> </span>phase<span class="w"> </span>implementing<span class="w"> </span>--note<span class="w"> </span><span class="s2">&quot;wiring the CLI verb&quot;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>grove<span class="w"> </span>phase<span class="w"> </span>a1b2<span class="w"> </span>verifying<span class="w">                    </span><span class="c1"># another workspace, by id prefix</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>grove<span class="w"> </span>phase<span class="w"> </span>verifying<span class="w"> </span>--ticket<span class="w"> </span>gitea:42<span class="w">       </span><span class="c1"># scoped to one attached ticket</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>grove<span class="w"> </span>phase<span class="w"> </span>implementing<span class="w"> </span>--blocked<span class="w">            </span><span class="c1"># stuck on this step</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>grove<span class="w"> </span>phase<span class="w">                                   </span><span class="c1"># read the cwd-inferred phase, tickets included</span>
 </span></code></pre></div>
+<p>Reading prints the workspace's own claim, then one line per attached ticket
+that has its own. A workspace serving several tickets from one branch can
+report each ticket's phase independently, so the ticket closing the issue can
+say <code>delivering</code> while the issue itself still reads <code>verifying</code>.</p>
 <h3 id="grove-sessions"><code>grove sessions</code></h3>
 <p>The sessions recorded for this project, a kind of <code>git log</code> for agent
 conversations. Transcripts outlive worktrees, so paused ones show up too. The
 subcommands form a cost ladder, cheapest first.</p>
 <h4 id="grove-sessions-list"><code>grove sessions list</code></h4>
 <p>Every session across this project's worktrees, newest first.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--host<span class="o">]</span><span class="w"> </span><span class="o">[</span>--agent<span class="w"> </span>KIND<span class="o">]</span><span class="w"> </span><span class="o">[</span>-w<span class="w"> </span>PREFIX<span class="o">]</span><span class="w"> </span><span class="o">[</span>--since<span class="w"> </span>WINDOW<span class="o">]</span><span class="w"> </span><span class="o">[</span>-n<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--host<span class="o">]</span><span class="w"> </span><span class="o">[</span>--agent<span class="w"> </span>KIND<span class="o">]</span><span class="w"> </span><span class="o">[</span>-w<span class="w"> </span>PREFIX<span class="o">]</span><span class="w"> </span><span class="o">[</span>--since<span class="w"> </span>WINDOW<span class="o">]</span><span class="w"> </span><span class="o">[</span>-n<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1513,20 +1589,20 @@ subcommands form a cost ladder, cheapest first.</p>
 <p><code>STATE</code> is computed from the transcript, one of <code>starting</code>, <code>working</code>,
 <code>waiting</code>, <code>blocked</code>, <code>idle</code>, <code>error</code>, or <code>unknown</code>. <code>waiting</code> or <code>blocked</code>
 wants a human.</p>
-<div class="language-text codehilite"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>SESSION    AGENT        WORKSPACE            STATE     TURNS MODIFIED         TITLE / PROMPT
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>7b3f2c1a   claude_code  Forecast cache       waiting      14 2 minutes ago   Add an LRU layer to the forecast client
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>a91e0d34   claude_code  Radar overlay        working       6 just now        Wire the radar tiles onto the map
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>SESSION    AGENT        WORKSPACE            STATE     TURNS MODIFIED         TITLE / PROMPT
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>7b3f2c1a   claude_code  Forecast cache       waiting      14 2 minutes ago   Add an LRU layer to the forecast client
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>a91e0d34   claude_code  Radar overlay        working       6 just now        Wire the radar tiles onto the map
 </span></code></pre></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Which agents are waiting for a human?</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.[] | select(.state==&quot;waiting&quot; or .state==&quot;blocked&quot;) | &quot;\(.state)\t\(.workspace_title // &quot;-&quot;)\t\(.title // .last_prompt)&quot;&#39;</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># Only what moved in the last two hours, five most recent.</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span>2h<span class="w"> </span>--limit<span class="w"> </span><span class="m">5</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Which agents are waiting for a human?</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.[] | select(.state==&quot;waiting&quot; or .state==&quot;blocked&quot;) | &quot;\(.state)\t\(.workspace_title // &quot;-&quot;)\t\(.title // .last_prompt)&quot;&#39;</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="c1"># Only what moved in the last two hours, five most recent.</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span>2h<span class="w"> </span>--limit<span class="w"> </span><span class="m">5</span>
 </span></code></pre></div>
 <h4 id="grove-sessions-show"><code>grove sessions show</code></h4>
 <p>One conversation as normalized turns, oldest first.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>-l<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>-l<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1554,12 +1630,12 @@ wants a human.</p>
 </tr>
 </tbody>
 </table></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>7b3f2c1a<span class="w"> </span>--last<span class="w"> </span><span class="m">3</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>7b3f2c1a<span class="w"> </span>--last<span class="w"> </span><span class="m">3</span>
 </span></code></pre></div>
 <h4 id="grove-sessions-dump"><code>grove sessions dump</code></h4>
 <p>Raw native records, the main transcript plus any sub-agent files. Megabytes
 are possible, so <code>list</code> and <code>show</code> are cheaper for catching up.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--jsonl<span class="o">]</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--jsonl<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1582,14 +1658,57 @@ are possible, so <code>list</code> and <code>show</code> are cheaper for catchin
 </tr>
 </tbody>
 </table></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>7b3f2c1a<span class="w"> </span>--jsonl<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;select(.type==&quot;assistant&quot;)&#39;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>7b3f2c1a<span class="w"> </span>--jsonl<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;select(.type==&quot;assistant&quot;)&#39;</span>
+</span></code></pre></div>
+<h4 id="grove-sessions-recollect-and-grove-recollect"><code>grove sessions recollect</code> and <code>grove recollect</code></h4>
+<p>Recover the direct user queries from a complete session transcript, oldest
+first. Use this after a context compaction when the normal turn view no longer
+contains the original request. Both spellings run the same command. Omit the
+session from inside a workspace to use its primary session.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>recollect<span class="w"> </span><span class="o">[</span>SESSION<span class="o">]</span><span class="w"> </span><span class="o">[</span>--last/-l<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>grove<span class="w"> </span>recollect<span class="w"> </span><span class="o">[</span>SESSION<span class="o">]</span><span class="w"> </span><span class="o">[</span>--last/-l<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+</span></code></pre></div>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Argument / option</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SESSION</code></td>
+<td>current workspace's primary session</td>
+<td>Session id or unique prefix.</td>
+</tr>
+<tr>
+<td><code>--last</code>, <code>-l</code></td>
+<td>all queries</td>
+<td>Keep only the most recent N direct user queries.</td>
+</tr>
+<tr>
+<td><code>--json</code></td>
+<td>off</td>
+<td>Structured query records instead of readable text.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Human slash commands count as direct queries. Provider envelopes and harness
+records do not. Recollection reads the full transcript, so use <code>--last</code> when
+you need only its recent instructions.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Recover the original task after a compaction.</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>grove<span class="w"> </span>recollect<span class="w"> </span>7b3f2c1a
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1"># Machine-readable most recent instructions.</span>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>grove<span class="w"> </span>sessions<span class="w"> </span>recollect<span class="w"> </span>7b3f2c1a<span class="w"> </span>--last<span class="w"> </span><span class="m">3</span><span class="w"> </span>--json
 </span></code></pre></div>
 <h4 id="grove-sessions-remap"><code>grove sessions remap</code></h4>
-<p>Implemented in <a href="https://github.com/bearlike/Grove/blob/6377c5a2/src/grove/tui/cli_sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>cli_sessions.py</span></a>. Pins an
+<p>Implemented in <a href="https://github.com/bearlike/Grove/blob/3dfe12f6/src/grove/tui/cli_sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>cli_sessions.py</span></a>. Pins an
 existing session as a workspace's tracked primary, after a <code>/clear</code> rotated
 the id or to adopt a hand-started session. Re-running the same pair is a
 no-op.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>WORKSPACE<span class="w"> </span>SESSION
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>WORKSPACE<span class="w"> </span>SESSION
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1609,12 +1728,15 @@ no-op.</p>
 </tr>
 </tbody>
 </table></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>a1b2<span class="w"> </span>cafef00d
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>a1b2<span class="w"> </span>cafef00d
 </span></code></pre></div>
 <h2 id="lifecycle-commands">Lifecycle commands</h2>
 <h3 id="grove-create"><code>grove create</code></h3>
-<p>A git worktree, a branch, a tmux session, and a running agent.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>grove<span class="w"> </span>create<span class="w"> </span>TITLE<span class="w"> </span>--agent/-a<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--model/-m<span class="w"> </span>ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--runtime<span class="w"> </span>host<span class="p">|</span>container<span class="o">]</span><span class="w"> </span><span class="o">[</span>branch<span class="w"> </span>flags<span class="o">]</span><span class="w"> </span><span class="o">[</span>--base<span class="w"> </span>REF<span class="o">]</span><span class="w"> </span><span class="o">[</span>--description/-d<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--no-init<span class="o">]</span><span class="w"> </span><span class="o">[</span>--prompt/-p<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--brief/--no-brief<span class="o">]</span>
+<p>A git worktree, a branch, a tmux session, and a running agent. Every
+argument is optional: a bare <code>grove create</code> mints a short id for the
+title, resolves your saved defaults for everything else, and attaches
+you to the result.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="o">[</span>TITLE<span class="o">]</span><span class="w"> </span><span class="o">[</span>--agent/-a<span class="w"> </span>NAME<span class="o">]</span><span class="w"> </span><span class="o">[</span>--model/-m<span class="w"> </span>ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--runtime<span class="w"> </span>host<span class="p">|</span>container<span class="o">]</span><span class="w"> </span><span class="o">[</span>branch<span class="w"> </span>flags<span class="o">]</span><span class="w"> </span><span class="o">[</span>--base<span class="w"> </span>REF<span class="o">]</span><span class="w"> </span><span class="o">[</span>--description/-d<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--no-init<span class="o">]</span><span class="w"> </span><span class="o">[</span>--prompt/-p<span class="w"> </span>TEXT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--brief/--no-brief<span class="o">]</span><span class="w"> </span><span class="o">[</span>--cwd<span class="w"> </span>PATH<span class="o">]</span><span class="w"> </span><span class="o">[</span>--resume-session<span class="w"> </span>ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--attach/--no-attach<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1625,16 +1747,16 @@ no-op.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>TITLE</code> (required)</td>
-<td>Label whose slug seeds the worktree path and tmux session name.</td>
+<td><code>TITLE</code></td>
+<td>Label whose slug seeds the worktree path and tmux session name. Omit for a generated id; <a href="#grove-edit"><code>grove edit</code></a> renames it later.</td>
 </tr>
 <tr>
-<td><code>--agent</code>, <code>-a</code> (required)</td>
-<td>Agent to launch, matching a name in your config.</td>
+<td><code>--agent</code>, <code>-a</code></td>
+<td>Agent to launch, matching a name in your config. Omit for your saved default.</td>
 </tr>
 <tr>
 <td><code>--model</code>, <code>-m ID</code></td>
-<td>Model id (claude: <code>sonnet</code>/<code>opus</code>/<code>haiku</code>, codex: <code>gpt-5.5</code>), forwarded verbatim, never validated. The catalog only informs the choice, blank means the tool's default.</td>
+<td>Model id (claude: <code>fable</code>/<code>opus</code>/<code>sonnet</code>/<code>haiku</code>, codex: <code>gpt-5.5</code>), forwarded verbatim, never validated. The catalog only informs the choice, blank means the tool's default.</td>
 </tr>
 <tr>
 <td><code>--runtime</code></td>
@@ -1665,6 +1787,10 @@ no-op.</p>
 <td>Free-form note on the workspace.</td>
 </tr>
 <tr>
+<td><code>--cwd PATH</code></td>
+<td>Start the agent in this directory within the worktree. A relative path is from the repo root; an absolute path is allowed when it resolves inside the repo. Omit it for <code>agent_cwds.default</code>, or the worktree root when none is configured. The worktree, branch, and init script remain at the root.</td>
+</tr>
+<tr>
 <td><code>--no-init</code></td>
 <td>Skip the init script for this create only.</td>
 </tr>
@@ -1676,37 +1802,51 @@ no-op.</p>
 <td><code>--brief</code> / <code>--no-brief</code></td>
 <td>A first-turn note pointing at the <code>working-in-grove</code> skill, so the agent reports task phase and keeps tickets current. Omit for the default (<code>brief.enabled</code>, on). Create-time only, and persisted.</td>
 </tr>
+<tr>
+<td><code>--resume-session ID</code></td>
+<td>Continue an existing claude or codex session in the new workspace instead of starting fresh. Id or unique prefix, from <code>grove sessions list</code>.</td>
+</tr>
+<tr>
+<td><code>--attach</code> / <code>--no-attach</code></td>
+<td>Hand your terminal to the agent once it is up. Unset, this happens whenever output is a terminal; a piped invocation keeps its own process either way it is set.</td>
+</tr>
 </tbody>
 </table></div>
 <p>The branch flags are mutually exclusive. Omitting them all auto-names a branch
 from the title slug.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Auto branch (title slug → grove/fix-login-YYYYMMDD-HHmmss)</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;fix login&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1"># Named branch off main</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;fix login&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--branch<span class="w"> </span>fix/login<span class="w"> </span>--base<span class="w"> </span>origin/main
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="c1"># Reuse an existing local branch</span>
-</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;review pr&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--checkout<span class="w"> </span>existing-wip
-</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>
-</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a><span class="c1"># Track a remote branch</span>
-</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;track ci&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--track<span class="w"> </span>origin/feature/ci
-</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>
-</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a><span class="c1"># In-place (no worktree, no new branch)</span>
-</span><span id="__span-19-14"><a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;in place&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--root
-</span><span id="__span-19-15"><a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>
-</span><span id="__span-19-16"><a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a><span class="c1"># Start working immediately</span>
-</span><span id="__span-19-17"><a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;add cache&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--prompt<span class="w"> </span><span class="s2">&quot;add an LRU cache in front of the API client&quot;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Quick create: saved defaults, generated title, attached</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>grove<span class="w"> </span>create
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1"># Auto branch (title slug → grove/fix-login-YYYYMMDD-HHmmss)</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;fix login&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="c1"># Named branch off main</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;fix login&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--branch<span class="w"> </span>fix/login<span class="w"> </span>--base<span class="w"> </span>origin/main
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>
+</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a><span class="c1"># Reuse an existing local branch</span>
+</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;review pr&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--checkout<span class="w"> </span>existing-wip
+</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a>
+</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13" href="#__codelineno-23-13"></a><span class="c1"># Track a remote branch</span>
+</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14" href="#__codelineno-23-14"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;track ci&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--track<span class="w"> </span>origin/feature/ci
+</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15" href="#__codelineno-23-15"></a>
+</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16" href="#__codelineno-23-16"></a><span class="c1"># In-place (no worktree, no new branch)</span>
+</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17" href="#__codelineno-23-17"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;in place&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--root
+</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18" href="#__codelineno-23-18"></a>
+</span><span id="__span-23-19"><a id="__codelineno-23-19" name="__codelineno-23-19" href="#__codelineno-23-19"></a><span class="c1"># Start working immediately</span>
+</span><span id="__span-23-20"><a id="__codelineno-23-20" name="__codelineno-23-20" href="#__codelineno-23-20"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;add cache&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--prompt<span class="w"> </span><span class="s2">&quot;add an LRU cache in front of the API client&quot;</span>
+</span><span id="__span-23-21"><a id="__codelineno-23-21" name="__codelineno-23-21" href="#__codelineno-23-21"></a>
+</span><span id="__span-23-22"><a id="__codelineno-23-22" name="__codelineno-23-22" href="#__codelineno-23-22"></a><span class="c1"># Start the agent in a monorepo&#39;s API directory</span>
+</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23" href="#__codelineno-23-23"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;add endpoint&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span>--cwd<span class="w"> </span>services/api
 </span></code></pre></div>
 <h3 id="grove-message"><code>grove message</code></h3>
 <p>Steers a running workspace's agent, the <abbr title="Terminal User Interface">TUI</abbr>'s steer modal.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>grove<span class="w"> </span>message<span class="w"> </span>WORKSPACE<span class="w"> </span>TEXT
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>grove<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span><span class="s2">&quot;now add a test for the empty case&quot;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>grove<span class="w"> </span>message<span class="w"> </span>WORKSPACE<span class="w"> </span>TEXT
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>grove<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span><span class="s2">&quot;now add a test for the empty case&quot;</span>
 </span></code></pre></div>
 <h3 id="grove-pause"><code>grove pause</code></h3>
 <p>Removes the worktree and tmux session, keeping the branch <code>grove resume</code>
 rebuilds from. <code>--force</code> is required with uncommitted changes.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>grove<span class="w"> </span>pause<span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--force/-f<span class="o">]</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>grove<span class="w"> </span>pause<span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--force/-f<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1722,26 +1862,26 @@ rebuilds from. <code>--force</code> is required with uncommitted changes.</p>
 </tr>
 </tbody>
 </table></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>grove<span class="w"> </span>pause<span class="w"> </span>a1b2
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>grove<span class="w"> </span>pause<span class="w"> </span>a1b2<span class="w"> </span>--force<span class="w">    </span><span class="c1"># discard uncommitted changes</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>grove<span class="w"> </span>pause<span class="w"> </span>a1b2
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>grove<span class="w"> </span>pause<span class="w"> </span>a1b2<span class="w"> </span>--force<span class="w">    </span><span class="c1"># discard uncommitted changes</span>
 </span></code></pre></div>
 <h3 id="grove-resume"><code>grove resume</code></h3>
 <p>Rebuilds a paused workspace's worktree from its branch, relaunching tmux and
 the agent.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>grove<span class="w"> </span>resume<span class="w"> </span>WORKSPACE
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>grove<span class="w"> </span>resume<span class="w"> </span>a1b2
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>grove<span class="w"> </span>resume<span class="w"> </span>WORKSPACE
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>grove<span class="w"> </span>resume<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-respawn"><code>grove respawn</code></h3>
 <p>Recreates a vanished tmux session when the worktree still exists, which
 <code>resume</code> does not cover. For a container it reattaches to the running agent.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>grove<span class="w"> </span>respawn<span class="w"> </span>WORKSPACE
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>grove<span class="w"> </span>respawn<span class="w"> </span>a1b2
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>grove<span class="w"> </span>respawn<span class="w"> </span>WORKSPACE
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>grove<span class="w"> </span>respawn<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-kill"><code>grove kill</code></h3>
 <p>Destroys a workspace. Tmux session and worktree go, remote branches stay
 untouched, and the local branch follows provenance. Grove-created branches
 are deleted, <code>--checkout</code> branches kept.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--delete-branch<span class="w"> </span><span class="p">|</span><span class="w"> </span>--keep-branch<span class="o">]</span><span class="w"> </span><span class="o">[</span>--yes/-y<span class="o">]</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--delete-branch<span class="w"> </span><span class="p">|</span><span class="w"> </span>--keep-branch<span class="o">]</span><span class="w"> </span><span class="o">[</span>--yes/-y<span class="o">]</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1765,37 +1905,37 @@ are deleted, <code>--checkout</code> branches kept.</p>
 </tr>
 </tbody>
 </table></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>a1b2<span class="w">              </span><span class="c1"># prompts for confirmation</span>
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>a1b2<span class="w"> </span>--keep-branch<span class="w"> </span>-y<span class="w">   </span><span class="c1"># keep branch, no prompt</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>a1b2<span class="w">              </span><span class="c1"># prompts for confirmation</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>grove<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>a1b2<span class="w"> </span>--keep-branch<span class="w"> </span>-y<span class="w">   </span><span class="c1"># keep branch, no prompt</span>
 </span></code></pre></div>
 <h3 id="grove-attach"><code>grove attach</code></h3>
 <p>Your terminal to a workspace's tmux session, replacing the current process
 with <code>tmux attach</code>, or <code>switch-client</code> from inside tmux. Detach with Ctrl-b
 d.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>grove<span class="w"> </span>attach<span class="w"> </span>WORKSPACE
-</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>grove<span class="w"> </span>attach<span class="w"> </span>a1b2
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>grove<span class="w"> </span>attach<span class="w"> </span>WORKSPACE
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>grove<span class="w"> </span>attach<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-shell"><code>grove shell</code></h3>
 <p>An interactive shell inside a container workspace, at the agent's working
 directory, replacing the current process like <code>grove attach</code>. Runs under the
 container's own tmux, so it survives between visits.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>grove<span class="w"> </span>shell<span class="w"> </span>WORKSPACE
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>grove<span class="w"> </span>shell<span class="w"> </span>a1b2
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>grove<span class="w"> </span>shell<span class="w"> </span>WORKSPACE
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>grove<span class="w"> </span>shell<span class="w"> </span>a1b2
 </span></code></pre></div>
 <p>A host workspace has no container, so <code>grove shell</code> points at <code>grove attach</code>.
 <code>container.shell</code> picks which shell runs, <code>bash</code> then <code>sh</code>.</p>
 <h3 id="grove-agent"><code>grove agent</code></h3>
 <p>Several agents in one containerized workspace, each in its own persistent
 tmux session.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>grove<span class="w"> </span>agent<span class="w"> </span>list<span class="w"> </span>WORKSPACE
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>grove<span class="w"> </span>agent<span class="w"> </span>add<span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--agent<span class="w"> </span>NAME<span class="o">]</span><span class="w"> </span><span class="o">[</span>--name<span class="w"> </span>SLOT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--model<span class="w"> </span>ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--prompt<span class="w"> </span>TEXT<span class="o">]</span>
-</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>grove<span class="w"> </span>agent<span class="w"> </span>attach<span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT
-</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>grove<span class="w"> </span>agent<span class="w"> </span>peek<span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT<span class="w"> </span><span class="o">[</span>--lines<span class="w"> </span>N<span class="o">]</span>
-</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>grove<span class="w"> </span>agent<span class="w"> </span>message<span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT<span class="w"> </span>TEXT
-</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>grove<span class="w"> </span>agent<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT<span class="w"> </span><span class="o">[</span>--yes<span class="o">]</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>grove<span class="w"> </span>agent<span class="w"> </span>list<span class="w"> </span>WORKSPACE
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>grove<span class="w"> </span>agent<span class="w"> </span>add<span class="w"> </span>WORKSPACE<span class="w"> </span><span class="o">[</span>--agent<span class="w"> </span>NAME<span class="o">]</span><span class="w"> </span><span class="o">[</span>--name<span class="w"> </span>SLOT<span class="o">]</span><span class="w"> </span><span class="o">[</span>--model<span class="w"> </span>ID<span class="o">]</span><span class="w"> </span><span class="o">[</span>--prompt<span class="w"> </span>TEXT<span class="o">]</span>
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a>grove<span class="w"> </span>agent<span class="w"> </span>attach<span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT
+</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a>grove<span class="w"> </span>agent<span class="w"> </span>peek<span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT<span class="w"> </span><span class="o">[</span>--lines<span class="w"> </span>N<span class="o">]</span>
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5" href="#__codelineno-33-5"></a>grove<span class="w"> </span>agent<span class="w"> </span>message<span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT<span class="w"> </span>TEXT
+</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6" href="#__codelineno-33-6"></a>grove<span class="w"> </span>agent<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>WORKSPACE<span class="w"> </span>SLOT<span class="w"> </span><span class="o">[</span>--yes<span class="o">]</span>
 </span></code></pre></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>grove<span class="w"> </span>agent<span class="w"> </span>add<span class="w"> </span>a1b2<span class="w"> </span>--agent<span class="w"> </span>codex<span class="w"> </span>--name<span class="w"> </span>reviewer
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>grove<span class="w"> </span>agent<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span>reviewer<span class="w"> </span><span class="s2">&quot;review the last three commits&quot;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>grove<span class="w"> </span>agent<span class="w"> </span>add<span class="w"> </span>a1b2<span class="w"> </span>--agent<span class="w"> </span>codex<span class="w"> </span>--name<span class="w"> </span>reviewer
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>grove<span class="w"> </span>agent<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span>reviewer<span class="w"> </span><span class="s2">&quot;review the last three commits&quot;</span>
 </span></code></pre></div>
 <p><code>add</code> auto-names slots <code>agent-2</code>, <code>agent-3</code>, unless you pass <code>--name</code>, and
 runs the workspace's own agent unless you pass <code>--agent</code>. <code>list</code> reads the
@@ -1806,29 +1946,29 @@ own agent, still <code>grove pause</code> and <code>grove kill</code>'s job.</p>
 <code>code</code> <abbr title="Command Line Interface">CLI</abbr> on <code>PATH</code> and a <code>container</code> runtime. See <a href="../features-containers/#opening-it-in-vs-code">Container
 Workspaces</a> for the
 dual-editing rule.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>grove<span class="w"> </span>code<span class="w"> </span>WORKSPACE
-</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>grove<span class="w"> </span>code<span class="w"> </span>a1b2
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>grove<span class="w"> </span>code<span class="w"> </span>WORKSPACE
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a>grove<span class="w"> </span>code<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="grove-tickets"><code>grove tickets</code></h3>
 <p>Attaches, lists, and detaches issues and pull requests, and hands an issue to
 the fleet. Most subcommands take one free-text <code>ref</code>, a URL, <code>#42</code>, a bare
 <code>42</code>, or <code>owner/repo#42</code>.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
-</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>detach<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
-</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handover<span class="w"> </span>REF
-</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a>grove<span class="w"> </span>tickets<span class="w"> </span>owned
-</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handback<span class="w"> </span>REF
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>detach<span class="w"> </span>REF<span class="w"> </span><span class="o">[</span>--workspace/-w<span class="w"> </span>ID<span class="o">]</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handover<span class="w"> </span>REF
+</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5" href="#__codelineno-36-5"></a>grove<span class="w"> </span>tickets<span class="w"> </span>owned
+</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6" href="#__codelineno-36-6"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handback<span class="w"> </span>REF
 </span></code></pre></div>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span>https://github.com/acme/api/pull/42<span class="w">   </span><span class="c1"># cwd-inferred workspace</span>
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span><span class="s1">&#39;#42&#39;</span><span class="w"> </span>-w<span class="w"> </span>a1b2
-</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>list
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span>https://github.com/acme/api/pull/42<span class="w">   </span><span class="c1"># cwd-inferred workspace</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>attach<span class="w"> </span><span class="s1">&#39;#42&#39;</span><span class="w"> </span>-w<span class="w"> </span>a1b2
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>list
 </span></code></pre></div>
 <p><code>--workspace</code> is inferred from the worktree. <code>attach</code> and <code>detach</code> are
 idempotent, so a repeat corrects a wrong guess.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handover<span class="w"> </span><span class="m">42</span><span class="w">   </span><span class="c1"># assign Grove&#39;s account, start a workspace on it</span>
-</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>owned<span class="w">         </span><span class="c1"># every ticket Grove holds, host-wide, and whether work is live</span>
-</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handback<span class="w"> </span><span class="m">42</span><span class="w">   </span><span class="c1"># unassign, leaving any workspace alone</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handover<span class="w"> </span><span class="m">42</span><span class="w">   </span><span class="c1"># assign Grove&#39;s account, start a workspace on it</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a>grove<span class="w"> </span>tickets<span class="w"> </span>owned<span class="w">         </span><span class="c1"># every ticket Grove holds, host-wide, and whether work is live</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a>grove<span class="w"> </span>tickets<span class="w"> </span>handback<span class="w"> </span><span class="m">42</span><span class="w">   </span><span class="c1"># unassign, leaving any workspace alone</span>
 </span></code></pre></div>
 <p><code>handover</code> records the marker the poll uses so no second workspace starts.
 <code>handback</code> keeps that marker so the poll does not reclaim it. Stopping the
@@ -1838,55 +1978,55 @@ providers</a>.</p>
 <h3 id="grove-config-show"><code>grove config show</code></h3>
 <p>The merged effective config for this repo, as JSON, after the cascade
 resolves.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>grove<span class="w"> </span>config<span class="w"> </span>show
-</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a>grove<span class="w"> </span>config<span class="w"> </span>show<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.worktree.root_template&#39;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>grove<span class="w"> </span>config<span class="w"> </span>show
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>grove<span class="w"> </span>config<span class="w"> </span>show<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.worktree.root_template&#39;</span>
 </span></code></pre></div>
 <h3 id="grove-config-add-project"><code>grove config add-project</code></h3>
 <p>Registers a git repo (default <code>cwd</code>) in the user config's known-projects
 list, so it appears in cross-project surfaces with zero workspaces and no
 config of its own.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>grove<span class="w"> </span>config<span class="w"> </span>add-project
-</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a>grove<span class="w"> </span>config<span class="w"> </span>add-project<span class="w"> </span>/path/to/other-project
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>grove<span class="w"> </span>config<span class="w"> </span>add-project
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>grove<span class="w"> </span>config<span class="w"> </span>add-project<span class="w"> </span>/path/to/other-project
 </span></code></pre></div>
 <h3 id="grove-config-init"><code>grove config init</code></h3>
 <p>A project config at <code>&lt;repo&gt;/.grove/config.json</code>, refusing to clobber an
 existing file without <code>-f</code>. The stub covers the worktree root and branch
 prefix, a single <code>claude</code> agent, and a disabled init script.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w">                    </span><span class="c1"># writes .grove/config.json</span>
-</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w"> </span>-f<span class="w">                 </span><span class="c1"># overwrite an existing config</span>
-</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w"> </span>--with-onboarding<span class="w">  </span><span class="c1"># also install skills + register the MCP server</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w">                    </span><span class="c1"># writes .grove/config.json</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w"> </span>-f<span class="w">                 </span><span class="c1"># overwrite an existing config</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a>grove<span class="w"> </span>config<span class="w"> </span>init<span class="w"> </span>--with-onboarding<span class="w">  </span><span class="c1"># also install skills + register the MCP server</span>
 </span></code></pre></div>
 <h3 id="grove-skills-install"><code>grove skills install</code></h3>
 <p>Grove's bundled skills, copied into Claude and Codex skill directories.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w">                          </span><span class="c1"># asks where to install</span>
-</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w"> </span>--target<span class="w"> </span>project<span class="w">         </span><span class="c1"># user | project | all</span>
-</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3" href="#__codelineno-38-3"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w"> </span>-t<span class="w"> </span>user<span class="w"> </span>--agent<span class="w"> </span>claude<span class="w">   </span><span class="c1"># claude | codex | all</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w">                          </span><span class="c1"># asks where to install</span>
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w"> </span>--target<span class="w"> </span>project<span class="w">         </span><span class="c1"># user | project | all</span>
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a>grove<span class="w"> </span>skills<span class="w"> </span>install<span class="w"> </span>-t<span class="w"> </span>user<span class="w"> </span>--agent<span class="w"> </span>claude<span class="w">   </span><span class="c1"># claude | codex | all</span>
 </span></code></pre></div>
 <h3 id="grove-mcp-install"><code>grove mcp install</code></h3>
 <p>This install as an <abbr title="Model Context Protocol">MCP</abbr> server via <code>claude mcp add</code> or <code>codex mcp add</code>, with
 the same <code>--target</code> and <code>--agent</code> flags.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>grove<span class="w"> </span>mcp<span class="w"> </span>install
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>grove<span class="w"> </span>mcp<span class="w"> </span>install<span class="w"> </span>--target<span class="w"> </span>project<span class="w"> </span>--agent<span class="w"> </span>claude
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>grove<span class="w"> </span>mcp<span class="w"> </span>install
+</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a>grove<span class="w"> </span>mcp<span class="w"> </span>install<span class="w"> </span>--target<span class="w"> </span>project<span class="w"> </span>--agent<span class="w"> </span>claude
 </span></code></pre></div>
 <h3 id="grove-init-devcontainer"><code>grove init devcontainer</code></h3>
 <p><code>.devcontainer/devcontainer.json</code> from Grove's packaged default container
 config, the remedy every "default container" notice points at. See
 <a href="../features-containers/">Container Workspaces</a>.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>grove<span class="w"> </span>init<span class="w"> </span>devcontainer<span class="w">          </span><span class="c1"># writes .devcontainer/devcontainer.json</span>
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>grove<span class="w"> </span>init<span class="w"> </span>devcontainer<span class="w"> </span>--force<span class="w">  </span><span class="c1"># overwrite an existing one</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>grove<span class="w"> </span>init<span class="w"> </span>devcontainer<span class="w">          </span><span class="c1"># writes .devcontainer/devcontainer.json</span>
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a>grove<span class="w"> </span>init<span class="w"> </span>devcontainer<span class="w"> </span>--force<span class="w">  </span><span class="c1"># overwrite an existing one</span>
 </span></code></pre></div>
 <h3 id="grove-config-schema"><code>grove config schema</code></h3>
 <p>The JSON Schema, written next to the user config and nothing else. Useful
 after an upgrade, when the config model may have gained fields.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>grove<span class="w"> </span>config<span class="w"> </span>schema<span class="w">           </span><span class="c1"># write to disk</span>
-</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>grove<span class="w"> </span>config<span class="w"> </span>schema<span class="w"> </span>--stdout<span class="w">  </span><span class="c1"># print to stdout instead</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>grove<span class="w"> </span>config<span class="w"> </span>schema<span class="w">           </span><span class="c1"># write to disk</span>
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a>grove<span class="w"> </span>config<span class="w"> </span>schema<span class="w"> </span>--stdout<span class="w">  </span><span class="c1"># print to stdout instead</span>
 </span></code></pre></div>
 <h3 id="grove-daemon-serve"><code>grove daemon serve</code></h3>
 <p>The HTTP daemon behind the <a href="../use-webapp/">web dashboard</a>, serving every repo
 from one process. The <a href="../use-webapp/#always-on-with-systemd">systemd user
 service</a> normally keeps it up.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">              </span><span class="c1"># 127.0.0.1:7421</span>
-</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w"> </span>--port<span class="w"> </span><span class="m">7777</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">              </span><span class="c1"># 127.0.0.1:7421</span>
+</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w"> </span>--port<span class="w"> </span><span class="m">7777</span>
 </span></code></pre></div>
 <div class="table-wrapper"><table>
 <thead>
@@ -1923,90 +2063,93 @@ service</a> normally keeps it up.</p>
 <li><code>grove auth sessions</code> lists active sessions.</li>
 <li><code>grove auth revoke &lt;session-id&gt;</code> cuts one off.</li>
 </ul>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>grove<span class="w"> </span>auth<span class="w"> </span>pending
-</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a><span class="c1"># 7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f  code=BFCD-GH23  label=&#39;My Tablet&#39;  state=pending  expires_at=...</span>
-</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3" href="#__codelineno-43-3"></a>
-</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4" href="#__codelineno-43-4"></a>grove<span class="w"> </span>auth<span class="w"> </span>approve<span class="w"> </span>7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f
-</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5" href="#__codelineno-43-5"></a>grove<span class="w"> </span>auth<span class="w"> </span>sessions
-</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6" href="#__codelineno-43-6"></a>grove<span class="w"> </span>auth<span class="w"> </span>revoke<span class="w"> </span>9d21f0e4-1a2b-4c3d-8e5f-6a7b8c9d0e1f
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>grove<span class="w"> </span>auth<span class="w"> </span>pending
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a><span class="c1"># 7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f  code=BFCD-GH23  label=&#39;My Tablet&#39;  state=pending  expires_at=...</span>
+</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a>
+</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4" href="#__codelineno-47-4"></a>grove<span class="w"> </span>auth<span class="w"> </span>approve<span class="w"> </span>7b3f2c1a-9d4e-4c2b-8f10-2a6b1c3d4e5f
+</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5" href="#__codelineno-47-5"></a>grove<span class="w"> </span>auth<span class="w"> </span>sessions
+</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6" href="#__codelineno-47-6"></a>grove<span class="w"> </span>auth<span class="w"> </span>revoke<span class="w"> </span>9d21f0e4-1a2b-4c3d-8e5f-6a7b8c9d0e1f
 </span></code></pre></div>
 <h3 id="grove-doctor"><code>grove doctor</code></h3>
 <p>The host against what Grove's container runtime needs, the Docker daemon,
 Compose v2, and <code>@devcontainers/cli</code>, with a hint per failure.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>grove<span class="w"> </span>doctor<span class="w">           </span><span class="c1"># human-readable table</span>
-</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2" href="#__codelineno-44-2"></a>grove<span class="w"> </span>doctor<span class="w"> </span>--json<span class="w">    </span><span class="c1"># for scripts</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>grove<span class="w"> </span>doctor<span class="w">           </span><span class="c1"># human-readable table</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a>grove<span class="w"> </span>doctor<span class="w"> </span>--json<span class="w">    </span><span class="c1"># for scripts</span>
 </span></code></pre></div>
 <p>Exit code <code>0</code> means every required check passed. The two advisory rows,
 <code>in-container tmux</code> and <code>container firewall</code>, are bundles Grove builds
 itself, so a missing one is not a fault.</p>
 <h3 id="grove-version"><code>grove version</code></h3>
 <p>The installed Grove version.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>grove<span class="w"> </span>version
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a><span class="c1"># grove 0.1.0</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>grove<span class="w"> </span>version
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a><span class="c1"># grove 0.1.0</span>
 </span></code></pre></div>
 <h3 id="grove-debug"><code>grove debug</code></h3>
 <p>The resolved paths Grove would use for this repo, plus whether the config
 loaded cleanly. Run it first when something "isn't loading".</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>grove<span class="w"> </span>debug
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a>grove<span class="w"> </span>debug
 </span></code></pre></div>
-<div class="language-json codehilite"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a><span class="p">{</span>
-</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a><span class="w">  </span><span class="nt">&quot;user_config_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/.config/grove/config.json&quot;</span><span class="p">,</span>
-</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a><span class="w">  </span><span class="nt">&quot;user_state_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/.local/state/grove/state.json&quot;</span><span class="p">,</span>
-</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4" href="#__codelineno-47-4"></a><span class="w">  </span><span class="nt">&quot;user_schema_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/.config/grove/config.schema.json&quot;</span><span class="p">,</span>
-</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5" href="#__codelineno-47-5"></a><span class="w">  </span><span class="nt">&quot;project_config_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/my-project/.grove/config.json&quot;</span><span class="p">,</span>
-</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6" href="#__codelineno-47-6"></a><span class="w">  </span><span class="nt">&quot;project_local_config_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/my-project/.grove/config.local.json&quot;</span><span class="p">,</span>
-</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7" href="#__codelineno-47-7"></a><span class="w">  </span><span class="nt">&quot;repo_root&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/my-project&quot;</span><span class="p">,</span>
-</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8" href="#__codelineno-47-8"></a><span class="w">  </span><span class="nt">&quot;config_loaded&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9" href="#__codelineno-47-9"></a><span class="p">}</span>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a><span class="p">{</span>
+</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a><span class="w">  </span><span class="nt">&quot;user_config_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/.config/grove/config.json&quot;</span><span class="p">,</span>
+</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a><span class="w">  </span><span class="nt">&quot;user_state_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/.local/state/grove/state.json&quot;</span><span class="p">,</span>
+</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a><span class="w">  </span><span class="nt">&quot;user_schema_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/.config/grove/config.schema.json&quot;</span><span class="p">,</span>
+</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5" href="#__codelineno-51-5"></a><span class="w">  </span><span class="nt">&quot;project_config_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/my-project/.grove/config.json&quot;</span><span class="p">,</span>
+</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6" href="#__codelineno-51-6"></a><span class="w">  </span><span class="nt">&quot;project_local_config_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/my-project/.grove/config.local.json&quot;</span><span class="p">,</span>
+</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7" href="#__codelineno-51-7"></a><span class="w">  </span><span class="nt">&quot;repo_root&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/my-project&quot;</span><span class="p">,</span>
+</span><span id="__span-51-8"><a id="__codelineno-51-8" name="__codelineno-51-8" href="#__codelineno-51-8"></a><span class="w">  </span><span class="nt">&quot;config_loaded&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9" href="#__codelineno-51-9"></a><span class="p">}</span>
 </span></code></pre></div>
 <h2 id="grove_debug1"><code>GROVE_DEBUG=1</code></h2>
 <p>Flips the logger's stderr handler from <code>WARNING</code> to <code>DEBUG</code>, so every <code>git</code>
 and <code>tmux</code> invocation, cascade merge, and state-file read becomes visible,
 keeping stdout JSON pipeable.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a><span class="nv">GROVE_DEBUG</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>grove<span class="w"> </span>ls
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a><span class="nv">GROVE_DEBUG</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>grove<span class="w"> </span>ls
 </span></code></pre></div>
 <h2 id="using-the-cli-from-an-agent">Using the <abbr title="Command Line Interface">CLI</abbr> from an agent</h2>
 <p>A coding agent with shell access inside a Grove-managed worktree has the full
 command surface, reading what siblings are doing and, when authorized,
 driving the same fleet.</p>
 <h3 id="discover-what-is-happening">Discover what is happening</h3>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a><span class="c1"># Every workspace in this project, with its reconciled status.</span>
-</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a>grove<span class="w"> </span>ls
-</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3" href="#__codelineno-49-3"></a>
-</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4" href="#__codelineno-49-4"></a><span class="c1"># Every agent session across every worktree, newest first.</span>
-</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5" href="#__codelineno-49-5"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list
-</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6" href="#__codelineno-49-6"></a>
-</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7" href="#__codelineno-49-7"></a><span class="c1"># Just the sibling sessions: drop your own branch, keep the others.</span>
-</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8" href="#__codelineno-49-8"></a><span class="nv">MY_BRANCH</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>branch<span class="w"> </span>--show-current<span class="k">)</span>
-</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9" href="#__codelineno-49-9"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-49-10"><a id="__codelineno-49-10" name="__codelineno-49-10" href="#__codelineno-49-10"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>--arg<span class="w"> </span>me<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_BRANCH</span><span class="s2">&quot;</span><span class="w"> </span><span class="s1">&#39;</span>
-</span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11" href="#__codelineno-49-11"></a><span class="s1">      .[] | select(.git_branch != $me)</span>
-</span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12" href="#__codelineno-49-12"></a><span class="s1">      | &quot;\(.session_id[0:8])  \(.state)  \(.workspace_title // &quot;-&quot;)  \(.title // .last_prompt // &quot;&quot;)&quot;&#39;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a><span class="c1"># Every workspace in this project, with its reconciled status.</span>
+</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a>grove<span class="w"> </span>ls
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a>
+</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4" href="#__codelineno-53-4"></a><span class="c1"># Every agent session across every worktree, newest first.</span>
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5" href="#__codelineno-53-5"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list
+</span><span id="__span-53-6"><a id="__codelineno-53-6" name="__codelineno-53-6" href="#__codelineno-53-6"></a>
+</span><span id="__span-53-7"><a id="__codelineno-53-7" name="__codelineno-53-7" href="#__codelineno-53-7"></a><span class="c1"># Just the sibling sessions: drop your own branch, keep the others.</span>
+</span><span id="__span-53-8"><a id="__codelineno-53-8" name="__codelineno-53-8" href="#__codelineno-53-8"></a><span class="nv">MY_BRANCH</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>branch<span class="w"> </span>--show-current<span class="k">)</span>
+</span><span id="__span-53-9"><a id="__codelineno-53-9" name="__codelineno-53-9" href="#__codelineno-53-9"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-53-10"><a id="__codelineno-53-10" name="__codelineno-53-10" href="#__codelineno-53-10"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>--arg<span class="w"> </span>me<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_BRANCH</span><span class="s2">&quot;</span><span class="w"> </span><span class="s1">&#39;</span>
+</span><span id="__span-53-11"><a id="__codelineno-53-11" name="__codelineno-53-11" href="#__codelineno-53-11"></a><span class="s1">      .[] | select(.git_branch != $me)</span>
+</span><span id="__span-53-12"><a id="__codelineno-53-12" name="__codelineno-53-12" href="#__codelineno-53-12"></a><span class="s1">      | &quot;\(.session_id[0:8])  \(.state)  \(.workspace_title // &quot;-&quot;)  \(.title // .last_prompt // &quot;&quot;)&quot;&#39;</span>
 </span></code></pre></div>
 <h3 id="read-context-cheaply">Read context cheaply</h3>
 <p>Stop at the first rung that answers your question.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a><span class="c1"># Cheapest: scan the list, filtered to recent activity.</span>
-</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span>1h
-</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a>
-</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4" href="#__codelineno-50-4"></a><span class="c1"># Mid cost: read the last few turns of one sibling session.</span>
-</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5" href="#__codelineno-50-5"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>a91e0d34<span class="w"> </span>--last<span class="w"> </span><span class="m">5</span>
-</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6" href="#__codelineno-50-6"></a>
-</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7" href="#__codelineno-50-7"></a><span class="c1"># Expensive, last resort: redirect to a file, not your context.</span>
-</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8" href="#__codelineno-50-8"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>a91e0d34<span class="w"> </span>--jsonl<span class="w"> </span>&gt;<span class="w"> </span>/tmp/a91e0d34.jsonl
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a><span class="c1"># Cheapest: scan the list, filtered to recent activity.</span>
+</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a>grove<span class="w"> </span>sessions<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span>1h
+</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a>
+</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a><span class="c1"># Mid cost: read the last few turns of one sibling session.</span>
+</span><span id="__span-54-5"><a id="__codelineno-54-5" name="__codelineno-54-5" href="#__codelineno-54-5"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>a91e0d34<span class="w"> </span>--last<span class="w"> </span><span class="m">5</span>
+</span><span id="__span-54-6"><a id="__codelineno-54-6" name="__codelineno-54-6" href="#__codelineno-54-6"></a>
+</span><span id="__span-54-7"><a id="__codelineno-54-7" name="__codelineno-54-7" href="#__codelineno-54-7"></a><span class="c1"># Recover every direct instruction, including ones before compaction.</span>
+</span><span id="__span-54-8"><a id="__codelineno-54-8" name="__codelineno-54-8" href="#__codelineno-54-8"></a>grove<span class="w"> </span>recollect<span class="w"> </span>a91e0d34<span class="w"> </span>--last<span class="w"> </span><span class="m">5</span>
+</span><span id="__span-54-9"><a id="__codelineno-54-9" name="__codelineno-54-9" href="#__codelineno-54-9"></a>
+</span><span id="__span-54-10"><a id="__codelineno-54-10" name="__codelineno-54-10" href="#__codelineno-54-10"></a><span class="c1"># Expensive, last resort: redirect to a file, not your context.</span>
+</span><span id="__span-54-11"><a id="__codelineno-54-11" name="__codelineno-54-11" href="#__codelineno-54-11"></a>grove<span class="w"> </span>sessions<span class="w"> </span>dump<span class="w"> </span>a91e0d34<span class="w"> </span>--jsonl<span class="w"> </span>&gt;<span class="w"> </span>/tmp/a91e0d34.jsonl
 </span></code></pre></div>
 <h3 id="create-and-steer-from-a-script">Create and steer from a script</h3>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a><span class="c1"># Spin up a new workspace with an initial task.</span>
-</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;add retry logic&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a><span class="w">  </span>--prompt<span class="w"> </span><span class="s2">&quot;wrap the API client&#39;s fetch method with exponential backoff&quot;</span>
-</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a>
-</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5" href="#__codelineno-51-5"></a><span class="c1"># Steer a running workspace by id prefix.</span>
-</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6" href="#__codelineno-51-6"></a>grove<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span><span class="s2">&quot;now add a test for the retry case&quot;</span>
-</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7" href="#__codelineno-51-7"></a>
-</span><span id="__span-51-8"><a id="__codelineno-51-8" name="__codelineno-51-8" href="#__codelineno-51-8"></a><span class="c1"># Check its transcript to see where it landed.</span>
-</span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9" href="#__codelineno-51-9"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>a1b2<span class="w"> </span>--last<span class="w"> </span><span class="m">3</span>
-</span><span id="__span-51-10"><a id="__codelineno-51-10" name="__codelineno-51-10" href="#__codelineno-51-10"></a>
-</span><span id="__span-51-11"><a id="__codelineno-51-11" name="__codelineno-51-11" href="#__codelineno-51-11"></a><span class="c1"># Pause it when the task is done.</span>
-</span><span id="__span-51-12"><a id="__codelineno-51-12" name="__codelineno-51-12" href="#__codelineno-51-12"></a>grove<span class="w"> </span>pause<span class="w"> </span>a1b2
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="c1"># Spin up a new workspace with an initial task.</span>
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2" href="#__codelineno-55-2"></a>grove<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;add retry logic&quot;</span><span class="w"> </span>--agent<span class="w"> </span>claude<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3" href="#__codelineno-55-3"></a><span class="w">  </span>--prompt<span class="w"> </span><span class="s2">&quot;wrap the API client&#39;s fetch method with exponential backoff&quot;</span>
+</span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4" href="#__codelineno-55-4"></a>
+</span><span id="__span-55-5"><a id="__codelineno-55-5" name="__codelineno-55-5" href="#__codelineno-55-5"></a><span class="c1"># Steer a running workspace by id prefix.</span>
+</span><span id="__span-55-6"><a id="__codelineno-55-6" name="__codelineno-55-6" href="#__codelineno-55-6"></a>grove<span class="w"> </span>message<span class="w"> </span>a1b2<span class="w"> </span><span class="s2">&quot;now add a test for the retry case&quot;</span>
+</span><span id="__span-55-7"><a id="__codelineno-55-7" name="__codelineno-55-7" href="#__codelineno-55-7"></a>
+</span><span id="__span-55-8"><a id="__codelineno-55-8" name="__codelineno-55-8" href="#__codelineno-55-8"></a><span class="c1"># Check its transcript to see where it landed.</span>
+</span><span id="__span-55-9"><a id="__codelineno-55-9" name="__codelineno-55-9" href="#__codelineno-55-9"></a>grove<span class="w"> </span>sessions<span class="w"> </span>show<span class="w"> </span>a1b2<span class="w"> </span>--last<span class="w"> </span><span class="m">3</span>
+</span><span id="__span-55-10"><a id="__codelineno-55-10" name="__codelineno-55-10" href="#__codelineno-55-10"></a>
+</span><span id="__span-55-11"><a id="__codelineno-55-11" name="__codelineno-55-11" href="#__codelineno-55-11"></a><span class="c1"># Pause it when the task is done.</span>
+</span><span id="__span-55-12"><a id="__codelineno-55-12" name="__codelineno-55-12" href="#__codelineno-55-12"></a>grove<span class="w"> </span>pause<span class="w"> </span>a1b2
 </span></code></pre></div>
 <h3 id="rules-of-thumb">Rules of thumb</h3>
 <ul>
@@ -2016,6 +2159,99 @@ driving the same fleet.</p>
 <li>Redirect <code>dump</code> to a file, not your context, and use <code>--since</code> and <code>-w</code> to
   shrink a result first.</li>
 </ul>
+<h2 id="tab-completion">Tab completion</h2>
+<p><code>grove completions install</code> writes a completion script into a directory your
+shell already searches, and never edits <code>~/.zshrc</code> or any other rc file.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>grove<span class="w"> </span>completions<span class="w"> </span>install<span class="w">          </span><span class="c1"># detects zsh, bash or fish</span>
+</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2" href="#__codelineno-56-2"></a><span class="nb">exec</span><span class="w"> </span><span class="nv">$SHELL</span><span class="w">                        </span><span class="c1"># start a new shell to pick it up</span>
+</span></code></pre></div>
+<p>For zsh it asks the shell itself which directories are on <code>$fpath</code> and takes the
+first writable one of your own, so it lands wherever you already keep
+completions on both Linux and macOS. If there is no such directory it still
+writes the file and prints the one line to add — placement is never silent,
+because a script the shell cannot see looks exactly like an install that worked.
+bash and fish use their conventional auto-loaded directories.</p>
+<p><code>grove completions show --shell zsh</code> prints the script instead, for a dotfiles
+repo or a system package.</p>
+<h3 id="what-completes">What completes</h3>
+<p>Command and subcommand names, every flag, and the values behind them:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Where</th>
+<th>Completes to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>grove show</code>, <code>pause</code>, <code>kill</code>, <code>attach</code>, …</td>
+<td>Workspace ids in this repo, with title and branch</td>
+</tr>
+<tr>
+<td><code>grove create --agent</code></td>
+<td>Agent names from your resolved config</td>
+</tr>
+<tr>
+<td><code>grove create --model</code></td>
+<td>That agent's model catalog — scoped to the <code>--agent</code> already typed</td>
+</tr>
+<tr>
+<td><code>grove create --checkout</code> / <code>--track</code> / <code>--base</code></td>
+<td>Local, remote and all branches; a local one says where it is checked out</td>
+</tr>
+<tr>
+<td><code>grove create --cwd</code></td>
+<td>The repo's configured working directories</td>
+</tr>
+<tr>
+<td><code>grove create --resume-session</code>, <code>grove sessions show</code></td>
+<td>Session ids recorded in this project</td>
+</tr>
+<tr>
+<td><code>grove phase</code></td>
+<td>The six phase names <em>and</em> workspace ids — the argument takes either</td>
+</tr>
+<tr>
+<td><code>grove tickets detach</code>, <code>grove phase --ticket</code></td>
+<td>Tickets attached to the workspace</td>
+</tr>
+<tr>
+<td><code>grove agent kill</code> / <code>peek</code> / <code>message</code></td>
+<td>Agents live in that workspace's container</td>
+</tr>
+<tr>
+<td><code>grove auth approve</code> / <code>deny</code> / <code>revoke</code></td>
+<td>Pending challenge and active session ids</td>
+</tr>
+</tbody>
+</table></div>
+<p>Values come from the same places the commands read — the config cascade, the
+workspace store, git — so a new agent, a curated model list or a renamed working
+directory appears at the next TAB with nothing to regenerate. The completion
+script itself only changes if you change shells.</p>
+<p>Completion stays cheap: it reads recorded state, config and git rather than
+reconciling live tmux or containers. <code>grove agent</code>'s name argument is the one
+exception, because an in-container agent exists nowhere but the running
+container. Everything here is best-effort — anything unavailable, slow to reach
+or failing offers nothing rather than interrupting your shell.</p>
+<h3 id="if-nothing-happens-when-you-press-tab">If nothing happens when you press TAB</h3>
+<p>Answering a completion means starting <code>grove</code>, which takes about a second on a
+typical host, most of it Python import before any value is looked up. Some zsh
+completion frameworks give a completer far less than that and silently drop it,
+so completion appears to do nothing at all.</p>
+<p>The common case is <a href="https://github.com/marlonrichert/zsh-autocomplete">zsh-autocomplete</a>, whose default budget is <strong>0.4 s</strong>. Raise
+it in <code>~/.zshrc</code>:</p>
+<div class="language-zsh codehilite"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>zstyle<span class="w"> </span><span class="s1">&#39;:autocomplete:&#39;</span><span class="w"> </span>timeout<span class="w"> </span><span class="m">3</span>
+</span></code></pre></div>
+<p>Note the single trailing colon. <code>:autocomplete:</code> is the exact context this
+setting is read from, and the more familiar <code>':autocomplete:*'</code> does not match
+it.</p>
+<p>To tell this apart from an install problem, run the round trip by hand:</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a><span class="nb">time</span><span class="w"> </span><span class="o">(</span><span class="w"> </span>env<span class="w"> </span><span class="nv">_TYPER_COMPLETE_ARGS</span><span class="o">=</span><span class="s2">&quot;grove show &quot;</span><span class="w"> </span><span class="nv">_GROVE_COMPLETE</span><span class="o">=</span>complete_zsh<span class="w"> </span>grove<span class="w"> </span><span class="o">)</span>
+</span></code></pre></div>
+<p>Candidates printed means Grove is fine and the shell is discarding them. Nothing
+printed is a real fault worth reporting. <code>zsh -f</code> (no rc) with the completion
+sourced is the other half of the same check.</p>
 <h2 id="see-also">See also</h2>
 <ul>
 <li><a href="../features-activity/">Agent activity and sessions</a>, <code>grove sessions</code>.</li>
@@ -3007,6 +3243,13 @@ driving the same fleet.</p>
                 grove show
             </a>
             
+            <a href="#grove-edit"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove-edit');">
+                grove edit
+            </a>
+            
             <a href="#grove-phase"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
@@ -3246,6 +3489,30 @@ driving the same fleet.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#rules-of-thumb');">
                 Rules of thumb
+            </a>
+            
+            
+            
+            <a href="#tab-completion"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#tab-completion');">
+                Tab completion
+            </a>
+            
+            
+            <a href="#what-completes"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#what-completes');">
+                What completes
+            </a>
+            
+            <a href="#if-nothing-happens-when-you-press-tab"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#if-nothing-happens-when-you-press-tab');">
+                If nothing happens when you press TAB
             </a>
             
             

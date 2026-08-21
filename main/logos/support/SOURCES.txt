@@ -1,0 +1,31 @@
+Support icon sources
+====================
+
+These PNGs retain their individually edited shells and artwork. The only shared
+finishing pass is intentionally narrow:
+
+    uv run --group dev python -m tools.refine_support_icons
+
+It regularizes only the outer alpha edge on Codex, Linear and Gitea, leaving
+every RGB pixel unchanged, and enlarges only Claude Code's clay mark over its
+existing dark shell. GitHub is not touched.
+
+`tools/support_icons.py --from-upstream` is the explicit destructive reset to
+the pinned library sources. Its digests make an upstream change fail closed.
+
+- claude-code.png: avatar asset from LobeHub Icons static-avatar, version 1.13.0.
+- codex.png: standalone transparent mark from LobeHub Icons static-png, version
+  1.95.0. The standalone form avoids nesting LobeHub's ready-made Codex square
+  inside Grove's own rounded tile.
+  Source: https://github.com/lobehub/lobe-icons
+  License: MIT, https://github.com/lobehub/lobe-icons/blob/master/LICENSE
+
+- linear.png, github.png, gitea.png: logo assets from selfh.st/icons, retrieved
+  2026-08-21.
+  Source: https://github.com/selfhst/icons
+  License: CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+
+The edited backgrounds, logo colors and compositions are the artwork of record;
+the finishing pass never normalizes them into one shell. Product names and logos
+remain trademarks of their respective owners; inclusion indicates compatibility,
+not endorsement.

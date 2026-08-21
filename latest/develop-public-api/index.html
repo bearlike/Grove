@@ -1603,11 +1603,15 @@ agent and it cascades like every other field.</p>
 display/override seam, never a validated allowlist (any id is still
 forwarded verbatim on create; the provider boundary). Empty (the default)
 falls through to the adapter's live discovery: Codex reads <code>codex debug
-models</code>, Claude Code offers its stable <code>sonnet</code>/<code>opus</code>/<code>haiku</code>
-aliases, a remote/shell agent offers nothing. Set it to pin, restrict,
-reorder, or add gateway/custom ids — it cascades and merges by field like
-every other AgentSpec knob (mechanism, not policy). The engine
-(<code>agents.resolve_models</code>) caps the offered list at ten.</p>
+models</code>, Claude Code offers its stable <code>fable</code>/<code>opus</code>/<code>sonnet</code>/
+<code>haiku</code> aliases, a remote/shell agent offers nothing. Set it to pin,
+restrict, reorder, or add gateway/custom ids — it cascades and merges by
+field like every other AgentSpec knob (mechanism, not policy). A curated
+list here is never trimmed, however long: only live discovery is capped
+at ten, since nobody chose what a tool happens to publish. A gateway
+behind one agent can publish twenty or more models under a shared prefix,
+and naming every one of them here is what puts all of them in the
+picker.</p>
 
     </div>
 
@@ -3045,6 +3049,42 @@ a record that does not carry the phase at all.</p>
 <div class="doc doc-object doc-function">
 
 
+<h3 id="grove.core.WorkspaceManager.shared_session_id" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">shared_session_id</span><span class="p">(</span><span class="n">state</span><span class="p">:</span> <span class="n">WorkspaceState</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Which transcript this workspace's PUBLIC link shows.</p>
+<p>THE SINGLE RESOLVER, and being single is the whole point. The public
+overview names a session and the public turns route serves one; while
+those were two independent derivations they disagreed in production —
+the overview reported the workspace's own session while the transcript
+rendered whichever file in the scan cwd had been touched most recently,
+which under ROOT placement is another workspace's conversation entirely.
+Any future public read that needs a session calls THIS, never a listing
+index.</p>
+<p>The recorded pin wins. <code>None</code> — a link issued before pinning existed,
+or one whose pin was never captured — falls back to
+:meth:<code>_todo_session_id</code>, the same per-request resolution the todo and
+task-text axes use, which is the workspace's own primary session. So an
+unpinned link is not broken, merely un-frozen: it follows the workspace
+the way the authenticated surface does.</p>
+<p>The answer may name a session with no transcript on disk yet (a mint
+inside the STARTING window). That is honest rather than a failure — the
+turns route finds no listing for it and says the workspace has nothing
+readable, which is exactly the state it is in.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="grove.core.WorkspaceManager.subscribe" class="doc doc-heading">
             <code class="codehilite language-python"><span class="n">subscribe</span><span class="p">(</span><span class="n">callback</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">WorkspaceEvent</span><span class="p">],</span> <span class="kc">None</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="kc">None</span><span class="p">]</span></code>
 
@@ -3165,14 +3205,14 @@ ways; one named seam gives it a home a new read path can find.</p>
 
 
 <h3 id="grove.core.WorkspaceManager.update" class="doc doc-heading">
-            <code class="codehilite language-python"><span class="n">update</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">_Unset</span> <span class="o">=</span> <span class="n">_UNSET</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">_Unset</span> <span class="o">=</span> <span class="n">_UNSET</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WorkspaceState</span></code>
+            <code class="codehilite language-python"><span class="n">update</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">_Unset</span> <span class="o">=</span> <span class="n">_UNSET</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">_Unset</span> <span class="o">=</span> <span class="n">_UNSET</span><span class="p">,</span> <span class="n">share</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="n">_Unset</span> <span class="o">=</span> <span class="n">_UNSET</span><span class="p">,</span> <span class="n">share_ttl_seconds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">_Unset</span> <span class="o">=</span> <span class="n">_UNSET</span><span class="p">,</span> <span class="n">share_session_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">_Unset</span> <span class="o">=</span> <span class="n">_UNSET</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WorkspaceState</span></code>
 
 </h3>
 
 
     <div class="doc doc-contents ">
 
-        <p>Rename the title or set/clear the description on a workspace.</p>
+        <p>Rename the title, set/clear the description, or share the workspace.</p>
 <p>Metadata-only — never touches the worktree, the tmux session, or
 the branch. Title is the slug seed for the worktree path and tmux
 session name <em>at create time</em>; both are persisted strings after
@@ -3184,11 +3224,43 @@ have; only the displayed title changes.</p>
 stripping). <code>description=None</code> or <code>description=""</code> clears it
 (stored as None — empty string and None are equivalent and we
 normalize on write). <code>description="..."</code> sets it.</p>
-<p>Refuses if both args are unset (nothing to do) and if the
-workspace is ORPHANED (worktree gone; record headed for kill).
-Emits an <code>"updated"</code> event with <code>title_changed</code> /
-<code>description_changed</code> flags so subscribers know what shifted
-without diffing themselves.</p>
+<p><code>share=True</code> mints a public capability token (and <code>share=False</code>
+clears it), which is what makes the workspace readable through the
+daemon's unauthenticated <code>/public</code> namespace. It lives here rather
+than on a <code>share()</code> method of its own because this method already
+owns all four things such a method would need: the ORPHANED gate, the
+read-modify-write against persisted state, the no-op short-circuit, and
+the <code>updated</code> event. A second copy of those is how two mutation paths
+drift.</p>
+<p>Enabling is IDEMPOTENT — an already-shared workspace keeps the token it
+has, so re-enabling never invalidates a link somebody is already
+holding. Disabling clears it outright, which permanently kills that
+link; a later re-share mints a fresh one rather than resurrecting it.</p>
+<p><strong>Minting a token also PINS the transcript the link will show</strong>, to the
+workspace's session as resolved at that moment
+(:meth:<code>_todo_session_id</code>). A link is a capability handed to somebody
+who cannot see this record, so what it renders must not change identity
+under them — and derived at read time it does, three ways: a respawn
+mints a new session id, adoption can promote a different one, and under
+ROOT placement the scan cwd is the shared repo root holding every other
+workspace's transcript. Revoking clears the pin with the token.</p>
+<p><code>share_session_id</code> RE-PINS explicitly, and it is the only way to move
+a live link: enabling is idempotent, so re-sharing an already-shared
+workspace cannot re-pin by itself, and that silence is deliberate —
+clicking "share" twice must not quietly change what a circulated URL
+shows. It resolves through :meth:<code>_resolve_session_ref</code> (unique prefix,
+kind-checked, no birth-gate) BEFORE any write, exactly like
+<code>remap_session</code>, and requires <code>share=True</code> because a pin without a
+link is a claim about nothing.</p>
+<p>Refuses if every arg is unset (nothing to do) and if the workspace is
+ORPHANED (worktree gone; record headed for kill). Emits an <code>"updated"</code>
+event with <code>title_changed</code> / <code>description_changed</code> / <code>share_changed</code>
+/ <code>share_session_changed</code> flags so subscribers know what shifted
+without diffing themselves. The event carries only the FLAGS, never the
+token — an event bus fans out to subscribers with no business holding a
+credential. The pinned session id is not a credential and rides the
+ordinary state view, but it is still not on the event: a subscriber that
+needs it re-reads the record, the same rule <code>share_changed</code> follows.</p>
 
 
     </div>
@@ -3433,6 +3505,64 @@ downstream consumer (<code>GET /workspaces</code>, <code>ActivityService</code>,
 pickers) inherits empty-project visibility with no further change. Reads
 fresh from the store each call so newly created repos appear without a
 restart.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.RepoRegistry.resolve_share" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">resolve_share</span><span class="p">(</span><span class="n">token</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">WorkspaceManager</span><span class="p">,</span> <span class="n">WorkspaceState</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>The workspace a public share token names, or <code>None</code>.</p>
+<p>The ONE place a token becomes an identity, which is why it belongs here
+rather than on a Manager: a token is host-wide by construction (the
+public reader is handed a bare string and has no repo to scope it with),
+so resolution has to happen above the per-repo cache.</p>
+<p>It reads the STORE directly rather than walking <code>known_roots()</code> and
+asking each Manager. One store read answers for every repo, where the
+walk would resolve every project's whole config cascade — and instantiate
+a Manager per repo — on a request that is unauthenticated by design.
+Only the single matching repo's Manager is then materialized, through the
+ordinary cache.</p>
+<p><code>None</code> covers every failure identically: no such token, an expired
+token, a token belonging to a workspace that has since been unshared, or
+an empty string. A caller must not distinguish them; the whole point of
+the capability is that a wrong guess learns nothing.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.RepoRegistry.shared_in" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">shared_in</span><span class="p">(</span><span class="n">repo_root</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">WorkspaceState</span><span class="p">]</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Every publicly-shared workspace in one repo, newest first.</p>
+<p>What the public view's rail lists. Scoped by <code>repo_root</code> — the repo,
+not the nested <code>Project</code> — because "the same project" to somebody
+reading a shared link means the codebase, and a security-adjacent path
+is the wrong place to introduce a second notion of project identity.</p>
+<p>The caller is trusted to already hold a token for ONE of these, and the
+consequence is deliberate and stated on the wire contract: sharing a
+workspace makes it discoverable from every other shared workspace in its
+repo. A private workspace never appears here.</p>
 
 
     </div>
@@ -3868,6 +3998,98 @@ worktree's own root would find zero workspaces.</p>
 workspace id prefix or a case-insensitive title substring; <code>since</code>
 keeps sessions modified at/after that instant; <code>limit</code> caps the
 result after sorting.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.SessionExplorer.primary_for_workspace" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">primary_for_workspace</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SessionListing</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>The readable primary session for one workspace.</p>
+<p>The recorded session id wins when it has materialized. Otherwise a
+Claude id rotated by <code>/clear</code> or a Codex workspace with no mint falls
+back to the newest adoption-gated session in the workspace's own scan.
+This is a request-time reader, not an activity-poll resolution: it may
+read the bounded transcript listing because an explicit recollection
+request earns that cost.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.SessionExplorer.queries_from_messages" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">queries_from_messages</span><span class="p">(</span><span class="n">messages</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">AgentMessage</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SessionQuery</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Project direct human messages from an adapter-filtered message spine.</p>
+<p>The adapter has already applied its provider-specific real-turn filter
+while assigning the <code>user</code> role; this generic projection deliberately
+makes no second classification judgement.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.SessionExplorer.recollect" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">recollect</span><span class="p">(</span><span class="n">ref</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">last</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SessionQuery</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Every direct user query in the uniquely resolved session, oldest first.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.SessionExplorer.recollect_for" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">recollect_for</span><span class="p">(</span><span class="n">listing</span><span class="p">:</span> <span class="n">SessionListing</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">last</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SessionQuery</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Every direct user query in one session, oldest first.</p>
+<p>Reads the complete normalized message spine before applying <code>last</code>:
+a user query can follow any amount of agent work, and compaction only
+changes the agent's context, never the transcript. The adapter's
+existing real-turn filter is authoritative — it excludes provider and
+harness machinery while admitting human slash commands and messages
+delivered while the agent was busy. A slash command is included because
+it is an explicit direct instruction from the user, not an echo.</p>
 
 
     </div>
@@ -5553,7 +5775,7 @@ and ignores it. Create-only — never re-applied on resume/respawn, like
 
 
 <h3 id="grove.core.CreateWorkspaceRequest.model" class="doc doc-heading">
-            <code class="codehilite language-python"><span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">max_length</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span></code>
+            <code class="codehilite language-python"><span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
   <span class="doc doc-labels">
       <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
@@ -5569,9 +5791,8 @@ and ignores it. Create-only — never re-applied on resume/respawn, like
 model argument at launch (<code>claude --model &lt;id&gt;</code> / <code>codex --model &lt;id&gt;</code>).
 <code>None</code> (the default) lets the tool pick its own default — Grove never
 second-guesses the model, it only forwards the parameter (the provider
-boundary). The token is opaque (a known id or a custom string); the tool
-validates it. Kinds with no launch-time model flag (mewbo, generic) ignore
-it. Create-time only, like <code>skip_init</code> — never persisted or re-applied.</p>
+boundary). Kinds with no launch-time model flag (mewbo, generic) ignore it.
+Create-time only, like <code>skip_init</code> — never persisted or re-applied.</p>
 
     </div>
 
@@ -5862,6 +6083,71 @@ request boundary.</p>
 unchanged. Empty string clears the description. <code>max_length</code> is
 a soft cap that mirrors the engine's validation — clients should
 truncate for the textarea, the engine is the source of truth.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="grove.core.UpdateWorkspaceRequest.share" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">share</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Whether this workspace is publicly readable. <code>None</code> / omitted leaves
+sharing exactly as it is — which is what makes an ordinary rename safe:
+a client PATCHing a title must never turn sharing off by not mentioning it.</p>
+<p><code>true</code> mints a public link (idempotent — an already-shared workspace keeps
+the token it has, so re-enabling never breaks a link somebody is holding).
+<code>false</code> revokes, permanently: the token is cleared rather than parked, and
+re-sharing later mints a fresh one. The token itself comes back on
+<code>WorkspaceStateView.share_token</code>; it is never accepted as input, because
+the engine is the only thing that may decide what a capability is.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="grove.core.UpdateWorkspaceRequest.share_session_id" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">share_session_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Which session transcript the public link shows. <code>None</code> / omitted keeps
+whatever the link is already pinned to.</p>
+<p>Minting a link pins it automatically, to the workspace's session at that
+moment, so the ordinary path never sends this. It exists to RE-PIN a link
+already in circulation: enabling is idempotent, so <code>share: true</code> alone
+cannot move a live link's transcript, and that silence is deliberate —
+clicking share twice must not quietly change what a URL somebody already
+holds renders.</p>
+<p>Requires <code>share: true</code> (a pin without a link is a claim about nothing) and
+accepts a unique id-prefix. An id this workspace's adapter could never read
+is rejected as <code>agent_session_not_found</code> rather than stored as a dead
+pointer that answers 200.</p>
 
     </div>
 
@@ -7607,6 +7893,13 @@ response can include them in the JSON payload.</p>
                 set_phase
             </a>
             
+            <a href="#grove.core.WorkspaceManager.shared_session_id"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.shared_session_id');">
+                shared_session_id
+            </a>
+            
             <a href="#grove.core.WorkspaceManager.subscribe"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
@@ -7702,6 +7995,20 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.known_roots');">
                 known_roots
+            </a>
+            
+            <a href="#grove.core.RepoRegistry.resolve_share"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.resolve_share');">
+                resolve_share
+            </a>
+            
+            <a href="#grove.core.RepoRegistry.shared_in"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.shared_in');">
+                shared_in
             </a>
             
             
@@ -7808,6 +8115,34 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.list');">
                 list
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.primary_for_workspace"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.primary_for_workspace');">
+                primary_for_workspace
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.queries_from_messages"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.queries_from_messages');">
+                queries_from_messages
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.recollect"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.recollect');">
+                recollect
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.recollect_for"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.recollect_for');">
+                recollect_for
             </a>
             
             <a href="#grove.core.SessionExplorer.resolve"
@@ -8247,6 +8582,20 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest.description');">
                 description
+            </a>
+            
+            <a href="#grove.core.UpdateWorkspaceRequest.share"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest.share');">
+                share
+            </a>
+            
+            <a href="#grove.core.UpdateWorkspaceRequest.share_session_id"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest.share_session_id');">
+                share_session_id
             </a>
             
             <a href="#grove.core.UpdateWorkspaceRequest.title"
