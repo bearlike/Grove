@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { agentTone, statusTone } from "@/components/grove/fleet/tokens";
-import type { AgentState, WorkspaceStatus } from "@/components/grove/fleet/types";
+import {
+  agentGlyph,
+  agentLabel,
+  agentTone,
+  phaseGlyph,
+  phaseLabel,
+  statusGlyph,
+  statusLabel,
+  statusTone,
+} from "@/components/grove/fleet/tokens";
+import type { AgentState, TaskPhase, WorkspaceStatus } from "@/components/grove/fleet/types";
 
 /**
  * The two badge invariants a fleet card depends on, neither of which any
@@ -34,6 +43,23 @@ const WORKSPACE_STATUSES: readonly WorkspaceStatus[] = [
   "orphaned",
   "error",
 ];
+
+const TASK_PHASES: readonly TaskPhase[] = [
+  "scoping",
+  "planning",
+  "implementing",
+  "verifying",
+  "delivering",
+  "done",
+];
+
+/** UI labels are sentence case; state labels never use enum spelling or title case. */
+const SENTENCE_CASE = /^[A-Z][^A-Z]*$/;
+
+const componentName = (Icon: React.ElementType): string =>
+  (Icon as { displayName?: string; name?: string }).displayName ||
+  (Icon as { name?: string }).name ||
+  "anonymous";
 
 describe("one `default` per object, across all its axes", () => {
   // The status axis owns the loudest tone because it is the axis a card leads
@@ -87,5 +113,38 @@ describe("every axis answers for its whole union", () => {
   it("has a tone for every agent state and workspace status", () => {
     for (const state of AGENT_STATES) expect(agentTone(state)).toBeTruthy();
     for (const status of WORKSPACE_STATUSES) expect(statusTone(status)).toBeTruthy();
+  });
+});
+
+describe("the fleet state vocabulary", () => {
+  it("makes every agent and workspace state human-readable in sentence case", () => {
+    for (const state of AGENT_STATES) {
+      expect(agentLabel(state), `agentLabel(${state})`).toMatch(SENTENCE_CASE);
+    }
+    for (const status of WORKSPACE_STATUSES) {
+      expect(statusLabel(status), `statusLabel(${status})`).toMatch(SENTENCE_CASE);
+    }
+    for (const phase of TASK_PHASES) {
+      expect(phaseLabel(phase), `phaseLabel(${phase})`).toMatch(SENTENCE_CASE);
+    }
+  });
+
+  it("gives each distinct state an intentional glyph instead of an inherited default", () => {
+    const agentMarks = new Map(AGENT_STATES.map((state) => [state, componentName(agentGlyph(state))]));
+    const statusMarks = new Map(
+      WORKSPACE_STATUSES.map((status) => [status, componentName(statusGlyph(status))]),
+    );
+
+    // `running` deliberately aliases the displayed active lifecycle state. All
+    // other labels express a different user-facing condition and need a mark a
+    // reader can distinguish before reading the words.
+    expect(new Set([...agentMarks.values()]).size).toBe(AGENT_STATES.length);
+    expect(new Set([...statusMarks.values()]).size).toBe(WORKSPACE_STATUSES.length - 1);
+    expect(statusMarks.get("running")).toBe(statusMarks.get("active"));
+  });
+
+  it("keeps phase position in both a named word and a grayscale-safe glyph", () => {
+    expect(new Set(TASK_PHASES.map(phaseLabel)).size).toBe(TASK_PHASES.length);
+    expect(new Set(TASK_PHASES.map((phase) => phaseGlyph(phase))).size).toBe(TASK_PHASES.length);
   });
 });

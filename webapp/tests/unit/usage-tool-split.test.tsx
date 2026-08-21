@@ -52,7 +52,7 @@ function view(rows: UsageBreakdownRowView[], truncated = false): UsageBreakdownV
   return { dimension: "tool", rows, truncated, coverage: COVERAGE };
 }
 
-/** The real shape of this host's top rows: a dominant Bash, the human-wait
+/** The shape a real host's top rows take: a dominant Bash, the human-wait
  * outlier, and the two most expensive MCP servers. */
 const REAL = view(
   [
@@ -60,7 +60,7 @@ const REAL = view(
     row("Agent", 2506, 189_454_462),
     row("AskUserQuestion", 168, 165_337_328),
     row("mcp__deepwiki__ask_question", 956, 20_139_282),
-    row("mcp__gitea__Gitea-Hurricane-issue_write", 1462, 19_990_591),
+    row("mcp__gitea__issue_write", 1462, 19_990_591),
   ],
   true,
 );
@@ -97,7 +97,7 @@ describe("toolSplit", () => {
   it("orders the MCP rows by time, longest first", () => {
     expect(toolSplit(REAL.rows).mcpRows.map((r) => r.key)).toEqual([
       "mcp__deepwiki__ask_question",
-      "mcp__gitea__Gitea-Hurricane-issue_write",
+      "mcp__gitea__issue_write",
     ]);
   });
 

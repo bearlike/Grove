@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { paneHtml, tabOnViewChange, visiblePane } from "@/components/grove/workspace/selectors";
+import { paneHtml, visiblePane } from "@/components/grove/workspace/selectors";
 
 /**
  * The pane payload is `tmux capture-pane -e` — a fixed character grid whose SGR
@@ -27,7 +27,9 @@ describe("paneHtml", () => {
   });
 
   it("carries bold and 256-colour runs, not just the basic eight", () => {
-    const html = paneHtml(`${sgr("1;33", "warn")} ${sgr("38;5;208", "orange")}`);
+    const html = paneHtml(
+      `${sgr("1;33", "warn")} ${sgr("38;5;208", "orange")}`,
+    );
     expect(html).toContain("font-weight");
     expect(html).toContain("--ansi-yellow");
     expect(html).toContain("rgb(255,135,0)");
@@ -52,7 +54,9 @@ describe("paneHtml", () => {
   });
 
   it("trims tmux's trailing blank rows so the reader does not scroll an empty screen", () => {
-    expect(textOf(paneHtml("row one\nrow two\n\n\n   \n") ?? "")).toBe("row one\nrow two");
+    expect(textOf(paneHtml("row one\nrow two\n\n\n   \n") ?? "")).toBe(
+      "row one\nrow two",
+    );
   });
 
   it("preserves interior blank rows — they are grid structure, not padding", () => {
@@ -104,40 +108,6 @@ describe("visiblePane", () => {
       for (const offered of [true, false]) {
         expect(offeredWhen(offered)).toContain(visiblePane(view, offered));
       }
-    }
-  });
-});
-
-/**
- * Both Work and Split open on Info, and only on the way IN. Neither pane
- * silently drops a user on a bare terminal with no context — that used to be
- * Work-alone's own default, overridden because it read as "taken to the
- * wrong place" exactly like the Split regression this test file already
- * pinned.
- */
-describe("tabOnViewChange", () => {
-  it("lands on info entering split from any other view", () => {
-    expect(tabOnViewChange("transcript", "split")).toBe("info");
-    expect(tabOnViewChange("work", "split")).toBe("info");
-  });
-
-  it("lands on info entering work from any other view", () => {
-    expect(tabOnViewChange("transcript", "work")).toBe("info");
-    expect(tabOnViewChange("split", "work")).toBe("info");
-  });
-
-  it("leaves a tab chosen INSIDE the same pane alone", () => {
-    // The switcher re-firing the pane it is already on must not throw away a
-    // deliberate move to Terminal — that is the difference between a default
-    // and an override.
-    expect(tabOnViewChange("split", "split")).toBeNull();
-    expect(tabOnViewChange("work", "work")).toBeNull();
-  });
-
-  it("changes nothing moving to transcript, from anywhere", () => {
-    // Transcript has no work-panel tab of its own to land on.
-    for (const from of ["transcript", "work", "split"] as const) {
-      expect(tabOnViewChange(from, "transcript")).toBeNull();
     }
   });
 });

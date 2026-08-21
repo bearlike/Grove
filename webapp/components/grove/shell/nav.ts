@@ -3,7 +3,7 @@ import type { LucideIcon } from "lucide-react";
 // — which is exactly why seven glyphs ended up imported both ways. Usage is
 // `ChartColumnIcon` and a session is `HistoryIcon` per the entity table; the
 // bare `BarChart3`/`Activity` here were the second name for each.
-import { ChartColumnIcon, HistoryIcon, TreesIcon } from "lucide-react";
+import { ChartColumnIcon, HistoryIcon, SproutIcon, TreesIcon } from "lucide-react";
 
 /** A top-level destination in the shell. */
 export interface NavItem {
@@ -31,7 +31,14 @@ export interface NavItem {
  * surface is added here and nowhere else.
  */
 export const NAV_ITEMS: readonly NavItem[] = [
-  { href: "/", label: "Fleet", icon: TreesIcon, placement: "rail" },
+  // SproutIcon, not a rocket. A rocket is the stock glyph for anything called
+  // "launch" and would be the undesigned default the finish bar names; this
+  // product's vocabulary is a forest, Fleet is already TreesIcon, and starting
+  // a workspace is planting one. The mark renders nowhere today — RAIL_ITEMS
+  // excludes `/` because the brand links there — but `icon` is required, and a
+  // required field still gets a considered value.
+  { href: "/", label: "Launch", icon: SproutIcon, placement: "rail" },
+  { href: "/fleet", label: "Fleet", icon: TreesIcon, placement: "rail" },
   { href: "/usage", label: "Usage", icon: ChartColumnIcon, placement: "rail" },
   // "All Sessions", not "Sessions". It sits one click from a workspace's own
   // transcript, and the qualifier is what says this is the host-wide catalog

@@ -6,12 +6,23 @@ a reader. Tool docstrings describe a single call; this describes the *posture* a
 connected agent should take, and it is spent on every connection, so length is a
 real cost and each line has to buy its place.
 
-Two audiences read it, which is why it carries two blocks. An ORCHESTRATOR needs
-to know what the tool surface is for and where to start with nothing in hand. An
-agent working INSIDE a Grove workspace needs the task-phase contract, and this is
-the highest-leverage place to hand it over — an MCP client surfaces server
-instructions automatically, so the agent receives it without anyone remembering
-to say it.
+Two audiences read it. An ORCHESTRATOR needs to know what the tool surface is
+for and where to start with nothing in hand. An agent working INSIDE a Grove
+workspace needs the hygiene and task-phase contracts, and this is the
+highest-leverage place to hand them over — an MCP client surfaces server
+instructions automatically, so the agent receives them without anyone remembering
+to say them.
+
+**The tiny todo block earns its per-connection cost because an empty checklist is
+an actively misleading public status.** The list is published on attached tickets,
+and agents otherwise routinely omit it altogether. Its measurable first-turn,
+item-granularity, completion, and one-in-progress rules fit in two sentences;
+the fuller rationale stays in the on-demand ``working-in-grove`` skill.
+
+**The self-naming mention earns one clause because an agent learns the task before
+a fleet reader can identify a generated id.** ``grove_update_workspace`` is the
+one MCP write that lets it repair that gap; command syntax and the longer rule
+stay in the skill.
 
 **The path is NAMED in the launch env, never derived from the cwd.** A
 worktree hosts one agent only in the simple case — ROOT-placed workspaces share
@@ -63,6 +74,17 @@ grove_resume_workspace, grove_respawn_workspace and grove_kill_workspace. Steer
 a running agent with grove_send_workspace_message. Destructive tools take their
 inputs explicitly and never guess.
 </grove>
+
+<workspace_hygiene>
+Working inside a workspace? Before your first edit, create a todo list with one
+item per meaningful discovery, change, verification, or delivery step. Complete
+items as you finish them, keep exactly one in progress, and remember that every
+attached ticket publishes this list as its public checklist.
+
+Once you understand the task, use grove_update_workspace to give a generated-id
+or undescribed workspace a useful title and one-line description: somebody
+watching the fleet needs to distinguish it from twenty others.
+</workspace_hygiene>
 
 <task_phase>
 If you are working inside a Grove workspace, keep its task phase current. A

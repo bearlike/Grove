@@ -220,6 +220,13 @@ __marimo__/
 # Grove — project-local config layer (machine-specific overrides)
 .grove/config.local.json
 
+# Grove — lock sidecars left beside a project config layer. `paths.exclusive_lock`
+# never unlinks its sidecar (unlinking would reintroduce the rename race it
+# exists to close), so writing project-scope create defaults leaves one behind.
+# It holds no data; ignoring it keeps `git status` clean in every repo Grove
+# writes a project config into.
+.grove/*.lock
+
 # Grove — worktrees created under worktree.root_template (${repo}/.worktrees).
 # Each is a linked git worktree (git tracks them via .git/worktrees/); ignore the
 # checkout dir itself so the main repo's `git status` stays clean.

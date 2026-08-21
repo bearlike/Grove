@@ -40,7 +40,9 @@ const asRoot = {
 
 describe("a workspace with no separate base branch", () => {
   it("fleet card drops the base chip AND the arrow it hangs off", () => {
-    const html = renderToStaticMarkup(<WorkspaceCard workspace={asRoot} repoName="Grove" />);
+    const html = renderToStaticMarkup(
+      <WorkspaceCard workspace={asRoot} repoName="Grove" />,
+    );
 
     // One branch glyph, not two, and no dangling relation mark.
     expect(html).not.toContain("←");
@@ -51,16 +53,23 @@ describe("a workspace with no separate base branch", () => {
   it("Info says there is no base rather than printing one called HEAD", () => {
     const html = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
-        <InfoTab peek={FIXTURE_PEEK} activity={null} onKilled={() => {}} />
+        <InfoTab
+          peek={FIXTURE_PEEK}
+          activity={null}
+          repoRoot={FIXTURE_PEEK.state.repo_root}
+          privileged={{ state: FIXTURE_PEEK.state, onKilled: () => {} }}
+        />
       </QueryClientProvider>,
     );
 
     expect(html).toContain("no separate base branch");
-    expect(html).not.toContain("from HEAD");
+    expect(html).not.toContain("HEAD");
   });
 
   it("Changes names the anchor it actually measures against", () => {
-    const html = renderToStaticMarkup(<ChangesTab peek={FIXTURE_PEEK} commits={[]} />);
+    const html = renderToStaticMarkup(
+      <ChangesTab peek={FIXTURE_PEEK} commits={[]} />,
+    );
 
     expect(html).toContain("against the commit this workspace started from");
     // ahead/behind are derived from the base NAME, so with no base they can only
@@ -75,7 +84,10 @@ describe("a workspace with no separate base branch", () => {
     // The control. Without it, "renders nothing" would pass every assertion
     // above for entirely the wrong reason.
     const html = renderToStaticMarkup(
-      <WorkspaceCard workspace={workspace({ id: "w1", branch: "feat/rail" })} repoName="Grove" />,
+      <WorkspaceCard
+        workspace={workspace({ id: "w1", branch: "feat/rail" })}
+        repoName="Grove"
+      />,
     );
 
     expect(html).toContain("←");

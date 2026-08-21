@@ -42,6 +42,12 @@ export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
   workers: 1,
+  // Above the longest per-assertion budget any spec asks for (the route smoke
+  // allows 60s for a dev-server route's first on-demand compile). Playwright's
+  // 30s default capped that silently: the assertion could never spend what it
+  // asked for, and a slow first compile failed as "element(s) not found" —
+  // indistinguishable from the page genuinely not rendering.
+  timeout: 90_000,
   use: {
     // `localhost`, NOT 127.0.0.1: Next 16 refuses to serve dev chunks to a Host
     // outside its default `allowedDevOrigins` (localhost), so a 127.0.0.1

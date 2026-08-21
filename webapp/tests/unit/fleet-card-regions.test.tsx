@@ -31,6 +31,7 @@ const ticket = (over: Partial<TicketRef> = {}): TicketRef => ({
   title: "The ticket's title",
   url: "https://example.invalid/issues/498",
   status: "open",
+  draft: false,
   assignee: null,
   ambiguous: false,
   ...over,
@@ -144,7 +145,9 @@ describe("the card body is named regions, not one flow", () => {
 describe("the todo count is the one figure that carries a hue", () => {
   const todo = (completed: number, total: number): string =>
     renderToStaticMarkup(
-      <TodoBadge todo={{ total, completed, in_progress: 0, pending: total - completed }} />,
+      <TooltipProvider>
+        <TodoBadge todo={{ total, completed, in_progress: 0, pending: total - completed }} />
+      </TooltipProvider>,
     );
 
   it("reads amber in flight and green complete", () => {
@@ -161,10 +164,16 @@ describe("the todo count is the one figure that carries a hue", () => {
 
   it("survives the colour being removed", () => {
     // §4.7 — `--success` and `--destructive` are 12/255 apart in greyscale, so
-    // the glyph and the fraction have to carry it alone.
+    // the icon and the fraction have to carry it alone.
     const html = todo(5, 5);
-    expect(html).toContain("☑");
+    expect(html).toContain("lucide-circle-check");
     expect(html).toContain("5/5");
+    expect(html).toContain("Checklist complete");
+  });
+
+  it("distinguishes a live checklist from one that is complete", () => {
+    expect(todo(2, 5)).toContain("lucide-list-todo");
+    expect(todo(5, 5)).toContain("lucide-circle-check");
   });
 });
 

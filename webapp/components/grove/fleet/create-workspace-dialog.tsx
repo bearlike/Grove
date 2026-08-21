@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import type { CreateWorkspaceRequest } from "@/lib/grove/api";
 import { useAgents, useBranches } from "@/lib/grove/hooks";
-import { AUTO_BRANCH, NEW_BRANCH, branchOptionValue, toBranchPlan } from "./branch-plan";
+import { AUTO_BRANCH, NEW_BRANCH, ROOT_BRANCH, branchOptionValue, toBranchPlan } from "./branch-plan";
 import { useCreateWorkspace } from "./use-fleet";
 import type { ProjectGroup, Runtime } from "./types";
 
@@ -172,7 +172,10 @@ function CreateWorkspaceForm({
       agent_name: agentName,
       title: title.trim(),
       repo_root: repoRoot,
-      skip_init: false,
+      // Root placement carries skip-init, the way the TUI's create screen does:
+      // an init script written for a fresh worktree can be destructive in the
+      // live repo root everyone else is standing in.
+      skip_init: branchChoice === ROOT_BRANCH,
       branch_plan: toBranchPlan(branchChoice, branchName),
       ...(model === INHERIT ? {} : { model }),
       ...(runtime === INHERIT ? {} : { runtime }),
@@ -331,6 +334,14 @@ function CreateWorkspaceForm({
               <SelectContent>
                 <SelectItem value={AUTO_BRANCH}>Auto — name it after the title</SelectItem>
                 <SelectItem value={NEW_BRANCH}>New branch…</SelectItem>
+                {/*
+                  Root states its cost in the option, never after it is chosen —
+                  a consequence a user meets when `pause` refuses is a
+                  consequence Grove hid.
+                */}
+                <SelectItem value={ROOT_BRANCH}>
+                  Repo root — no worktree, no isolation, no pause/resume
+                </SelectItem>
                 {branchNote ? <PickerNote>{branchNote}</PickerNote> : null}
                 {(localBranches.data ?? []).map((branch) => (
                   <SelectItem key={`local:${branch.name}`} value={branchOptionValue(branch)}>

@@ -44,6 +44,7 @@ from grove.core.usage.quota._state import QuotaProbeState, QuotaStateFile
 from grove.core.usage.quota.base import QuotaAccount, QuotaProvider
 from grove.core.usage.quota.claude import ClaudeQuotaProvider
 from grove.core.usage.quota.codex import CodexQuotaProvider
+from grove.core.usage.quota.gateway import GatewayQuotaProvider
 
 
 class QuotaCollector:
@@ -75,6 +76,13 @@ class QuotaCollector:
                     timeout=quota.timeout_seconds, clock=self._clock, transport=transport
                 ),
                 CodexQuotaProvider(clock=self._clock),
+                GatewayQuotaProvider(
+                    base_url=quota.gateway.base_url,
+                    token_env=quota.gateway.token_env,
+                    timeout=quota.timeout_seconds,
+                    clock=self._clock,
+                    transport=transport,
+                ),
             )
         )
         self._state_file = state_file if state_file is not None else QuotaStateFile()
@@ -177,6 +185,26 @@ class QuotaCollector:
             if cached is not None:
                 return cached
             return self._describe(provider, account)
+
+        if provider.enumerates_accounts:
+            # The gateway's one aggregate request happens during enumeration.
+            # Calling collect per subscription would turn one envelope into N GETs.
+            if not state.may_probe(now, ttl_seconds=0, force=force):
+                served = state.render(now)
+                if served is not None:
+                    return served
+            view = self._describe(provider, account)
+            state = state.record(
+                view,
+                now,
+                floor_seconds=quota.retry_floor_seconds,
+                max_seconds=quota.retry_max_seconds,
+            )
+            self._states[account.account_id] = state
+            written[account.account_id] = state
+            self._log_outcome(account, state)
+            rendered = state.render(now)
+            return rendered if rendered is not None else view
 
         # The TTL is a rate-limit budget, so it governs only the providers that
         # spend one. An unmetered read is a file the tool already wrote: it can
@@ -285,6 +313,10 @@ class QuotaCollector:
                     root=Path(root),
                     labels=labels,
                 )
+                found.setdefault(account.account_id, (provider, account))
+        known_account_ids = tuple(self._states)
+        for provider in self._providers:
+            for account in provider.accounts(labels=labels, known_account_ids=known_account_ids):
                 found.setdefault(account.account_id, (provider, account))
         return tuple(sorted(found.values(), key=lambda pair: (pair[1].provider, pair[1].label)))
 

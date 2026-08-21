@@ -17,12 +17,20 @@ import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import urlparse
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic.fields import FieldInfo
 
 from grove.core import paths
@@ -55,6 +63,120 @@ class WorktreeConfig(BaseModel):
 
     branch_prefix: str = "grove/"
     """Prefix prepended to every auto-created branch."""
+
+
+BranchMode = Literal["auto", "new", "existing", "remote", "root"]
+"""Which branch-source variant the create form opens on."""
+
+
+class WorkspaceDefaults(BaseModel):
+    """Pre-filled answers for the new-workspace form.
+
+    Every field is optional and ``None`` means "no saved default" — the field
+    falls through to whatever the existing per-field cascade already resolved
+    (``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's
+    own default for model). Title is deliberately absent: it names one task,
+    never a default. So are concrete branch/remote names, for the same reason.
+    """
+
+    model_config = _FROZEN
+
+    agent: str | None = None
+    # Runtime would cycle via workspace.py; keep its values literal here.
+    runtime: Literal["host", "container"] | None = None
+    brief: bool | None = None
+    model: str | None = Field(default=None, max_length=200)
+    branch_mode: BranchMode | None = None
+    base_ref: str | None = None
+    skip_init: bool | None = None
+
+
+class AgentCwdsConfig(BaseModel):
+    """Named directories, relative to the repo root, an agent may start in.
+
+    A repository is often several projects, and in a large monorepo each
+    directory belongs to a different team. This is the labelled set a create
+    surface offers so nobody types a path, plus which one applies when a create
+    names none.
+
+    Only the AGENT SESSION's working directory moves. The git worktree, the
+    branch and the init script stay anchored at the repository root, which is
+    what lets several directories of one repo be distinct projects sharing one
+    worktree family.
+
+    Every path is relative and stays relative, so the set is portable: it
+    describes the repository's own layout rather than one machine's disks, and
+    a committed project config carries it to everyone who clones. Absolute
+    paths and anything climbing out of the repo are refused here, at the point
+    of definition, rather than at the create that would have used them.
+    """
+
+    model_config = _FROZEN
+
+    entries: dict[str, str] = Field(default_factory=dict)
+    """Label → repo-relative POSIX path. A label is what a person picks from a
+    dropdown; the path is what reaches the wire, so renaming a label never
+    invalidates a workspace that already exists. Insertion order is the
+    presentation order every picker uses."""
+
+    default: str | None = None
+    """The label a create with no working directory named resolves to. ``None``
+    (the default) keeps the historical behaviour: the agent starts at the
+    worktree root. Must name an entry."""
+
+    @field_validator("entries")
+    @classmethod
+    def _relative_and_contained(cls, value: dict[str, str]) -> dict[str, str]:
+        for label, raw in value.items():
+            if not label.strip():
+                raise ValueError("a working-directory label may not be blank")
+            path = PurePosixPath(raw)
+            if path.is_absolute() or raw.startswith("~"):
+                raise ValueError(
+                    f"working directory {label!r} must be relative to the repo root, got {raw!r}"
+                )
+            if ".." in path.parts:
+                raise ValueError(f"working directory {label!r} may not climb out of the repo")
+        return value
+
+    @model_validator(mode="after")
+    def _default_names_an_entry(self) -> AgentCwdsConfig:
+        if self.default is not None and self.default not in self.entries:
+            known = ", ".join(sorted(self.entries)) or "none declared"
+            raise ValueError(f"default working directory {self.default!r} is not one of: {known}")
+        return self
+
+    def default_path(self) -> str | None:
+        """The resolved relative path for :attr:`default`, or ``None``.
+
+        The engine's single consumer. Returning the PATH rather than the label
+        is what keeps the label a presentation concern: nothing downstream of
+        here ever learns that labels exist.
+        """
+        return None if self.default is None else self.entries[self.default]
+
+
+class DefaultsScope(StrEnum):
+    """Which config layer a "save as defaults" write lands in."""
+
+    USER = "user"
+    PROJECT = "project"
+    PROJECT_LOCAL = "project-local"
+
+    def path(self, repo_root: Path | None) -> Path:
+        """Absolute file this scope writes to.
+
+        A project-targeted write without its repository would otherwise have no
+        honest destination: silently falling back to the user file would make a
+        team-default action change every project on this machine instead.
+        """
+        if self is DefaultsScope.USER:
+            return paths.user_config_path()
+        if repo_root is None:
+            raise ConfigError(f"{self.value} defaults require a repository root")
+        if self is DefaultsScope.PROJECT:
+            return paths.project_config_path(repo_root)
+        return paths.project_local_config_path(repo_root)
 
 
 # Which AgentAdapter introspects an agent. Module-level alias so the persisted
@@ -95,11 +217,15 @@ class AgentSpec(BaseModel):
     display/override seam, never a validated allowlist (any id is still
     forwarded verbatim on create; the provider boundary). Empty (the default)
     falls through to the adapter's live discovery: Codex reads ``codex debug
-    models``, Claude Code offers its stable ``sonnet``/``opus``/``haiku``
-    aliases, a remote/shell agent offers nothing. Set it to pin, restrict,
-    reorder, or add gateway/custom ids — it cascades and merges by field like
-    every other AgentSpec knob (mechanism, not policy). The engine
-    (``agents.resolve_models``) caps the offered list at ten."""
+    models``, Claude Code offers its stable ``fable``/``opus``/``sonnet``/
+    ``haiku`` aliases, a remote/shell agent offers nothing. Set it to pin,
+    restrict, reorder, or add gateway/custom ids — it cascades and merges by
+    field like every other AgentSpec knob (mechanism, not policy). A curated
+    list here is never trimmed, however long: only live discovery is capped
+    at ten, since nobody chose what a tool happens to publish. A gateway
+    behind one agent can publish twenty or more models under a shared prefix,
+    and naming every one of them here is what puts all of them in the
+    picker."""
 
     env_unset: tuple[str, ...] = ()
     """Env vars *cleared* in the agent's tmux window before ``env`` is applied.
@@ -313,6 +439,39 @@ class BriefConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
+
+    instructions: str = ""
+    """Your own text, appended to the brief every agent in this repo is handed.
+
+    Grove's own brief says where the agent is and which skill carries the rules.
+    This is where a team adds what only they know: the review conventions, the
+    tracker etiquette, the one command that must be run before pushing. It rides
+    the same first-turn delivery, so it reaches a containerized agent that can
+    reach neither the daemon nor the ``grove`` command.
+
+    It cascades like everything else, so a machine-wide default set once in the
+    user config applies to every project, and a repository's own
+    ``.grove/config.json`` refines it for the people working in that repository.
+
+    Keep it short. It is spent on the first turn of every session of every
+    workspace, and a long one costs more attention than it buys. Anything a
+    reader could look up on demand belongs in the repository's own guidance
+    files, which the agent is already standing in.
+    """
+
+    self_naming: bool = True
+    """Ask an agent whose workspace has no description to write one, and to
+    replace a generated title with a real one.
+
+    A workspace created without a title is named after a short generated id, on
+    the promise that it stays renameable — but nothing was renaming it, so a
+    fleet ended up named after hashes that say nothing about what each agent is
+    doing. The agent is the one participant that learns the answer, usually
+    within its first few turns.
+
+    The nudge is added only for a workspace whose description is empty, so one
+    a person already described is never asked to re-describe itself.
+    """
 
 
 AgentShare = Literal["full", "projects", "isolated"]
@@ -916,6 +1075,23 @@ class PermissionConfig(BaseModel):
     agent); ``allow`` is the deliberate permissive opt-in for a trusted sandbox
     (a container workspace whose blast radius is bounded). Mechanism, not policy:
     the tool answers whatever this names, verbatim."""
+
+
+class TLSConfig(BaseModel):
+    """Additional certificate authority roots for Grove's outbound TLS clients."""
+
+    model_config = _FROZEN
+
+    ca_path: str = Field(default="", json_schema_extra={"x-env-var": "GROVE_TLS_CA_PATH"})
+    """A PEM CA bundle file or OpenSSL-hashed CA directory trusted alongside the
+    operating system's roots.
+
+    Use this when Grove must reach a private forge, gateway, or collector whose
+    root CA cannot be installed in the operating system store. Empty (the
+    default) uses only the operating system roots. A named path is checked when
+    Grove starts; a missing or unreadable path stops startup instead of silently
+    falling back to the default trust set.
+    """
 
 
 class AuthConfig(BaseModel):
@@ -2087,6 +2263,23 @@ class UsagePricingConfig(BaseModel):
     release inherits its family's price without a new entry per snapshot."""
 
 
+class UsageQuotaGatewayConfig(BaseModel):
+    """One aggregate quota endpoint that holds subscriptions from several vendors.
+
+    The bearer token stays in the consuming process environment; configuring an
+    endpoint never puts a credential into a cascadeable file. An empty URL leaves
+    this optional source inactive.
+    """
+
+    model_config = _FROZEN
+
+    base_url: str = ""
+    """The gateway endpoint to GET once for every aggregate quota refresh."""
+
+    token_env: str = "GROVE_QUOTA_GATEWAY_TOKEN"
+    """Name of the environment variable carrying the gateway bearer token."""
+
+
 class UsageQuotaConfig(BaseModel):
     """How subscription windows and billing posture are collected per account.
 
@@ -2145,6 +2338,9 @@ class UsageQuotaConfig(BaseModel):
     labels: dict[str, str] = Field(default_factory=dict)
     """Account id to display name, so an operator can tell two profiles apart
     without Grove ever storing an email address."""
+
+    gateway: UsageQuotaGatewayConfig = Field(default_factory=UsageQuotaGatewayConfig)
+    """Optional aggregate source, resolved through this quota configuration cascade."""
 
     window_seconds: dict[str, int] = Field(default_factory=dict)
     """Window label to its length in seconds, for providers that publish a reset
@@ -2704,6 +2900,57 @@ class CommittedEnvSource:
         )
 
 
+class DefaultsUserFirst:
+    """Resolve the one section where user policy outranks repository policy.
+
+    The ordinary cascade lets a project shape its own workspaces, which is right
+    for almost every setting. Create-form defaults are different: the values are
+    personal starting answers, so a project suggesting an agent or runtime must
+    not replace the operator's own habitual choice. Precedence alone cannot say
+    that for one section while preserving it everywhere else, so this is a
+    pre-merge pass like :class:`ExclusiveGroups` and the committed-layer guards.
+
+    The rule stays field-level. A user who only saved an agent still receives a
+    project's default branch mode; stripping the whole project ``defaults``
+    object would turn one personal preference into a refusal of every useful
+    team convention.
+    """
+
+    SECTION: ClassVar[str] = "defaults"
+
+    @classmethod
+    def resolve(
+        cls,
+        layers: list[dict[str, Any]],
+        *,
+        user: int | None,
+        project: frozenset[int],
+    ) -> list[dict[str, Any]]:
+        """Strip project keys that the user layer already sets.
+
+        A missing user layer has no preference to protect. A malformed section
+        stays untouched so Pydantic owns the useful validation message rather
+        than this pre-validation mechanism silently repairing it.
+        """
+        resolved = [dict(layer) for layer in layers]
+        if user is None:
+            return resolved
+        user_defaults = resolved[user].get(cls.SECTION)
+        if not isinstance(user_defaults, dict):
+            return resolved
+        user_keys = set(user_defaults)
+        if not user_keys:
+            return resolved
+        for index in project:
+            project_defaults = resolved[index].get(cls.SECTION)
+            if not isinstance(project_defaults, dict):
+                continue
+            resolved[index][cls.SECTION] = {
+                key: value for key, value in project_defaults.items() if key not in user_keys
+            }
+        return resolved
+
+
 class EnvReferences:
     """Resolves ``${VAR}`` references in string config values against the env.
 
@@ -2868,6 +3115,8 @@ class GroveConfig(BaseModel):
     # git repo. A user-level concern that still cascades like every other field.
     projects: list[str] = Field(default_factory=list)
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
+    agent_cwds: AgentCwdsConfig = Field(default_factory=AgentCwdsConfig)
+    defaults: WorkspaceDefaults = Field(default_factory=WorkspaceDefaults)
     builtin_agents: bool = True
     """Whether Grove's own agents (``claude``, ``codex``, ``shell``) are offered
     alongside the ones you declare.
@@ -2893,6 +3142,7 @@ class GroveConfig(BaseModel):
     init_script: InitScriptConfig = Field(default_factory=InitScriptConfig)
     tmux: TmuxConfig = Field(default_factory=TmuxConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    tls: TLSConfig = Field(default_factory=TLSConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     brief: BriefConfig = Field(default_factory=BriefConfig)
@@ -2952,18 +3202,25 @@ def load_config(
     # input (they travel with the code), so a capability they may only request —
     # not grant — is resolved by index, not by precedence (`CommittedShareFloor`).
     committed: set[int] = set()
+    # `defaults` is intentionally the one inverse-precedence section: preserve
+    # the user index and both project indexes for its pre-merge resolver.
+    user_index: int | None = None
+    project_indexes: set[int] = set()
 
     user_path = paths.user_config_path()
     if user_path.exists():
+        user_index = len(overlays)
         overlays.append(_read_json(user_path))
 
     if repo_root is not None:
         project_path = paths.project_config_path(repo_root)
         if project_path.exists():
+            project_indexes.add(len(overlays))
             committed.add(len(overlays))
             overlays.append(_read_json(project_path))
         local_path = paths.project_local_config_path(repo_root)
         if local_path.exists():
+            project_indexes.add(len(overlays))
             overlays.append(_read_json(local_path))
 
     # Declared per-field variables sit BELOW the schema-path layer: the name a
@@ -3002,6 +3259,12 @@ def load_config(
     # layer's `env_file`. That is the fail-safe outcome: a repo's attempt to
     # claim the slot must not quietly promote the operator's own setting into it.
     layers = CommittedEnvSource.resolve(layers, committed=committed_indexes)
+    # +1 again: both user and project overlay indexes are shifted by the seed.
+    layers = DefaultsUserFirst.resolve(
+        layers,
+        user=user_index + 1 if user_index is not None else None,
+        project=frozenset(index + 1 for index in project_indexes),
+    )
     merged = _deep_merge(*layers)
     # Explicit references resolve LAST, over the merged result rather than per
     # layer: a reference is a property of the value that won, and resolving
@@ -3028,6 +3291,62 @@ def load_config(
 
     logger.debug("config loaded: {} layers merged", len(layers))
     return cfg
+
+
+def user_defaults_keys() -> frozenset[str]:
+    """Return the raw user-layer defaults fields that outrank project values.
+
+    Provenance disappears when the config layers merge, but the scope picker
+    needs this exact fact to explain why a project save cannot affect a field.
+    A broken user config belongs to ``load_config``'s loud validation path; the
+    advisory UI remains quiet rather than turning a warning into a second error.
+    """
+    path = paths.user_config_path()
+    if not path.exists():
+        return frozenset()
+    try:
+        raw = _read_json(path)
+    except ConfigError:
+        return frozenset()
+    defaults = raw.get(DefaultsUserFirst.SECTION)
+    if not isinstance(defaults, dict):
+        return frozenset()
+    try:
+        WorkspaceDefaults.model_validate(defaults)
+    except ValidationError:
+        return frozenset()
+    return frozenset(defaults)
+
+
+def save_workspace_defaults(
+    defaults: WorkspaceDefaults,
+    *,
+    scope: DefaultsScope,
+    repo_root: Path | None = None,
+) -> Path:
+    """Persist ``defaults`` into ``scope`` and return the path written.
+
+    Reads and rewrites the raw layer rather than a merged :class:`GroveConfig`:
+    serializing the latter would bake unrelated cascade values into the target.
+    The whole object is replaced so a cleared form field clears its saved value
+    instead of leaving an old answer behind. The lock covers the read-modify-write
+    because atomic publication alone prevents torn files, not a concurrent save
+    from losing an earlier form's update.
+    """
+    target = scope.path(repo_root)
+    with paths.exclusive_lock(target):
+        raw = _read_json(target) if target.exists() else {}
+        raw[DefaultsUserFirst.SECTION] = defaults.model_dump(exclude_none=True)
+        try:
+            GroveConfig.model_validate(raw)
+        except ValidationError as exc:
+            raise ConfigError(f"Invalid configuration: {exc}") from exc
+        paths.write_atomic(
+            target,
+            json.dumps(raw, indent=2) + "\n",
+            mode=0o644 if scope is not DefaultsScope.USER else 0o600,
+        )
+    return target
 
 
 def add_known_project(repo_root: Path, *, target: Path | None = None) -> bool:

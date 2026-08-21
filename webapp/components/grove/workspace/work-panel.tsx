@@ -12,8 +12,23 @@ import type { LucideIcon } from "lucide-react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/assistant-ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { CommitSummaryView, WorkspaceActivityView, WorkspacePeekView } from "@/lib/grove/api";
-import { PANEL_TAB_VALUES, type PanelTab } from "./selectors";
+import type { CommitSummaryView, WorkspacePeekView } from "@/lib/grove/api";
+import {
+  PANEL_TAB_VALUES,
+  type ActivityRead,
+  type PanelTab,
+  type WorkspaceRead,
+} from "./selectors";
+
+/**
+ * The tabs a reader with no Grove session may see: what the work IS, and what
+ * it CHANGED. Terminal, Files and Controls are absent because each is either a
+ * live handle on the machine or a way to steer the agent.
+ *
+ * A subset of `PANEL_TAB_VALUES` rather than a parallel list, so a name that
+ * does not exist in the census cannot be written here.
+ */
+const SHARED_TABS: readonly PanelTab[] = ["changes", "info"];
 
 /**
  * Each tab is its own chunk, fetched only once its `TabsContent` actually
@@ -94,19 +109,42 @@ export function WorkPanel({
   peek,
   activity,
   commits,
-  sessionId,
-  onKilled,
   tab,
   onTabChange,
+  repoRoot,
+  privileged,
 }: {
-  peek: WorkspacePeekView;
-  activity: WorkspaceActivityView | null;
+  peek: WorkspaceRead;
+  activity: ActivityRead | null;
   commits: CommitSummaryView[] | undefined;
-  sessionId: string | null;
-  onKilled: () => void;
   tab: PanelTab;
   onTabChange: (tab: PanelTab) => void;
+  repoRoot: string | null;
+  /**
+   * Everything only a caller with a Grove session can supply — and therefore
+   * everything only such a caller may see.
+   *
+   * ONE optional prop rather than a `tabs` array beside an `onKilled` beside a
+   * `readOnly`, because the tab set is not an independent choice: Terminal
+   * needs the pane, Files and Controls need a workspace id to fetch privately,
+   * and Lifecycle needs a record carrying `branch_provenance`. Bundling them
+   * means the panel's own reach is DERIVED from what it was handed, so a caller
+   * cannot ask for a tab whose data it did not provide, and nobody can leave a
+   * boolean disagreeing with a handler.
+   *
+   * Withholding these is chrome, never the security boundary: the public
+   * surface is safe because the daemon serves it three read-only routes, not
+   * because a trigger is missing. If the only thing stopping a reader were this
+   * prop, the feature would be broken.
+   */
+  privileged?: {
+    peek: WorkspacePeekView;
+    onKilled: () => void;
+  };
 }) {
+  // Order is the census's, never the caller's — a subset cannot reorder the
+  // strip, and a sixth tab lands in the right place for both audiences at once.
+  const offered = PANEL_TAB_VALUES.filter((value) => privileged || SHARED_TABS.includes(value));
   return (
     <Tabs
       value={tab}
@@ -119,7 +157,7 @@ export function WorkPanel({
         size="sm"
         className="w-full shrink-0 justify-start overflow-x-auto px-3"
       >
-        {PANEL_TAB_VALUES.map((value) => {
+        {offered.map((value) => {
           const { label, Icon } = TAB_CHROME[value];
           return (
             <TabsTrigger key={value} value={value} data-testid={`work-panel-tab-${value}`}>
@@ -130,21 +168,41 @@ export function WorkPanel({
         })}
       </TabsList>
 
-      <TabsContent value="terminal" className="flex min-h-0 flex-1 flex-col">
-        <TerminalTab peek={peek} active={tab === "terminal"} />
-      </TabsContent>
       <TabsContent value="changes" className="flex min-h-0 flex-1 flex-col">
         <ChangesTab peek={peek} commits={commits} />
       </TabsContent>
-      <TabsContent value="files" className="flex min-h-0 flex-1 flex-col">
-        <FilesTab workspaceId={peek.state.id} />
-      </TabsContent>
       <TabsContent value="info" className="flex min-h-0 flex-1 flex-col">
-        <InfoTab peek={peek} activity={activity} onKilled={onKilled} />
+        <InfoTab
+          peek={peek}
+          activity={activity}
+          repoRoot={repoRoot}
+          privileged={
+            privileged && {
+              state: privileged.peek.state,
+              onKilled: privileged.onKilled,
+            }
+          }
+        />
       </TabsContent>
-      <TabsContent value="controls" className="flex min-h-0 flex-1 flex-col">
-        <ControlsTab workspaceId={peek.state.id} />
-      </TabsContent>
+      {/* The three privileged tabs are not merely untriggerable without
+          `privileged` — they are not in the tree at all. A hidden `TabsContent`
+          still mounts nothing here (see the doc comment above on why only the
+          active tab mounts), but leaving them declared would put three
+          components that dereference a full peek behind a value that may not
+          exist, which is a compile error waiting for whoever adds a fourth. */}
+      {privileged && (
+        <>
+          <TabsContent value="terminal" className="flex min-h-0 flex-1 flex-col">
+            <TerminalTab peek={privileged.peek} active={tab === "terminal"} />
+          </TabsContent>
+          <TabsContent value="files" className="flex min-h-0 flex-1 flex-col">
+            <FilesTab workspaceId={privileged.peek.state.id} />
+          </TabsContent>
+          <TabsContent value="controls" className="flex min-h-0 flex-1 flex-col">
+            <ControlsTab workspaceId={privileged.peek.state.id} />
+          </TabsContent>
+        </>
+      )}
     </Tabs>
   );
 }

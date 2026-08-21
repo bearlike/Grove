@@ -3,11 +3,11 @@
 import { GitCommitHorizontalIcon, GitCompareArrowsIcon } from "lucide-react";
 
 import { Timeline } from "@/components/elements/timeline";
-import type { CommitSummaryView, WorkspacePeekView } from "@/lib/grove/api";
+import type { CommitSummaryView } from "@/lib/grove/api";
 import { CardGrid, SectionCard, CardScroll, CardStat } from "@/components/grove/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { baseBranchOf } from "@/lib/grove/adapters";
-import { commitEvents } from "./selectors";
+import { commitEvents, type WorkspaceRead } from "./selectors";
 
 /**
  * What this branch has actually done: divergence from base, working-tree churn,
@@ -16,12 +16,16 @@ import { commitEvents } from "./selectors";
  * There is no hunk view because the daemon exposes no per-file patch for the
  * working tree — `/commits` and the peek's counters are the whole wire surface.
  * The Files tab covers the per-file diffs the agent itself reported.
+ *
+ * `peek` is the narrowed `WorkspaceRead`, not `WorkspacePeekView`, so the public
+ * share view renders this tab verbatim — see that type's docstring for why the
+ * narrowing is the mechanism rather than a tidy-up.
  */
 export function ChangesTab({
   peek,
   commits,
 }: {
-  peek: WorkspacePeekView;
+  peek: WorkspaceRead;
   commits: CommitSummaryView[] | undefined;
 }) {
   // `undefined` is NOT `[]`, and collapsing the two is a wrong answer rather

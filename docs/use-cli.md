@@ -4,6 +4,11 @@
 
 Every verb runs the same engine as the TUI, at feature parity.
 
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/demos/cli-completion.gif" alt="Pressing TAB through grove commands and model names in a terminal, with each completion list drawn from live values" /></div>
+  <figcaption class="ms-shot__body">Completion reads live values: workspace ids, your configured agents, each agent's models, branches and sessions. See <a href="#tab-completion">tab completion</a>.</figcaption>
+</figure>
+
 ## The contract
 
 - **Scope.** Most commands resolve the repo from `cwd` upward. `daemon`,
@@ -20,8 +25,8 @@ Every verb runs the same engine as the TUI, at feature parity.
 ## `grove`
 
 Launches the TUI for the repo found from `cwd`, or exits `1` outside one. See
-the [TUI tour](use-tui.md). Also carries Typer's `--install-completion` and
-`--show-completion`.
+the [TUI tour](use-tui.md). See [tab completion](#tab-completion) for
+`grove completions`.
 
 ```bash
 cd /path/to/my-project
@@ -29,6 +34,9 @@ grove
 ```
 
 ## Read commands
+
+`grove recollect` is also available here as the top-level spelling of
+[`grove sessions recollect`](#grove-sessions-recollect-and-grove-recollect).
 
 ### `grove ls`
 
@@ -91,6 +99,37 @@ grove show            # from inside a worktree, infers the workspace
 grove show a1b2 -l 5  # by id prefix, last 5 turns
 ```
 
+### `grove edit`
+
+Renames a workspace or changes its description. Metadata only: the worktree
+path, the tmux session and the branch are set once at create time and never
+move, so renaming a workspace never breaks a client already attached to it.
+
+```bash
+grove edit [WORKSPACE] [--title TEXT] [--description TEXT]
+```
+
+| Argument / option | Default | Meaning |
+|---|---|---|
+| `WORKSPACE` | inferred from cwd | Id or unique prefix, resolved as in `grove show`. |
+| `--title`, `-t` | none | New title, 1 to 120 characters. |
+| `--description`, `-d` | none | New description. Pass an empty string to clear it. |
+| `--json` | off | Emit the updated workspace record as JSON. |
+
+Omitting both `--title` and `--description` is a refusal, not a silent no-op:
+an edit that changes nothing still looks like it worked.
+
+```bash
+grove edit --title "quota gateway"    # from inside the worktree
+grove edit a1b2 -d "spike, do not merge"
+grove edit --description ""           # clear the description
+```
+
+A workspace `grove create` starts with no title of its own is named after a
+generated id, on the promise that it stays renameable. This is that promise
+kept from the command line, the same write path the TUI's edit modal and the
+web dashboard use.
+
 ### `grove phase`
 
 Sets or reads a workspace's [task
@@ -98,21 +137,37 @@ phase](features-status.md#the-third-axis-task-phase), writing the file named
 by `GROVE_PHASE_FILE`, the channel available everywhere.
 
 ```bash
-grove phase <phase> [--note TEXT] [WORKSPACE]   # set
-grove phase [WORKSPACE]                         # read
+grove phase [REF] [PHASE] [--note TEXT] [--ticket PROVIDER:ID] [--blocked]   # set
+grove phase [REF]                                                            # read
 ```
+
+`REF` and `PHASE` are both optional positionals, and either can stand alone.
+A bare phase word infers the workspace from your directory, the shape an
+agent reporting its own progress uses most. Give a workspace id or prefix
+first when you mean a different workspace, or when a phase word alone would
+be ambiguous with the literal `show`.
 
 | Argument / option | Default | Meaning |
 |---|---|---|
-| `PHASE` | (none) | `scoping`, `planning`, `implementing`, `verifying`, `delivering`, or `done`. Omit to read instead of set. |
+| `REF` | inferred from cwd | Workspace id or unique prefix. With no second argument this token may instead be the phase itself. |
+| `PHASE` | (none) | `scoping`, `planning`, `implementing`, `verifying`, `delivering`, or `done`. Omit both arguments, or pass the literal `show`, to just print the current phase. |
 | `--note` | none | One-line note, 200 characters or less. |
-| `WORKSPACE` | inferred from cwd | Id or unique prefix, resolved as in `grove show`. |
+| `--ticket` | none | Scope this claim to one attached ticket's `provider:id` key, for a workspace working several tickets at once, instead of the workspace as a whole. |
+| `--blocked` | off | Flag the phase as stuck on this step, not just at it. A flag beside the phase, never a replacement for it. |
 
 ```bash
-grove phase implementing --note "wiring the parser"   # from inside the worktree
-grove phase                                           # read the current phase back
-grove phase verifying a1b2                             # set another workspace's phase by id
+grove phase planning                          # from inside the worktree, no note
+grove phase implementing --note "wiring the CLI verb"
+grove phase a1b2 verifying                    # another workspace, by id prefix
+grove phase verifying --ticket gitea:42       # scoped to one attached ticket
+grove phase implementing --blocked            # stuck on this step
+grove phase                                   # read the cwd-inferred phase, tickets included
 ```
+
+Reading prints the workspace's own claim, then one line per attached ticket
+that has its own. A workspace serving several tickets from one branch can
+report each ticket's phase independently, so the ticket closing the issue can
+say `delivering` while the issue itself still reads `verifying`.
 
 ### `grove sessions`
 
@@ -192,6 +247,36 @@ grove sessions dump REF [--jsonl]
 grove sessions dump 7b3f2c1a --jsonl | jq -c 'select(.type=="assistant")'
 ```
 
+#### `grove sessions recollect` and `grove recollect`
+
+Recover the direct user queries from a complete session transcript, oldest
+first. Use this after a context compaction when the normal turn view no longer
+contains the original request. Both spellings run the same command. Omit the
+session from inside a workspace to use its primary session.
+
+```bash
+grove sessions recollect [SESSION] [--last/-l N] [--json]
+grove recollect [SESSION] [--last/-l N] [--json]
+```
+
+| Argument / option | Default | Meaning |
+|---|---|---|
+| `SESSION` | current workspace's primary session | Session id or unique prefix. |
+| `--last`, `-l` | all queries | Keep only the most recent N direct user queries. |
+| `--json` | off | Structured query records instead of readable text. |
+
+Human slash commands count as direct queries. Provider envelopes and harness
+records do not. Recollection reads the full transcript, so use `--last` when
+you need only its recent instructions.
+
+```bash
+# Recover the original task after a compaction.
+grove recollect 7b3f2c1a
+
+# Machine-readable most recent instructions.
+grove sessions recollect 7b3f2c1a --last 3 --json
+```
+
 #### `grove sessions remap`
 
 Implemented in [`cli_sessions.py`](repo:src/grove/tui/cli_sessions.py). Pins an
@@ -216,17 +301,20 @@ grove sessions remap a1b2 cafef00d
 
 ### `grove create`
 
-A git worktree, a branch, a tmux session, and a running agent.
+A git worktree, a branch, a tmux session, and a running agent. Every
+argument is optional: a bare `grove create` mints a short id for the
+title, resolves your saved defaults for everything else, and attaches
+you to the result.
 
 ```bash
-grove create TITLE --agent/-a NAME [--model/-m ID] [--runtime host|container] [branch flags] [--base REF] [--description/-d TEXT] [--no-init] [--prompt/-p TEXT] [--brief/--no-brief]
+grove create [TITLE] [--agent/-a NAME] [--model/-m ID] [--runtime host|container] [branch flags] [--base REF] [--description/-d TEXT] [--no-init] [--prompt/-p TEXT] [--brief/--no-brief] [--cwd PATH] [--resume-session ID] [--attach/--no-attach]
 ```
 
 | Option | Meaning |
 |---|---|
-| `TITLE` (required) | Label whose slug seeds the worktree path and tmux session name. |
-| `--agent`, `-a` (required) | Agent to launch, matching a name in your config. |
-| `--model`, `-m ID` | Model id (claude: `sonnet`/`opus`/`haiku`, codex: `gpt-5.5`), forwarded verbatim, never validated. The catalog only informs the choice, blank means the tool's default. |
+| `TITLE` | Label whose slug seeds the worktree path and tmux session name. Omit for a generated id; [`grove edit`](#grove-edit) renames it later. |
+| `--agent`, `-a` | Agent to launch, matching a name in your config. Omit for your saved default. |
+| `--model`, `-m ID` | Model id (claude: `fable`/`opus`/`sonnet`/`haiku`, codex: `gpt-5.5`), forwarded verbatim, never validated. The catalog only informs the choice, blank means the tool's default. |
 | `--runtime` | `host` or `container`. Omit for the default. Create-time only, never editable after. See [Container Workspaces](features-containers.md). |
 | `--branch`, `-b NAME` | New branch with this exact name off `--base`. |
 | `--checkout`, `-c NAME` | Existing local branch, checked out into the worktree. |
@@ -234,14 +322,20 @@ grove create TITLE --agent/-a NAME [--model/-m ID] [--runtime host|container] [b
 | `--root` | Repo root on the current branch, no worktree. |
 | `--base REF` | Ref to branch off (default `HEAD`). Valid only with auto or `--branch`. |
 | `--description`, `-d` | Free-form note on the workspace. |
+| `--cwd PATH` | Start the agent in this directory within the worktree. A relative path is from the repo root; an absolute path is allowed when it resolves inside the repo. Omit it for `agent_cwds.default`, or the worktree root when none is configured. The worktree, branch, and init script remain at the root. |
 | `--no-init` | Skip the init script for this create only. |
 | `--prompt`, `-p` | First task, delivered race-free at boot so it starts working immediately. |
 | `--brief` / `--no-brief` | A first-turn note pointing at the `working-in-grove` skill, so the agent reports task phase and keeps tickets current. Omit for the default (`brief.enabled`, on). Create-time only, and persisted. |
+| `--resume-session ID` | Continue an existing claude or codex session in the new workspace instead of starting fresh. Id or unique prefix, from `grove sessions list`. |
+| `--attach` / `--no-attach` | Hand your terminal to the agent once it is up. Unset, this happens whenever output is a terminal; a piped invocation keeps its own process either way it is set. |
 
 The branch flags are mutually exclusive. Omitting them all auto-names a branch
 from the title slug.
 
 ```bash
+# Quick create: saved defaults, generated title, attached
+grove create
+
 # Auto branch (title slug → grove/fix-login-YYYYMMDD-HHmmss)
 grove create "fix login" --agent claude
 
@@ -259,6 +353,9 @@ grove create "in place" --agent claude --root
 
 # Start working immediately
 grove create "add cache" --agent claude --prompt "add an LRU cache in front of the API client"
+
+# Start the agent in a monorepo's API directory
+grove create "add endpoint" --agent claude --cwd services/api
 ```
 
 ### `grove message`
@@ -625,6 +722,9 @@ grove sessions list --since 1h
 # Mid cost: read the last few turns of one sibling session.
 grove sessions show a91e0d34 --last 5
 
+# Recover every direct instruction, including ones before compaction.
+grove recollect a91e0d34 --last 5
+
 # Expensive, last resort: redirect to a file, not your context.
 grove sessions dump a91e0d34 --jsonl > /tmp/a91e0d34.jsonl
 ```
@@ -653,6 +753,84 @@ grove pause a1b2
   no git repository.
 - Redirect `dump` to a file, not your context, and use `--since` and `-w` to
   shrink a result first.
+
+## Tab completion
+
+`grove completions install` writes a completion script into a directory your
+shell already searches, and never edits `~/.zshrc` or any other rc file.
+
+```bash
+grove completions install          # detects zsh, bash or fish
+exec $SHELL                        # start a new shell to pick it up
+```
+
+For zsh it asks the shell itself which directories are on `$fpath` and takes the
+first writable one of your own, so it lands wherever you already keep
+completions on both Linux and macOS. If there is no such directory it still
+writes the file and prints the one line to add — placement is never silent,
+because a script the shell cannot see looks exactly like an install that worked.
+bash and fish use their conventional auto-loaded directories.
+
+`grove completions show --shell zsh` prints the script instead, for a dotfiles
+repo or a system package.
+
+### What completes
+
+Command and subcommand names, every flag, and the values behind them:
+
+| Where | Completes to |
+|---|---|
+| `grove show`, `pause`, `kill`, `attach`, … | Workspace ids in this repo, with title and branch |
+| `grove create --agent` | Agent names from your resolved config |
+| `grove create --model` | That agent's model catalog — scoped to the `--agent` already typed |
+| `grove create --checkout` / `--track` / `--base` | Local, remote and all branches; a local one says where it is checked out |
+| `grove create --cwd` | The repo's configured working directories |
+| `grove create --resume-session`, `grove sessions show` | Session ids recorded in this project |
+| `grove phase` | The six phase names *and* workspace ids — the argument takes either |
+| `grove tickets detach`, `grove phase --ticket` | Tickets attached to the workspace |
+| `grove agent kill` / `peek` / `message` | Agents live in that workspace's container |
+| `grove auth approve` / `deny` / `revoke` | Pending challenge and active session ids |
+
+Values come from the same places the commands read — the config cascade, the
+workspace store, git — so a new agent, a curated model list or a renamed working
+directory appears at the next TAB with nothing to regenerate. The completion
+script itself only changes if you change shells.
+
+Completion stays cheap: it reads recorded state, config and git rather than
+reconciling live tmux or containers. `grove agent`'s name argument is the one
+exception, because an in-container agent exists nowhere but the running
+container. Everything here is best-effort — anything unavailable, slow to reach
+or failing offers nothing rather than interrupting your shell.
+
+### If nothing happens when you press TAB
+
+Answering a completion means starting `grove`, which takes about a second on a
+typical host, most of it Python import before any value is looked up. Some zsh
+completion frameworks give a completer far less than that and silently drop it,
+so completion appears to do nothing at all.
+
+The common case is [zsh-autocomplete], whose default budget is **0.4 s**. Raise
+it in `~/.zshrc`:
+
+```zsh
+zstyle ':autocomplete:' timeout 3
+```
+
+Note the single trailing colon. `:autocomplete:` is the exact context this
+setting is read from, and the more familiar `':autocomplete:*'` does not match
+it.
+
+To tell this apart from an install problem, run the round trip by hand:
+
+```bash
+time ( env _TYPER_COMPLETE_ARGS="grove show " _GROVE_COMPLETE=complete_zsh grove )
+```
+
+Candidates printed means Grove is fine and the shell is discarding them. Nothing
+printed is a real fault worth reporting. `zsh -f` (no rc) with the completion
+sourced is the other half of the same check.
+
+[zsh-autocomplete]: https://github.com/marlonrichert/zsh-autocomplete
 
 ## See also
 

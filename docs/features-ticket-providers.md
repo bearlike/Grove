@@ -51,6 +51,26 @@ rewrites it in place rather than posting a feed.
 
 [Issue ops](issue-ops.md) covers the body in detail.
 
+## Several tickets, one workspace
+
+A workspace can serve more than one attached ticket, and each one gets its
+own phase claim rather than sharing the workspace's single answer. The issue
+a pull request closes can read `verifying` while the pull request itself
+already reads `delivering`, and each ticket's own comment carries only its
+own claim. See [task phase](features-status.md#the-third-axis-task-phase)
+for how an agent reports one, and `--ticket`/`--blocked` on
+[`grove phase`](use-cli.md#grove-phase) for setting one from outside the
+workspace.
+
+The ticket list on a workspace ranks by the same rule everywhere it renders,
+so the TUI, the web dashboard and the sticky comment never disagree about
+what belongs at the top. Pull requests rank above issues. Within each, open
+ranks above draft, above anything settled. Within that, the ticket furthest
+along its own phase ranks first, then one marked `done`, then one nobody has
+reported against yet. A ticket marked `done` ranks below one still in
+progress even if it was the one updated moments ago, because the rank tracks
+progress, not recency.
+
 ## The assignee is the work queue
 
 Grove uses the tracker's own assignee field in both directions, off by
@@ -79,7 +99,16 @@ grove tickets handback '#42'
 
 On create, and again on adopting an existing branch, Grove parses the
 branch through every enabled provider. Each match becomes a `ticket_ref`
-on the workspace, and fetches nothing until you open a ticket's detail.
+on the workspace.
+
+A ref is **stored bare** — the provider, the id and whether it is an issue or
+a pull request. A title, a status and an assignee are fetched on demand, and
+never persisted, so a ticket renamed on the tracker is never shown stale.
+Grove asks the tracker when a surface actually needs those details: the
+terminal UI when you select the workspace, the web workspace page when it
+opens, and issue-ops when it refreshes a ticket's comment. **Nothing polls a
+tracker in the background**, so an unreachable tracker costs you titles and
+nothing else.
 
 | Provider | Recognizes | Example branch | Derived ref |
 |---|---|---|---|

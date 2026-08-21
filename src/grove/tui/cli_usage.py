@@ -11,7 +11,6 @@ import typer
 from grove.core.config import load_config
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
-from grove.core.usage import UsageService
 
 usage_app = typer.Typer(
     name="usage",
@@ -58,6 +57,11 @@ def backfill(
         raise typer.Exit(code=2)
 
     registry = RepoRegistry(cfg=cfg, store=JsonWorkspaceStore(), config_loader=load_config)
+    # Deferred: this module is imported by every `grove` invocation, and the
+    # usage stack pulls in `bashlex` (~98 ms measured) that only this command
+    # needs. Every shell-completion round trip pays a module-scope import.
+    from grove.core.usage import UsageService  # noqa: PLC0415
+
     service = UsageService(cfg=cfg, registry=registry)
     try:
         local = None if dry_run else service.refresh(force=force)

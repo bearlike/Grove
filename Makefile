@@ -48,26 +48,36 @@ check: lint test  ## Run lint + unit tests (no integration)
 
 # ─── docs ───────────────────────────────────────────────────────────────────
 
-.PHONY: docs-schema docs-screenshots docs-webapp-screenshots docs-frame-webapp-screenshots docs-mockups docs-images docs docs-build
+.PHONY: docs-schema docs-screenshots docs-webapp-screenshots docs-frame-webapp-screenshots docs-tour-gif docs-mockups docs-images docs docs-build
 docs-schema:  ## Regenerate docs/grove.schema.json from the Pydantic model
 	$(UV) run grove config schema --stdout > docs/grove.schema.json
 
-docs-screenshots:  ## Regenerate the TUI SVG screenshots from the live TUI
-	$(UV) run python -m tools.screenshots.capture
+# Captures as SVG, then rasterizes and frames in one process — the SVG is a
+# sandbox intermediate and never reaches docs/. Needs `node` plus the webapp's
+# Playwright install for the raster step; `capture.py` preflights both before it
+# plants a fleet.
+docs-screenshots:  ## Regenerate the framed TUI PNG screenshots from the live TUI
+	$(UV) run --group dev python -m tools.screenshots.capture
 
 # The desktop shots, and only those. Framing is not idempotent — a second
 # pass frames the frame — so the set is named rather than globbed, and it is
 # chained onto the capture that produces it so the two cannot drift apart.
 # `webapp-home-mobile.png` is deliberately absent: it feeds the phone mockup,
 # which supplies its own device shell.
-FRAMED_SHOTS := $(addprefix docs/img/screenshots/,webapp-home.png webapp-workspace.png webapp-usage.png webapp-usage-detail.png webapp-pair-device.png webapp-pair-code.png)
+FRAMED_SHOTS := $(addprefix docs/img/screenshots/,webapp-home.png webapp-composer.png webapp-sessions.png webapp-workspace.png webapp-usage.png webapp-usage-detail.png webapp-pair-device.png webapp-pair-code.png)
 
 docs-webapp-screenshots: webapp-build  ## Regenerate the web dashboard PNG screenshots (needs webapp/.next)
 	$(UV) run python -m tools.screenshots.webapp_capture
 	$(MAKE) docs-frame-webapp-screenshots
+	$(MAKE) docs-tour-gif
 
 docs-frame-webapp-screenshots:  ## Composite the webapp screenshots onto a consistent 16:9 framed window
 	$(UV) run --group dev python -m tools.screenshots.frame $(FRAMED_SHOTS)
+
+# Chained onto the framing above, never run standalone against unframed shots:
+# the tour's whole compression story is that every slide shares one wallpaper.
+docs-tour-gif:  ## Build the looping web dashboard tour GIF from the framed shots
+	$(UV) run --group dev python -m tools.screenshots.slideshow
 
 docs-mockups:  ## Composite the landing-page device mockups from the latest screenshots
 	$(UV) run python -m tools.screenshots.mockups

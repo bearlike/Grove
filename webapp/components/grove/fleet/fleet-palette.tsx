@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { CommandPalette, type PaletteCommand } from "@/components/elements/command-palette";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { agentStateOf } from "./filter";
+import { agentLabel } from "./tokens";
 import type { FleetRow } from "./types";
 
 /**
@@ -39,7 +40,7 @@ export function FleetPalette({ rows }: { rows: readonly FleetRow[] }): React.Rea
         label: row.workspace.state.title,
         group: row.repoName,
         keys: [
-          row.workspace.needs_attention ? "needs you" : agentStateOf(row.workspace),
+          row.workspace.needs_attention ? "needs attention" : agentLabel(agentStateOf(row.workspace)),
         ],
       })),
     [rows],

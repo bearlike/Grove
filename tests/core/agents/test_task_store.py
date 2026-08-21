@@ -264,43 +264,38 @@ def test_the_team_board_wins_over_the_sessions_own_name(
     assert [i.content for i in todo.items] == ["live"]
 
 
-def test_a_rotated_session_with_no_teammate_of_its_own_still_finds_the_team_board(
+def test_a_sibling_sessions_team_board_is_never_adopted_through_a_shared_cwd(
     adapter: ClaudeCodeAdapter, claude_home: Path
 ) -> None:
-    """A session id rotates in place (compaction, ``/clear``, a fork) and
-    Claude Code only stamps ``teamName`` into a sub-agent's sidecar at SPAWN
-    time — so a just-rotated id that has not yet spawned a teammate of its
-    own carries no team on ITS OWN paths, even though the team's board
-    plainly still exists under an EARLIER sibling session's name. Before the
-    fix this silently fell through to the fold (a real 58-item board read as
-    84+, since the fold only sees this session's own history)."""
-    rotated_sid = "55555555-5555-5555-8555-555555555555"
-    _transcript(claude_home, _three_creates(), sid=rotated_sid)
-    # An earlier, unrelated session recorded for the SAME cwd — its own
-    # sub-agent is the only record anywhere that names the team.
+    """THE cross-session regression. A cwd is not an identity: every ROOT-placement
+    workspace in a repo scans the shared repo root, so the sessions recorded there
+    belong to other workspaces and to hand-started agents. Resolution once widened
+    to those siblings to rescue a rotated id, and on the reference host that served
+    6 of 8 live workspaces a stranger's checklist — twice, the SAME 27-item board to
+    two different workspaces. A session that names no team of its own has no board
+    anyone can identify, so the fold over its OWN transcript answers."""
+    lone_sid = "55555555-5555-5555-8555-555555555555"
+    _transcript(claude_home, _three_creates(), sid=lone_sid)
+    # A sibling session recorded for the SAME cwd, naming a team of its own.
     _transcript(claude_home, [_cwd_line()], sid=SID)
     _subagent(claude_home, {"agentType": "worker", "teamName": "session-99999999"}, sid=SID)
-    _board(claude_home, "session-99999999", [{"id": "1", "subject": "live", "status": "completed"}])
-    todo = adapter.latest_todo(CWD, rotated_sid)
+    _board(claude_home, "session-99999999", [{"id": "1", "subject": "theirs", "status": "pending"}])
+    todo = adapter.latest_todo(CWD, lone_sid)
     assert todo is not None
-    assert [(i.content, i.status) for i in todo.items] == [("live", "completed")]
+    assert [i.content for i in todo.items] == ["Scope the work", "Write the fix", "Run the gates"]
 
 
-def test_a_dead_pointer_session_with_no_transcript_at_all_still_finds_the_team_board(
+def test_a_dead_pointer_session_reports_nothing_rather_than_a_strangers_board(
     adapter: ClaudeCodeAdapter, claude_home: Path
 ) -> None:
-    """The extreme case of the same gap: a session id Grove still has pinned
-    but whose transcript no longer exists on disk at all (rotated away, e.g.
-    by ``/clear``). ``locate_transcripts`` for it is empty, so the fix must
-    reach the team through a SIBLING session recorded for this cwd rather
-    than through anything belonging to the dead id itself."""
+    """The extreme case: an id Grove still has pinned whose transcript is gone.
+    It names no team and has no transcript to fold, so there is nothing to
+    report — and the sibling recorded for this cwd is somebody else's."""
     dead_sid = "66666666-6666-6666-8666-666666666666"
     _transcript(claude_home, [_cwd_line()], sid=SID)
     _subagent(claude_home, {"agentType": "worker", "teamName": "session-99999999"}, sid=SID)
-    _board(claude_home, "session-99999999", [{"id": "1", "subject": "live", "status": "completed"}])
-    todo = adapter.latest_todo(CWD, dead_sid)
-    assert todo is not None
-    assert [(i.content, i.status) for i in todo.items] == [("live", "completed")]
+    _board(claude_home, "session-99999999", [{"id": "1", "subject": "theirs", "status": "pending"}])
+    assert adapter.latest_todo(CWD, dead_sid) is None
 
 
 def test_a_team_name_that_could_climb_out_of_the_tasks_dir_is_refused(

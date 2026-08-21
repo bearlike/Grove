@@ -16,9 +16,9 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,10 +26,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from grove import __version__ as _GROVE_VERSION
 from grove.core import paths as core_paths
 from grove.core.activity import ActivityService
-from grove.core.agents import SessionTurn, get_adapter, resolve_models
+from grove.core.agents import get_adapter, resolve_models
 from grove.core.agents.hook import HOOK_INGEST_ROUTE, ClaudeHook
 from grove.core.auth import SessionStore
-from grove.core.config import GroveConfig, load_config
+from grove.core.config import (
+    DefaultsScope,
+    GroveConfig,
+    WorkspaceDefaults,
+    load_config,
+    save_workspace_defaults,
+    user_defaults_keys,
+)
 from grove.core.container_infra import ProjectInfra
 from grove.core.contracts.activity import (
     DashboardEvent,
@@ -41,6 +48,7 @@ from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.issueops import IssueOpsEvent, IssueOpsOutcome
 from grove.core.contracts.phase import PhaseView, SetPhaseRequest
+from grove.core.contracts.public import PublicWorkspaceView
 from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
 from grove.core.contracts.sessions import (
@@ -48,10 +56,12 @@ from grove.core.contracts.sessions import (
     RemapSessionRequest,
     SessionControlsView,
     SessionDetailView,
+    SessionQueryView,
     SessionSummaryView,
     TodoListView,
     WorkspaceQueueView,
 )
+from grove.core.contracts.share_policy import SharePolicyUpdateRequest, SharePolicyView
 from grove.core.contracts.tickets import (
     TicketProviderName,
     TicketProviderView,
@@ -65,6 +75,8 @@ from grove.core.contracts.views import (
     ProjectView,
     ProvisionProgressView,
     WhoamiView,
+    WorkspaceDefaultsSaveView,
+    WorkspaceDefaultsView,
     WorkspaceDiffView,
     WorkspacePaneView,
     WorkspacePeekView,
@@ -99,6 +111,7 @@ from grove.core.manager import WorkspaceManager
 from grove.core.notifications import NotificationBroker
 from grove.core.release import ReleaseChecker, ReleaseStatus
 from grove.core.sessions import SessionCatalog, SessionExplorer, SessionListing
+from grove.core.share_policy import SharePolicy, SharePolicyStore
 from grove.core.store import JsonWorkspaceStore
 from grove.core.trace_forwarder import TraceForwarder
 from grove.daemon._audience import _PollAudience
@@ -106,7 +119,10 @@ from grove.daemon._catalog import _CatalogMemo
 from grove.daemon._lifecycle import _LifecycleRunner
 from grove.daemon._pane_stream import _PaneStreamer
 from grove.daemon._poll_coalescer import _PollCoalescer
+from grove.daemon._public import PublicWorkspaceReader, ShareNotFound
+from grove.daemon._public_tickets import _PublicTicketMemo
 from grove.daemon._sse import _SseHub
+from grove.daemon._turns import turn_window
 from grove.daemon.auth import build_auth_router, make_require_hook_token, make_require_session
 from grove.daemon.repos import RepoRegistry
 from grove.daemon.usage import _default_usage_service, build_usage_router
@@ -330,53 +346,6 @@ def _sse_frame(event: DashboardEvent) -> str:
     return f"{id_line}event: {event.kind}\ndata: {event.model_dump_json()}\n\n"
 
 
-class _TurnWindow(NamedTuple):
-    """Which slice of a session's turns one response carries, and why."""
-
-    turns: tuple[SessionTurn, ...]
-    total: int
-    first_index: int
-    incremental: bool
-
-
-def _turn_window(
-    turns: tuple[SessionTurn, ...], *, last: int | None, after_turn: int | None
-) -> _TurnWindow:
-    """Resolve the requested window over a session's complete turn list.
-
-    ``after_turn`` is INCLUSIVE of its own index, and that is the whole answer to
-    the tail-mutation problem: turns are append-*mostly*, not append-only — the
-    last turn keeps growing as the agent streams parts and resolves tool calls,
-    while every earlier one is frozen (measured on a live session: 6 of 7 turns
-    byte-identical over 45 s, only the tail moved). An exclusive cursor would
-    freeze a half-finished turn on screen for the rest of the session, so the
-    client's last-known turn is always re-sent and it replaces from
-    ``first_index`` rather than blindly appending.
-
-    A cursor STRICTLY BEYOND the end is the GAP: the session now holds fewer
-    turns than the client claims to have seen, so the transcript was replaced
-    or forked under the reader, ordinals no longer mean what the client thinks,
-    and the honest answer is the whole session with ``incremental=False``.
-    Fail-safe by construction — anything this cannot prove it can serve
-    incrementally comes back whole, mirroring ``_SseHub.can_replay``'s fall
-    back to a full snapshot.
-
-    ``after_turn == total`` is deliberately NOT a gap but an empty incremental
-    window: the client is exactly up to date, and answering a one-off-by-one
-    cursor with the entire session would make the common "nothing happened"
-    tick the most expensive request on the route.
-    """
-    total = len(turns)
-    if after_turn is not None:
-        if after_turn > total:
-            return _TurnWindow(turns, total, 0, False)
-        return _TurnWindow(turns[after_turn:], total, after_turn, True)
-    if last is not None:
-        start = max(total - last, 0)
-        return _TurnWindow(turns[start:], total, start, False)
-    return _TurnWindow(turns, total, 0, False)
-
-
 def _parse_last_event_id(raw: str | None) -> int | None:
     """Parse the ``Last-Event-ID`` header to an int seq, tolerating junk → ``None``."""
     if not raw:
@@ -424,6 +393,7 @@ def build_app(  # noqa: PLR0915
     cfg: GroveConfig,
     store: JsonWorkspaceStore,
     auth_store: SessionStore | None = None,
+    share_policy_store: SharePolicyStore | None = None,
     notification_broker: NotificationBroker | None = None,
     release_checker: ReleaseChecker | None = None,
     issue_ops_engine: IssueOpsEngine | None = None,
@@ -434,7 +404,8 @@ def build_app(  # noqa: PLR0915
 
     Tests call this directly; the CLI's ``serve`` calls it via uvicorn.
     ``auth_store`` is constructed from ``cfg.auth`` if not supplied — tests
-    inject one with a fake clock when they need to control TTLs.
+    inject one with a fake clock when they need to control TTLs. ``share_policy_store``
+    is likewise injectable so tests do not write user state.
     ``notification_broker`` is built from ``cfg.notifications`` if not supplied —
     tests inject one with a capturing channel to assert the edge-trigger wiring.
     ``status_publisher`` is built from ``cfg.issueops`` if not supplied (``None``
@@ -469,6 +440,19 @@ def build_app(  # noqa: PLR0915
     # polled, never per-row (see `_catalog.py`). Shared by the host-scoped
     # listing and its drill-in so the pair costs one scan.
     catalog = _CatalogMemo(SessionCatalog(registry))
+    # Ticket enrichment for the PUBLIC share view, memoized per process.
+    #
+    # It has to live here rather than at module scope for the reason every other
+    # cache in this file does: a module global outlives the app, so two apps in
+    # one test process would share it and a test's resolved ticket would leak
+    # into the next. Owned by `build_app`, it dies with the app.
+    #
+    # The `/public` overview is POLLED by every open shared page, and resolving
+    # a ticket is an upstream HTTP call against somebody else's forge with the
+    # host's own credential. Without a memo, N anonymous readers polling would
+    # be N x refs upstream requests — an amplification vector pointed at a third
+    # party, driven by callers Grove never authenticated.
+    public_ticket_memo = _PublicTicketMemo()
     # Shared by the lifespan timer and the hook-ingest route below — the
     # single choke point that keeps their two independent triggers from ever
     # running `poll_once` concurrently.
@@ -535,6 +519,8 @@ def build_app(  # noqa: PLR0915
             pair_init_per_minute=cfg.auth.pair_init_per_minute,
             pair_poll_per_minute=cfg.auth.pair_poll_per_minute,
         )
+    if share_policy_store is None:
+        share_policy_store = SharePolicyStore()
     require_session = make_require_session(auth_store=auth_store, enabled=cfg.auth.enabled)
     auth_dep = [Depends(require_session)]
     # Same config flag, a DIFFERENT mechanism: the hook-ingest route
@@ -565,6 +551,7 @@ def build_app(  # noqa: PLR0915
         # itself already carries the identical suppression for.
         app.state.registry = registry
         app.state.auth_store = auth_store
+        app.state.share_policy_store = share_policy_store
         app.state.activity = activity_service
         app.state.usage = usage_service
         app.state.sse_hub = sse_hub
@@ -879,6 +866,177 @@ def build_app(  # noqa: PLR0915
         runs the daemon.
         """
         return HealthView(version=_GROVE_VERSION)
+
+    # ─── /public — the unauthenticated share namespace ──────────────────────
+    #
+    # THE ONLY ROUTES IN THIS FILE WITHOUT `auth_dep`, apart from `/healthz`
+    # above and the pairing handshake. That is the whole security design and it
+    # is why they live together here rather than beside the `/workspaces` routes
+    # they mirror: a reviewer reading this block sees the entire public attack
+    # surface at once, and nothing under `/workspaces` can drift into it.
+    #
+    # Every one is a GET, resolves its workspace ONLY through the token in its
+    # own path, and answers a flat 404 for every failure so a wrong token learns
+    # nothing. `PublicWorkspaceReader` (`_public.py`) owns what may be read;
+    # these three are the shells that offload it. **Anything added here needs
+    # the same three properties, and a fourth route is a design decision rather
+    # than a convenience.**
+
+    def _share_reader(token: str, passcode: str | None) -> PublicWorkspaceReader:
+        """Resolve a share token AND clear its project's passcode, together.
+
+        THE PASSCODE CHECK LIVES HERE RATHER THAN IN EACH ROUTE, and that is a
+        structural choice rather than a tidy-up. As three separate calls it was
+        correct but forgettable: a fourth `/public/**` route added later would
+        be unauthenticated BY OMISSION — nothing raises, no test breaks, the
+        route simply serves without a passcode. That is the very failure this
+        whole namespace exists to prevent, one layer in.
+
+        Folded in, a route cannot obtain a reader without the check having run,
+        so the guarantee is carried by the type rather than by memory. Every
+        route below already had to call this to get anywhere.
+        """
+        reader = PublicWorkspaceReader.for_token(
+            token,
+            registry=registry,
+            activity=activity_service,
+            version=_GROVE_VERSION,
+            ticket_memo=public_ticket_memo,
+        )
+        _require_share_passcode(reader, passcode)
+        return reader
+
+    def _share_404(exc: ShareNotFound) -> HTTPException:
+        return HTTPException(
+            status_code=404,
+            detail={"error": "share_not_found", "message": str(exc)},
+        )
+
+    def _require_share_passcode(reader: PublicWorkspaceReader, passcode: str | None) -> None:
+        """Reject a missing or wrong project passcode with one flat response."""
+        policy = share_policy_store.get(Path(reader.state.repo_root))
+        if not policy.verifies(passcode):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "share_passcode_required",
+                    "message": "a share passcode is required",
+                },
+            )
+
+    def _share_policy_view(repo_root: Path) -> SharePolicyView:
+        policy = share_policy_store.get(repo_root)
+        return SharePolicyView(
+            ttl_seconds=policy.ttl_seconds,
+            passcode_set=policy.passcode_hash is not None,
+        )
+
+    @app.get("/share-policy", response_model=SharePolicyView, dependencies=auth_dep)
+    async def get_share_policy(repo: Annotated[Path, Query()]) -> SharePolicyView:
+        """The authenticated project's public-share policy, never its hash."""
+        root = _known_root(repo)
+        return await asyncio.to_thread(_share_policy_view, root)
+
+    @app.put("/share-policy", response_model=SharePolicyView, dependencies=auth_dep)
+    async def save_share_policy(
+        body: SharePolicyUpdateRequest,
+        repo: Annotated[Path, Query()],
+    ) -> SharePolicyView:
+        """Replace the authenticated project's public-share policy."""
+        root = _known_root(repo)
+
+        def _save() -> SharePolicyView:
+            policy = SharePolicy.for_repo(
+                root,
+                passcode=body.passcode,
+                ttl_seconds=body.ttl_seconds,
+            )
+            saved = share_policy_store.save(policy)
+            return SharePolicyView(
+                ttl_seconds=saved.ttl_seconds,
+                passcode_set=saved.passcode_hash is not None,
+            )
+
+        return await asyncio.to_thread(_save)
+
+    @app.get("/public/{token}", response_model=PublicWorkspaceView)
+    async def public_workspace(
+        token: str,
+        x_grove_share_passcode: Annotated[str | None, Header()] = None,
+    ) -> PublicWorkspaceView:
+        """Everything a shared page renders except its transcript and its diff.
+
+        The payload is an explicit allowlist built in ``contracts/public.py`` —
+        no host path, no container identity, no pane, no token. It is also what
+        the page POLLS, since the public view has no SSE to ride (``/events`` is
+        a cross-project fan-out over every workspace on the host).
+
+        Runs off the loop: it peeks the worktree (git) and resolves the session
+        activity (transcript parse), which is exactly the "no route calls a
+        manager method on the loop" rule this file holds everywhere else.
+        """
+        try:
+            reader = await asyncio.to_thread(_share_reader, token, x_grove_share_passcode)
+            return await asyncio.to_thread(reader.overview)
+        except ShareNotFound as exc:
+            raise _share_404(exc) from exc
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get("/public/{token}/turns", response_model=SessionDetailView | None)
+    async def public_turns(
+        token: str,
+        x_grove_share_passcode: Annotated[str | None, Header()] = None,
+        last: Annotated[int | None, Query(ge=1)] = None,
+        after_turn: Annotated[int | None, Query(ge=0)] = None,
+    ) -> SessionDetailView | None:
+        """The shared workspace's transcript, windowed — the LIVE half.
+
+        Takes no session id: the token names a workspace and the daemon picks
+        the session, so an unauthenticated caller holds no coordinate it could
+        tamper with. ``after_turn`` and ``last`` mean exactly what they mean on
+        the authenticated route (one ``turn_window``, shared), which is what
+        lets the browser reuse its whole cursor-merge path unchanged.
+
+        ``null`` means this workspace has no readable transcript yet — a real
+        state for a workspace shared right after it was created, not an error.
+        """
+        if last is not None and after_turn is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "invalid_turn_window",
+                    "message": "`last` and `after_turn` are mutually exclusive",
+                },
+            )
+        try:
+            reader = await asyncio.to_thread(_share_reader, token, x_grove_share_passcode)
+            return await asyncio.to_thread(reader.turns, last=last, after_turn=after_turn)
+        except ShareNotFound as exc:
+            raise _share_404(exc) from exc
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get("/public/{token}/diff", response_model=WorkspaceDiffView)
+    async def public_diff(
+        token: str,
+        x_grove_share_passcode: Annotated[str | None, Header()] = None,
+        path: Annotated[str | None, Query()] = None,
+    ) -> WorkspaceDiffView:
+        """The shared workspace's working-tree patch, same scope and bounds as
+        the authenticated route.
+
+        The changed code is the thing a shared link exists to show, so it is not
+        trimmed for being public — ``?path=`` is the same per-file drill-in the
+        Changes tab already uses.
+        """
+        try:
+            reader = await asyncio.to_thread(_share_reader, token, x_grove_share_passcode)
+            return await asyncio.to_thread(reader.diff, path=path)
+        except ShareNotFound as exc:
+            raise _share_404(exc) from exc
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
 
     @app.get("/whoami", response_model=WhoamiView, dependencies=auth_dep)
     async def whoami() -> WhoamiView:
@@ -1348,23 +1506,40 @@ def build_app(  # noqa: PLR0915
         dependencies=auth_dep,
     )
     async def update_workspace(ws_id: str, body: UpdateWorkspaceRequest) -> WorkspaceStateView:
-        """Partial metadata update — title and/or description.
+        """Partial metadata update — title, description and/or public sharing.
 
         Wire semantics: ``null`` / omitted = "do not change". Empty
         string in ``description`` clears it; title cannot be cleared.
         Mapping wire → engine kwargs: an absent field translates to
         "kwarg not passed" so the manager's ``_UNSET`` sentinel works.
+
+        ``share`` is the one field with a security consequence, and omission is
+        what makes it safe: a client renaming a workspace must never revoke a
+        public link by not mentioning it. The minted token comes back on the
+        response's ``share_token`` — this route is where a client learns the
+        link, and there is no second endpoint that hands one out.
         """
         mgr = _manager_for(ws_id)
-        # Build kwargs dict with str values only — body.title / body.description
-        # are str|None, but the `is not None` guards mean we only ever pass
-        # strings into the dict. ``str`` typing keeps the **kwargs splat
-        # compatible with the manager's ``str | _Unset`` parameter type.
-        kwargs: dict[str, str] = {}
+        # `Any` rather than `str`: the values are now heterogeneous (`share` is
+        # a bool), and a `**kwargs` splat cannot be typed more precisely than
+        # its widest member without the splat itself failing to check. This is
+        # the wire→engine boundary the escape hatch is for, and the narrowing
+        # is right below — the `is not None` guards mean only present fields
+        # reach the manager, which is what preserves its `_UNSET`
+        # "leave alone" semantics, and the manager validates each one anyway.
+        kwargs: dict[str, Any] = {}
         if body.title is not None:
             kwargs["title"] = body.title
         if body.description is not None:
             kwargs["description"] = body.description
+        if body.share is not None:
+            kwargs["share"] = body.share
+            if body.share:
+                # TTL is resolved when the capability is issued, not when it is
+                # read; later policy edits cannot retroactively move this link.
+                kwargs["share_ttl_seconds"] = share_policy_store.get(mgr.repo_root).ttl_seconds
+        if body.share_session_id is not None:
+            kwargs["share_session_id"] = body.share_session_id
         try:
             state = await asyncio.to_thread(lambda: mgr.update(ws_id, **kwargs))
         except GroveError as exc:
@@ -1629,7 +1804,7 @@ def build_app(  # noqa: PLR0915
             # parse, and only the complete list can report an honest
             # `total_turns`.
             if listing is not None:
-                window = _turn_window(explorer.turns_for(listing), last=last, after_turn=after_turn)
+                window = turn_window(explorer.turns_for(listing), last=last, after_turn=after_turn)
                 return SessionDetailView.from_listing_turns(
                     listing,
                     window.turns,
@@ -1640,7 +1815,7 @@ def build_app(  # noqa: PLR0915
             fallback = explorer.subagent_turns(ws_id, session_id)
             if fallback is not None:
                 fleet_listing, turns = fallback
-                window = _turn_window(turns, last=last, after_turn=after_turn)
+                window = turn_window(turns, last=last, after_turn=after_turn)
                 return SessionDetailView.from_listing_turns(
                     fleet_listing,
                     window.turns,
@@ -1934,7 +2109,7 @@ def build_app(  # noqa: PLR0915
             # session that may belong to no workspace and mostly is not
             # running), so nothing follows a growing tail. It still reports the
             # window it served, so `last` stops being a silent truncation.
-            window = _turn_window(
+            window = turn_window(
                 get_adapter(kind).read_turns(Path(cwd), session_id),
                 last=last,
                 after_turn=None,
@@ -1945,6 +2120,48 @@ def build_app(  # noqa: PLR0915
                 total_turns=window.total,
                 first_turn_index=window.first_index,
             )
+
+        try:
+            return await asyncio.to_thread(_read)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/sessions/{session_id}/queries",
+        response_model=list[SessionQueryView],
+        dependencies=auth_dep,
+    )
+    async def session_queries(
+        session_id: str,
+        kind: Annotated[str, Query()],
+        cwd: Annotated[str, Query()],
+        last: Annotated[int | None, Query(ge=1)] = None,
+    ) -> list[SessionQueryView]:
+        """Every direct user query in one session, oldest first.
+
+        A transcript is unbounded in session length, while this response is
+        bounded by how many times a human typed something — usually dozens, not
+        thousands — so full query text is affordable here where it is not for
+        the transcript's bounded turn view. ``last`` is an opt-in tail only;
+        the complete normalized message spine is always read before it applies.
+
+        Like the workspace-less turns drill-in, the session is addressed by the
+        catalog row's ``(kind, cwd, session_id)`` coordinates. ``cwd`` must be
+        passed back byte-for-byte from that row, and a coordinate mismatch is a
+        typed 404 rather than a chance to expose a different transcript.
+        """
+
+        def _read() -> list[SessionQueryView]:
+            entry = catalog.find(kind=kind, cwd=cwd, session_id=session_id)
+            if entry is None:
+                raise AgentSessionNotFound(
+                    f"no {kind!r} session {session_id!r} recorded under {cwd}"
+                )
+            queries = SessionExplorer.queries_from_messages(
+                get_adapter(kind).read_messages(Path(cwd), session_id)
+            )
+            selected = queries[-last:] if last is not None else queries
+            return [SessionQueryView.from_query(query) for query in selected]
 
         try:
             return await asyncio.to_thread(_read)
@@ -2007,6 +2224,69 @@ def build_app(  # noqa: PLR0915
             ]
 
         return await asyncio.to_thread(_build)
+
+    @app.get("/defaults", response_model=WorkspaceDefaultsView, dependencies=auth_dep)
+    async def get_workspace_defaults(
+        repo: Annotated[Path, Query()],
+    ) -> WorkspaceDefaultsView:
+        """Resolved create-form defaults for one registered repo's cascade.
+
+        The raw ``defaults`` section is deliberately not returned: runtime,
+        brief, branch mode, and init behavior already have create-path fallbacks,
+        and a remote form needs the same pre-selected answers the TUI sees.
+        """
+        root = _known_root(repo)
+        registry.get(root)
+        # Managers cache their config for lifecycle consistency. Defaults writes
+        # are immediately visible instead, so re-resolve the read-only cascade.
+        cfg_for_repo = await asyncio.to_thread(load_config, root)
+        return WorkspaceDefaultsView.from_config(cfg_for_repo)
+
+    @app.put(
+        "/defaults",
+        response_model=WorkspaceDefaultsSaveView,
+        dependencies=auth_dep,
+    )
+    async def save_defaults(
+        defaults: WorkspaceDefaults,
+        scope: Annotated[DefaultsScope, Query()],
+        repo: Annotated[Path | None, Query()] = None,
+    ) -> WorkspaceDefaultsSaveView:
+        """Replace one config layer's complete create-defaults object.
+
+        This is not a patch: ``save_workspace_defaults`` replaces the whole
+        ``defaults`` object, so callers must send every answer they intend to
+        retain or an omitted field is cleared. Project scopes require a registered
+        ``repo``; the user scope deliberately has no repository requirement.
+        """
+        repo_root = _known_root(repo) if repo is not None else None
+        # `WorkspaceDefaults` keeps optional fields for config layers, but this
+        # route's replacement semantics require an explicit value or clear for
+        # every field — don't let a partial JSON body silently erase the rest.
+        if defaults.model_fields_set != set(WorkspaceDefaults.model_fields):
+            missing = sorted(set(WorkspaceDefaults.model_fields) - defaults.model_fields_set)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "incomplete_defaults",
+                    "message": f"complete defaults replacement requires: {', '.join(missing)}",
+                },
+            )
+
+        def _save() -> WorkspaceDefaultsSaveView:
+            saved_fields = defaults.model_dump(exclude_none=True)
+            shadowed = (
+                tuple(name for name in saved_fields if name in user_defaults_keys())
+                if scope is not DefaultsScope.USER
+                else ()
+            )
+            path = save_workspace_defaults(defaults, scope=scope, repo_root=repo_root)
+            return WorkspaceDefaultsSaveView(path=str(path), shadowed=shadowed)
+
+        try:
+            return await asyncio.to_thread(_save)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
 
     @app.get(
         "/branches",

@@ -275,6 +275,24 @@ describe("the rendered body", () => {
     expect(html).toMatch(/“rebasing”/);
   });
 
+  it("puts the agent's note ABOVE Grove's own explanation of the phase", () => {
+    // Order IS the ranking here — the tooltip carries no colour, so nothing
+    // else can say which line matters most. The note is the only firsthand
+    // fact in the card; `meaning` and `stall` are Grove re-teaching its own
+    // vocabulary, which a returning reader already knows. Shipping it the
+    // other way round buried the one line somebody hovered for, and no test
+    // could see it because every row was present either way.
+    const html = body(phaseTooltip(mark({ blocked: true, note: "rebasing" }), ticket()));
+
+    const note = html.indexOf("phase-tooltip-note");
+    const meaning = html.indexOf("phase-tooltip-meaning");
+    const stall = html.indexOf("phase-tooltip-stall");
+
+    expect(note).toBeGreaterThan(-1);
+    expect(note).toBeLessThan(meaning);
+    expect(note).toBeLessThan(stall);
+  });
+
   it("carries no colour at all, because it sits on the INVERTED tooltip surface", () => {
     // `--content-*` is tuned against `--background`; on `TooltipContent`'s
     // `bg-foreground` it measures under AA (see `usage/window-meter.tsx`).

@@ -354,56 +354,28 @@ class _ClaudeHome:
         unverified either way.) Takes the already-located transcript paths so this costs
         one ``read`` of a file the fleet reader opens anyway; a main transcript
         has no sidecar and simply contributes nothing.
+
+        **This session's own sidecars are the ONLY admissible evidence, and
+        widening to the siblings recorded under ``cwd`` is refused.** That
+        widening shipped, to rescue a rotated id that had not yet spawned a
+        teammate of its own — and a cwd is not an identity: every ROOT-placement
+        workspace in a repo scans the shared repo root, as do hand-started
+        agents, so the scan returned the newest sibling that happened to name
+        ANY team and served its board as this session's checklist. Measured on
+        the reference host, 6 of 8 live workspaces were reading a stranger's
+        list, two of them the same 27-item board. The rotation gap it was
+        built for is real and it degrades to this session's own transcript
+        fold, which under-reports its OWN work; the widening mis-attributed
+        somebody else's. **Re-open only against an identity signal, never a
+        shared path** — and note there is none on disk today: over 60 real
+        ``~/.claude/teams/<board>/config.json`` files only 5 name a
+        ``leadSessionId`` that is a transcript on this host, and 19 of 34
+        non-empty boards match no session id at all, so the board name is
+        minted by the harness rather than derived from the id Grove holds.
         """
         for path in paths:
             name = cls.read_subagent_meta(path).get("teamName")
             if isinstance(name, str) and name:
-                return name
-        return None
-
-    #: Bound on how many sibling sessions :meth:`resolve_team` will inspect
-    #: before giving up — a filesystem-listing-only fallback, but still one
-    #: worth capping against a cwd with a very long session history.
-    _TEAM_SIBLING_SCAN_LIMIT = 10
-
-    @classmethod
-    def resolve_team(
-        cls, cwd: Path, session_id: str, *, own_paths: Sequence[Path] | None = None
-    ) -> str | None:
-        """:meth:`team_name` widened to the session's SIBLINGS under ``cwd`` —
-        the fix for a session whose id just rotated (``/clear``, a fork — not
-        compaction, see :meth:`team_name`) and has not yet spawned a single
-        team-tagged sub-agent of its own.
-
-        Claude Code stamps ``teamName`` into a sub-agent's sidecar only at
-        SPAWN time, so a freshly rotated session id carries none of its own
-        until it spawns its first teammate — during that window ``team_name``
-        honestly returns ``None`` even though the team (and its board)
-        plainly still exists, and :class:`_ClaudeTasks` falls back to
-        ``_own_board(session_id)``, which almost never matches a
-        pre-existing board once any rotation has happened. Reproduced
-        on-host: a rotated id with zero sub-agents of its own read the wrong
-        board and silently degraded to the transcript fold (58 real vs. 84+
-        folded, see :class:`_ClaudeTasks`).
-
-        The team a workspace's session belongs to is a fact about the
-        WORKSPACE, not about any one session id in its rotation history, so
-        the fallback asks every OTHER session recorded for this ``cwd``,
-        newest-first, and returns the first team any of them names — cheap
-        (:meth:`discover_paths` is one directory listing; :meth:`locate` per
-        candidate is a glob, never a transcript parse) and self-limiting: the
-        moment the current session spawns its own first teammate,
-        :meth:`team_name` on its own paths answers directly again and this
-        fallback never runs.
-        """
-        own = cls.team_name(own_paths if own_paths is not None else cls.locate(cwd, session_id))
-        if own:
-            return own
-        for sid, _path, _mtime, _birth in cls.discover_paths(cwd, exclude_id=session_id)[
-            : cls._TEAM_SIBLING_SCAN_LIMIT
-        ]:
-            name = cls.team_name(cls.locate(cwd, sid))
-            if name:
                 return name
         return None
 
@@ -2433,10 +2405,16 @@ class ClaudeCodeAdapter:
     # gateway model still works (forwarded verbatim); a deployment that wants a
     # different set pins ``AgentSpec.models`` in config, which the resolver
     # prefers over this default.
-    _MODEL_ALIASES: tuple[str, ...] = ("sonnet", "opus", "haiku")
+    #
+    # An alias never goes stale, but this TUPLE does, the day the vendor adds a
+    # tier — and nothing fails when it happens, because a short list of valid
+    # aliases is indistinguishable from a complete one. ``claude --help``'s own
+    # ``--model`` prose is the census; re-read it on a major release rather than
+    # trusting this line. Ordered most- to least-capable.
+    _MODEL_ALIASES: tuple[str, ...] = ("fable", "opus", "sonnet", "haiku")
 
     def available_models(self, command: str) -> tuple[str, ...]:
-        """Claude Code's stable tier aliases (``sonnet``/``opus``/``haiku``).
+        """Claude Code's stable tier aliases (``fable``/``opus``/``sonnet``/``haiku``).
 
         Not read from the CLI (none enumerates models); the aliases are the
         provider's durable ``--model`` vocabulary, so this is a mechanism
@@ -2564,8 +2542,7 @@ class ClaudeCodeAdapter:
         list stands still.
         """
         paths = self.locate_transcripts(cwd, session_id)
-        team = _ClaudeHome.resolve_team(cwd, session_id, own_paths=paths)
-        board = _ClaudeTasks.locate(session_id, team=team)
+        board = _ClaudeTasks.locate(session_id, team=_ClaudeHome.team_name(paths))
         if board:
             return _MEMO.get_or_compute(
                 ("task-board", str(board[0].parent)), board, lambda: _ClaudeTasks.read(board)
@@ -3003,12 +2980,28 @@ class _RecordFolder:
 
     - ``uuid`` is line identity. A repeated uuid is a resume/fork replaying
       history in another file → dropped.
-    - ``dedup_key`` is logical-record identity. A new line under a seen key is
-      a split-block sibling of the same assistant response (Claude Code 2.x
-      writes one line per content block) → its blocks fold into the kept
-      record via :meth:`_Record.absorb_continuation`. The old first-line-wins
-      drop here lost every post-``thinking`` text and tool_use block — the
-      "transcripts show no follow-ups" bug.
+    - ``dedup_key`` is logical-record identity **within one file**. A new line
+      under a seen key is a split-block sibling of the same assistant response
+      (Claude Code 2.x writes one line per content block) → its blocks fold
+      into the kept record via :meth:`_Record.absorb_continuation`. The old
+      first-line-wins drop here lost every post-``thinking`` text and tool_use
+      block — the "transcripts show no follow-ups" bug.
+
+    **The file scoping is the load-bearing half of that second layer, because
+    a fork sub-agent re-records its parent's spawning message.** Its own head
+    line carries the parent's ``message.id`` with a FRESH ``uuid``, so it slips
+    the line-identity guard — which already means to drop a cross-file replay —
+    and lands on the merge, giving the parent's record the same ``tool_use``
+    block twice. That duplicate ``tool_use_id`` reaches the wire and throws
+    assistant-ui's keyed resource registry, taking the whole transcript surface
+    down. Scoping by source expresses the real invariant (one logical API
+    response is written to exactly one file) rather than sniffing ``agentId``
+    or ``isSidechain``, which would be inferring structure from provider
+    semantics. The replay then survives as its own sidechain record, which the
+    projections that already filter sidechain content drop for free — no
+    explicit discard rule is needed. Modern transcripts make this the ONLY
+    defence: ``requestId`` is absent entirely (0 of 755 assistant lines on the
+    reference session), so ``message.id`` is the whole key.
 
     ``absorb_continuation`` mutates the kept record's raw dict, which is safe
     here by construction: every raw dict is parsed privately for this fold
@@ -3020,11 +3013,11 @@ class _RecordFolder:
 
     def __init__(self) -> None:
         self._seen_lines: set[str] = set()
-        self._by_key: dict[str, _Record] = {}
+        self._by_key: dict[tuple[str, str], _Record] = {}
         self._unique: list[_Record] = []
         self._index = 0
 
-    def add(self, raw: dict[str, Any]) -> None:
+    def add(self, raw: dict[str, Any], source: str) -> None:
         rec = _Record(raw=raw, index=self._index)
         self._index += 1
         uid = rec.uuid
@@ -3032,11 +3025,12 @@ class _RecordFolder:
             if uid in self._seen_lines:
                 return
             self._seen_lines.add(uid)
-        kept = self._by_key.get(rec.dedup_key)
+        key = (source, rec.dedup_key)
+        kept = self._by_key.get(key)
         if kept is not None:
             kept.absorb_continuation(rec)
             return
-        self._by_key[rec.dedup_key] = rec
+        self._by_key[key] = rec
         self._unique.append(rec)
 
     def records(self) -> list[_Record]:

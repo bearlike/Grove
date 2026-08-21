@@ -627,3 +627,113 @@
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+
+/*
+ * A public workspace is useful on paper as a durable progress record, not as a
+ * screenshot of the app shell. These hooks are deliberately generic: the
+ * public route and the authenticated workspace use different compositions, but
+ * both can name what is chrome, a split, and a scroll owner without duplicating
+ * a print treatment at every call site.
+ */
+/* Chrome that exists ONLY on paper: the branded masthead, the section
+   headings that replace a tab strip print cannot show, and the closing rule.
+   Hidden here and revealed inside the print block below, so the screen is
+   completely unaffected by anything the printout needs. */
+.print-only {
+  display: none;
+}
+
+@media print {
+  .print-only {
+    display: block;
+  }
+
+  /* Each printed section starts a page. The seam between the summary and the
+     transcript is the structure a printout exists to carry, and a heading
+     stranded at the foot of a page carries none of it. `:first-of-type` is
+     excluded so the document does not open on a blank sheet. */
+  .print-section:not(:first-of-type) {
+    break-before: page;
+  }
+
+  /* The app is a fixed-height, clipped, multi-scroller layout: an `h-dvh` root,
+     nested `min-h-0 flex-1` children, and two independent scroll owners. A
+     printer wants the opposite — one continuous document — so the whole height
+     chain is released here rather than patched per container.
+
+     MEASURED, not guessed: before this, `main` stayed 900px tall in print while
+     the transcript inside it was 19,506px, so everything past the first fold was
+     clipped and the PDF came out effectively blank. Releasing `overflow` alone
+     (which the first version did) is not enough — the ANCESTORS' heights are
+     what does the clipping. */
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Chrome that means nothing on paper: the rail, header actions, the print
+     button itself. */
+  .print-hide {
+    display: none !important;
+  }
+
+  /* Release every structural container between body and the content.
+     Deliberately scoped to layout elements rather than `*`: an icon or an
+     avatar sized by a height utility must keep its box, and `* { height: auto }`
+     would collapse them. `display` is left alone so cards keep their grid and
+     badge rows keep their flex — the goal is to un-clip the page, not to
+     re-lay-it-out. */
+  main,
+  section,
+  article,
+  nav,
+  aside,
+  div,
+  ol,
+  ul {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* The split is side-by-side on screen and stacked on paper, with the WORK
+     first: a printed record is read as a document, and the summary of what the
+     workspace is belongs above the conversation that produced it.
+
+     `column-reverse` on the GROUP rather than an `order` on the panel, and that
+     is not a stylistic choice: `ResizablePanel` owns its element's display and
+     overflow outright and DROPS the `className` it is handed, so a class on the
+     panel is silently inert — it would have looked correct in review and done
+     nothing. The group forwards `className`; the panel does not. */
+  [data-slot="resizable-panel-group"] {
+    flex-direction: column !important;
+  }
+  [data-slot="resizable-panel"] {
+    flex: none !important;
+    width: 100% !important;
+  }
+  [data-slot="resizable-handle"] {
+    display: none !important;
+  }
+  .print-reverse {
+    flex-direction: column-reverse !important;
+  }
+
+  /* Ink on white. Tinted cards and filled badges are screen affordances; on
+     paper they cost toner and reduce contrast. Borders stay — they are what
+     keeps a card readable as a card once its fill is gone. */
+  [data-slot="card"],
+  [data-slot="badge"] {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  /* A card split across a page break is the one layout artifact a reader
+     notices immediately. Turns are far too long to protect this way, so only
+     the bounded things ask for it. */
+  [data-slot="card"] {
+    break-inside: avoid;
+  }
+}

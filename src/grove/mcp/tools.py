@@ -23,6 +23,7 @@ from grove.core.contracts import (
     CreateWorkspaceRequest,
     HostAttachView,
     ProjectView,
+    SessionQueryView,
     SessionSummaryView,
     TicketProviderName,
     WorkspacePeekView,
@@ -112,6 +113,25 @@ class GroveTools:
             repo=Path(repo_root) if repo_root is not None else None, limit=limit
         )
 
+    async def recollect_session(
+        self,
+        session_id: str,
+        kind: str,
+        cwd: str,
+        last: int | None = None,
+    ) -> list[SessionQueryView]:
+        """Recover every direct user query from one session, oldest first.
+
+        Use ``grove_list_sessions`` to obtain the exact ``session_id``,
+        ``adapter_kind`` (pass as ``kind``), and ``cwd`` coordinates. This reads
+        the full transcript so it can recover instructions predating a context
+        compaction; ``last`` is only an opt-in tail of the recovered query list.
+        Query text is deliberately uncapped — unlike a transcript turn, this
+        response grows with human instructions, typically dozens rather than
+        thousands of records. Read-only.
+        """
+        return await self._client.session_queries(session_id, kind=kind, cwd=cwd, last=last)
+
     async def list_agents(self, repo_root: str) -> list[AgentSummaryView]:
         """List the agents available for a repo — the valid `agent_name`
         values for grove_create_workspace — each with its offered `models`
@@ -189,6 +209,7 @@ class GroveTools:
         model: str | None = None,
         runtime: str | None = None,
         brief: bool | None = None,
+        project_cwd: str | None = None,
     ) -> WorkspaceStateView:
         """Create a Grove workspace: a git worktree plus a tmux session
         running the named agent. ``branch_plan`` defaults to ``auto`` (Grove
@@ -217,8 +238,14 @@ class GroveTools:
         ``grove_respawn_workspace``. ``brief`` hands the new agent Grove's
         first-turn brief, a short note pointing it at the ``working-in-grove``
         skill so it reports its task phase and keeps its attached tickets
-        current; omit it to use the configured default (on). Returns the
-        created workspace's state including its stable id.
+        current; omit it to use the configured default (on). ``project_cwd``
+        starts the agent in a SUBDIRECTORY instead of the worktree root — give
+        it relative to the repo root (e.g. ``"webapp"``); an absolute path is
+        taken as-is and anything outside the repo is refused before any side
+        effect. The worktree, the branch and the init script still anchor at the
+        root, so this is how two subdirectories of one repo become distinct
+        projects sharing one worktree family. Returns the created workspace's
+        state including its stable id.
         """
         req = CreateWorkspaceRequest(
             agent_name=agent_name,
@@ -232,6 +259,7 @@ class GroveTools:
             runtime=runtime,
             brief=brief,
             repo_root=Path(repo_root),
+            project_cwd=Path(project_cwd) if project_cwd is not None else None,
         )
         return await self._client.create_workspace(req)
 
@@ -247,6 +275,35 @@ class GroveTools:
         workspace state.
         """
         return await self._client.remap_session(workspace_id, session_ref)
+
+    async def update_workspace(
+        self,
+        workspace_id: str,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> WorkspaceStateView:
+        """Rename a workspace or set its description — metadata only, nothing moves.
+
+        The write half of ``grove_get_workspace``. Use it to give a workspace a
+        name that says what the work turned out to be: a workspace created
+        without a title carries a generated short id, and that id is what every
+        fleet listing, dashboard and ticket comment renders until somebody
+        replaces it. An agent working inside a workspace is the one caller that
+        knows what to call it.
+
+        ``title=None`` (the default) leaves the title alone; a non-empty string
+        renames. ``description=None`` leaves the description alone; ``""``
+        clears it. At least one must be given — an update naming neither is
+        refused rather than reported as a no-op success.
+
+        The worktree path, the tmux session and the branch are derived from the
+        title once, at create, and are NEVER re-derived: renaming changes the
+        displayed name and nothing a client is already attached to. Refused for
+        an ORPHANED workspace, whose worktree is gone.
+        """
+        return await self._client.update_workspace(
+            workspace_id, title=title, description=description
+        )
 
     async def attach_ticket(self, workspace_id: str, ref: str) -> WorkspaceStateView:
         """Attach an issue or pull request to a workspace — the one-call verb

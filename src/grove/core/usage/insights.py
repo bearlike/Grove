@@ -59,7 +59,7 @@ class RecurringToolFailureDetector(InsightDetector):
             findings.append(
                 _finding(
                     "recurring_tool_failure",
-                    f"Recurring failures in {row['subject']}",
+                    f"Recurring failures in `{row['subject']}`",
                     row,
                     filters,
                     subject=row["subject"],
@@ -92,7 +92,7 @@ class RetryLoopDetector(InsightDetector):
         return tuple(
             _finding(
                 "retry_loop",
-                f"Repeated failed {row['subject']} calls",
+                f"Repeated failed `{row['subject']}` calls",
                 row,
                 filters,
                 subject=row["subject"],
@@ -117,7 +117,7 @@ class EditChurnDetector(InsightDetector):
         return tuple(
             _finding(
                 "edit_churn",
-                f"Repeated edits to {row['subject']}",
+                f"Repeated edits to `{row['subject']}`",
                 row,
                 filters,
                 subject=row["subject"],
@@ -165,7 +165,7 @@ class SlowOperationDetector(InsightDetector):
             tool_name = first["tool_name"]
             model = first["model"] if first["kind"] == "generation" else None
             subject = tool_name or model or first["kind"]
-            operation = f"generation in {model}" if model else str(subject)
+            operation = f"generation in `{model}`" if model else f"`{subject}`"
             findings.append(
                 _finding_from_values(
                     "slow_operation",
@@ -204,7 +204,9 @@ class TokenStructureDetector(InsightDetector):
             findings.append(
                 _finding(
                     "token_structure",
-                    f"Fresh or cache-write input dominates in {row['subject'] or 'unknown project'}",
+                    f"Fresh or cache-write input dominates in `{row['subject']}`"
+                    if row["subject"]
+                    else "Fresh or cache-write input dominates in unknown project",
                     row,
                     filters,
                     subject=row["subject"],
@@ -257,7 +259,9 @@ class ConcentrationDetector(InsightDetector):
                 findings.append(
                     _finding_from_values(
                         "concentration",
-                        f"Usage is concentrated in {dimension} {subject or 'unknown'}",
+                        f"Usage is concentrated in {dimension} `{subject}`"
+                        if subject
+                        else f"Usage is concentrated in {dimension} unknown",
                         count=len(members),
                         first_seen=_minimum(row["started_at"] for row, _ in members),
                         last_seen=_maximum(row["last_event_at"] for row, _ in members),

@@ -214,6 +214,18 @@ def test_load_defaults_when_no_layers(
     assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
 
 
+def test_tls_ca_path_resolves_through_the_full_cascade(tmp_state_dir: Path, tmp_repo: Path) -> None:
+    """A deployment CA is host policy, but projects may refine it like other config."""
+    del tmp_state_dir
+    _write_layer(paths_mod.user_config_path(), {"tls": {"ca_path": "/user/ca.pem"}})
+    _write_layer(paths_mod.project_config_path(tmp_repo), {"tls": {"ca_path": "/project/ca.pem"}})
+    _write_layer(
+        paths_mod.project_local_config_path(tmp_repo), {"tls": {"ca_path": "/local/ca.pem"}}
+    )
+    cfg = load_config(tmp_repo, env={"GROVE_TLS_CA_PATH": "/environment/ca.pem"})
+    assert cfg.tls.ca_path == "/environment/ca.pem"
+
+
 def test_tmux_config_has_peek_refresh_defaults() -> None:
     """Two cadences for the rail: a fast pane-only tick (~250 ms) and a
     slower full-stats tick (~3 s). Defaults are the recommended values
@@ -1227,6 +1239,9 @@ def test_declared_env_var_layer_is_sparse() -> None:
     assert DeclaredEnvVars.layer(GroveConfig, {"GROVE_GOTIFY_API_URL": "https://x"}) == {
         "notifications": {"gotify": {"server_url": "https://x"}}
     }
+    assert DeclaredEnvVars.layer(GroveConfig, {"GROVE_TLS_CA_PATH": "/ca.pem"}) == {
+        "tls": {"ca_path": "/ca.pem"}
+    }
 
 
 def test_declared_env_vars_are_exported_on_the_schema() -> None:
@@ -1251,6 +1266,7 @@ def test_no_secret_field_declares_an_env_var() -> None:
     assert declared == {
         "notifications.gotify.server_url": "GROVE_GOTIFY_API_URL",
         "tickets.gitea.base_url": "GROVE_GITEA_BASE_URL",
+        "tls.ca_path": "GROVE_TLS_CA_PATH",
     }
     assert not [path for path in declared if path.rsplit(".", 1)[-1].endswith("_env")]
 

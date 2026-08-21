@@ -12,6 +12,7 @@ it is the one piece of real logic the command shells out to.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -29,10 +30,11 @@ from grove.core import (
     build,
 )
 from grove.core.agents.claude_code import _ClaudeHome
+from grove.core.contracts.views import WorkspaceDefaultsView
 from grove.core.git import GitRepo
 from grove.core.tmux import ContainerAttach, HostAttach
 from grove.tui.cli import app
-from grove.tui.cli_workspace import BranchFlags
+from grove.tui.cli_workspace import BranchFlags, QuickCreate
 from tests.conftest import FakeTmux
 
 
@@ -447,3 +449,123 @@ def test_build_from_linked_worktree_binds_to_main_root(
     monkeypatch.chdir(linked)
     manager = build()
     assert manager.repo_root == tmp_repo.resolve()
+
+
+# ─── QuickCreate: what an unset flag resolves to (pure, no CliRunner) ────────
+
+
+def _defaults(**over: object) -> WorkspaceDefaultsView:
+    base: dict[str, object] = {
+        "agent": "claude",
+        "runtime": "host",
+        "brief": False,
+        "model": None,
+        "branch_mode": "auto",
+        "base_ref": None,
+        "skip_init": False,
+    }
+    return WorkspaceDefaultsView(**{**base, **over})  # type: ignore[arg-type]
+
+
+def test_quick_create_mints_a_short_id_title_when_none_is_given() -> None:
+    title = QuickCreate(defaults=_defaults()).title(None)
+    assert title.startswith("wk-")
+    assert len(title) == len("wk-") + QuickCreate.ID_HEX_CHARS
+
+
+def test_quick_create_keeps_an_explicit_title() -> None:
+    assert QuickCreate(defaults=_defaults()).title("fix login") == "fix login"
+
+
+def test_quick_create_agent_prefers_the_flag_then_the_saved_default() -> None:
+    quick = QuickCreate(defaults=_defaults(agent="claude"))
+    assert quick.agent("codex") == "codex"
+    assert quick.agent(None) == "claude"
+
+
+def test_quick_create_refuses_when_no_agent_is_reachable() -> None:
+    with pytest.raises(GroveError, match="no agent given"):
+        QuickCreate(defaults=_defaults(agent=None)).agent(None)
+
+
+def test_quick_create_branch_plan_honours_an_explicit_flag_over_the_default() -> None:
+    quick = QuickCreate(defaults=_defaults(branch_mode="root"))
+    assert quick.branch_plan(BranchFlags(branch="fix/login")) == NewNamedBranch(
+        name="fix/login", base_ref="HEAD"
+    )
+
+
+def test_quick_create_branch_plan_applies_a_saved_root_default() -> None:
+    quick = QuickCreate(defaults=_defaults(branch_mode="root"))
+    assert quick.branch_plan(BranchFlags()) == RootBranch()
+
+
+def test_quick_create_branch_plan_falls_back_to_auto_with_the_saved_base() -> None:
+    """`existing`/`remote` store no NAME, so they have nothing to check out.
+
+    ``WorkspaceDefaults`` deliberately refuses to save a concrete branch or
+    remote name — it names one task, never a default — so those two modes can
+    only mean Auto by the time they reach a create with no flags.
+    """
+    quick = QuickCreate(defaults=_defaults(branch_mode="existing", base_ref="origin/main"))
+    assert quick.branch_plan(BranchFlags()) == AutoBranch(base_ref="origin/main")
+
+
+# ─── the quick path end to end ───────────────────────────────────────────────
+
+
+def test_bare_create_resolves_the_saved_defaults_and_mints_a_title(
+    runner: CliRunner, project: Path
+) -> None:
+    """`grove create` with no arguments at all is the whole point of the path."""
+    (project / ".grove").mkdir(exist_ok=True)
+    (project / ".grove" / "config.json").write_text(
+        json.dumps({"defaults": {"agent": "claude", "runtime": "host"}}), encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["create"])
+
+    assert result.exit_code == 0, result.output
+    assert "created " in result.output
+    assert "title:    wk-" in result.output
+
+
+def test_bare_create_without_a_saved_agent_names_the_way_to_set_one(
+    runner: CliRunner, project: Path
+) -> None:
+    del project
+    result = runner.invoke(app, ["create"])
+    assert result.exit_code == 1
+    assert "no agent given" in result.output
+
+
+def test_create_cwd_flag_starts_the_agent_in_a_repo_relative_subdir(
+    runner: CliRunner, project: Path, fake_tmux: FakeTmux
+) -> None:
+    """`--cwd webapp` moves only the agent session; the worktree stays at the root."""
+    sub = project / "webapp"
+    sub.mkdir()
+    (sub / ".keep").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=project, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add webapp", "--no-verify"],
+        cwd=project,
+        check=True,
+        capture_output=True,
+    )
+
+    result = runner.invoke(app, ["create", "nested", "--agent", "claude", "--cwd", "webapp"])
+
+    assert result.exit_code == 0, result.output
+    state = build().list()[0]
+    assert state.project_subpath == "webapp"
+    worktree = Path(state.worktree_path)
+    assert worktree.name != "webapp"  # the worktree itself is repo-root level
+    assert fake_tmux.session_cwds[state.tmux_session] == worktree / "webapp"
+
+
+def test_create_cwd_outside_the_repo_is_a_clean_error(runner: CliRunner, project: Path) -> None:
+    del project
+    result = runner.invoke(app, ["create", "out", "--agent", "claude", "--cwd", "../../elsewhere"])
+    assert result.exit_code == 1
+    assert "not within repo root" in result.output

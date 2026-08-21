@@ -2,12 +2,8 @@
 
 ## Screen anatomy
 
-<video preload="auto" poster="../img/posters/terminal-still.png">
-  <source src="../videos/1-grove-terminal.mp4" type="video/mp4" />
-</video>
-
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI showing four workspaces in mixed states with a live peek rail" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.png" alt="Grove TUI showing four workspaces in mixed states with a live peek rail" /></div>
   <figcaption class="ms-shot__body">Header, filter bar (slash-toggled), workspace list left, peek rail right, status bar and footer at bottom.</figcaption>
 </figure>
 
@@ -51,11 +47,6 @@ Global keys work anytime. Selection keys act on the highlighted row.
 PAUSED dims attach and pause, OFFLINE lights respawn, ORPHANED leaves only
 kill ([`list.py`](repo:src/grove/tui/screens/list.py)).
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-filter.svg" alt="Filter bar narrowed to workspaces matching "auth"" /></div>
-  <figcaption class="ms-shot__body">Filter bar in action, matched substring-style across title, branch, and agent.</figcaption>
-</figure>
-
 ## Activity Dashboard
 
 Press ++d++: every workspace, one tile each, grouped by project.
@@ -77,11 +68,6 @@ Tile meaning: [activity and sessions](features-activity.md).
 
 Press ++shift+p++ to hop repositories.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-project-switcher.svg" alt="Project switcher listing two repositories with workspace counts and a current tag" /></div>
-  <figcaption class="ms-shot__body">Project switcher. Type to narrow, arrows to move, <code>Enter</code> to switch, current repo tagged.</figcaption>
-</figure>
-
 - Lists every repository with its workspace count. Filter holds focus,
   ++enter++ switches, ++esc++ cancels.
 - A cheap, instant chooser, not a dashboard. ++d++ for live status.
@@ -90,11 +76,6 @@ Press ++shift+p++ to hop repositories.
 
 Press ++m++, type a follow-up, ++enter++ to steer.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-steer.svg" alt="Send-message modal with a follow-up typed to a running agent" /></div>
-  <figcaption class="ms-shot__body">Steer modal. A quick redirect to a running agent, no attach required.</figcaption>
-</figure>
-
 - Delivery follows the agent: local gets it typed into tmux, remote over
   the remote API.
 - ++m++ lights up only for a running agent, else Grove flashes why.
@@ -102,11 +83,6 @@ Press ++m++, type a follow-up, ++enter++ to steer.
 ## The sessions browser
 
 Press ++s++ to browse recorded sessions.
-
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-sessions.svg" alt="Sessions browser with a session list on the left and turn history on the right" /></div>
-  <figcaption class="ms-shot__body">Sessions browser: sessions left, selected session's turns right.</figcaption>
-</figure>
 
 - Each row: state, turn count, model, who started the agent.
 - Highlight a session: its turns fill the right pane, tool calls collapsed
@@ -126,11 +102,6 @@ worktrees.
 ### Create
 
 ++n++ opens an eight-step modal.
-
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal showing branch source variants and agent picker" /></div>
-  <figcaption class="ms-shot__body">Create modal. Branch source on the left, agent picker, title input.</figcaption>
-</figure>
 
 1. **Agent.** Radio list of agents the cascade resolved.
 2. **Runtime.** Host or Container (`container.enabled` default).
@@ -164,30 +135,77 @@ deletion needs `git push --delete`.
 
 ++question++ opens a read-only key reference. Any key dismisses.
 
+### Pairing
+
+A new [web dashboard](use-webapp.md) pairing request pops a modal with a
+device label and code. Approve with ++a++, deny with ++d++. See
+[authentication & pairing](use-auth.md).
+
+## Every screen
+
+One gallery rather than a screenshot under each heading. It walks the tour in
+page order, and the arrows loop.
+
 <div class="swiper ms-shots">
   <div class="swiper-wrapper">
     <div class="swiper-slide">
       <figure>
-        <img loading="lazy" src="../img/screenshots/tui-edit-modal.svg" alt="Edit workspace modal with title and description fields">
-        <figcaption>Edit modal (<code>e</code>): title and description are metadata, worktree path and session name stay fixed.</figcaption>
+        <img loading="lazy" src="../img/screenshots/tui-filter.png" alt="Filter bar narrowed to workspaces matching auth">
+        <figcaption>Filter bar (<kbd>/</kbd>): matched substring-style across title, branch and agent.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
-        <img loading="lazy" src="../img/screenshots/tui-kill-confirm.svg" alt="Kill confirm modal">
-        <figcaption>Kill confirm (<code>k</code>): checkbox default reflects whether Grove created the branch.</figcaption>
+        <img loading="lazy" src="../img/screenshots/tui-dashboard.png" alt="Activity dashboard with one tile per workspace, grouped by project, the busiest tiles taller with a live terminal tail">
+        <figcaption>Activity Dashboard (<kbd>d</kbd>): one tile per workspace, sized by how much it needs you.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
-        <img loading="lazy" src="../img/screenshots/tui-pause-confirm.svg" alt="Pause confirm modal">
-        <figcaption>Pause confirm (<code>p</code>): Grove refuses a dirty worktree, commit or stash first.</figcaption>
+        <img loading="lazy" src="../img/screenshots/tui-project-switcher.png" alt="Project switcher listing two repositories with workspace counts and a current tag">
+        <figcaption>Project switcher (<kbd>P</kbd>): type to narrow, arrows to move, <kbd>Enter</kbd> to switch, current repo tagged.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
       <figure>
-        <img loading="lazy" src="../img/screenshots/tui-help.svg" alt="Help modal">
-        <figcaption>Help modal (<code>?</code>): pulled from the same <code>DEFAULT_BINDINGS</code> tuple the footer reads.</figcaption>
+        <img loading="lazy" src="../img/screenshots/tui-steer.png" alt="Send-message modal with a follow-up typed to a running agent">
+        <figcaption>Steer modal (<kbd>m</kbd>): a quick redirect to a running agent, no attach required.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-sessions.png" alt="Sessions browser with a session list on the left and turn history on the right">
+        <figcaption>Sessions browser (<kbd>s</kbd>): sessions left, the selected session's turns right.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-create-modal.png" alt="Create workspace modal showing branch source variants and agent picker">
+        <figcaption>Create modal (<kbd>n</kbd>): branch source on the left, agent picker, title input.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-edit-modal.png" alt="Edit workspace modal with title and description fields">
+        <figcaption>Edit modal (<kbd>e</kbd>): title and description are metadata, worktree path and session name stay fixed.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-kill-confirm.png" alt="Kill confirm modal">
+        <figcaption>Kill confirm (<kbd>k</kbd>): checkbox default reflects whether Grove created the branch.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-pause-confirm.png" alt="Pause confirm modal">
+        <figcaption>Pause confirm (<kbd>p</kbd>): Grove refuses a dirty worktree, commit or stash first.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-help.png" alt="Help modal">
+        <figcaption>Help modal (<kbd>?</kbd>): pulled from the same <code>DEFAULT_BINDINGS</code> tuple the footer reads.</figcaption>
       </figure>
     </div>
   </div>
@@ -195,12 +213,6 @@ deletion needs `git push --delete`.
   <div class="swiper-button-prev"></div>
   <div class="swiper-button-next"></div>
 </div>
-
-### Pairing
-
-A new [web dashboard](use-webapp.md) pairing request pops a modal with a
-device label and code. Approve with ++a++, deny with ++d++. See
-[authentication & pairing](use-auth.md).
 
 ## Theme
 

@@ -252,6 +252,7 @@ from here.
 | Discovery | `grove_list_projects`, `grove_list_workspaces`, `grove_get_workspace`, `grove_list_agents`, `grove_list_sessions` |
 | Watching | `grove_get_fleet_status`, `grove_peek_workspace`, `grove_get_workspace_phase`, `grove_get_workspace_todo`, `grove_attach_instruction` |
 | Lifecycle | `grove_create_workspace`, `grove_pause_workspace`, `grove_resume_workspace`, `grove_respawn_workspace`, `grove_kill_workspace` |
+| Workspace metadata | `grove_update_workspace` |
 | Steering | `grove_send_workspace_message`, `grove_set_workspace_phase` |
 | Links and sessions | `grove_attach_ticket`, `grove_detach_ticket`, `grove_remap_workspace_session` |
 

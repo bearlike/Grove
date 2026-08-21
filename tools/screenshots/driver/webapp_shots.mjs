@@ -11,12 +11,15 @@
 // Everything here is fictional (the acme-api / acme-web fleet). Nothing
 // touches the real daemon or real repos.
 //
-// Shot set: webapp-pair-device, webapp-pair-code, webapp-home,
+// Shot set: webapp-pair-device, webapp-pair-code, webapp-home (the fleet, at
+// `/fleet`), webapp-composer (the launch surface, at `/`), webapp-sessions,
 // webapp-workspace, webapp-usage, webapp-usage-detail (the last is the usage
 // page scrolled to `By model` / `Recent sessions`, never shown in the first
-// shot). Re-targeted against the current `AppShell` rail + `FleetDashboard` +
-// `Workspace` split surface (webapp/CLAUDE.md), NOT the composer-first /
-// old-dashboard testids this file used to select on.
+// shot).
+//
+// `webapp-home` is the ONLY shot that keeps the rail expanded; it exists partly
+// to show it. Everything after it runs collapsed, and the order below is
+// therefore load-bearing rather than incidental.
 //
 // The desktop captures are 16:9 so `tools/screenshots/frame.py` composites
 // them onto its own 16:9 canvas without letterboxing.
@@ -208,12 +211,41 @@ async function main() {
 
   // The fleet dashboard: rail + search/filter/create row + the flat,
   // attention-sorted workspace card grid.
-  await d.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  //
+  // IT IS `/fleet`, NOT `/`. The root route is the launch composer now, and
+  // this shot used to navigate to `/` and wait for `fleet-dashboard` — which
+  // would simply time out. Route ownership moved under the composer landing
+  // work; the testid never changed, which is what makes the staleness look
+  // like a data problem rather than a routing one.
+  await d.goto(`${BASE}/fleet`, { waitUntil: "domcontentloaded" });
   await d.getByTestId("app-sidebar").waitFor({ timeout: 20_000 });
   await d.getByTestId("fleet-dashboard").waitFor({ timeout: 20_000 });
   await d.getByTestId("workspace-card").first().waitFor({ timeout: 20_000 });
   await settle(d);
   await shot(d, "webapp-home");
+
+  // Everything from here on is about its own content rather than the rail, and
+  // the collapse persists for the rest of the context — so this is the single
+  // place it happens.
+  await collapseSidebar(d);
+
+  // The app's own landing page: the launch composer, which is what `/` serves.
+  // Wait on the INPUT, not on `launch-page` — the page shell renders before the
+  // composer's controls resolve their cascade defaults, and a shot taken on the
+  // shell catches the row mid-populate.
+  await d.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await d.getByTestId("launch-composer").waitFor({ timeout: 20_000 });
+  await d.getByTestId("launch-input").waitFor({ timeout: 20_000 });
+  await d.getByTestId("launch-controls").waitFor({ timeout: 20_000 });
+  await settle(d, 1200);
+  await shot(d, "webapp-composer");
+
+  // The host-wide session catalog. Wait on a ROW: `sessions-page` is the shell
+  // and renders immediately, so it would shoot the skeleton.
+  await d.goto(`${BASE}/sessions`, { waitUntil: "domcontentloaded" });
+  await d.getByTestId("session-row").first().waitFor({ timeout: DATA_WAIT_MS });
+  await settle(d, 800);
+  await shot(d, "webapp-sessions");
 
   // Workspace detail (transcript + work panel). Pick the live
   // auth-refactor session so the transcript shows real planted turns.
@@ -226,12 +258,6 @@ async function main() {
     await d.goto(`${BASE}/w/${target.id}`, { waitUntil: "domcontentloaded" });
     await d.getByTestId("workspace-page").waitFor({ timeout: 20_000 });
     await settle(d, 1000);
-
-    // This page is about its own content, not the rail — collapse it. It
-    // stays collapsed (persisted) through the usage shots below too, since
-    // `webapp-home` is the only shot that keeps it expanded and it already
-    // ran, above.
-    await collapseSidebar(d);
 
     // The default pane is "transcript" only — the work panel does not mount
     // until "work" or "split" is selected (`workspace/index.tsx`'s

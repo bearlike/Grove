@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   panesShown,
-  restoredView,
-  restoredWorkTab,
+  storedView,
+  storedWorkTab,
+  resolvedWorkspaceSelection,
 } from "@/components/grove/workspace/selectors";
 
 /**
@@ -34,68 +35,82 @@ describe("panesShown", () => {
   });
 
   it("split is the union of what either single pane shows alone", () => {
-    const single = new Set([...panesShown("transcript"), ...panesShown("work")]);
+    const single = new Set([
+      ...panesShown("transcript"),
+      ...panesShown("work"),
+    ]);
     expect(new Set(panesShown("split"))).toEqual(single);
   });
 });
 
 /**
- * `restoredView` and `restoredWorkTab` are the pure half of restoring a
- * workspace's pane choice from `localStorage` (the I/O itself — the actual
- * `getItem` call, the `typeof window` guard — lives at the edge in
- * `Workspace`, never here). What has to be pinned by a test is exactly what
- * crossing that boundary can do to a value: the raw read is `unknown`, not
- * `PaneView`/`PanelTab`, because nothing stops a missing key, a value from a
- * different build, or a hand-edited store from showing up as the stored
- * value.
+ * A saved choice is distinct from no choice. The page deliberately carries
+ * `null` through to the transcript rule instead of converting it into an
+ * arbitrary pane/tab: that is what lets the first real turn update an automatic
+ * default without overwriting a reader's explicit choice.
  */
-describe("restoredView", () => {
-  it("restores a stored value that is still a real pane", () => {
-    expect(restoredView("work", true)).toBe("work");
-    expect(restoredView("split", true)).toBe("split");
+describe("resolvedWorkspaceSelection", () => {
+  it("opens the live terminal until a transcript exists", () => {
+    expect(
+      resolvedWorkspaceSelection(false, { view: null, workTab: null }),
+    ).toEqual({
+      view: "work",
+      workTab: "terminal",
+    });
   });
 
-  it("falls back to transcript for a missing key", () => {
-    expect(restoredView(null, true)).toBe("transcript");
+  it("opens the split once there is a real transcript", () => {
+    expect(
+      resolvedWorkspaceSelection(true, { view: null, workTab: null }),
+    ).toEqual({
+      view: "split",
+      workTab: "info",
+    });
   });
 
-  it("falls back to transcript for garbage — an old build's value, a wrong type, a hand-edited store", () => {
-    expect(restoredView("minimized", true)).toBe("transcript");
-    expect(restoredView(42, true)).toBe("transcript");
-    expect(restoredView(undefined, true)).toBe("transcript");
-    expect(restoredView({ view: "work" }, true)).toBe("transcript");
+  it("keeps every reader choice when the first turn arrives asynchronously", () => {
+    const selected = {
+      view: "transcript" as const,
+      workTab: "changes" as const,
+    };
+
+    expect(resolvedWorkspaceSelection(false, selected)).toEqual(selected);
+    expect(resolvedWorkspaceSelection(true, selected)).toEqual(selected);
   });
 
-  it("still resolves a restored split through visiblePane on a narrow viewport", () => {
-    // The exact bug `visiblePane` exists for, reached by a second route: a
-    // `split` persisted from a wide session must not leave no tab selected
-    // when it is restored on a narrow one.
-    expect(restoredView("split", false)).toBe("work");
-  });
-
-  it("leaves a restored single pane alone at any width", () => {
-    for (const offered of [true, false]) {
-      expect(restoredView("transcript", offered)).toBe("transcript");
-      expect(restoredView("work", offered)).toBe("work");
-    }
+  it("keeps a stored choice that is only partially specified", () => {
+    expect(
+      resolvedWorkspaceSelection(true, { view: "work", workTab: null }),
+    ).toEqual({ view: "work", workTab: "info" });
   });
 });
 
-describe("restoredWorkTab", () => {
-  it("restores a stored value that is still a real tab", () => {
+describe("storedView", () => {
+  it("returns a valid saved pane as an explicit choice", () => {
+    expect(storedView("work")).toBe("work");
+    expect(storedView("split")).toBe("split");
+  });
+
+  it("keeps absence and garbage distinct from a default", () => {
+    expect(storedView(null)).toBeNull();
+    expect(storedView("minimized")).toBeNull();
+    expect(storedView(42)).toBeNull();
+    expect(storedView(undefined)).toBeNull();
+    expect(storedView({ view: "work" })).toBeNull();
+  });
+});
+
+describe("storedWorkTab", () => {
+  it("returns a valid saved tab as an explicit choice", () => {
     for (const tab of ["terminal", "changes", "files", "info", "controls"]) {
-      expect(restoredWorkTab(tab)).toBe(tab);
+      expect(storedWorkTab(tab)).toBe(tab);
     }
   });
 
-  it("falls back to info — the same default a fresh Work/Split entry lands on — for a missing key", () => {
-    expect(restoredWorkTab(null)).toBe("info");
-    expect(restoredWorkTab(undefined)).toBe("info");
-  });
-
-  it("falls back to info for garbage", () => {
-    expect(restoredWorkTab("history")).toBe("info");
-    expect(restoredWorkTab(7)).toBe("info");
-    expect(restoredWorkTab({ tab: "changes" })).toBe("info");
+  it("keeps absence and garbage distinct from a default", () => {
+    expect(storedWorkTab(null)).toBeNull();
+    expect(storedWorkTab("history")).toBeNull();
+    expect(storedWorkTab(7)).toBeNull();
+    expect(storedWorkTab({ tab: "changes" })).toBeNull();
   });
 });

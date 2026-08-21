@@ -3,6 +3,7 @@
 import {
   CheckIcon,
   CpuIcon,
+  TerminalIcon,
   PlayIcon,
   ServerIcon,
   SparklesIcon,
@@ -12,12 +13,20 @@ import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EmptyState, EmptyStateGreeting } from "@/components/elements/empty-state";
+import {
+  EmptyState,
+  EmptyStateGreeting,
+} from "@/components/elements/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { SessionControlView, SessionControlsView } from "@/lib/grove/api";
-import { useInvokeControl, useSessionControls, useSwitchModel } from "@/lib/grove/hooks";
+import {
+  useInvokeControl,
+  useSessionControls,
+  useSwitchModel,
+} from "@/lib/grove/hooks";
 import { cn } from "@/lib/utils";
 import { CardGrid, SectionCard, CardScroll } from "@/components/grove/card";
+import { CopyButton, ShareCard } from "./share-card";
 
 /**
  * Both lists use the pane's width instead of a column of it, and neither knows
@@ -30,7 +39,8 @@ import { CardGrid, SectionCard, CardScroll } from "@/components/grove/card";
  * and a fixed `grid-cols-2` is wrong at both ends.
  */
 const MODEL_LIST = "flex flex-wrap gap-1.5";
-const CONTROL_GRID = "grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-3";
+const CONTROL_GRID =
+  "grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-3";
 
 /**
  * The session's input-control surface: the model catalog with a switch, plus
@@ -49,17 +59,30 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
   if (isLoading && !data) {
     return (
       <CardGrid data-testid="controls-tab">
+        <AttachCommandCard workspaceId={workspaceId} />
+        <ShareCard workspaceId={workspaceId} />
         <Skeleton className="h-32" />
         <Skeleton className="h-48" />
       </CardGrid>
     );
   }
+
+  // Sharing is a workspace capability, not an agent-control capability: a
+  // shell or remote agent can still have a useful public transcript. Keep the
+  // card mounted around the agent's quiet empty state instead of returning it
+  // away with the unavailable controls.
   if (!data || !hasAnyControl(data)) {
     return (
-      <CardGrid className="place-content-center justify-items-center" data-testid="controls-tab">
-        <EmptyState>
-          <EmptyStateGreeting>This agent exposes no session controls.</EmptyStateGreeting>
-        </EmptyState>
+      <CardGrid data-testid="controls-tab">
+        <AttachCommandCard workspaceId={workspaceId} />
+        <ShareCard workspaceId={workspaceId} />
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState>
+            <EmptyStateGreeting>
+              This agent exposes no session controls.
+            </EmptyStateGreeting>
+          </EmptyState>
+        </div>
       </CardGrid>
     );
   }
@@ -70,6 +93,8 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
 
   return (
     <CardGrid className="@xl:grid-cols-2" data-testid="controls-tab">
+      <AttachCommandCard workspaceId={workspaceId} />
+      <ShareCard workspaceId={workspaceId} />
       {data.models.length > 0 && (
         <SectionCard
           icon={<CpuIcon />}
@@ -140,7 +165,10 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
               has not. */}
           <ul className="flex flex-wrap gap-x-3 gap-y-1">
             {data.mcp_servers.map((server) => (
-              <li key={server.name} className="font-mono text-xs text-content-tertiary">
+              <li
+                key={server.name}
+                className="font-mono text-xs text-content-tertiary"
+              >
                 {server.name}
               </li>
             ))}
@@ -154,6 +182,31 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
         </p>
       )}
     </CardGrid>
+  );
+}
+
+/** The exact CLI handoff, with no current-session prerequisite. */
+export function AttachCommandCard({ workspaceId }: { workspaceId: string }) {
+  const command = `grove attach ${workspaceId}`;
+  return (
+    <SectionCard
+      icon={<TerminalIcon />}
+      title="Attach terminal"
+      description="Run this on the host. Containerized workspaces enter the container’s own tmux session."
+      className="@xl:col-span-2"
+      data-testid="attach-command-card"
+    >
+      <div className="flex min-w-0 gap-2">
+        <code
+          className="min-w-0 flex-1 truncate font-mono text-xs"
+          title={command}
+          data-testid="attach-command"
+        >
+          {command}
+        </code>
+        <CopyButton text={command} />
+      </div>
+    </SectionCard>
   );
 }
 
@@ -190,7 +243,10 @@ function ModelChip({
         )}
         data-testid="model-chip"
       >
-        <CheckIcon className={cn("shrink-0", !selected && "invisible")} aria-hidden />
+        <CheckIcon
+          className={cn("shrink-0", !selected && "invisible")}
+          aria-hidden
+        />
         <span className="truncate">{id}</span>
       </button>
     </Badge>
@@ -212,7 +268,12 @@ function ControlList({
 }) {
   if (items.length === 0) return null;
   return (
-    <SectionCard icon={icon} title={label} description={`${items.length} available`} flush>
+    <SectionCard
+      icon={icon}
+      title={label}
+      description={`${items.length} available`}
+      flush
+    >
       <CardScroll className="p-1.5">
         <ul className={CONTROL_GRID}>
           {items.map((item) => (
@@ -224,9 +285,14 @@ function ControlList({
                   tells you whether it is the right one — primary over tertiary,
                   which is the rank a list of near-identical rows needs most. */}
               <div className="min-w-0 flex-1">
-                <p className="truncate font-mono text-xs text-content-primary">/{item.name}</p>
+                <p className="truncate font-mono text-xs text-content-primary">
+                  /{item.name}
+                </p>
                 {item.detail && (
-                  <p className="truncate text-xs text-content-tertiary" title={item.detail}>
+                  <p
+                    className="truncate text-xs text-content-tertiary"
+                    title={item.detail}
+                  >
                     {item.detail}
                   </p>
                 )}

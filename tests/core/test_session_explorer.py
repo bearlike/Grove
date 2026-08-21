@@ -8,6 +8,7 @@ annotation, filters, and unique-prefix resolution.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -224,6 +225,125 @@ def test_turns_read_through_the_adapter(
     turns = SessionExplorer(manager).turns("1111", last=5)
     assert len(turns) == 1
     assert turns[0].user_text == "hello there"
+
+
+def test_recollect_reads_full_spine_and_keeps_only_direct_user_queries(
+    manager: WorkspaceManager, claude_home: Path, tmp_repo: Path
+) -> None:
+    """Recollection delegates classification to the adapter's real-turn filter.
+
+    The records deliberately take the on-disk shapes the provider writes rather
+    than constructing `SessionQuery` objects: the regression is the ordinary
+    `type:"user"` machinery that would otherwise impersonate user intent.
+    """
+    long_query = "x" * 5_001
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(tmp_repo)
+    folder.mkdir(parents=True)
+
+    def user(index: int, text: str, **extra: object) -> dict[str, object]:
+        return {
+            "type": "user",
+            "uuid": f"u-{index}",
+            "timestamp": f"2026-08-18T00:00:{index:02d}Z",
+            "isSidechain": False,
+            "cwd": str(tmp_repo),
+            "message": {"role": "user", "content": text},
+            **extra,
+        }
+
+    records = [
+        user(1, "first direct instruction"),
+        user(2, "/compact"),  # A direct slash command remains an instruction.
+        user(
+            3,
+            "tool output",
+            message={
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}],
+            },
+        ),
+        user(4, "meta machinery", isMeta=True),
+        user(5, "<command-name>review</command-name>"),
+        user(6, "<bash-input>git status</bash-input>"),
+        user(7, "Caveat: resumed session"),
+        user(8, "replacement summary", isCompactSummary=True),
+        user(9, "<task-notification><summary>done</summary></task-notification>"),
+        user(10, '<teammate-message teammate_id="peer">done</teammate-message>'),
+        {
+            "type": "attachment",
+            "timestamp": "2026-08-18T00:00:11Z",
+            "attachment": {
+                "type": "queued_command",
+                "commandMode": "prompt",
+                "origin": {"kind": "human"},
+                "prompt": "message sent while the agent was busy",
+            },
+        },
+        user(12, long_query),
+    ]
+    (folder / f"{ROOT_SID}.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+
+    queries = SessionExplorer(manager).recollect(ROOT_SID)
+
+    assert [query.ordinal for query in queries] == [1, 2, 3, 4]
+    assert [query.text for query in queries[:-1]] == [
+        "first direct instruction",
+        "/compact",
+        "message sent while the agent was busy",
+    ]
+    assert queries[-1].text == long_query  # recollection never truncates a query
+    assert queries[2].sent_at is not None  # queued prompt preserves both clocks
+
+
+def test_recollect_excludes_codex_injected_preamble(
+    manager: WorkspaceManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tmp_repo: Path,
+) -> None:
+    """Codex's real-turn filter, not a second recollection-only preamble rule."""
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    sid = "019dd5d5-60fb-7461-bd07-b6e8cf342726"
+    folder = codex_home / "sessions" / "2026" / "08" / "18"
+    folder.mkdir(parents=True)
+    records = [
+        {
+            "timestamp": "2026-08-18T00:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": sid, "cwd": str(tmp_repo)},
+        },
+        {
+            "timestamp": "2026-08-18T00:00:01Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "<environment_context>host</environment_context>\n# AGENTS.md",
+                    }
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-08-18T00:00:02Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "make the change"}],
+            },
+        },
+    ]
+    (folder / f"rollout-2026-08-18T00-00-00-{sid}.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+
+    assert [query.text for query in SessionExplorer(manager).recollect(sid)] == ["make the change"]
 
 
 def test_for_workspace_scopes_to_one_directory(

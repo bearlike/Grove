@@ -51,9 +51,25 @@ DEFAULT_MEMO_MAXSIZE = 512
 class RecordFolder(Protocol):
     """An adapter's per-line fold policy: ``add`` sees each parsed line exactly
     once (in file order per path, paths in the order given to ``read``);
-    ``records`` returns the accumulated fold output, which the cache snapshots."""
+    ``records`` returns the accumulated fold output, which the cache snapshots.
 
-    def add(self, raw: dict[str, Any]) -> None: ...
+    ``source`` identifies the FILE the line was read from. A fold that MERGES
+    records sharing a provider-assigned id needs it, because one logical record
+    is written to exactly one file: the same id arriving from a second file is a
+    replay of another thread's record, never a continuation of this one. The
+    cache stays provider-agnostic — it supplies the fact, the folder decides
+    whether it means anything.
+
+    It is the ``(st_dev, st_ino)`` pair rather than the path STRING, and the
+    difference is load-bearing: ``locate`` globs each project directory and
+    de-dupes its results lexically, so one transcript reachable through a
+    symlinked directory is returned under two distinct strings. Keyed by
+    string, those two aliases are two sources and a record the global uuid
+    guard cannot drop — one carrying ``message.id`` but no ``uuid`` — is
+    retained twice, which is the very duplication this scope exists to
+    prevent. The identity is free: ``_ingest`` already holds the ``stat``."""
+
+    def add(self, raw: dict[str, Any], source: str) -> None: ...
 
     def records(self) -> list[Any]: ...
 
@@ -174,6 +190,9 @@ class TranscriptCache:
             logger.debug("transcript read failed for {}: {}", path, exc)
             return False
         complete = data.rfind(b"\n") + 1
+        # File IDENTITY, not the path string — see RecordFolder.add. Two aliases
+        # of one transcript must fold as one source or the scope is defeated.
+        source = f"{stat.st_dev}:{stat.st_ino}"
         for line in data[:complete].split(b"\n"):
             stripped = line.strip()
             if not stripped:
@@ -183,7 +202,7 @@ class TranscriptCache:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             if isinstance(obj, dict):
-                folder.add(obj)
+                folder.add(obj, source)
         cursor.offset += complete
         cursor.size = stat.st_size
         cursor.mtime_ns = stat.st_mtime_ns

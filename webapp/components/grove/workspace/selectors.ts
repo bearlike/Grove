@@ -19,6 +19,7 @@ import type {
   SessionSummaryView,
   TicketRef,
   WorkspaceActivityView,
+  WorkspacePeekView,
   WorkspaceStateView,
 } from "@/lib/grove/api";
 import type { badgeVariants } from "@/components/ui/badge";
@@ -41,24 +42,135 @@ import type { TaskPhase } from "@/components/grove/fleet/types";
  */
 
 /**
+ * What the Info and Changes tabs actually READ off a workspace record — and
+ * therefore the most either of them may require of a caller.
+ *
+ * A `Pick`, not the whole `WorkspaceStateView`, and the narrowing is
+ * load-bearing rather than tidy. TypeScript is structural, so a component
+ * asking for exactly the fields it uses is satisfied by *any* object carrying
+ * them: the authenticated peek, and equally the deliberately smaller payload the
+ * public share view sends (`PublicWorkspaceStateView`, an allowlist that holds
+ * no host path). That is what lets one Info tab and one Changes tab serve both
+ * surfaces with no fork, no branch and no second copy to keep in step.
+ *
+ * The precedent is already here: `adapters/branch.ts::baseBranchOf` has always
+ * taken `Pick<WorkspaceStateView, "branch" | "base_branch">`. This is the same
+ * move applied to the two tabs that consume it.
+ *
+ * Deliberately ABSENT, because neither tab reads them and a public reader must
+ * never receive them: `repo_root`, `worktree_path`, `tmux_session`, `container`,
+ * `share_token`. Adding one here to satisfy a new call site is the moment to
+ * ask whether that call site belongs on a shared surface at all.
+ */
+export type WorkspaceIdentity = Pick<
+  WorkspaceStateView,
+  | "id"
+  | "title"
+  | "description"
+  | "status"
+  | "branch"
+  | "base_branch"
+  | "base_commit"
+  | "agent_name"
+  | "created_at"
+  | "updated_at"
+  | "paused_at"
+  | "placement"
+  | "runtime"
+  | "runtime_fallback_reason"
+  | "runtime_default_config"
+  | "ticket_refs"
+>;
+
+/**
+ * The working-tree read those tabs need: the identity above plus the five
+ * counters. `WorkspacePeekView` minus the pane — which is exactly what the
+ * public payload is, and exactly what a reader with no terminal access may see.
+ */
+export type WorkspaceRead = Pick<
+  WorkspacePeekView,
+  "base_ahead" | "base_behind" | "diff_added" | "diff_removed" | "dirty_files"
+> & { state: WorkspaceIdentity };
+
+/**
+ * The activity fields the shared selectors below reduce over.
+ *
+ * Never the whole `WorkspaceActivityView` — that shape embeds a full
+ * `WorkspaceStateView`, so requiring it would drag every host path back into the
+ * one payload built to exclude them.
+ *
+ * `todo` is OPTIONAL where `sessions` and `phase` are required, and the split is
+ * a real one rather than an accident of who sends what. The task phase is a
+ * claim about the work and belongs on any surface showing that work; the todo
+ * COUNTS ride the ~1 Hz fleet delta, which the public view does not subscribe
+ * to. Absent therefore means "this surface has no counts", which renders as no
+ * badge — never as `0/0`.
+ */
+export type ActivityRead = Pick<WorkspaceActivityView, "sessions" | "phase"> & {
+  todo?: WorkspaceActivityView["todo"];
+};
+
+/**
  * Which work-panel surfaces exist, IN THE ORDER THE STRIP RENDERS THEM — the
  * one census, from which the type is derived rather than written twice.
  *
- * There were three copies of this list a moment ago: this union, a validation
- * array beside `restoredWorkTab`, and `work-panel.tsx`'s own label/icon tuples.
+ * There were three copies of this list a moment ago: this union, a storage
+ * validation array, and `work-panel.tsx`'s own label/icon tuples.
  * Three places to keep in sync is how a sixth tab ends up unreachable from the
  * restore path while still rendering, which is invisible until someone reloads
  * onto it. `work-panel.tsx` now maps over this array and looks its label and
  * icon up in a `Record<PanelTab, …>`, so a tab added here without a label
  * fails to compile instead of silently vanishing from the strip.
  */
-export const PANEL_TAB_VALUES = ["terminal", "changes", "files", "info", "controls"] as const;
+export const PANEL_TAB_VALUES = [
+  "terminal",
+  "changes",
+  "files",
+  "info",
+  "controls",
+] as const;
 
 /** Which work-panel surface is showing. */
 export type PanelTab = (typeof PANEL_TAB_VALUES)[number];
 
 /** The workspace's two panes; `split` shows both at once. */
 export type PaneView = "transcript" | "work" | "split";
+
+/**
+ * The page's default surface before a reader has chosen one.
+ *
+ * An unborn transcript has nothing to read, while the terminal is the one live
+ * surface during the agent's first moments. Once a turn exists, the conversation
+ * and its work belong beside each other. This is a DEFAULT only: `Workspace`
+ * keeps an explicit null choice until a reader picks either control, so an async
+ * turn arriving later never takes a manually selected pane or tab away.
+ */
+export interface WorkspaceSelection {
+  /** `null` means neither this visit nor a saved choice selected a pane. */
+  view: PaneView | null;
+  /** `null` means neither this visit nor a saved choice selected a work tab. */
+  workTab: PanelTab | null;
+}
+
+/**
+ * Resolve automatic defaults only for the parts a reader has not chosen.
+ *
+ * The fields resolve independently: selecting Transcript does not claim that
+ * its reader also chose a work tab. More importantly, a selection stays fixed
+ * across `false` → `true` as the first transcript turn arrives.
+ */
+export function resolvedWorkspaceSelection(
+  hasTranscript: boolean,
+  selection: WorkspaceSelection,
+): { view: PaneView; workTab: PanelTab } {
+  const defaults = hasTranscript
+    ? { view: "split" as const, workTab: "info" as const }
+    : { view: "work" as const, workTab: "terminal" as const };
+  return {
+    view: selection.view ?? defaults.view,
+    workTab: selection.workTab ?? defaults.workTab,
+  };
+}
 
 /** A single mountable pane — what `PaneView` resolves to, one at a time or both. */
 export type PaneKey = "transcript" | "work";
@@ -94,57 +206,31 @@ export function visiblePane(view: PaneView, splitOffered: boolean): PaneView {
   return view === "split" && !splitOffered ? "work" : view;
 }
 
-/**
- * The work-panel tab a pane change should land on — `null` to keep whichever
- * one is showing.
- *
- * Entering the work panel — whether alone or via SPLIT — always lands on
- * Info first. Terminal used to be the work-alone default on the reasoning
- * that "let me drive the agent" was the pane's whole point; a design review
- * overrode that, because landing on a bare terminal with no context read as
- * "taken to the wrong place" regardless of which switcher tab was clicked.
- *
- * Keyed on the TRANSITION, not on the destination, and that is the whole
- * subtlety: a deliberate tab choice made WHILE ALREADY on that pane has to
- * survive (picking Terminal inside Work, then toggling the switcher off it
- * and back, must not throw the choice away), and widening a window back into
- * a split the user had already arranged must not silently move them either.
- * Pure, so the rule is pinned by a test rather than by a render.
- */
-export function tabOnViewChange(from: PaneView, to: PaneView): PanelTab | null {
-  return to !== from && (to === "split" || to === "work") ? "info" : null;
-}
-
 const PANE_VIEWS: readonly PaneView[] = ["transcript", "work", "split"];
 
 /**
- * The `view` to restore from a raw, `localStorage`-sourced value — untyped
- * because it crossed a boundary the type system cannot see through: a
- * missing key, a value written by an older or newer build, or a hand-edited
- * store all have to fall back rather than crash or render a pane that does
- * not exist. Anything that is not one of the three known values falls back
- * to "transcript", the same default a workspace with no stored choice at
- * all starts on.
+ * A valid persisted pane selection, or no selection at all.
  *
- * ALWAYS resolved through `visiblePane` before being handed back — a `split`
- * persisted from a wide session, restored on a narrow one, must not leave no
- * tab selected any more than a live width change may. Restoring is just
- * another route to the same state `visiblePane` already guards.
+ * `null` is intentionally distinct from a default pane. A missing, stale, or
+ * hand-edited value means the workspace has not been chosen yet, so the live
+ * transcript rule may decide it. A valid value is a reader's old choice and
+ * must survive an asynchronous transcript arrival unchanged.
  */
-export function restoredView(stored: unknown, splitOffered: boolean): PaneView {
-  const candidate = (PANE_VIEWS as readonly unknown[]).includes(stored) ? (stored as PaneView) : "transcript";
-  return visiblePane(candidate, splitOffered);
+export function storedView(stored: unknown): PaneView | null {
+  return (PANE_VIEWS as readonly unknown[]).includes(stored)
+    ? (stored as PaneView)
+    : null;
 }
 
 /**
- * The `workTab` to restore from a raw, `localStorage`-sourced value. Same
- * defensiveness as `restoredView`, and the fallback is "info" for the same
- * reason `workTab`'s own initial state is "info" in `Workspace` — it has to
- * agree with `tabOnViewChange`'s landing tab, or the very first restored
- * entry into Work/Split would flash the wrong tab for one render.
+ * A valid persisted work-tab selection, or no selection at all. Like
+ * `storedView`, absence remains absence instead of becoming a magic default so
+ * the page can distinguish automatic landing from a reader's deliberate tab.
  */
-export function restoredWorkTab(stored: unknown): PanelTab {
-  return (PANEL_TAB_VALUES as readonly unknown[]).includes(stored) ? (stored as PanelTab) : "info";
+export function storedWorkTab(stored: unknown): PanelTab | null {
+  return (PANEL_TAB_VALUES as readonly unknown[]).includes(stored)
+    ? (stored as PanelTab)
+    : null;
 }
 
 export type LifecycleAction = "pause" | "resume" | "respawn" | "kill";
@@ -158,7 +244,9 @@ export type LifecycleAction = "pause" | "resume" | "respawn" | "kill";
  * anyway, and an unrecognised status falls back to the one verb that always
  * applies.
  */
-export function availableActions(state: WorkspaceStateView): readonly LifecycleAction[] {
+export function availableActions(
+  state: Pick<WorkspaceStateView, "status" | "placement">,
+): readonly LifecycleAction[] {
   const suspendable = state.placement !== "root";
   switch (state.status) {
     case "active":
@@ -178,7 +266,9 @@ export function availableActions(state: WorkspaceStateView): readonly LifecycleA
  * What `kill(delete_branch=null)` resolves to engine-side, mirrored only so the
  * confirm dialog can pre-tick an honest default.
  */
-export function defaultDeleteBranch(state: WorkspaceStateView): boolean {
+export function defaultDeleteBranch(
+  state: Pick<WorkspaceStateView, "placement" | "branch_provenance">,
+): boolean {
   if (state.placement === "root") return false;
   return state.branch_provenance === "grove";
 }
@@ -202,7 +292,9 @@ export type ActivityStat = { label: string; value: string };
  * would restate the same magnitude twice, once as a mystery and once
  * explained.
  */
-export function activityStats(activity: WorkspaceActivityView | null): ActivityStat[] | null {
+export function activityStats(
+  activity: ActivityRead | null,
+): ActivityStat[] | null {
   const session = activity?.sessions[0];
   const live = session?.activity;
   if (!live) return null;
@@ -218,7 +310,11 @@ export function activityStats(activity: WorkspaceActivityView | null): ActivityS
 }
 
 /** One class of `tokens in`, with the glossary term that explains it (if any). */
-export type TokenClassStat = { label: string; value: string; term?: GlossaryTerm };
+export type TokenClassStat = {
+  label: string;
+  value: string;
+  term?: GlossaryTerm;
+};
 
 /**
  * `tokens in` unfolded into the classes that sum to it, so a figure in the
@@ -241,14 +337,25 @@ export type TokenClassStat = { label: string; value: string; term?: GlossaryTerm
  * big", which fresh input / cache read / cache creation already answer
  * completely, since those three are exactly what `tokens_in` sums.
  */
-export function tokenClassStats(activity: WorkspaceActivityView | null): TokenClassStat[] | null {
+export function tokenClassStats(
+  activity: ActivityRead | null,
+): TokenClassStat[] | null {
   const tokens = activity?.sessions[0]?.tokens;
   if (!tokens) return null;
-  const format = (n: number | null | undefined) => (n == null ? "not measured" : COMPACT.format(n));
+  const format = (n: number | null | undefined) =>
+    n == null ? "not measured" : COMPACT.format(n);
   return [
     { label: "fresh input", value: format(tokens.fresh_input) },
-    { label: "cache read", value: format(tokens.cache_read), term: "cache_read_tokens" },
-    { label: "cache write", value: format(tokens.cache_creation), term: "cache_creation_tokens" },
+    {
+      label: "cache read",
+      value: format(tokens.cache_read),
+      term: "cache_read_tokens",
+    },
+    {
+      label: "cache write",
+      value: format(tokens.cache_creation),
+      term: "cache_creation_tokens",
+    },
   ];
 }
 
@@ -267,7 +374,9 @@ export function tokenClassStats(activity: WorkspaceActivityView | null): TokenCl
  * `unknown` is NOT that case — the session was measured, Grove is just telling
  * you how well, so those rows still render.
  */
-export function sessionClocks(activity: WorkspaceActivityView | null): DurationView | null {
+export function sessionClocks(
+  activity: ActivityRead | null,
+): DurationView | null {
   return activity?.sessions[0]?.duration ?? null;
 }
 
@@ -279,16 +388,21 @@ export function sessionClocks(activity: WorkspaceActivityView | null): DurationV
  * the clocks and this cannot describe different sessions.
  */
 export function sessionLatency(
-  activity: WorkspaceActivityView | null,
+  activity: ActivityRead | null,
 ): GenerationLatencyView | null {
   return activity?.sessions[0]?.latency ?? null;
 }
 
 const COUNT = new Intl.NumberFormat("en-US");
-const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+const COMPACT = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
 
 /** Commits as the vendored `Timeline`'s event shape; the newest commit is "now". */
-export function commitEvents(commits: readonly CommitSummaryView[]): TimelineEvent[] {
+export function commitEvents(
+  commits: readonly CommitSummaryView[],
+): TimelineEvent[] {
   return commits.map((commit, index) => ({
     id: commit.sha,
     when: index === 0 ? "now" : "past",
@@ -325,7 +439,9 @@ export type TicketPhaseMark = TicketPhaseView & { total: number };
  * about — keeps its coordinate, so the agent's claim cannot detach from the row
  * it belongs to.
  */
-export function ticketPhaseKey(ref: Pick<TicketRef, "provider" | "id">): string {
+export function ticketPhaseKey(
+  ref: Pick<TicketRef, "provider" | "id">,
+): string {
   return `${ref.provider}:${ref.id}`;
 }
 
@@ -347,7 +463,9 @@ export function ticketPhases(
 ): ReadonlyMap<string, TicketPhaseMark> {
   if (!phase) return new Map();
   return new Map(
-    phase.tickets.map((claim) => [claim.ticket, { ...claim, total: phase.total }] as const),
+    phase.tickets.map(
+      (claim) => [claim.ticket, { ...claim, total: phase.total }] as const,
+    ),
   );
 }
 
@@ -378,9 +496,24 @@ export type TicketRollup = {
   unreported: number;
   done: number;
   blocked: number;
+  /** A count for every phase, kept separate from the orthogonal flags. */
+  phases: Record<TaskPhase, number>;
   /** 0–1 mean completion across every attached ticket, unclaimed ones included. */
   fraction: number;
 };
+
+const TASK_PHASES: readonly TaskPhase[] = [
+  "scoping",
+  "planning",
+  "implementing",
+  "verifying",
+  "delivering",
+  "done",
+];
+
+function emptyPhaseCounts(): Record<TaskPhase, number> {
+  return Object.fromEntries(TASK_PHASES.map((phase) => [phase, 0])) as Record<TaskPhase, number>;
+}
 
 export function ticketRollup(
   refs: readonly TicketRef[],
@@ -396,11 +529,13 @@ export function ticketRollup(
   let done = 0;
   let blocked = 0;
   let progress = 0;
+  const phases = emptyPhaseCounts();
 
   for (const ref of refs) {
     const claim = claims.get(ticketPhaseKey(ref));
     if (!claim) continue;
     reported += 1;
+    phases[claim.phase] += 1;
     if (claim.blocked) blocked += 1;
     if (claim.phase === "done") done += 1;
     // `index / (total - 1)` so `done` is exactly 1 and `scoping` exactly 0 —
@@ -415,20 +550,73 @@ export function ticketRollup(
     unreported: refs.length - reported,
     done,
     blocked,
+    phases,
     fraction: progress / refs.length,
   };
 }
 
-/** Issues first, then pull requests — the order they appear in over a task's life. */
+/**
+ * Rank attached tickets in the same order as
+ * `core/contracts/ticket_order.py::ticket_sort_key`: PRs, then issues; live
+ * tracker state; the furthest non-terminal claim; and finally the numeric or
+ * lexical id. A claim is deliberately passed in rather than fetched here — it
+ * is already on the Info tab, so ordering costs no request or loading state.
+ */
+export function ticketSortKey(
+  ticket: Pick<TicketRef, "kind" | "status" | "id"> & { draft?: boolean },
+  phase: Pick<TicketPhaseMark, "index" | "phase"> | null,
+): [number, number, number, number] {
+  const state = ticketState(ticket.status, ticket.draft);
+  const stateRank: Record<TicketState, number> = {
+    open: 0,
+    draft: 1,
+    unknown: 2,
+    merged: 3,
+    closed: 3,
+  };
+
+  return [
+    ticket.kind === "pull_request" ? 0 : 1,
+    stateRank[state],
+    phase === null ? 2 : phase.phase === "done" ? 1 : 0,
+    phase === null || phase.phase === "done" ? 0 : -phase.index,
+  ];
+}
+
+/** Compare two joined ticket rows by the shared cross-client ordering contract. */
+export function compareTicketRefs(
+  a: Pick<TicketRef, "kind" | "status" | "id"> & { draft?: boolean },
+  aPhase: Pick<TicketPhaseMark, "index" | "phase"> | null,
+  b: Pick<TicketRef, "kind" | "status" | "id"> & { draft?: boolean },
+  bPhase: Pick<TicketPhaseMark, "index" | "phase"> | null,
+): number {
+  const aKey = ticketSortKey(a, aPhase);
+  const bKey = ticketSortKey(b, bPhase);
+  for (let index = 0; index < aKey.length; index += 1) {
+    if (aKey[index] < bKey[index]) return -1;
+    if (aKey[index] > bKey[index]) return 1;
+  }
+
+  const aIsNumeric = /^-?\d+$/.test(a.id);
+  const bIsNumeric = /^-?\d+$/.test(b.id);
+  if (aIsNumeric && bIsNumeric) {
+    const [aId, bId] = [BigInt(a.id), BigInt(b.id)];
+    return aId < bId ? -1 : aId > bId ? 1 : 0;
+  }
+  if (aIsNumeric !== bIsNumeric) return aIsNumeric ? -1 : 1;
+  return a.id.localeCompare(b.id);
+}
+
+/** Sort direct ticket refs, which have no per-ticket claims yet. */
 export function sortTicketRefs(refs: readonly TicketRef[]): TicketRef[] {
-  return [...refs].sort(
-    (a, b) => Number(a.kind === "pull_request") - Number(b.kind === "pull_request"),
-  );
+  return [...refs].sort((a, b) => compareTicketRefs(a, null, b, null));
 }
 
 type TicketProvider = TicketRef["provider"];
 type TicketKind = TicketRef["kind"];
-type UiBadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
+type UiBadgeVariant = NonNullable<
+  VariantProps<typeof badgeVariants>["variant"]
+>;
 
 /**
  * How each tracker writes its own name. A provider is an IDENTITY, not a state,
@@ -487,7 +675,8 @@ const STATE_BY_WORD: Record<string, TicketState> = {
   draft: "draft",
 };
 
-export function ticketState(status: string | null | undefined): TicketState {
+export function ticketState(status: string | null | undefined, draft = false): TicketState {
+  if (draft) return "draft";
   if (!status) return "unknown";
   return STATE_BY_WORD[status.trim().toLowerCase()] ?? "unknown";
 }
@@ -621,7 +810,8 @@ export function ticketGlyph(kind: TicketKind, state: TicketState): LucideIcon {
 const PHASE_MEANING: Record<TaskPhase, string> = {
   scoping:
     "The agent is reading the ticket, the code and the tests, working out what the job actually is.",
-  planning: "The agent understands the problem and is choosing an approach or writing it down.",
+  planning:
+    "The agent understands the problem and is choosing an approach or writing it down.",
   implementing: "The agent is editing files.",
   verifying:
     "The agent is running tests, linters or the build, and reading its own diff back.",
@@ -647,7 +837,10 @@ const TRACKER_WORD: Record<TicketState, string | null> = {
 };
 
 /** What a phase tooltip needs of a ticket: who tracks it, and what they call it. */
-export type PhaseTooltipTicket = Pick<TicketRef, "provider" | "kind" | "status">;
+export type PhaseTooltipTicket = Pick<TicketRef, "provider" | "kind" | "status"> & {
+  /** Older daemon responses omit this additive enrichment field. */
+  draft?: boolean;
+};
 
 /**
  * The phase badge's hover, as separate claims rather than one paragraph.
@@ -692,10 +885,16 @@ export type PhaseTooltip = {
  * `glossary.tsx` defines as `agent_blocked` and which clears when you answer).
  * Nothing in this copy says "waiting for you" for that reason.
  *
- * There is NO recency claim anywhere in it. A per-ticket row carries no
- * timestamp, so "still", "since" and "as of" would all be inventions.
+ * The deliberate cut is title, URL, assignee and link uncertainty: all four are
+ * already visible on the row or its destination, and repeating them buries the
+ * agent's note — the one fact the tracker cannot supply. There is NO recency
+ * claim anywhere in it. A per-ticket row carries no timestamp, so "still",
+ * "since" and "as of" would all be inventions.
  */
-export function phaseTooltip(mark: PhaseMark, ticket?: PhaseTooltipTicket | null): PhaseTooltip {
+export function phaseTooltip(
+  mark: PhaseMark,
+  ticket?: PhaseTooltipTicket | null,
+): PhaseTooltip {
   // The badge's own words, so the hover starts where the reader's eye already
   // is. `blocked in <phase>` keeps the position a bare `blocked` would drop.
   const headline = mark.blocked ? `blocked in ${mark.phase}` : mark.phase;
@@ -725,7 +924,8 @@ export function phaseTooltip(mark: PhaseMark, ticket?: PhaseTooltipTicket | null
  */
 function trackerClaim(ticket: PhaseTooltipTicket): string | null {
   const raw = ticket.status?.trim();
-  const said = TRACKER_WORD[ticketState(ticket.status)] ?? (raw ? `“${raw}”` : null);
+  const said =
+    TRACKER_WORD[ticketState(ticket.status, ticket.draft)] ?? (raw ? `“${raw}”` : null);
   if (!said) return null;
   return `${providerLabel(ticket.provider)} says this ${ticketKindLabel(ticket.kind)} is ${said}.`;
 }
@@ -768,7 +968,8 @@ export function titleRuns(title: string): TitleRun[] {
     runs.push({ text: match[1]!, code: true });
     cursor = at + match[0].length;
   }
-  if (cursor < title.length) runs.push({ text: title.slice(cursor), code: false });
+  if (cursor < title.length)
+    runs.push({ text: title.slice(cursor), code: false });
   return runs;
 }
 
@@ -787,7 +988,10 @@ export function titleRuns(title: string): TitleRun[] {
  * route reports every ticket it fetched by id as unambiguous. Taking its answer
  * would silently clear the very uncertainty the user is being asked to resolve.
  */
-export function mergeTicket(cached: TicketRef, live: TicketRef | undefined): TicketRef {
+export function mergeTicket(
+  cached: TicketRef,
+  live: TicketRef | undefined,
+): TicketRef {
   if (!live) return cached;
   return {
     ...cached,
@@ -806,7 +1010,12 @@ export function mergeTicket(cached: TicketRef, live: TicketRef | undefined): Tic
  * several otherwise-identical rows you are looking at.
  */
 export function sessionLabel(session: SessionSummaryView): string {
-  return session.title ?? session.first_prompt ?? session.git_branch ?? session.session_id;
+  return (
+    session.title ??
+    session.first_prompt ??
+    session.git_branch ??
+    session.session_id
+  );
 }
 
 /**
@@ -859,7 +1068,10 @@ const SHELL_TOOL_NAMES = new Set(["bash", "exec_command", "local_shell_call"]);
 const CODE_MODE_TOOL_NAMES = new Set(["exec"]);
 const COMMAND_FIELD_NAMES = new Set(["command", "input"]);
 
-export function toolCommandLanguage(toolName: string, fieldName: string): "bash" | "javascript" | undefined {
+export function toolCommandLanguage(
+  toolName: string,
+  fieldName: string,
+): "bash" | "javascript" | undefined {
   if (!COMMAND_FIELD_NAMES.has(fieldName)) return undefined;
   const name = toolName.toLowerCase();
   if (SHELL_TOOL_NAMES.has(name)) return "bash";

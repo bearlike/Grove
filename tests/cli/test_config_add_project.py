@@ -24,6 +24,25 @@ def project(monkeypatch: pytest.MonkeyPatch, tmp_state_dir: Path, tmp_repo: Path
     return tmp_repo
 
 
+def test_cli_resolves_user_scope_tls_before_every_subcommand(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_state_dir: Path
+) -> None:
+    del tmp_state_dir
+    paths.user_config_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.user_config_path().write_text(
+        json.dumps({"tls": {"ca_path": "/deployment/ca.pem"}}), encoding="utf-8"
+    )
+    received: list[str] = []
+    monkeypatch.setattr(
+        "grove.tui.cli.use_system_trust_store", lambda path: received.append(path) or None
+    )
+
+    result = runner.invoke(app, ["version"])
+
+    assert result.exit_code == 0, result.output
+    assert received == ["/deployment/ca.pem"]
+
+
 def test_add_project_registers_cwd_repo(runner: CliRunner, project: Path) -> None:
     result = runner.invoke(app, ["config", "add-project"])
 

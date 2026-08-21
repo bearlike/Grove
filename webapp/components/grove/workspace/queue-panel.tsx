@@ -23,13 +23,36 @@ import type { WorkspaceQueueView } from "@/lib/grove/api";
  * OPEN by default, which is where it differs from the plan card, and the
  * difference is the whole reason this card exists. The plan card is always
  * present and often long, so collapsing it protects the transcript; this card
- * renders ONLY when something is actually waiting, and the complaint it answers
- * was "I send a steer message and never see it". A disclosure that starts shut
- * would reproduce that exactly — the card would be present, correct, and still
- * showing nothing. The toggle stays because a backlog can grow.
+ * renders ONLY when something is actually waiting.
+ *
+ * **It starts CLOSED, reversing an earlier decision that is worth recording
+ * rather than quietly overwriting.** The original argument was that the card
+ * exists to answer "I send a steer message and never see it", so starting shut
+ * would reproduce that complaint. That reasoning conflated two things the card
+ * does: it *announces* a backlog, and it *lists* one. The announcement survives
+ * a closed disclosure intact — the card only mounts when something is waiting,
+ * and the count rides the summary header — so a person still sees that their
+ * message landed and how many are ahead of it. What a closed card withholds is
+ * only the message TEXT, which is the part nobody needs on arrival.
+ *
+ * Opening on its own was the real defect: a queue that expands whenever
+ * something arrives moves the composer down the page at the least welcome
+ * moment, which is precisely while the user is typing the next message.
  */
-export function QueuePanel({ queue }: { queue: WorkspaceQueueView }) {
-  const [open, setOpen] = useState(true);
+export function QueuePanel({
+  queue,
+  defaultOpen = false,
+}: {
+  queue: WorkspaceQueueView;
+  /** Initial disclosure state. The same name and default Radix's own
+   * `Collapsible` uses, so a caller that wants the list open on mount can say
+   * so without this component growing a second vocabulary for it. */
+  defaultOpen?: boolean;
+}) {
+  // Seeded once and never keyed on the queue: a NEW arrival must not reopen a
+  // card the user shut, which is the same "a deliberate choice outranks a
+  // default" rule the workspace tab selection follows.
+  const [open, setOpen] = useState(defaultOpen);
 
   // Two separate guards, not one `messages.length === 0` check. The wire
   // contract is explicit that these are different claims — "nothing waiting"

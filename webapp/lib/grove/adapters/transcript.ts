@@ -121,6 +121,13 @@ const COMPLETE = { type: "complete", reason: "stop" } as const;
  * is only valid when the running index at lookup time still matches the one
  * it was built at. A prefix change therefore misses and correctly rebuilds
  * the tail; turns only ever append in practice, so the common case is a hit.
+ *
+ * Deliberately NOT keyed on the prefix's tool-call ids. Uniqueness does not
+ * need it — a cache hit claims its own ids before the tail is built, so the
+ * tail can never reuse one — and computing such a key means serializing the
+ * whole accumulated id set once per turn, which is O(turns x ids) of string
+ * work on the hottest render path in the app, every poll, to stabilize a
+ * suffix in a case a reference-preserving merge cannot actually produce.
  */
 const turnMessageCache = new WeakMap<
   SessionTurnView,
@@ -146,24 +153,41 @@ const turnMessageCache = new WeakMap<
  */
 export function messagesFromTurns(turns: readonly SessionTurnView[]): ThreadMessageLike[] {
   const messages: ThreadMessageLike[] = [];
+  const toolCallIds = new Set<string>();
   let nextIndex = 0;
 
   for (const turn of turns) {
     const cached = turnMessageCache.get(turn);
     if (cached && cached.startIndex === nextIndex) {
       messages.push(...cached.messages);
+      // Cache hits must claim their existing ids before a new tail is built:
+      // rebuilding them just to learn those ids would remount an unchanged
+      // prefix, while leaving them unclaimed lets the tail reuse one.
+      rememberToolCallIds(cached.messages, toolCallIds);
       nextIndex += cached.messages.length;
       continue;
     }
 
     const startIndex = nextIndex;
-    const turnMessages = buildTurnMessages(turn, startIndex);
+    const turnMessages = buildTurnMessages(turn, startIndex, toolCallIds);
     turnMessageCache.set(turn, { startIndex, messages: turnMessages });
     messages.push(...turnMessages);
     nextIndex = startIndex + turnMessages.length;
   }
 
   return messages;
+}
+
+/** Claim the tool-call ids embedded in a cached turn before building its tail. */
+function rememberToolCallIds(messages: readonly ThreadMessageLike[], toolCallIds: Set<string>): void {
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type === "tool-call" && typeof part.toolCallId === "string") {
+        toolCallIds.add(part.toolCallId);
+      }
+    }
+  }
 }
 
 /**
@@ -176,7 +200,11 @@ export function messagesFromTurns(turns: readonly SessionTurnView[]): ThreadMess
  * count of ids consumed, which is what lets the caller advance its running
  * index by the returned array's length.
  */
-function buildTurnMessages(turn: SessionTurnView, startIndex: number): ThreadMessageLike[] {
+function buildTurnMessages(
+  turn: SessionTurnView,
+  startIndex: number,
+  toolCallIds: Set<string>,
+): ThreadMessageLike[] {
   const messages: ThreadMessageLike[] = [];
   let nextIndex = startIndex;
   const nextId = (): string => `grove-msg-${nextIndex++}`;
@@ -201,13 +229,23 @@ function buildTurnMessages(turn: SessionTurnView, startIndex: number): ThreadMes
     const id = nextId();
     messages.push({
       role: "assistant",
-      // The provider's `tool_use_id` wins where it exists; the positional id
-      // is only a fallback, so a correlation key never gets overwritten by an
-      // ordinal that changes shape the moment a run is re-windowed.
-      content: toolRun.map((part, i) => ({
-        ...part,
-        toolCallId: part.toolCallId ?? `${id}-${i}`,
-      })),
+      // The provider's `tool_use_id` remains the normal identity so an open
+      // expander survives polling. Only a collision is suffixed with its stable
+      // owning message and part position; rebuilding unchanged turns to find
+      // collisions would defeat their reference-preserving cache entries.
+      content: toolRun.map((part, i) => {
+        const toolCallId = part.toolCallId ?? `${id}-${i}`;
+        let uniqueToolCallId = toolCallId;
+        if (toolCallIds.has(uniqueToolCallId)) {
+          uniqueToolCallId = `${toolCallId}-${id}-${i}`;
+          let duplicate = 2;
+          while (toolCallIds.has(uniqueToolCallId)) {
+            uniqueToolCallId = `${toolCallId}-${id}-${i}-${duplicate++}`;
+          }
+        }
+        toolCallIds.add(uniqueToolCallId);
+        return { ...part, toolCallId: uniqueToolCallId };
+      }),
       id,
       status: COMPLETE,
     });

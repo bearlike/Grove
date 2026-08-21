@@ -37,12 +37,15 @@ export const groveKeys = {
   // provider config rather than to whoever asked for it.
   tickets: (repo: string) => ["grove", "tickets", repo] as const,
   ticketProviders: (repo: string) => ["grove", "tickets", repo, "providers"] as const,
+  assignedTickets: (repo: string) => ["grove", "tickets", repo, "assigned"] as const,
   ticket: (repo: string, provider: string, id: string) =>
     ["grove", "tickets", repo, provider, id] as const,
 
   agents: (repo: string) => ["grove", "agents", repo] as const,
   branches: (repo: string, scope: "local" | "remote") =>
     ["grove", "branches", repo, scope] as const,
+  defaults: (repo: string) => ["grove", "defaults", repo] as const,
+  sharePolicy: (repo: string) => ["grove", "share-policy", repo] as const,
 
   usage: ["grove", "usage"] as const,
   usageSummary: (filters: Record<string, string>) =>

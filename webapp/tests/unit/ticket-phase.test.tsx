@@ -32,6 +32,7 @@ function ref(overrides: Partial<TicketRef> = {}): TicketRef {
     title: "Widgets render twice on resize",
     url: "https://tracker.example/acme/api/issues/42",
     status: "open",
+    draft: false,
     assignee: null,
     ambiguous: false,
     ...overrides,

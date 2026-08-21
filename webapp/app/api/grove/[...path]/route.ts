@@ -11,7 +11,17 @@ export async function GET(request: NextRequest, context: Context): Promise<Respo
   const { path } = await context.params;
   return isEventStream(path) ? proxyStream(request, path) : proxy(request, path);
 }
+// EVERY method the daemon serves needs an export here, and a missing one fails
+// in a way nothing in this file can see: Next matches the route, finds no
+// handler for the verb, and answers 405 before any code below runs. That is
+// what happened to `PUT /share-policy` — the daemon route, the client method
+// and the typed schema were all correct and the browser still got a 405, so the
+// bug reads as a daemon problem while living entirely in this list.
+//
+// `tests/daemon/test_bff_method_parity.py` now pins the set against the app's
+// real route table, because this file cannot check itself.
 export async function POST(request: NextRequest, context: Context): Promise<Response> { return proxyParams(request, context); }
+export async function PUT(request: NextRequest, context: Context): Promise<Response> { return proxyParams(request, context); }
 export async function DELETE(request: NextRequest, context: Context): Promise<Response> { return proxyParams(request, context); }
 export async function PATCH(request: NextRequest, context: Context): Promise<Response> { return proxyParams(request, context); }
 

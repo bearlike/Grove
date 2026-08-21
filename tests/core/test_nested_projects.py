@@ -160,3 +160,46 @@ def test_resume_restores_nested_cwd(
 
     worktree = Path(state.worktree_path)
     assert fake_tmux.session_cwds[state.tmux_session] == worktree / "services" / "api"
+
+
+def test_relative_project_cwd_anchors_on_the_repo_root_not_the_process_cwd(
+    tmp_state_dir: Path,
+    tmp_repo: Path,
+    tmp_path: Path,
+    fake_tmux: FakeTmux,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative ``project_cwd`` means "this subdir of the project".
+
+    Resolving it against the caller's own directory would give one request
+    different meanings per client — the daemon serves repos it never stands in,
+    so ``"services/api"`` there would resolve under the systemd unit's working
+    directory and fail containment for a reason no user could see. Standing the
+    process somewhere else entirely is what makes the distinction visible.
+    """
+    del tmp_state_dir
+    _add_subdir(tmp_repo, "services/api")
+    mgr = _manager(tmp_repo, tmp_path)
+    monkeypatch.chdir(tmp_path)  # deliberately NOT inside the repo
+
+    state = mgr.create(
+        CreateWorkspaceRequest(agent_name="claude", title="rel", project_cwd=Path("services/api"))
+    )
+
+    assert state.project_subpath == "services/api"
+    assert fake_tmux.session_cwds[state.tmux_session] == Path(state.worktree_path) / "services/api"
+
+
+def test_project_cwd_outside_the_repo_is_refused_before_any_side_effect(
+    tmp_state_dir: Path, tmp_repo: Path, tmp_path: Path, fake_tmux: FakeTmux
+) -> None:
+    """Containment stays the engine's call, and it is made before git runs."""
+    del tmp_state_dir, fake_tmux
+    mgr = _manager(tmp_repo, tmp_path)
+
+    with pytest.raises(GroveError, match="not within repo root"):
+        mgr.create(
+            CreateWorkspaceRequest(agent_name="claude", title="out", project_cwd=Path("../.."))
+        )
+
+    assert mgr.list() == []

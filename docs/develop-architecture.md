@@ -63,6 +63,59 @@ make that a build gate.
 `import textual` would slip through silently. `lint-imports` runs on
 every push.
 
+## The public share boundary
+
+Every route on the daemon requires a bearer token, with three exceptions:
+the pairing handshake, the liveness probe, and the public share
+namespace. A shared workspace is readable at `/public/{token}` by
+somebody who has no Grove session at all.
+
+Think of a share token as a coat-check ticket. Whoever holds it gets
+that one coat and nothing else. They cannot browse the cloakroom, and
+losing the ticket does not expose anybody else's coat.
+
+Three properties make that true, and each is structural rather than a
+check somebody has to remember.
+
+**The token is the state.** `WorkspaceState.share_token` is one nullable
+field. Present means public, absent means private, and the value is the
+link itself. There is no second boolean that can disagree with it.
+Revoking clears the field, which kills the link permanently rather than
+parking it.
+
+**A separate path prefix, not a scoped credential.** The tempting design
+teaches the bearer dependency to recognise a share token and lets
+`/workspaces/{id}/...` serve both audiences. That was rejected. It puts
+the boundary in an allowlist that lives away from the route being
+written, so a route added next year is one forgotten entry from being
+world readable. With a prefix, every route under `/workspaces` carries
+the auth dependency and always will. A test asserts set equality over
+every route lacking it, so a new public route fails the suite rather
+than shipping quietly.
+
+**An allowlist, never a redaction.** `grove.core.contracts.public` writes
+out every field by hand. A field added to `WorkspaceStateView` later is
+private by default. The reverse design, serialising the state and then
+dropping keys, fails open and fails silently: the leak ships with the
+change that introduced the field. Host paths, container identities and
+the token itself never cross. Nested shapes get the same scrutiny as top
+level ones, because the authenticated activity view embeds a whole
+workspace state and would have carried every path through a field
+nobody inspects.
+
+Sharing policy is per project, not per workspace, and lives in
+`grove.core.share_policy`. It holds two things: how long a new link
+lives, and an optional passcode (stored as a hash, never plaintext). The
+two behave differently on purpose. Expiry is stamped when a link is
+minted, so changing the TTL affects future links and leaves circulating
+ones alone. A passcode is checked on every read, so setting one locks
+existing links immediately.
+
+The reader supplies a passcode as a request header. There is no grant,
+no cookie and no session for an anonymous reader, which is what keeps
+this small: a grant would need a lifetime, a store and a revocation
+story, while a header needs none of them.
+
 ## Side effects at the edges
 
 - [`src/grove/core/git.py`](repo:src/grove/core/git.py): worktree add and remove, branch delete, status, log.

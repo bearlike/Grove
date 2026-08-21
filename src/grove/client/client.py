@@ -33,7 +33,12 @@ from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.phase import PhaseView
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.contracts.sessions import SessionDetailView, SessionSummaryView, TodoListView
+from grove.core.contracts.sessions import (
+    SessionDetailView,
+    SessionQueryView,
+    SessionSummaryView,
+    TodoListView,
+)
 from grove.core.contracts.tickets import (
     TicketProviderName,
     TicketProviderView,
@@ -431,6 +436,22 @@ class GroveClient:
             params["last"] = str(last)
         body = await self._get(f"/sessions/{session_id}/turns", params=params)
         return SessionDetailView.model_validate(body)
+
+    async def session_queries(
+        self, session_id: str, *, kind: str, cwd: str, last: int | None = None
+    ) -> list[SessionQueryView]:
+        """Every full-text direct user query in a session.
+
+        Mirrors ``GET /sessions/{id}/queries``. ``kind`` and ``cwd`` are the
+        catalog row's coordinates and must be passed back verbatim; ``last``
+        is an opt-in tail after the daemon reads the complete message spine.
+        Unlike ``session_turns``, query text is intentionally uncapped.
+        """
+        params: dict[str, str] = {"kind": kind, "cwd": cwd}
+        if last is not None:
+            params["last"] = str(last)
+        body = await self._get(f"/sessions/{session_id}/queries", params=params)
+        return [SessionQueryView.model_validate(item) for item in body]
 
     async def remap_session(self, ws_id: str, session_ref: str) -> WorkspaceStateView:
         """Pin an existing agent session as the workspace's tracked primary.

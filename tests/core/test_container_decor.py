@@ -541,7 +541,12 @@ def test_statusline_reports_subscription_usage_from_the_payload() -> None:
     snapshot is not shared in, and a number invented for a pool we cannot read
     would be worse than an absent segment.
     """
-    soon = int(time.time()) + 7500
+    # OFF the minute boundary on purpose. `reset_in` reads its OWN clock
+    # (`date +%s`) after this process spawns it and floors the remainder to
+    # minutes, so an exact 7_500 (125m 0s) renders "2h 4m" the moment ≥1s
+    # elapses in between — which a loaded host reliably supplies. The extra 30s
+    # is slack for that gap, not a different assertion.
+    soon = int(time.time()) + 7530
     later = int(time.time()) + 320_000
     payload = (
         f'{{"rate_limits": {{"five_hour": {{"used_percentage": 12, "resets_at": {soon}}},'

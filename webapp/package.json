@@ -1,6 +1,6 @@
 {
   "name": "@grove/webapp",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,8 @@
     "codegen": "tsx scripts/codegen.ts",
     "codegen:aliases": "node scripts/gen-type-aliases.mjs",
     "registry:check": "tsx scripts/registry-check.ts",
+    "registry:upstream": "tsx scripts/registry-check.ts --upstream",
+    "registry:refresh": "tsx scripts/registry-check.ts --refresh",
     "lint:styling": "tsx scripts/lint-styling.ts",
     "codegen:check": "tsx scripts/codegen.ts --check",
     "test:watch": "vitest",
@@ -20,7 +22,7 @@
     "check:ignored": "tsx scripts/check-ignored.ts"
   },
   "dependencies": {
-    "@assistant-ui/react": "^0.15.13",
+    "@assistant-ui/react": "^0.15.16",
     "@assistant-ui/react-markdown": "^0.14.10",
     "@assistant-ui/react-syntax-highlighter": "^0.14.5",
     "@lobehub/icons": "5.16.0",
@@ -48,6 +50,7 @@
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.6.0",
+    "ts-md5": "2.0.1",
     "tw-shimmer": "^0.4.12",
     "zustand": "^5.0.14"
   },

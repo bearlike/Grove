@@ -1,4 +1,4 @@
-import { TriangleAlertIcon } from "lucide-react";
+import { CircleCheckIcon, ListTodoIcon, TriangleAlertIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -16,15 +16,19 @@ import type { TicketRef } from "@/lib/grove/api";
 import {
   agentAccent,
   agentGlossaryTerm,
+  agentGlyph,
   agentLabel,
   agentTone,
   phaseGlyph,
+  phaseLabel,
   progressAccent,
   runtimeGlossaryTerm,
   runtimeGlyph,
   runtimeLabel,
   statusAccent,
   statusGlossaryTerm,
+  statusGlyph,
+  statusLabel,
   statusTone,
 } from "./tokens";
 import type { AgentState, Runtime, TaskPhase, TodoProgress, WorkspaceStatus } from "./types";
@@ -51,7 +55,9 @@ import type { AgentState, Runtime, TaskPhase, TodoProgress, WorkspaceStatus } fr
 
 /** Axis 1 — the workspace lifecycle, as the daemon sees it. */
 export function StatusBadge({ status }: { status: WorkspaceStatus }): React.ReactNode {
+  const Icon = statusGlyph(status);
   const term = statusGlossaryTerm(status);
+  const label = statusLabel(status);
   return (
     <Badge
       variant={statusTone(status)}
@@ -59,13 +65,15 @@ export function StatusBadge({ status }: { status: WorkspaceStatus }): React.Reac
       data-testid="status-badge"
       data-status={status}
     >
-      {term ? <Explain term={term}>{status}</Explain> : status}
+      <Icon aria-hidden />
+      {term ? <Explain term={term}>{label}</Explain> : label}
     </Badge>
   );
 }
 
 /** Axis 2 — what the agent is doing right now. */
 export function AgentStateBadge({ state }: { state: AgentState }): React.ReactNode {
+  const Icon = agentGlyph(state);
   const term = agentGlossaryTerm(state);
   const label = agentLabel(state);
   return (
@@ -75,6 +83,7 @@ export function AgentStateBadge({ state }: { state: AgentState }): React.ReactNo
       data-testid="agent-state-badge"
       data-state={state}
     >
+      <Icon aria-hidden />
       {term ? <Explain term={term}>{label}</Explain> : label}
     </Badge>
   );
@@ -155,7 +164,7 @@ export function PhaseBadge({
         >
           <span aria-hidden>{phaseGlyph(phase.phase, phase.blocked)}</span>
           <span className="tabular-nums">
-            {phase.index + 1}/{phase.total}
+            {phaseLabel(phase.phase)} {phase.index + 1}/{phase.total}
           </span>
         </Badge>
       </TooltipTrigger>
@@ -184,16 +193,21 @@ export function PhaseTooltipBody({ tip }: { tip: PhaseTooltip }): React.ReactNod
       <p className="font-medium" data-testid="phase-tooltip-headline">
         {tip.headline}
       </p>
-      <p data-testid="phase-tooltip-meaning">{tip.meaning}</p>
-      {tip.stall && <p data-testid="phase-tooltip-stall">{tip.stall}</p>}
-      {/* Quoted and italic because it is SOMEBODY ELSE'S SENTENCE: the agent's
-          own words, rendered exactly as written rather than folded into the
-          voice of the sentences around it. */}
+      {/* THE NOTE COMES SECOND, directly under the headline, and the order is
+          the decision rather than the styling. It is the only firsthand fact
+          here — the agent's own sentence about this specific ticket — while
+          `meaning` and `stall` are Grove explaining its own vocabulary, which a
+          returning reader already knows and does not need re-taught above the
+          one line they came for. Quoted and italic because it is SOMEBODY
+          ELSE'S SENTENCE, rendered as written rather than folded into the voice
+          of the sentences around it. */}
       {tip.note && (
         <p className="italic" data-testid="phase-tooltip-note">
           &ldquo;{tip.note}&rdquo;
         </p>
       )}
+      <p data-testid="phase-tooltip-meaning">{tip.meaning}</p>
+      {tip.stall && <p data-testid="phase-tooltip-stall">{tip.stall}</p>}
       {tip.tracker && <p data-testid="phase-tooltip-tracker">{tip.tracker}</p>}
     </div>
   );
@@ -226,7 +240,7 @@ export function RuntimeBadge({
         data-fallback="true"
       >
         <TriangleAlertIcon aria-hidden />
-        <Explain term="runtime_fallback">fallback</Explain>
+        <Explain term="runtime_fallback">Fell back to host</Explain>
       </Badge>
     );
   }
@@ -256,23 +270,36 @@ export function RuntimeBadge({
  * and keeping the table's variant means the hairline survives the accent, so a
  * toned chip still sits in the same set as the untoned ones beside it.
  *
- * The `☑` and the fraction carry the meaning with the hue removed (§4.7), which
- * is why the accent can be a fill here at all.
+ * A distinct checked-list / check-circle pair carries the same in-flight / done
+ * difference if colour is unavailable, and the fraction tells the reader what
+ * was measured. The button-like badge is focusable because its progress detail
+ * is a full sentence rather than a cryptic native title.
  */
 export function TodoBadge({ todo }: { todo: TodoProgress }): React.ReactNode {
+  const complete = todo.total > 0 && todo.completed >= todo.total;
+  const Icon = complete ? CircleCheckIcon : ListTodoIcon;
+  const label = complete ? "Checklist complete" : "Checklist progress";
+  const detail = `${label}: ${todo.completed} of ${todo.total} items done`;
   return (
-    <Badge
-      variant="outline"
-      className={progressAccent(todo.completed, todo.total)}
-      title="todo checklist the agent is keeping"
-      data-testid="todo-badge"
-    >
-      <span aria-hidden>☑</span>
-      <span className="tabular-nums">
-        {todo.completed}/{todo.total}
-      </span>
-      <span className="sr-only">todo items done</span>
-    </Badge>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          className={progressAccent(todo.completed, todo.total)}
+          tabIndex={0}
+          aria-label={detail}
+          data-testid="todo-badge"
+          data-complete={complete || undefined}
+        >
+          <Icon aria-hidden />
+          <span className="tabular-nums">
+            {todo.completed}/{todo.total}
+          </span>
+          <span className="sr-only">{label}</span>
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent>{detail}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -300,7 +327,7 @@ export function TodoBadge({ todo }: { todo: TodoProgress }): React.ReactNode {
  * the chip is what they can paste into the fleet search and find.
  */
 export function TicketChip({ ticket }: { ticket: TicketRef }): React.ReactNode {
-  const state = ticketState(ticket.status);
+  const state = ticketState(ticket.status, ticket.draft);
   const Glyph = ticketGlyph(ticket.kind, state);
   const label = `${ticket.provider}#${ticket.id}`;
   const body = (
@@ -349,7 +376,8 @@ export function TicketChip({ ticket }: { ticket: TicketRef }): React.ReactNode {
 export function AttentionBadge({ count }: { count: number }): React.ReactNode {
   return (
     <Badge variant="destructive" data-testid="attention-badge">
-      {count} need you
+      <TriangleAlertIcon aria-hidden />
+      {count} {count === 1 ? "needs" : "need"} attention
     </Badge>
   );
 }

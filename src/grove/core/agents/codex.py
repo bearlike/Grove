@@ -1887,7 +1887,9 @@ class _LineFolder:
         self._lines: list[_RolloutLine] = []
         self._index = 0
 
-    def add(self, raw: dict[str, Any]) -> None:
+    def add(self, raw: dict[str, Any], source: str) -> None:  # noqa: ARG002
+        # ``source`` is ignored deliberately: this fold appends and never merges
+        # by id, so it has no cross-file collision to disambiguate.
         self._lines.append(_RolloutLine(raw=raw, index=self._index))
         self._index += 1
 

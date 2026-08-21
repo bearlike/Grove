@@ -12,7 +12,6 @@ import os
 import sys
 
 import typer
-import uvicorn
 from loguru import logger
 
 app = typer.Typer(help="Grove API daemon")
@@ -90,6 +89,13 @@ def serve(
     ),
 ) -> None:
     """Run the Grove daemon (FastAPI + uvicorn)."""
+    # Deferred: this module is imported by `grove.cli` to mount the `daemon`
+    # subcommand, so EVERY `grove` invocation — including each shell-completion
+    # round trip — paid uvicorn's ~125 ms import to run some other verb. The app
+    # is already referenced by string ("grove.daemon._asgi:app"), so `serve` is
+    # the only thing here that needs the package at all.
+    import uvicorn  # noqa: PLC0415
+
     if print_port:
         _arm_parent_death_signal()
     config = uvicorn.Config(

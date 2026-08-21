@@ -39,9 +39,85 @@ title: Grove
   </span>
 </div>
 
-<video preload="auto" poster="img/posters/terminal-still.png">
-  <source src="videos/1-grove-terminal.mp4" type="video/mp4" />
-</video>
+<div class="swiper ms-shots">
+  <div class="swiper-wrapper">
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/webapp-composer.png" alt="Grove's web dashboard on its launch page: a composer for describing a task, with pills for the project, working directory, agent, runtime and branch">
+        <figcaption>Start here. Describe the task, pick the agent and runtime, and a workspace opens around it.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/demos/cli-completion.gif" alt="Grove CLI tab completion stepping through commands, configured agents, model names, workspace ids, branches and recorded sessions">
+        <figcaption>CLI. Every command and live value completes in your shell, from agent models to workspace ids.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/tui-list.png" alt="Grove's terminal UI showing four workspaces in mixed states beside a live peek rail">
+        <figcaption>Terminal fleet. Create, attach, pause and steer beside a live peek at the selected agent.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/tui-dashboard.png" alt="Grove's terminal activity dashboard: one tile per workspace, grouped by project, with the busiest tiles expanded to show a live terminal tail">
+        <figcaption>Activity dashboard. Every project on one wall, sized by which workspace needs you.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done">
+        <figcaption>Issue ops. The phase, checklist and pull request stay current on the ticket that started the work.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/demos/grove-demo-devcontainer.gif" alt="Grove creating a workspace with the Container runtime, then running Claude Code inside its devcontainer under visible CPU and memory limits">
+        <figcaption>Containerized agents. One complete stack per workspace, built from the repository's own devcontainer.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/webapp-workspace.png" alt="A Grove workspace page with an agent transcript in the center and the work panel open beside it to show branch, model, runtime and ticket details">
+        <figcaption>Workspace detail. Read the transcript and inspect the branch, runtime, tickets and diff without attaching.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/webapp-sessions.png" alt="Grove's host-wide session catalog: searchable agent sessions with project, model, turn count, recency and context usage columns">
+        <figcaption>Session catalog. Search every recorded agent session on the host, including work Grove did not launch.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/webapp-usage.png" alt="Grove's usage audit showing subscription windows, measured totals, a daily token heatmap and weekly model mix">
+        <figcaption>Usage. Subscription windows, burn rate and a year of tokens, cost and latency from local transcripts.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools for creating, listing, inspecting, pausing and steering workspaces">
+        <figcaption>MCP. Claude Code, Codex and other orchestrators can create workspaces and steer the fleet themselves.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/telemetry-trace.png" alt="One Claude Code turn as a Langfuse trace: an agent-turn root with model generations and a span for each tool call">
+        <figcaption>Telemetry. Every turn can become one trace with model generations, tool calls, latency and cost.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/webapp-home.png" alt="Grove's web fleet dashboard: an attention-sorted grid of workspace cards beside a session rail listing every workspace by recency">
+        <figcaption>Web fleet. Reach every workspace from any device, sorted by the one that needs you.</figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="swiper-pagination"></div>
+  <div class="swiper-button-prev"></div>
+  <div class="swiper-button-next"></div>
+</div>
 
 ## What is Grove? { .ms-h2-icon data-icon="target" }
 
@@ -86,19 +162,10 @@ Every workspace is reachable from all four.
 </a>
 </div>
 
-<video preload="auto" poster="img/posters/web-still.png">
-  <source src="videos/2-grove-web.mp4" type="video/mp4" />
-</video>
-
 ## The ticket you filed is the ticket you check { .ms-h2-icon data-icon="flow" }
 
 A workspace treats its issue as the spec. One comment, rewritten as the work moves, carries the agent's
 phase, what it has finished and the pull request it opened.
-
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img src="img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done" width="100%" /></div>
-  <figcaption class="ms-shot__body">One comment per ticket, rewritten in place.</figcaption>
-</figure>
 
 ## What you get { .ms-h2-icon data-icon="grid" }
 
@@ -146,10 +213,6 @@ phase, what it has finished and the pull request it opened.
     <span class="ms-card__body">Get pinged when an agent finishes a turn or needs an answer.</span>
   </a>
 </div>
-
-<video preload="auto" poster="img/posters/devcontainer-still.png">
-  <source src="videos/3-grove-devcontainer.mp4" type="video/mp4" />
-</video>
 
 ## Install { .ms-h2-icon data-icon="plug" }
 

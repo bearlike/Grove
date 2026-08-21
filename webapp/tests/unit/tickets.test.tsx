@@ -7,12 +7,14 @@ import {
   mergeTicket,
   providerLabel,
   sortTicketRefs,
+  compareTicketRefs,
   ticketIdLabel,
   ticketKindLabel,
   ticketStatusTone,
 } from "@/components/grove/workspace/selectors";
 import type { TicketProviderView, TicketRef } from "@/lib/grove/api";
 import { groveKeys } from "@/lib/grove/hooks";
+import { FIXTURE_PHASE } from "../e2e/_fixtures";
 
 /**
  * What this surface owes a reader, pinned.
@@ -38,6 +40,7 @@ function ref(overrides: Partial<TicketRef> = {}): TicketRef {
     title: "Widgets render twice on resize",
     url: "https://tracker.example/acme/api/issues/42",
     status: "open",
+    draft: false,
     assignee: null,
     ambiguous: false,
     ...overrides,
@@ -179,14 +182,14 @@ describe("a row", () => {
 });
 
 describe("the list", () => {
-  it("renders every attached ref, issues before pull requests", () => {
+  it("renders every attached ref, pull requests before issues", () => {
     const html = card({
       refs: [ref({ id: "9", kind: "pull_request", title: "Fix it" }), ref({ id: "42" })],
       providers: [provider()],
     });
 
     expect(html).toContain("2 linked");
-    expect(html.indexOf("#42")).toBeLessThan(html.indexOf("#9"));
+    expect(html.indexOf("#9")).toBeLessThan(html.indexOf("#42"));
   });
 
   it("warns once, and says how to resolve it, when any link is uncertain", () => {
@@ -249,13 +252,49 @@ describe("the list", () => {
 });
 
 describe("presentation rules", () => {
-  it("orders issues before pull requests", () => {
+  it("orders pull requests before issues", () => {
     const ordered = sortTicketRefs([
       ref({ id: "9", kind: "pull_request" }),
       ref({ id: "42", kind: "issue" }),
     ]);
 
-    expect(ordered.map((each) => each.id)).toEqual(["42", "9"]);
+    expect(ordered.map((each) => each.id)).toEqual(["9", "42"]);
+  });
+
+  it("keeps an unresolved ticket above settled work", () => {
+    expect(
+      compareTicketRefs(
+        ref({ id: "2", status: null }),
+        null,
+        ref({ id: "1", status: "closed" }),
+        null,
+      ),
+    ).toBeLessThan(0);
+  });
+
+  it("orders the furthest live phase first, then done, then no claim", () => {
+    expect(
+      compareTicketRefs(
+        ref({ id: "1" }),
+        { ...FIXTURE_PHASE.tickets[0]!, phase: "delivering", index: 4 },
+        ref({ id: "2" }),
+        { ...FIXTURE_PHASE.tickets[0]!, phase: "implementing", index: 2 },
+      ),
+    ).toBeLessThan(0);
+    expect(
+      compareTicketRefs(
+        ref({ id: "2" }),
+        { ...FIXTURE_PHASE.tickets[0]!, phase: "done", index: 5 },
+        ref({ id: "3" }),
+        null,
+      ),
+    ).toBeLessThan(0);
+  });
+
+  it("orders numeric ids before lexical ids, each ascending", () => {
+    expect(compareTicketRefs(ref({ id: "9" }), null, ref({ id: "42" }), null)).toBeLessThan(0);
+    expect(compareTicketRefs(ref({ id: "42" }), null, ref({ id: "ENG-7" }), null)).toBeLessThan(0);
+    expect(compareTicketRefs(ref({ id: "ENG-7" }), null, ref({ id: "ENG-9" }), null)).toBeLessThan(0);
   });
 
   it("writes an id the way its tracker does", () => {

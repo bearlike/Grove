@@ -29,6 +29,7 @@ from grove.core import GroveError, build
 from grove.core.container_runtime import ContainerRuntimeState
 from grove.core.container_shell import ContainerShell
 from grove.core.workspace import WorkspaceState, ensure_can_attach
+from grove.tui.cli_complete import Complete
 from grove.tui.cli_workspace import clean_exit, resolve_workspace
 
 # Mirrors cli_workspace.py's private ``_WORKSPACE_ARG`` verbatim rather than
@@ -38,6 +39,7 @@ from grove.tui.cli_workspace import clean_exit, resolve_workspace
 _WORKSPACE_ARG = typer.Argument(
     ...,
     help="Workspace id or unique id prefix (see `grove ls`).",
+    autocompletion=Complete.workspaces,
 )
 
 

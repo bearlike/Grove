@@ -9,13 +9,17 @@ rather than quietly missing a field.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from grove.core.contracts.branch_plan import AutoBranch, BranchPlan
 from grove.core.contracts.tickets import TicketSelector
 from grove.core.workspace import Runtime
+
+_MODEL_ID_MAX_LENGTH = 64
+_MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:\[\]-]*\Z")
 
 
 class CreateWorkspaceRequest(BaseModel):
@@ -43,14 +47,30 @@ class CreateWorkspaceRequest(BaseModel):
     treated equivalent to ``None`` by the engine; no separate "cleared"
     state on the wire."""
 
-    model: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None)
     """Optional model id for this create only, forwarded to the agent tool as its
     model argument at launch (``claude --model <id>`` / ``codex --model <id>``).
     ``None`` (the default) lets the tool pick its own default — Grove never
     second-guesses the model, it only forwards the parameter (the provider
-    boundary). The token is opaque (a known id or a custom string); the tool
-    validates it. Kinds with no launch-time model flag (mewbo, generic) ignore
-    it. Create-time only, like ``skip_init`` — never persisted or re-applied."""
+    boundary). Kinds with no launch-time model flag (mewbo, generic) ignore it.
+    Create-time only, like ``skip_init`` — never persisted or re-applied."""
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        model = value.strip()
+        if not model:
+            return None
+        if len(model) > _MODEL_ID_MAX_LENGTH:
+            raise ValueError(f"model id {model!r} exceeds {_MODEL_ID_MAX_LENGTH} characters")
+        # This limits argv shape, not model semantics: providers still validate any id we forward.
+        # A separator is admitted unless dangerous, not excluded unless proven necessary.
+        # Brackets occur in real gateway ids; list-form argv with shell=False never expands them.
+        if not _MODEL_ID_PATTERN.fullmatch(model):
+            raise ValueError(f"invalid model id {model!r}")
+        return model
 
     branch_plan: BranchPlan = Field(default_factory=AutoBranch)
     """How the workspace's branch and placement are sourced. See
@@ -169,10 +189,46 @@ class UpdateWorkspaceRequest(BaseModel):
     a soft cap that mirrors the engine's validation — clients should
     truncate for the textarea, the engine is the source of truth."""
 
+    share: bool | None = None
+    """Whether this workspace is publicly readable. ``None`` / omitted leaves
+    sharing exactly as it is — which is what makes an ordinary rename safe:
+    a client PATCHing a title must never turn sharing off by not mentioning it.
+
+    ``true`` mints a public link (idempotent — an already-shared workspace keeps
+    the token it has, so re-enabling never breaks a link somebody is holding).
+    ``false`` revokes, permanently: the token is cleared rather than parked, and
+    re-sharing later mints a fresh one. The token itself comes back on
+    ``WorkspaceStateView.share_token``; it is never accepted as input, because
+    the engine is the only thing that may decide what a capability is."""
+
+    share_session_id: str | None = Field(default=None, min_length=1)
+    """Which session transcript the public link shows. ``None`` / omitted keeps
+    whatever the link is already pinned to.
+
+    Minting a link pins it automatically, to the workspace's session at that
+    moment, so the ordinary path never sends this. It exists to RE-PIN a link
+    already in circulation: enabling is idempotent, so ``share: true`` alone
+    cannot move a live link's transcript, and that silence is deliberate —
+    clicking share twice must not quietly change what a URL somebody already
+    holds renders.
+
+    Requires ``share: true`` (a pin without a link is a claim about nothing) and
+    accepts a unique id-prefix. An id this workspace's adapter could never read
+    is rejected as ``agent_session_not_found`` rather than stored as a dead
+    pointer that answers 200."""
+
     @model_validator(mode="after")
     def _at_least_one_field(self) -> UpdateWorkspaceRequest:
-        if self.title is None and self.description is None:
-            raise ValueError("provide at least one of title, description")
+        if self.title is None and self.description is None and self.share is None:
+            raise ValueError("provide at least one of title, description, share")
+        return self
+
+    @model_validator(mode="after")
+    def _pin_requires_sharing(self) -> UpdateWorkspaceRequest:
+        # Mirrored engine-side too — this one exists so the refusal lands as a
+        # 422 naming the field rather than as a generic engine error.
+        if self.share_session_id is not None and self.share is not True:
+            raise ValueError("share_session_id requires share: true")
         return self
 
 

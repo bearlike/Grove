@@ -96,10 +96,33 @@ export function findWorkspaceActivity(
  * disagree with the order they are printed in.
  */
 export function lastActivityIso(workspace: WorkspaceActivityView): string | null {
-  const stamps: readonly (string | null | undefined)[] = [
-    ...workspace.sessions.map((session) => session.activity.last_event_at),
+  return newestActivityIso(
+    workspace.sessions,
     workspace.state.updated_at,
     workspace.state.created_at,
+  );
+}
+
+/**
+ * The same rule as {@link lastActivityIso}, with the record's stamps passed in
+ * rather than read off an embedded workspace state.
+ *
+ * It exists because the public share view carries the session rows and the
+ * workspace identity as two separate objects — its activity payload embeds no
+ * `WorkspaceStateView`, deliberately, since that shape carries host paths a
+ * public reader may not see. Rather than let that surface derive recency its own
+ * way (and disagree with every other one), the fallback chain is the parameter
+ * and the rule stays here, in one place.
+ *
+ * Fallbacks are tried in the order given, newest wins overall.
+ */
+export function newestActivityIso(
+  sessions: readonly { activity: { last_event_at?: string | null } }[],
+  ...fallbacks: readonly (string | null | undefined)[]
+): string | null {
+  const stamps: readonly (string | null | undefined)[] = [
+    ...sessions.map((session) => session.activity.last_event_at),
+    ...fallbacks,
   ];
 
   let newest = 0;

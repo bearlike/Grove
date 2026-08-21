@@ -11,9 +11,9 @@ import type { PhaseView, TicketProviderView, TicketRef } from "@/lib/grove/api";
 import { ticketKey, useTicketProviders, useTickets } from "@/lib/grove/hooks";
 import { cn } from "@/lib/utils";
 import {
+  compareTicketRefs,
   mergeTicket,
   providerLabel,
-  sortTicketRefs,
   ticketGlyph,
   ticketIdLabel,
   ticketKindLabel,
@@ -60,14 +60,27 @@ export function TicketRefsCard({
   refs,
   phase,
 }: {
-  repoRoot: string;
+  repoRoot: string | null;
   refs: readonly TicketRef[];
   phase: PhaseView | null;
 }) {
+  // `null` means DO NOT RESOLVE, and it is what the public share view passes.
+  // Two reasons, and the first is not about tidiness: resolving a ticket needs
+  // the host's own tracker credential, so doing it for an unauthenticated
+  // reader would let an anonymous request drive an authenticated outbound call
+  // and put a private tracker's prose on a public page. The second is that a
+  // repo root is a host path, which that payload deliberately does not carry.
+  // Both hooks already gate on `repo !== null`, so this costs no request.
   const providers = useTicketProviders(repoRoot);
   const configured = configuredProviders(providers.data);
   const live = useTickets(repoRoot, refs, configured);
   const claims = ticketPhases(phase);
+  // A DISABLED query is pending forever (see `useTickets`' own note on why it
+  // reads `isLoading` rather than `isPending`), so without this the rows would
+  // report "resolving" for the life of the page on a surface that is never
+  // going to resolve anything. Not resolving and not-yet-resolved are different
+  // states and only one of them ever ends.
+  const resolving = repoRoot !== null;
 
   // The stored refs are the spine and the live reads are enrichment over them:
   // rows exist, in order, before any request resolves.
@@ -76,7 +89,7 @@ export function TicketRefsCard({
   // provider list lands, and the first paint that treated "not asked yet" as
   // "answered nothing" said `No title recorded` about a ticket whose title
   // arrived 200ms later — an unknown rendered as a fact.
-  const rows = sortTicketRefs(refs).map((ref) => ({
+  const rows = refs.map((ref) => ({
     // The STORED coordinate, not the merged one: a resolve may correct `kind`
     // (a forge numbers issues and pull requests in one space, so a ref attached
     // as an issue can come back a PR), and keying a row on a value the server
@@ -92,8 +105,10 @@ export function TicketRefsCard({
     // which is exactly how the fleet already draws a workspace that has
     // reported nothing.
     phase: claims.get(ticketPhaseKey(ref)) ?? null,
-    resolving: (providers.isPending || live.loading) && !live.byKey.has(ticketKey(ref)),
+    resolving:
+      resolving && (providers.isPending || live.loading) && !live.byKey.has(ticketKey(ref)),
   }));
+  rows.sort((a, b) => compareTicketRefs(a.ticket, a.phase, b.ticket, b.phase));
 
   // Only claimable once the provider list has actually ANSWERED. Computed off
   // `providers.data ?? []` while it was loading, this note accused every
@@ -216,7 +231,7 @@ export function TicketRow({
   resolving: boolean;
   phase?: TicketPhaseMark | null;
 }) {
-  const state = ticketState(ticket.status);
+  const state = ticketState(ticket.status, ticket.draft);
   const KindIcon = ticketGlyph(ticket.kind, state);
   const kind = ticketKindLabel(ticket.kind);
   const meta = [providerLabel(ticket.provider), kind, ticket.assignee ? `@${ticket.assignee}` : ""]

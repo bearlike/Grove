@@ -249,8 +249,15 @@ function NoDetail(): ReactNode {
  * An agent issues several calls in one turn and the vendored grouping folds
  * them behind "3 tool calls" — which is the right shape, and would otherwise
  * hide the very state a user is watching for. The count of running and failed
- * calls rides the header, and a group that gains a live call opens itself, so a
- * spinner is never buried one click deep.
+ * calls rides the header, and a group follows its own liveness: it opens when a
+ * call starts, so a spinner is never buried one click deep, and folds back up
+ * when the last one settles.
+ *
+ * That is what makes "only the newest group is open" true without any group
+ * needing to know its position. Running is a property one group has at a time
+ * on a live workspace, so tracking it locally gives the same result an explicit
+ * latest-index would, with no cross-group state to keep correct — and a
+ * finished transcript opens nothing at all.
  *
  * The counts are read as NUMBERS from the store rather than as a summary
  * object: a selector returning a fresh object re-renders this on every frame of
@@ -266,12 +273,19 @@ export function ToolCallGroup({
 
   // The vendored `ToolFallback` uses exactly this shape to open itself when a
   // call starts requiring action: track the previous value, act on the edge.
+  // BOTH edges, symmetrically — a rising edge that opens with no falling edge
+  // that closes is not a disclosure, it is an append-only list of everything
+  // the agent has ever done, and on a live workspace that is the whole
+  // transcript held open until someone reloads the page. Following the edge
+  // rather than the value is also what keeps the user in charge: a manual
+  // toggle changes `open` without moving `live`, so nothing fires and their
+  // choice stands until the group's own state actually changes.
   const live = running > 0;
   const [open, setOpen] = useState(live);
   const [wasLive, setWasLive] = useState(live);
   if (live !== wasLive) {
     setWasLive(live);
-    if (live) setOpen(true);
+    setOpen(live);
   }
 
   return (

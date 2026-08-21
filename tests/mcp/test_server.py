@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
+from grove._truststore import CA_PATH_ENV
 from grove.client import TransportError
 from grove.mcp.server import GroveMcpServer, McpServerConfig, SharedSecretVerifier, main
 from tests.mcp.conftest import FakeGroveClient
@@ -21,6 +22,7 @@ EXPECTED_TOOLS = {
     "grove_list_agents",
     "grove_list_sessions",
     "grove_create_workspace",
+    "grove_update_workspace",
     "grove_peek_workspace",
     "grove_get_fleet_status",
     "grove_pause_workspace",
@@ -35,6 +37,7 @@ EXPECTED_TOOLS = {
     "grove_get_workspace_phase",
     "grove_set_workspace_phase",
     "grove_get_workspace_todo",
+    "grove_recollect_session",
 }
 
 # The read-only scope: tools that only observe. Every OTHER published tool
@@ -52,6 +55,7 @@ NON_MUTATING_TOOLS = {
     "grove_attach_instruction",
     "grove_get_workspace_phase",
     "grove_get_workspace_todo",
+    "grove_recollect_session",
 }
 
 
@@ -150,6 +154,28 @@ def test_config_cli_flag_beats_env() -> None:
         {"GROVE_API_URL": "http://127.0.0.1:9999"}, api_url="http://127.0.0.1:7777"
     )
     assert cfg.api_url == "http://127.0.0.1:7777"
+
+
+def test_mcp_entry_point_passes_the_tls_ca_environment_to_process_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[str | None] = []
+    monkeypatch.setenv(CA_PATH_ENV, "/deployment/ca.pem")
+
+    def use_trust_store(path: str | None) -> str:
+        received.append(path)
+        return "unavailable"
+
+    def stop_before_server(*_args: object, **_kwargs: object) -> McpServerConfig:
+        raise SystemExit
+
+    monkeypatch.setattr("grove.mcp.server.use_system_trust_store", use_trust_store)
+    monkeypatch.setattr(McpServerConfig, "from_env", stop_before_server)
+
+    with pytest.raises(SystemExit):
+        main([])
+
+    assert received == ["/deployment/ca.pem"]
 
 
 def test_config_empty_token_env_means_unset() -> None:

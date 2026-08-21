@@ -43,10 +43,11 @@ _CONTAINER_TMUX_DIR = "container-tmux"
 _CONTAINER_NETFILTER_DIR = "container-netfilter"
 _HOOKS_SETTINGS_FILE = "claude-hooks-settings.json"
 _CONTAINER_SETTINGS_FILE = "claude-container-settings.json"
-_BRIEF_FILE = "agent-brief.md"
+_BRIEFS_DIR = "agent-briefs"
 _HANDOVER_FILE = "handovers.json"
 _USAGE_DB_FILE = "usage.sqlite3"
 _QUOTA_STATE_FILE = "quota-state.json"
+_SHARE_POLICIES_FILE = "share-policies.json"
 _TELEMETRY_LEDGER_FILE = "telemetry-exports.sqlite3"
 _SESSION_TURNS_FILE = "session-turns.json"
 
@@ -183,6 +184,16 @@ def quota_state_path() -> Path:
     labels, percentages and timestamps only.
     """
     return Path(user_state_dir(_APP_NAME)) / _QUOTA_STATE_FILE
+
+
+def share_policies_path() -> Path:
+    """Per-project public-share TTLs and passcode hashes.
+
+    This is state rather than config because the passcode hash is mutable secret
+    material; a committed project config would turn an access-control change into
+    source-controlled policy and could expose the hash to every clone.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _SHARE_POLICIES_FILE
 
 
 def session_turns_path() -> Path:
@@ -354,17 +365,28 @@ def agent_hooks_settings_path() -> Path:
     return Path(user_config_dir(_APP_NAME)) / _HOOKS_SETTINGS_FILE
 
 
-def agent_brief_path() -> Path:
-    """Grove-owned first-turn brief, rendered for the ``UserPromptSubmit`` hook.
+def agent_brief_path(workspace_id: str) -> Path:
+    """Grove-owned first-turn brief for ONE workspace, read by its hook.
 
     Beside the hook settings file, because it has the same lifecycle: Grove owns
     it, every launch rewrites it, and it is only ever read by the hook process.
-    Host-global like that file — the text is identical for every workspace, so
-    the per-workspace choice is carried by whether the launch env names this path
-    at all (:attr:`grove.core.agents.brief.AgentBrief.PATH_ENV`), never by a
-    second copy per workspace.
+
+    **It is per workspace, and it did not used to be.** The text was once
+    identical everywhere, so one host-global file sufficed and the per-workspace
+    choice was carried purely by whether the launch env named it
+    (:attr:`grove.core.agents.brief.AgentBrief.PATH_ENV`). Two things made the
+    content itself vary: an operator's own appended instructions resolve through
+    the config cascade, which is per repository, and the self-naming nudge is
+    added only for a workspace with no description. A shared file cannot hold
+    two answers, and the env var can only say yes or no.
+
+    The id is already filesystem-safe (bare hex), and the directory accumulates
+    one small file per workspace — the same tolerated growth as the sidecar
+    directory's per-session markers, and for the same reason: a stale brief is
+    inert, while tying its removal to ``kill`` would put a cosmetic file on a
+    teardown path that already has three things that can fail.
     """
-    return Path(user_config_dir(_APP_NAME)) / _BRIEF_FILE
+    return Path(user_config_dir(_APP_NAME)) / _BRIEFS_DIR / f"{workspace_id}.md"
 
 
 def agent_container_settings_path() -> Path:

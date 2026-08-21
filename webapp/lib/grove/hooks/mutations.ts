@@ -8,9 +8,11 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 
+import type { components } from "@/lib/grove/api/types.gen";
 import type {
   CreateWorkspaceRequest,
   QuestionAnswerItem,
+  UpdateWorkspaceRequest,
   WorkspaceQueueView,
   WorkspaceStateView,
 } from "@/lib/grove/api";
@@ -38,7 +40,11 @@ function invalidateWorkspace(queryClient: QueryClient, id: string): void {
 }
 
 export interface WorkspaceActions {
-  pause: UseMutationResult<WorkspaceStateView, Error, { force?: boolean } | void>;
+  pause: UseMutationResult<
+    WorkspaceStateView,
+    Error,
+    { force?: boolean } | void
+  >;
   resume: UseMutationResult<WorkspaceStateView, Error, void>;
   respawn: UseMutationResult<WorkspaceStateView, Error, void>;
   kill: UseMutationResult<void, Error, { deleteBranch: boolean | null }>;
@@ -53,7 +59,10 @@ export interface WorkspaceActions {
  */
 export function useWorkspaceActions(id: string): WorkspaceActions {
   const queryClient = useQueryClient();
-  const settle = useCallback(() => invalidateWorkspace(queryClient, id), [queryClient, id]);
+  const settle = useCallback(
+    () => invalidateWorkspace(queryClient, id),
+    [queryClient, id],
+  );
 
   return {
     pause: useMutation({
@@ -84,10 +93,42 @@ export function useCreateWorkspace(): UseMutationResult<
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (request: CreateWorkspaceRequest) => groveClient.createWorkspace(request),
+    mutationFn: (request: CreateWorkspaceRequest) =>
+      groveClient.createWorkspace(request),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: groveKeys.workspaces });
       void queryClient.invalidateQueries({ queryKey: groveKeys.activity });
+    },
+  });
+}
+
+/** Update workspace metadata and refresh every read that carries its title. */
+export function useUpdateWorkspace(
+  id: string,
+): UseMutationResult<WorkspaceStateView, Error, UpdateWorkspaceRequest> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: UpdateWorkspaceRequest) =>
+      groveClient.updateWorkspace(id, request),
+    onSuccess: () => invalidateWorkspace(queryClient, id),
+  });
+}
+
+type SharePolicyView = components["schemas"]["SharePolicyView"];
+type SharePolicyUpdateRequest = components["schemas"]["SharePolicyUpdateRequest"];
+
+/** Replace a project's complete share policy, including its passcode state. */
+export function useSaveSharePolicy(
+  repoRoot: string,
+): UseMutationResult<SharePolicyView, Error, SharePolicyUpdateRequest> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (policy: SharePolicyUpdateRequest) =>
+      groveClient.saveSharePolicy(repoRoot, policy),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: groveKeys.sharePolicy(repoRoot),
+      });
     },
   });
 }
@@ -104,7 +145,8 @@ export function useRemapSession(
 ): UseMutationResult<WorkspaceStateView, Error, string> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (sessionRef: string) => groveClient.remapSession(id, sessionRef),
+    mutationFn: (sessionRef: string) =>
+      groveClient.remapSession(id, sessionRef),
     onSuccess: () => {
       invalidateWorkspace(queryClient, id);
       void queryClient.invalidateQueries({ queryKey: groveKeys.sessions(id) });
@@ -184,7 +226,9 @@ export function withOptimisticSend(
 }
 
 /** Interrupt a working agent. A 409 means it was already idle. */
-export function useInterrupt(workspaceId: string): UseMutationResult<void, Error, void> {
+export function useInterrupt(
+  workspaceId: string,
+): UseMutationResult<void, Error, void> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => groveClient.interrupt(workspaceId),
@@ -221,7 +265,9 @@ export function useAnswerQuestion(
 }
 
 /** Fire a slash command or skill into the running session. */
-export function useInvokeControl(workspaceId: string): UseMutationResult<void, Error, string> {
+export function useInvokeControl(
+  workspaceId: string,
+): UseMutationResult<void, Error, string> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => groveClient.invokeControl(workspaceId, name),
@@ -233,12 +279,16 @@ export function useInvokeControl(workspaceId: string): UseMutationResult<void, E
 
 /** Switch the running session's model. Grove forwards the id verbatim and never
  * interprets it — the catalog is a hint, never a closed set. */
-export function useSwitchModel(workspaceId: string): UseMutationResult<void, Error, string> {
+export function useSwitchModel(
+  workspaceId: string,
+): UseMutationResult<void, Error, string> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (model: string) => groveClient.switchModel(workspaceId, model),
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: groveKeys.controls(workspaceId) });
+      void queryClient.invalidateQueries({
+        queryKey: groveKeys.controls(workspaceId),
+      });
     },
   });
 }

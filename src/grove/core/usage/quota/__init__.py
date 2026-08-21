@@ -18,10 +18,12 @@ from grove.core.usage.quota.base import QuotaAccount, QuotaProvider
 from grove.core.usage.quota.claude import ClaudeQuotaProvider
 from grove.core.usage.quota.codex import CodexQuotaProvider
 from grove.core.usage.quota.collector import QuotaCollector
+from grove.core.usage.quota.gateway import GatewayQuotaProvider
 
 __all__ = [
     "ClaudeQuotaProvider",
     "CodexQuotaProvider",
+    "GatewayQuotaProvider",
     "QuotaAccount",
     "QuotaCollector",
     "QuotaProvider",

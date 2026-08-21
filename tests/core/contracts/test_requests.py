@@ -83,6 +83,35 @@ def test_create_request_rejects_overlong_initial_prompt() -> None:
         CreateWorkspaceRequest(agent_name="claude", title="t", initial_prompt="x" * 10_001)
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-haiku-4-5-20251001",
+        "anthropic/claude-sonnet-4-6",
+        "anthropic-opus-5[1m]",  # A real gateway id, not a synthetic edge case.
+        "anthropic-qwen3.8-max-preview[1m]",
+        "openai:gpt-5",
+        " custom-model ",
+    ],
+)
+def test_create_request_accepts_model_id(model: str) -> None:
+    req = CreateWorkspaceRequest(agent_name="claude", title="t", model=model)
+    assert req.model == model.strip()
+
+
+@pytest.mark.parametrize("model", ["-rf", "claude sonnet", "claude\x00sonnet", "x" * 65])
+def test_create_request_rejects_unsafe_model_id(model: str) -> None:
+    with pytest.raises(ValidationError, match=r"model id|invalid model id"):
+        CreateWorkspaceRequest(agent_name="claude", title="t", model=model)
+
+
+def test_create_request_empty_model_normalizes_like_omitted() -> None:
+    omitted = CreateWorkspaceRequest(agent_name="claude", title="t")
+    blank = CreateWorkspaceRequest(agent_name="claude", title="t", model="  \t ")
+    assert blank.model is None
+    assert blank == omitted
+
+
 # ─── UpdateWorkspaceRequest ────────────────────────────────────────────────
 
 

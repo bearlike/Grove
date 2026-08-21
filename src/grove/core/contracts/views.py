@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from grove.core.config import BranchMode, GroveConfig
 from grove.core.container_runtime import ContainerRuntimeState
 from grove.core.contracts.tickets import TicketRef
 from grove.core.tmux import AttachInstruction, ContainerAttach, HostAttach
@@ -99,6 +100,29 @@ class WorkspaceStateView(BaseModel):
     # workspace whose image ships no in-container tmux, so the agent runs bare
     # and dies with the client that launched it.
     runtime_no_tmux: bool = False
+    # The public share link's capability token, or None when the workspace is
+    # private (the default). It rides THIS view — an authenticated-only shape —
+    # rather than a route of its own, because the only client that needs it is
+    # the one already holding the workspace it belongs to, and the surface that
+    # renders the link is the Controls tab on that same payload.
+    #
+    # It is deliberately NOT on any public view: the unauthenticated shapes in
+    # `contracts/public.py` are a hand-written allowlist and this field is not
+    # in it, so a shared page can never echo its own token back nor learn
+    # another's. Defaults to None so an older client decodes unchanged.
+    share_token: str | None = None
+    # Which transcript the share link shows, recorded when the link was issued.
+    # None means the link is not pinned (it was issued before pinning existed,
+    # or the workspace is private) and the public reader follows the workspace's
+    # own primary session instead.
+    #
+    # Unlike `share_token` this is NOT a credential and carries no host detail,
+    # so it also crosses to the public reader — as `session_id` plus
+    # `session_pinned` on `PublicWorkspaceView`. It rides here so the sharing
+    # surface can show WHAT it is publishing, not merely that it is publishing:
+    # a link whose pinned session has drifted from the workspace's current one
+    # is the state a user needs to see in order to decide whether to re-pin.
+    share_session_id: str | None = None
 
     @classmethod
     def from_state(cls, s: WorkspaceState) -> WorkspaceStateView:
@@ -131,6 +155,8 @@ class WorkspaceStateView(BaseModel):
             provision_started_at=s.provision_started_at,
             # Frozen model — safe to share with the record rather than copy.
             container=s.container,
+            share_token=s.share_token,
+            share_session_id=s.share_session_id,
             # TicketRef is frozen/immutable; the list is copied so the view can
             # never alias and mutate the engine record's refs.
             ticket_refs=list(s.ticket_refs),
@@ -379,6 +405,87 @@ class ProjectView(BaseModel):
         )
 
 
+class AgentCwdView(BaseModel):
+    """One labelled working directory a create surface may offer.
+
+    ``path`` is repo-relative and is what a client SENDS (as
+    ``CreateWorkspaceRequest.project_cwd``); ``label`` is only ever displayed.
+    Keeping the label off the wire is what lets a project rename one without
+    invalidating any workspace already created from it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    path: str
+
+
+class WorkspaceDefaultsView(BaseModel):
+    """Resolved answers a new-workspace form should pre-select.
+
+    Unlike the raw ``WorkspaceDefaults`` config section, this fills values the
+    create path already resolves through the wider cascade. ``None`` remains
+    meaningful for agent and model: their providers decide when no saved answer
+    exists.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    agent: str | None
+    runtime: Literal["host", "container"]
+    brief: bool
+    model: str | None
+    branch_mode: BranchMode
+    base_ref: str | None
+    skip_init: bool
+    agent_cwds: tuple[AgentCwdView, ...] = ()
+    """The repo's labelled agent working directories, in declaration order.
+
+    Read-only enrichment: it comes from ``agent_cwds``, a section a project
+    commits, NOT from the ``defaults`` object ``PUT /defaults`` replaces — so
+    this field rides the GET and is simply absent from the write shape. That
+    asymmetry is deliberate. ``defaults`` can be saved at USER scope and
+    applies to every project on the machine, where a repo-relative path like
+    ``webapp`` means nothing.
+    """
+    agent_cwd: str | None = None
+    """The relative path an untouched create will actually use, or ``None`` for
+    the worktree root — so a form can pre-select the right row rather than
+    guessing which entry is the default."""
+
+    @classmethod
+    def from_config(cls, cfg: GroveConfig) -> WorkspaceDefaultsView:
+        """Resolve create-form answers from one repo's fully merged config."""
+        defaults = cfg.defaults
+        return cls(
+            agent=defaults.agent,
+            runtime=defaults.runtime or ("container" if cfg.container.enabled else "host"),
+            brief=cfg.brief.enabled if defaults.brief is None else defaults.brief,
+            model=defaults.model,
+            branch_mode=defaults.branch_mode or "auto",
+            base_ref=defaults.base_ref,
+            skip_init=defaults.skip_init or False,
+            agent_cwds=tuple(
+                AgentCwdView(label=label, path=path)
+                for label, path in cfg.agent_cwds.entries.items()
+            ),
+            agent_cwd=cfg.agent_cwds.default_path(),
+        )
+
+
+class WorkspaceDefaultsSaveView(BaseModel):
+    """Where a complete workspace-defaults replacement landed.
+
+    ``shadowed`` names submitted fields whose user-layer defaults still outrank
+    a project-targeted write.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    shadowed: tuple[str, ...]
+
+
 class HealthView(BaseModel):
     """Public liveness probe — unauthenticated, no host identity.
 
@@ -453,6 +560,8 @@ __all__ = [
     "ProjectView",
     "ProvisionProgressView",
     "WhoamiView",
+    "WorkspaceDefaultsSaveView",
+    "WorkspaceDefaultsView",
     "WorkspacePaneView",
     "WorkspacePeekView",
     "WorkspaceStateView",

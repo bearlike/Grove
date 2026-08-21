@@ -1,44 +1,59 @@
 ---
 name: working-in-grove
-description: Use when you are the coding agent running INSIDE a Grove workspace — a git worktree Grove created for one task, on the host or in a container. Triggers on: reporting or updating your task phase or progress, GROVE_PHASE_FILE or .grove/phase.json, `grove phase`, grove_set_workspace_phase, keeping an attached issue or PR up to date, being asked how far along you are, or noticing you are in a worktree with a phase file. Covers the six phase names and when to write each, that your phase, note, todo checklist and activity line are PUBLISHED onto every attached ticket as a live comment, giving each attached ticket its own phase plus a `blocked` flag for work you cannot finish, and attaching the pull request you opened so the work is seen to land.
+description: Use when you are the coding agent running INSIDE a Grove workspace — a git worktree Grove created for one task, on the host or in a container. Triggers on: reporting or updating your task phase or progress, GROVE_PHASE_FILE or .grove/phase.json, `grove phase`, grove_set_workspace_phase, naming this workspace or setting its title or description, keeping an attached issue or PR up to date, being asked how far along you are, or noticing you are in a worktree with a phase file. Covers the six phase names and when to write each, that your phase, note, todo checklist and activity line are PUBLISHED onto every attached ticket as a live comment, giving each attached ticket its own phase plus a `blocked` flag for work you cannot finish, keeping the public checklist current, naming a workspace somebody can find in the fleet, and attaching the pull request you opened so the work is seen to land.
 ---
 
 # Working inside a Grove workspace
 
 You are one agent in a fleet. Somebody is watching twenty workspaces at once and
-cannot attach to yours to find out how it is going. Report your task phase and
-they can see it at a glance.
+cannot attach to yours to find out how it is going. Report your task phase so
+they can tell scoping from delivery at a glance.
 
-This is not status reporting for its own sake. Your transcript shows that you are
-busy. It never shows whether you are still working out what the job is or already
-pushing the branch, and those are the two facts a person deciding where to spend
-attention actually needs. Only you can tell them apart, so only you can report
-it.
+## What becomes public
 
-## What you report may be public
+When a ticket is attached and issue-ops is enabled, Grove keeps one live sticky
+comment on that ticket. It shows the workspace status, branch and commit, your
+reported phase and note, current activity, todo checklist, and other attached
+refs. Anyone who can read the ticket can read this comment.
 
-When your workspace is linked to a ticket and issue-ops is enabled, Grove keeps a
-live comment on that ticket built from what you report: your **phase and its
-note**, your **todo checklist**, and your **current activity line**. That comment
-is on the tracker, where anyone with access to the issue reads it — reviewers,
-teammates, and on a public repository, strangers.
+Keep the note and active-task text short and human-readable; raw tool output,
+another agent's message, or harness markup is published verbatim. The mirror
+says where you are, not what you found: write a real ticket comment when you
+confirm a cause, land a fix, or open a pull request.
 
-Three things follow, and none of them cost you extra work.
+If nothing about your work should be public, raise that with whoever created the
+workspace; do not silently stop reporting. If you are instead DRIVING a fleet,
+use `using-grove`. For installation configuration, use `configuring-grove`.
 
-- **Keep the phase note and your active-task text short and human-readable.**
-  Pasting raw tool output, another agent's message, or internal harness markup
-  into either one publishes it verbatim.
-- **Keep your todo list honest as you go.** It renders as the checklist, so an
-  item you finish without marking it makes the public status wrong.
-- **Nothing you report is a substitute for a real comment.** The mirror says
-  where you are; it never says what you found. When you confirm or correct a root
-  cause, land a fix, or open a pull request, write that on the ticket yourself.
+## Keep the todo list current
 
-If nothing about your work should be public, that is a conversation to have with
-whoever created the workspace — not a reason to stop reporting.
+Create the list on your first turn, before your first edit. Give every meaningful
+piece of work its own item: a discovery, a code change, a verification step, or a
+delivery step. Do not turn individual commands or files into items unless they
+are independently useful to the person reading the list.
 
-If you are instead DRIVING a fleet rather than working inside one, that is
-`using-grove`. Configuring the installation is `configuring-grove`.
+Mark an item complete as soon as that piece of work is complete. Keep exactly one
+item in progress; move to the next only after completing or deliberately
+superseding the current one. This is not private scratch planning: Grove renders
+the list as the public checklist on every attached ticket. An empty list says
+there is no plan, and stale items say work remains when it does not.
+
+## Name the workspace
+
+If its title is a generated id or its description is empty, set both once you
+understand the task. Somebody is reading this name to tell your workspace from
+twenty others.
+
+On the host, infer the current workspace and use:
+
+```bash
+grove edit --title "parser validation" --description "Validate malformed input"
+```
+
+Over MCP, call `grove_update_workspace` with the workspace id, `title`, and
+`description`. Do this once, not on every phase change; neither action moves the
+worktree, branch, or tmux session. Inside a container, ask the orchestrator to
+name it if neither command nor MCP is reachable.
 
 ## Write the file
 
@@ -85,13 +100,25 @@ for whichever is already in your hand — the point is that the report happens, 
 which door it came through. Inside a container neither is available, so the file
 is the answer.
 
-## Keeping several tickets current at once
+## Attach the work item
 
-A workspace often carries more than one ticket — a cluster of related issues, or
-an issue plus the PR that closes it. Each one now carries its own phase. Grove
-seeds it for you: at launch, and again the moment a ticket is attached, it writes
-that ticket an entry in your phase file at `scoping`, keyed `"<provider>:<id>"`.
-Open the file and the key is already there — you edit it, you never compose one.
+Attach every issue you work and the pull request you open: attaching is what makes
+Grove seed that ticket's phase entry and publish its sticky comment. On the host:
+
+```bash
+grove tickets attach 42
+grove tickets attach https://example.com/acme/widgets/pull/17
+```
+
+Or call `grove_attach_ticket` with the workspace id and ref. A bare number,
+`#42`, a full issue/PR URL, or `owner/repo#42` works; Grove infers the provider
+and issue-versus-PR. If a bare number is ambiguous across enabled trackers, use a
+URL or `owner/repo#42`. Attaching again is safe. Inside a container, ask the
+orchestrator to attach it.
+
+A workspace can carry related issues and the PR that closes them. Each ticket has
+its own phase. Grove seeds the entry at `scoping`, keyed `"<provider>:<id>"`;
+edit the existing key, never compose one.
 
 ```json
 {
@@ -131,9 +158,6 @@ converge on `done`.
 | `delivering` | Committing, pushing, opening or updating the pull request, writing the handoff |
 | `done` | Handed off. Nothing is left for you to do on this task |
 
-There is no `failed` phase, and phase alone no longer says everything about
-trouble either — see the next section.
-
 ## Report blocked work
 
 Set `"blocked": true` beside a phase — the workspace's own, or one ticket's —
@@ -151,27 +175,13 @@ when both are true.
 
 ## Report at transitions, not on a timer
 
-Write the file when what you are doing changes. On a normal task that is five or
-six writes from start to handoff, which is roughly one per phase.
+Write the file when what you are doing changes: `scoping` before reading,
+`planning` when choosing an approach, `implementing` at the first edit,
+`verifying` for gates and diff review, `delivering` for the commit or PR, and
+`done` only when nothing remains. Do not freshen a note because time passed.
 
-Do not report progress inside a phase. Ten writes of `implementing` with a
-freshening note cost you ten turns and tell the watcher nothing the first one did
-not. If you catch yourself updating the note because time has passed rather than
-because the work moved, stop.
-
-A good rhythm for a typical ticket looks like this.
-
-1. You are handed the task. Write `scoping` before you start reading.
-2. You have read enough to know what to build. Write `planning`.
-3. You open the first file to edit. Write `implementing`.
-4. The change is in and you run the test suite. Write `verifying`.
-5. Gates pass and you start the commit. Write `delivering`.
-6. The PR is up and you have nothing left. Write `done`.
-
-**Going backwards is a correct report.** If verifying shows the design was wrong,
-write `planning` again and say why in the note. Grove never enforces forward
-motion, and an honest reversal is worth far more to the watcher than a phase that
-only ever climbs.
+Going backwards is correct: if verification overturns the design, report
+`planning` again and say why.
 
 ## If the write fails, keep working
 
@@ -186,54 +196,20 @@ the far end. Grove drops the report and shows nothing rather than breaking.
 You do not need to gitignore the file. Grove excludes it from the worktree
 itself. Never commit it and never mention it in your diff or your PR body.
 
-## Link the pull request you opened
+## Attach the pull request
 
-Grove never works your pull request out from the branch name. It knows the issue
-your branch references and nothing more, so a PR reaches your workspace only if
-somebody attaches it. On the host, that somebody is you, in one call as you
-deliver.
+Your pull request is another ticket ref; Grove never discovers it from the
+branch. Attach its URL through the same command or MCP tool above as you deliver.
+This lets the ticket comment link the work to the PR and recognize a merged PR as
+landed. It is a local Grove link, not a substitute for the project's convention
+for issue references in PR text.
 
-```bash
-grove tickets attach https://example.com/acme/widgets/pull/17
-```
-
-You never name the tracker. Grove infers the provider and whether the ref is an
-issue or a pull request from the shape of what you pass — a full URL, `#42`,
-`42`, or `owner/repo#42` — and works out which workspace you are in from the
-current directory. Attaching twice is a no op rather than a duplicate.
-
-This is worth the one call: it is how the person watching learns your work
-landed, since Grove reads a merged pull request as `merged` where the issues
-endpoint would only say closed. It is a local link that fetches nothing, and it
-is not a substitute for however your project wants issues referenced in PR
-text — a separate question with its own rules. Follow the repo's convention
-there.
-
-If you are inside a container you have no `grove` command, so skip this and say
-in your handoff that the PR is open. Whoever is orchestrating attaches it from
-outside.
+Inside a container, tell the orchestrator the PR URL so they can attach it.
 
 ## Shortcuts, where you can reach them
 
-Two conveniences do the same job as the file when your workspace runs on the
-host.
-
-```bash
-grove phase implementing --note "wiring the JSON parser"
-grove phase verifying --ticket gitea:498 --note "gates green"
-grove phase planning --ticket gitea:499 --blocked --note "needs 498 merged"
-```
-
-The command works out which workspace you are in from the current directory, so
-it takes no id. Add `--ticket` to target one ticket's entry instead of the
-top-level phase, and `--blocked` to set the flag alongside whichever phase you
-pass. Over MCP the equivalent is `grove_set_workspace_phase`, with the same
-`ticket` and `blocked` parameters, plus `grove_get_workspace_phase` and
-`grove_get_workspace_todo`, which reads back the checklist Grove already tracks
-for you.
-
-Reach for these when they are there. Fall back to the file the moment either one
-is missing, and treat that as ordinary rather than as a problem to report. A
-containerized workspace has neither by design, and Grove leaves its MCP server
-out of a container's config on purpose rather than register a binary that is not
-installed.
+On the host, `grove phase implementing --note "wiring the JSON parser"` infers
+your workspace from the current directory. Add `--ticket gitea:498` or
+`--blocked` when needed. Over MCP, use `grove_set_workspace_phase` with the same
+options; `grove_get_workspace_phase` and `grove_get_workspace_todo` read them
+back. In a container, fall back to the file.

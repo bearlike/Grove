@@ -155,6 +155,17 @@ def test_resume_dedups_overlapping_records(adapter: ClaudeCodeAdapter, claude_ho
     assert act.state is AgentActivityState.WORKING  # tail is a tool_use
     assert act.needs_attention is False
 
+    # The kept records' CONTENT, not only the counters above. Every assertion
+    # so far is a reduction, and usage is counted once per LOGICAL record — so
+    # a cross-file collision that ABSORBED instead of dropping would duplicate
+    # a content block here with all of them still green. That is exactly how a
+    # duplicated `tool_use` shipped to the wire and threw the browser's keyed
+    # tool registry. Note this fixture's replayed line keeps its `uuid`, so it
+    # is the LINE-identity guard being pinned here; the fresh-uuid case a real
+    # fork produces is `test_fork_subagent_head_line_does_not_absorb_into_its_parent`.
+    spine = adapter.read_messages(Path("/elsewhere"), BASIC_SID)
+    assert [len(m.content) for m in spine if m.role == "assistant"] == [2, 1, 1, 1, 1, 1]
+
 
 def test_split_block_lines_merge_into_one_logical_reply(
     adapter: ClaudeCodeAdapter, claude_home: Path
@@ -206,6 +217,107 @@ def test_split_block_lines_merge_into_one_logical_reply(
         ("tool", "Read"),
         ("tool", "Bash"),
     ]
+
+
+def test_fork_subagent_head_line_does_not_absorb_into_its_parent(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A ``fork`` sub-agent re-records its PARENT's spawning ``tool_use`` as its
+    own head line — same ``message.id``, a FRESH ``uuid``, ``isSidechain:true``
+    — and every ``subagents/**`` file folds into ONE state with the main
+    transcript. Keying logical identity on ``message.id`` alone therefore read
+    that head line as a split-block sibling and absorbed it, leaving the
+    parent's record holding the SAME ``tool_use`` block twice. The duplicate
+    ``tool_use_id`` reached the wire and threw assistant-ui's keyed resource
+    registry, which tears down the whole transcript surface — a workspace page
+    that renders for a second and then dies.
+
+    Shape pinned from a real on-host fork (CC 2.1.233, 2026-08-15). **Note the
+    absent ``requestId``: modern transcripts carry NONE at all** (0 of 755
+    assistant lines on the reference session), so ``message.id`` is the entire
+    key and a cross-file collision has nothing left to disambiguate it.
+
+    The fork's OWN reply (``mown``, split thinking→text) must still merge — a
+    fix that over-corrects by disabling absorption across the board fails here.
+    """
+    sid = "66666666-6666-4666-8666-666666666666"
+    cwd = Path("/home/dev/work/forked")
+    usage = '"usage":{"input_tokens":100,"output_tokens":50}'
+    spawn = (
+        '{"type":"tool_use","id":"toolu_fork","name":"Agent",'
+        '"input":{"subagent_type":"fork","description":"ask the db agent"}}'
+    )
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    (folder / f"{sid}.jsonl").write_text(
+        "\n".join(
+            [
+                '{"type":"user","uuid":"u1","timestamp":"2026-08-15T06:40:00.000Z",'
+                '"isSidechain":false,"message":{"role":"user","content":"spawn a fork"}}',
+                f'{{"type":"assistant","uuid":"a1","isSidechain":false,'
+                f'"timestamp":"2026-08-15T06:40:04.451Z","message":{{"id":"mspawn",'
+                f'"role":"assistant","stop_reason":"tool_use",{usage},'
+                f'"content":[{spawn}]}}}}',
+                '{"type":"user","uuid":"u2","isSidechain":false,'
+                '"timestamp":"2026-08-15T06:40:05.000Z","message":{"role":"user",'
+                '"content":[{"type":"tool_result","tool_use_id":"toolu_fork",'
+                '"content":[{"type":"text","text":"Async agent launched"}]}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    sub_dir = folder / sid / "subagents"
+    sub_dir.mkdir(parents=True)
+    (sub_dir / "agent-f0.jsonl").write_text(
+        "\n".join(
+            [
+                '{"type":"fork-context-ref","agentId":"f0","parentSessionId":"'
+                + sid
+                + '","parentLastUuid":"a1","contextLength":898}',
+                # The replay: parent's message.id, its own uuid, sidechain.
+                f'{{"type":"assistant","uuid":"f1","isSidechain":true,"agentId":"f0",'
+                f'"timestamp":"2026-08-15T06:40:04.451Z","message":{{"id":"mspawn",'
+                f'"role":"assistant","stop_reason":"tool_use",{usage},'
+                f'"content":[{spawn}]}}}}',
+                '{"type":"user","uuid":"f2","isSidechain":true,"agentId":"f0",'
+                '"timestamp":"2026-08-15T06:40:04.600Z","message":{"role":"user",'
+                '"content":[{"type":"tool_result","tool_use_id":"toolu_fork",'
+                '"content":[{"type":"text","text":"Fork started"}]}]}}',
+                # The fork's own reply, genuinely split across two lines.
+                f'{{"type":"assistant","uuid":"f3","isSidechain":true,"agentId":"f0",'
+                f'"timestamp":"2026-08-15T06:40:06.000Z","message":{{"id":"mown",'
+                f'"role":"assistant","stop_reason":"end_turn",{usage},'
+                f'"content":[{{"type":"thinking","thinking":"checking"}}]}}}}',
+                f'{{"type":"assistant","uuid":"f4","isSidechain":true,"agentId":"f0",'
+                f'"timestamp":"2026-08-15T06:40:06.100Z","message":{{"id":"mown",'
+                f'"role":"assistant","stop_reason":"end_turn",{usage},'
+                f'"content":[{{"type":"text","text":"db agent is idle"}}]}}}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    spine = adapter.read_messages(cwd, sid)
+    parent = [m for m in spine if m.role == "assistant" and not m.is_sidechain]
+    assert len(parent) == 1
+    # The spawn survives EXACTLY once; two blocks here is the bug.
+    assert [b.tool_use_id for b in parent[0].content] == ["toolu_fork"]
+
+    # The replayed head stays its own sidechain record, and the fork's own
+    # split reply is still ONE message — three here means absorption broke.
+    assert len([m for m in spine if m.role == "assistant" and m.is_sidechain]) == 2
+
+    # The invariant the client depends on: a tool id renders at most once.
+    rendered = [
+        e.tool.tool_use_id
+        for turn in adapter.read_turns(cwd, sid)
+        for e in turn.entries
+        if e.tool is not None and e.tool.tool_use_id
+    ]
+    assert rendered == ["toolu_fork"]
 
 
 def test_trailing_tool_result_reads_working(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:

@@ -390,9 +390,15 @@ async def test_create_modal_submits_brief_false_when_off_selected(
 async def test_create_modal_model_input_flows_into_request(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """A filled model Input lands on ``CreateWorkspaceRequest.model`` verbatim
-    (the provider boundary — Grove forwards any id, never validates it)."""
-    from textual.widgets import Input  # noqa: PLC0415
+    """A custom-typed model id lands on ``CreateWorkspaceRequest.model`` verbatim
+    (the provider boundary — Grove forwards any id, never validates it).
+
+    The picker offers each agent's curated catalog, but ``Custom…`` is what keeps
+    the boundary honest: an id Grove has never heard of must still reach the tool
+    untouched, so this drives that path rather than a catalog entry."""
+    from textual.widgets import Input, Select  # noqa: PLC0415
+
+    from grove.tui.screens.create import MODEL_CUSTOM  # noqa: PLC0415
 
     del fake_tmux
     manager = _manager(tmp_repo, tmp_path)
@@ -403,7 +409,9 @@ async def test_create_modal_model_input_flows_into_request(
         await pilot.pause()
         modal = await _open_create_modal(pilot, app)
         modal.dismiss = lambda result=None: captured.__setitem__("req", result)  # type: ignore[assignment,method-assign]
-        modal.query_one("#model", Input).value = "opus"
+        modal.query_one("#model", Select).value = MODEL_CUSTOM
+        await pilot.pause()
+        modal.query_one("#model-custom", Input).value = "opus"
         for ch in "modeled":
             await pilot.press(ch)
         await pilot.pause()

@@ -32,7 +32,16 @@ if TYPE_CHECKING:
     # Eagerly visible to mypy/IDEs; never executed at runtime. The lazy
     # `__getattr__` below is what actually resolves these at import time.
     from grove.core.activity import ActivityService, DashboardSnapshot
-    from grove.core.config import AgentSpec, GroveConfig, load_config
+    from grove.core.config import (
+        AgentSpec,
+        BranchMode,
+        DefaultsScope,
+        GroveConfig,
+        WorkspaceDefaults,
+        load_config,
+        save_workspace_defaults,
+        user_defaults_keys,
+    )
     from grove.core.contracts import (
         AttachInstructionView,
         AutoBranch,
@@ -79,8 +88,13 @@ _EXPORTS: dict[str, str] = {
     "ActivityService": "grove.core.activity",
     "DashboardSnapshot": "grove.core.activity",
     "AgentSpec": "grove.core.config",
+    "BranchMode": "grove.core.config",
+    "DefaultsScope": "grove.core.config",
     "GroveConfig": "grove.core.config",
+    "WorkspaceDefaults": "grove.core.config",
     "load_config": "grove.core.config",
+    "save_workspace_defaults": "grove.core.config",
+    "user_defaults_keys": "grove.core.config",
     "AttachInstructionView": "grove.core.contracts",
     "AutoBranch": "grove.core.contracts",
     "BranchInfo": "grove.core.contracts",
@@ -131,6 +145,7 @@ __all__ = [
     "BranchConflict",
     "BranchError",
     "BranchInfo",
+    "BranchMode",
     "BranchNotFound",
     "BranchPlan",
     "BranchProvenance",
@@ -138,6 +153,7 @@ __all__ = [
     "CommitSummaryView",
     "CreateWorkspaceRequest",
     "DashboardSnapshot",
+    "DefaultsScope",
     "ExistingLocalBranch",
     "GroveConfig",
     "GroveError",
@@ -154,6 +170,7 @@ __all__ = [
     "SessionListing",
     "TrackRemoteBranch",
     "UpdateWorkspaceRequest",
+    "WorkspaceDefaults",
     "WorkspaceEvent",
     "WorkspaceManager",
     "WorkspacePeek",
@@ -163,6 +180,8 @@ __all__ = [
     "WorkspaceStatus",
     "build",
     "load_config",
+    "save_workspace_defaults",
+    "user_defaults_keys",
 ]
 
 

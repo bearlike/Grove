@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-query";
 
 import { GroveProtocolError } from "@/lib/grove/api";
+import type { components } from "@/lib/grove/api/types.gen";
 import type {
   AgentSummaryView,
   BranchInfo,
@@ -196,6 +197,17 @@ export function useSessionControls(id: string | null): UseQueryResult<SessionCon
     queryKey: groveKeys.controls(id ?? ""),
     queryFn: () => groveClient.getControls(id!),
     enabled: id !== null,
+  });
+}
+
+type SharePolicyView = components["schemas"]["SharePolicyView"];
+
+/** The public-share policy that every new link in a repository will inherit. */
+export function useSharePolicy(repoRoot: string | null): UseQueryResult<SharePolicyView> {
+  return useQuery({
+    queryKey: groveKeys.sharePolicy(repoRoot ?? ""),
+    queryFn: () => groveClient.getSharePolicy(repoRoot!),
+    enabled: repoRoot !== null,
   });
 }
 

@@ -155,6 +155,9 @@ class JsonWorkspaceStore:
         data["created_at"] = state.created_at.isoformat()
         data["updated_at"] = state.updated_at.isoformat()
         data["paused_at"] = state.paused_at.isoformat() if state.paused_at else None
+        data["share_expires_at"] = (
+            state.share_expires_at.isoformat() if state.share_expires_at else None
+        )
         data["init_status"] = state.init_status.value if state.init_status else None
         data["branch_provenance"] = state.branch_provenance.value
         data["placement"] = state.placement.value
@@ -234,6 +237,21 @@ class JsonWorkspaceStore:
             # selection existed loads as a host workspace, which is exactly
             # what it is. No migration step, no version bump.
             runtime=Runtime(data.get("runtime", Runtime.HOST.value)),
+            # `.get()` — absent on every record written before public sharing
+            # existed. None means private, which is what every one of those
+            # workspaces is, so the default is also the safe direction.
+            share_token=data.get("share_token"),
+            # `.get()` — absent on every record written before a share pinned
+            # its transcript. None means "not pinned", which is exactly what a
+            # link issued before the pin existed is; the reader falls back to
+            # the workspace's own primary session rather than inventing a pin.
+            share_session_id=data.get("share_session_id"),
+            # A legacy record predates expiring shares, so its links never expire.
+            share_expires_at=(
+                datetime.fromisoformat(data["share_expires_at"])
+                if data.get("share_expires_at")
+                else None
+            ),
             # `.get(..., False)` — a record written before the first-turn brief
             # existed was never briefed, which is exactly what `False` says.
             brief=bool(data.get("brief", False)),

@@ -6,7 +6,7 @@ no daemon, no real tmux. ``show`` composes the engine's best-effort read seams
 tests exercise the create → show happy path, cwd inference, the clean
 unknown-workspace error, and the renderer in isolation.
 
-The cwd-inference resolver (:func:`_resolve_or_infer_workspace`) and the
+The cwd-inference resolver (:func:`resolve_or_infer_workspace`) and the
 renderer (:class:`WorkspaceInspection`) are the real logic and are unit-tested
 directly (no CliRunner) — the same split ``BranchFlags`` follows.
 """
@@ -41,7 +41,7 @@ from grove.tui.cli import app
 from grove.tui.cli_workspace import (
     WorkspaceInspection,
     _emit_runtime_marks,
-    _resolve_or_infer_workspace,
+    resolve_or_infer_workspace,
 )
 from tests.conftest import FakeTmux
 
@@ -128,7 +128,7 @@ def test_show_unknown_workspace_is_clean_error(runner: CliRunner, project: Path)
     assert "Traceback" not in result.output
 
 
-# ─── _resolve_or_infer_workspace (pure, no CliRunner) ────────────────────────
+# ─── resolve_or_infer_workspace (pure, no CliRunner) ────────────────────────
 
 
 def _state(ws_id: str, worktree: Path) -> WorkspaceState:
@@ -171,11 +171,11 @@ def test_infer_prefers_most_specific_worktree(
     manager = _FakeManager([root_ws, nested_ws])
 
     monkeypatch.chdir(nested)
-    resolved = _resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+    resolved = resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
     assert resolved.id == "nestedws"
 
     monkeypatch.chdir(root)
-    resolved = _resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+    resolved = resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
     assert resolved.id == "rootws"
 
 
@@ -183,7 +183,7 @@ def test_infer_outside_any_worktree_raises(tmp_path: Path, monkeypatch: pytest.M
     manager = _FakeManager([_state("ws", tmp_path / "elsewhere")])
     monkeypatch.chdir(tmp_path)
     with pytest.raises(GroveError, match="run inside a workspace worktree"):
-        _resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+        resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
 
 
 def test_infer_refuses_an_equal_depth_tie_and_names_the_candidates(
@@ -202,7 +202,7 @@ def test_infer_refuses_an_equal_depth_tie_and_names_the_candidates(
     monkeypatch.chdir(root)
 
     with pytest.raises(GroveError) as excinfo:
-        _resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+        resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
 
     message = str(excinfo.value)
     assert "2 workspaces share this directory" in message
@@ -223,7 +223,7 @@ def test_infer_still_breaks_a_tie_by_specificity_before_refusing(
     )
 
     monkeypatch.chdir(nested)
-    assert _resolve_or_infer_workspace(manager, None).id == "nestedws"  # type: ignore[arg-type]
+    assert resolve_or_infer_workspace(manager, None).id == "nestedws"  # type: ignore[arg-type]
 
 
 # ─── WorkspaceInspection renderer (pure, hand-built peek) ─────────────────────

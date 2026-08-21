@@ -32,6 +32,7 @@ function ref(overrides: Partial<TicketRef> = {}): TicketRef {
     title: "Widgets render twice on resize",
     url: "https://example.invalid/42",
     status: "open",
+    draft: false,
     assignee: null,
     ambiguous: false,
     ...overrides,
@@ -51,6 +52,7 @@ describe("normalizing a tracker's own word", () => {
     }
     expect(ticketState("merged")).toBe("merged");
     expect(ticketState("draft")).toBe("draft");
+    expect(ticketState("open", true)).toBe("draft");
   });
 
   // The fallback is the point of the open-ended side: a tracker Grove has never

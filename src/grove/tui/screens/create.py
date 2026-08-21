@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Final, cast, get_args
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -34,7 +34,16 @@ from textual.widgets import (
     Static,
 )
 
-from grove.core import AgentSpec, GroveConfig
+from grove.core import (
+    AgentSpec,
+    BranchMode,
+    DefaultsScope,
+    GroveConfig,
+    GroveError,
+    WorkspaceDefaults,
+    save_workspace_defaults,
+    user_defaults_keys,
+)
 from grove.core.agents import resolve_models
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import (
@@ -49,6 +58,7 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.workspace import Runtime, slug
 from grove.tui._status import ref_color
 from grove.tui.screens._modal import GroveModal
+from grove.tui.screens.save_defaults import SaveDefaultsScreen
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
 
 _MODE_AUTO = "auto"
@@ -57,7 +67,25 @@ _MODE_EXISTING = "existing"
 _MODE_REMOTE = "remote"
 _MODE_ROOT = "root"
 
-_MODES = (_MODE_AUTO, _MODE_NEW, _MODE_EXISTING, _MODE_REMOTE, _MODE_ROOT)
+_MODES: Final[tuple[BranchMode, ...]] = cast("tuple[BranchMode, ...]", get_args(BranchMode))
+
+# Select values intentionally cannot collide with provider model ids, which are
+# opaque strings at the provider boundary.
+#
+# Public rather than underscored because they are the only way to *name* either
+# non-id choice: an id is its own value, but "let the agent decide" and "I will
+# type my own" are identities, not strings. A test (or any future caller) that
+# drives this picker has to say which one it means, and a private sentinel would
+# make that an implicit contract — moved silently, it would no-op the caller
+# while the test still passed.
+MODEL_DEFAULT: Final = object()
+MODEL_CUSTOM: Final = object()
+# The working-directory picker's two non-path choices. Sentinels rather
+# than magic strings ("" / "custom") for the same reason the model pair
+# are: every other option's VALUE is a real repo-relative path, and a
+# string sentinel could collide with one a project actually declares.
+CWD_ROOT: Final = object()
+CWD_CUSTOM: Final = object()
 
 # The Brief picker is genuinely tri-state (unlike Runtime, which always submits
 # a concrete value) because `CreateWorkspaceRequest.brief` really does carry
@@ -305,6 +333,12 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         color: $text-muted;
         margin-bottom: 1;
     }
+    CreateWorkspaceScreen #model-custom.-hidden {
+        display: none;
+    }
+    CreateWorkspaceScreen #cwd-custom.-hidden {
+        display: none;
+    }
     CreateWorkspaceScreen #root-explain {
         color: $text-muted;
     }
@@ -348,7 +382,18 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         self._repo_root = repo_root
         self._local_branches: list[BranchInfo] = list(local_branches or ())
         self._remote_branches: list[BranchInfo] = list(remote_branches or ())
-        self._mode: str = _MODE_AUTO
+        self._model_catalog: dict[str, tuple[str, ...]] = {
+            spec.name: resolve_models(
+                kind=spec.kind,
+                command=spec.command,
+                configured=spec.models,
+            )
+            for spec in self._agents
+        }
+        defaults = cfg.defaults
+        self._default_agent = self._agent_default(defaults.agent)
+        self._default_model = defaults.model
+        self._mode: BranchMode = self._branch_mode_default(defaults.branch_mode)
         # Whether the user has typed (or seeded) something into the title
         # field. Drives the "seed title from picked branch" behavior — only
         # seed when the field is still empty, never overwrite typed text.
@@ -360,6 +405,8 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         default_base_value = (
             default_base if any(v == default_base for _, v in base_opts) else "HEAD"
         )
+        if defaults.base_ref and any(v == defaults.base_ref for _, v in base_opts):
+            default_base_value = defaults.base_ref
 
         self._auto_block = _AutoBlock(base_opts, default_base_value)
         self._new_block = _NewNamedBlock(base_opts, default_base_value)
@@ -378,12 +425,145 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         # default (`core/runtime.py`'s `RuntimeResolver.resolve` reads this same
         # field when `requested is None`); reusing it here rather than a copy
         # is what keeps this in sync with the engine instead of drifting.
-        self._default_runtime = Runtime.CONTAINER if cfg.container.enabled else Runtime.HOST
+        cascade_runtime = Runtime.CONTAINER if cfg.container.enabled else Runtime.HOST
+        self._default_runtime = (
+            Runtime(defaults.runtime) if defaults.runtime is not None else cascade_runtime
+        )
         # Presentation hint only, same reasoning as `_default_runtime` above:
         # `cfg.brief.enabled` IS the cascade's answer for an unopinionated
         # create, reused here (never re-derived) to name it on the "cascade"
         # option instead of leaving it an ambiguous blank.
         self._default_brief = cfg.brief.enabled
+        self._default_brief_choice = self._brief_default(defaults.brief)
+        self._default_skip_init = bool(defaults.skip_init)
+
+    def _agent_default(self, agent: str | None) -> str:
+        """Use a saved agent only while it still belongs to this roster."""
+        names = {spec.name for spec in self._agents}
+        return agent if agent in names else self._agents[0].name
+
+    def _branch_mode_default(self, mode: BranchMode | None) -> BranchMode:
+        """Fall back to Auto when no saved branch-source variant exists."""
+        return mode if mode in _MODES else cast(BranchMode, _MODE_AUTO)
+
+    @staticmethod
+    def _brief_default(brief: bool | None) -> str:
+        """Map an optional config value to the Brief picker's three states."""
+        if brief is None:
+            return _BRIEF_CASCADE
+        return _BRIEF_ON if brief else _BRIEF_OFF
+
+    def _cwd_options(self) -> list[tuple[str, object]]:
+        """Repo root, each labelled directory, then free text.
+
+        The label is what a person reads and the repo-relative path is the
+        VALUE, so what the request carries is the path — a project renaming a
+        label never invalidates a workspace already created from it. The path
+        rides the label so somebody who knows the layout can confirm the
+        choice without opening the config.
+        """
+        return [
+            ("Repository root", CWD_ROOT),
+            *((f"{label}  ({path})", path) for label, path in self._cfg.agent_cwds.entries.items()),
+            ("Other relative path…", CWD_CUSTOM),
+        ]
+
+    def _cwd_default(self) -> object:
+        """Pre-select the repo's configured default, or the root.
+
+        Displaying the resolved answer is the point: the engine applies this
+        same default for an omitted field, so a form showing anything else
+        would disagree with what the create is about to do.
+        """
+        configured = self._cfg.agent_cwds.default_path()
+        if configured is None:
+            return CWD_ROOT
+        return configured if configured in self._cfg.agent_cwds.entries.values() else CWD_ROOT
+
+    def _cwd_value(self) -> Path | None:
+        """Resolve picker state to the request's ``project_cwd``.
+
+        ``None`` means the worktree root. The custom path is NOT validated
+        here — containment is the engine's refusal, raised before any side
+        effect, and re-implementing it in the form would be a second copy of a
+        rule that has to hold for every other client anyway.
+        """
+        value = self.query_one("#cwd", Select).value
+        if value is CWD_ROOT:
+            return None
+        if value is CWD_CUSTOM:
+            typed = self.query_one("#cwd-custom", Input).value.strip()
+            return Path(typed) if typed else None
+        return Path(str(value))
+
+    def _model_options(self, agent: str) -> list[tuple[str, object]]:
+        """Return one opaque provider catalog plus the two form sentinels."""
+        return [
+            ("Agent default", MODEL_DEFAULT),
+            *((model, model) for model in self._model_catalog[agent]),
+            ("Custom…", MODEL_CUSTOM),
+        ]
+
+    def _model_default(self) -> object:
+        """Select the saved opaque model when this agent still offers it."""
+        if self._default_model in self._model_catalog[self._default_agent]:
+            return self._default_model
+        if self._default_model:
+            return MODEL_CUSTOM
+        return MODEL_DEFAULT
+
+    def _model_value(self) -> str | None:
+        """Resolve picker state without validating an opaque provider model id."""
+        value = self.query_one("#model", Select).value
+        if value is MODEL_DEFAULT:
+            return None
+        if value is MODEL_CUSTOM:
+            return self.query_one("#model-custom", Input).value.strip() or None
+        return str(value)
+
+    def _shadowed_defaults(self) -> tuple[str, ...]:
+        """Name form values that raw user defaults prevent a project write changing."""
+        saved_fields = self.read_defaults().model_dump(exclude_none=True)
+        return tuple(name for name in saved_fields if name in user_defaults_keys())
+
+    def _handle_save_defaults(self, scope: DefaultsScope | None) -> None:
+        """Keep the create form open while the explicit write reports its result."""
+        if scope is None:
+            return
+        try:
+            path = save_workspace_defaults(
+                self.read_defaults(),
+                scope=scope,
+                repo_root=self._repo_root,
+            )
+        except GroveError as exc:
+            self.app.bell()
+            self.notify(f"could not save defaults: {exc}", severity="error")
+            return
+        self.notify(f"saved workspace defaults to {path}", severity="information")
+
+    def read_defaults(self) -> WorkspaceDefaults:
+        """Build defaults from the current form without writing anything."""
+        runtime_value = self.query_one("#runtime", Select).value
+        brief_value = self.query_one("#brief", Select).value
+        base_ref = self._base_ref_for_mode()
+        return WorkspaceDefaults(
+            agent=str(self.query_one("#agent", Select).value),
+            runtime=str(runtime_value),
+            brief=None if brief_value == _BRIEF_CASCADE else brief_value == _BRIEF_ON,
+            model=self._model_value(),
+            branch_mode=self._mode,
+            base_ref=base_ref,
+            skip_init=self.query_one("#skip-init", Checkbox).value,
+        )
+
+    def _base_ref_for_mode(self) -> str | None:
+        """Read a base ref only from variants where that answer exists."""
+        if self._mode == _MODE_AUTO:
+            return self._read_select_value("#auto-base", self._auto_block)
+        if self._mode == _MODE_NEW:
+            return self._read_select_value("#new-base", self._new_block)
+        return None
 
     def _brief_option_label(self, choice: str) -> str:
         """Option text for the tri-state Brief picker. The cascade option
@@ -395,18 +575,15 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         return "On" if choice == _BRIEF_ON else "Off"
 
     def _build_model_hint(self) -> str:
-        """Placeholder text for the model input: the union of every configured
-        agent's resolved model catalog (``agents.resolve_models`` — the same
-        seam the daemon/webapp use), deduped and capped to a glance-width list.
+        """Placeholder for Custom: every cached catalog id, deduped and capped.
 
-        Deliberately NOT reactive to the agent Select (KISS — a static hint
-        computed once at open time is enough context to type a plausible id;
-        the field never validates against this list, so a stale hint after an
-        agent switch costs nothing but a slightly-off suggestion).
+        The agent Select is reactive: it repopulates the model Select from the
+        catalog built at modal-open. This hint remains global because it helps
+        an opaque custom id that belongs to any configured provider, without
+        running provider discovery from the UI event handler.
         """
         seen: dict[str, None] = {}
-        for spec in self._agents:
-            models = resolve_models(kind=spec.kind, command=spec.command, configured=spec.models)
+        for models in self._model_catalog.values():
             for model in models:
                 seen.setdefault(model, None)
         if not seen:
@@ -475,7 +652,7 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             yield Label("Agent:", classes="field-label")
             yield Select(
                 agent_options,
-                value=agent_options[0][1],
+                value=self._default_agent,
                 id="agent",
                 allow_blank=False,
             )
@@ -497,45 +674,78 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                     (self._brief_option_label(_BRIEF_ON), _BRIEF_ON),
                     (self._brief_option_label(_BRIEF_OFF), _BRIEF_OFF),
                 ],
-                value=_BRIEF_CASCADE,
+                value=self._default_brief_choice,
                 id="brief",
                 allow_blank=False,
             )
-            yield Label("Model (blank = agent default):", classes="field-label")
-            yield Input(placeholder=self._model_hint, id="model")
+            yield Label("Model:", classes="field-label")
+            yield Select(
+                self._model_options(self._default_agent),
+                value=self._model_default(),
+                id="model",
+                allow_blank=False,
+            )
+            yield Input(
+                value=self._default_model or "",
+                placeholder=self._model_hint,
+                id="model-custom",
+                classes="-hidden" if self._model_default() is not MODEL_CUSTOM else None,
+            )
+            yield Label("Working directory:", classes="field-label")
+            yield Select(
+                self._cwd_options(),
+                value=self._cwd_default(),
+                id="cwd",
+                allow_blank=False,
+            )
+            yield Input(
+                placeholder="e.g. services/api",
+                id="cwd-custom",
+                classes="-hidden" if self._cwd_default() is not CWD_CUSTOM else None,
+            )
             yield Label("Title:", classes="field-label")
             yield Input(placeholder="my-task", id="title")
             yield Label("Branch:", classes="field-label")
             with RadioSet(id="branch-mode"):
                 yield RadioButton(
                     "Auto — Grove generates from title + timestamp",
-                    value=True,
+                    value=self._mode == _MODE_AUTO,
                     id="mode-auto",
                 )
-                yield RadioButton("New — pick a name and base branch", id="mode-new")
+                yield RadioButton(
+                    "New — pick a name and base branch",
+                    value=self._mode == _MODE_NEW,
+                    id="mode-new",
+                )
                 yield RadioButton(
                     "Existing — check out a local branch",
+                    value=self._mode == _MODE_EXISTING,
                     id="mode-existing",
                 )
-                yield RadioButton("Remote — track a remote branch", id="mode-remote")
+                yield RadioButton(
+                    "Remote — track a remote branch",
+                    value=self._mode == _MODE_REMOTE,
+                    id="mode-remote",
+                )
                 yield RadioButton(
                     "Root — work in the repo root (no worktree, current branch)",
+                    value=self._mode == _MODE_ROOT,
                     id="mode-root",
                 )
             with Vertical(id="branch-blocks"):
-                yield self._auto_block
-                self._new_block.add_class("-hidden")
-                yield self._new_block
-                self._existing_block.add_class("-hidden")
-                yield self._existing_block
-                self._remote_block.add_class("-hidden")
-                yield self._remote_block
-                self._root_block.add_class("-hidden")
-                yield self._root_block
-            yield Checkbox("Skip init script", id="skip-init")
+                for mode, block in self._blocks().items():
+                    if mode != self._mode:
+                        block.add_class("-hidden")
+                    yield block
+            yield Checkbox(
+                "Skip init script",
+                value=self._default_skip_init,
+                id="skip-init",
+            )
             yield Static(self._render_preview(""), id="preview")
             with Horizontal(classes="grove-dialog-buttons"):
                 yield Button("Cancel", id="cancel", variant="default")
+                yield Button("Save as defaults", id="save-defaults", variant="default")
                 yield Button("Create (Ctrl-S)", id="submit", variant="primary")
         yield ContextualFooter()
 
@@ -558,10 +768,44 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         self._refresh_preview()
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        del event
+        if event.select.id == "agent":
+            self._sync_model_options(str(event.select.value))
+        elif event.select.id == "model":
+            self._sync_custom_model_visibility()
+        elif event.select.id == "cwd":
+            self._sync_custom_cwd_visibility()
         if not self._title_user_edited:
             self._maybe_seed_title()
         self._refresh_preview()
+
+    def _sync_model_options(self, agent: str) -> None:
+        """Keep a model only if the newly selected agent offers that opaque id."""
+        model_select = self.query_one("#model", Select)
+        current = model_select.value
+        options = self._model_options(agent)
+        values = {value for _, value in options}
+        model_select.set_options(options)
+        model_select.value = current if current in values else MODEL_DEFAULT
+
+    def _sync_custom_model_visibility(self) -> None:
+        """Reveal free text only for the explicit Custom choice."""
+        custom_input = self.query_one("#model-custom", Input)
+        custom_input.set_class(
+            self.query_one("#model", Select).value is not MODEL_CUSTOM,
+            "-hidden",
+        )
+
+    def _sync_custom_cwd_visibility(self) -> None:
+        """Reveal the free-text directory only for the explicit Other choice.
+
+        Hidden rather than unmounted, so a typed path survives switching to a
+        labelled entry and back — the same reason the branch blocks all stay
+        mounted behind `-hidden`.
+        """
+        self.query_one("#cwd-custom", Input).set_class(
+            self.query_one("#cwd", Select).value is not CWD_CUSTOM,
+            "-hidden",
+        )
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         idx = event.radio_set.pressed_index
@@ -688,6 +932,14 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit":
             self._submit()
+        elif event.button.id == "save-defaults":
+            self.app.push_screen(
+                SaveDefaultsScreen(
+                    repo_root=self._repo_root,
+                    shadowed=self._shadowed_defaults(),
+                ),
+                self._handle_save_defaults,
+            )
         else:
             self.dismiss(None)
 
@@ -707,7 +959,7 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             self.app.bell()
             return
         skip_init = self.query_one("#skip-init", Checkbox).value
-        model = self.query_one("#model", Input).value.strip() or None
+        model = self._model_value()
         # The picker only ever offers the two concrete runtimes (no "default
         # (config)" sentinel), so this always resolves to a real `Runtime` —
         # never `None`. That differs from a non-interactive caller (CLI/MCP,
@@ -737,6 +989,7 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 model=model,
                 runtime=runtime,
                 brief=brief,
+                project_cwd=self._cwd_value(),
             )
         except Exception:
             self.app.bell()

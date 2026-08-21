@@ -18,18 +18,27 @@ from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 
 
 class _CountingFolder:
-    """A trivial appender that counts ``add`` calls — the re-parse detector."""
+    """A trivial appender that counts ``add`` calls — the re-parse detector.
+
+    It also records the ``source`` each line arrived under. A folder that
+    merges by a provider id relies on that being the file the line was read
+    from (Claude's split-block merge is scoped by it), and a cache handing over
+    the wrong path would otherwise be exactly as green as one handing over the
+    right one.
+    """
 
     instances: ClassVar[list[_CountingFolder]] = []
 
     def __init__(self) -> None:
         self._records: list[dict] = []
+        self.sources: list[str] = []
         self.adds = 0
         _CountingFolder.instances.append(self)
 
-    def add(self, raw: dict) -> None:
+    def add(self, raw: dict, source: str) -> None:
         self.adds += 1
         self._records.append(raw)
+        self.sources.append(source)
 
     def records(self) -> list[dict]:
         return self._records
@@ -66,6 +75,55 @@ def test_append_only_growth_parses_each_line_once(tmp_path: Path) -> None:
     # One folder, 3 adds total: the prefix was never re-parsed.
     assert len(_CountingFolder.instances) == 1
     assert _CountingFolder.instances[0].adds == 3
+
+
+def test_each_line_is_folded_under_the_file_it_came_from(tmp_path: Path) -> None:
+    """Lines from one file share a ``source``; lines from another do not.
+
+    Claude's fold scopes its split-block merge key by exactly this value — a
+    same-id line arriving from a SECOND file is another thread's replay, not a
+    continuation — so a cache that passed a constant, the first path, or the
+    path-set key would silently re-merge across files and duplicate content
+    blocks. Nothing else in this module would notice.
+
+    Asserted as a partition rather than against a literal, because the value is
+    a file IDENTITY and not a path string; pinning the representation would
+    make the test fail for a correct change.
+    """
+    cache = _cache()
+    a = tmp_path / "a.jsonl"
+    b = tmp_path / "b.jsonl"
+    _write_lines(a, [{"n": 1}, {"n": 2}])
+    _write_lines(b, [{"n": 3}])
+
+    cache.read([a, b])
+
+    sources = _CountingFolder.instances[0].sources
+    assert len(sources) == 3
+    assert sources[0] == sources[1]  # both lines of a.jsonl
+    assert sources[2] != sources[0]  # b.jsonl is a different source
+
+
+def test_one_file_reached_through_two_paths_is_one_source(tmp_path: Path) -> None:
+    """A transcript reachable under two names must fold as ONE source.
+
+    ``_ClaudeHome.locate`` globs each project directory and de-dupes its hits
+    lexically, so a symlinked directory yields the same inode under two
+    distinct strings. Keyed by string, those aliases are two sources — and the
+    cross-file scope that exists to stop a replay merging would instead be the
+    thing that duplicates it, for any record the global uuid guard cannot drop.
+    """
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    transcript = real_dir / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(real_dir, target_is_directory=True)
+
+    cache = _cache()
+    cache.read([transcript, alias_dir / "t.jsonl"])
+
+    assert len(set(_CountingFolder.instances[0].sources)) == 1
 
 
 def test_unchanged_file_costs_no_adds(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 [project]
 name = "grove"
-version = "0.0.7"
+version = "0.0.8"
 description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -37,6 +37,14 @@ dependencies = [
     # defensively and degrades to its own scan, so an older install keeps
     # working rather than failing to import `grove.core`.
     "bashlex>=0.18,<1",
+    # Verify TLS against the OS trust store instead of the venv's certifi
+    # bundle. Grove talks to a user's OWN forge, gateway and collector, which
+    # are exactly the endpoints a public root bundle cannot verify — and the
+    # symptom is never "TLS failed" but "these tickets have no titles". Pure
+    # Python, no dependencies of its own; `grove._truststore` still imports it
+    # defensively so an older install keeps working rather than failing to
+    # start.
+    "truststore>=0.9,<1",
 ]
 
 [project.optional-dependencies]

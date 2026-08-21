@@ -47,6 +47,7 @@ from grove.core.session_duration import duration_of
 from grove.core.turn_count import TurnCountCache
 
 if TYPE_CHECKING:
+    from grove.core.agents import AgentMessage
     from grove.core.agents.base import AgentAdapter
     from grove.core.registry import RepoRegistry
     from grove.core.workspace import WorkspaceState
@@ -54,6 +55,25 @@ if TYPE_CHECKING:
 # Aware epoch for "no mtime" rows so the newest-first sort never compares
 # aware and naive datetimes (that raises, and a sort must never raise here).
 _EPOCH = datetime.fromtimestamp(0, tz=UTC)
+
+
+@dataclass(slots=True, frozen=True)
+class SessionQuery:
+    """One direct user query recovered from a session's complete message spine.
+
+    ``ordinal`` is the query's one-based position in conversation order.
+    ``timestamp`` is when the harness delivered it into the conversation — the
+    ordering clock, particularly for a prompt that waited in an input queue.
+    ``sent_at`` preserves that prompt's earlier submission time where the
+    provider recorded it. ``text`` is deliberately uncapped: recollection is
+    for recovering context lost to compaction, so a shortened query would
+    defeat the read.
+    """
+
+    ordinal: int
+    timestamp: datetime | None
+    text: str
+    sent_at: datetime | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -313,6 +333,26 @@ class SessionExplorer:
         """
         return self._scan_workspace(self._manager.get(workspace_id), adopt_gate=True)
 
+    def primary_for_workspace(self, workspace_id: str) -> SessionListing:
+        """The readable primary session for one workspace.
+
+        The recorded session id wins when it has materialized. Otherwise a
+        Claude id rotated by ``/clear`` or a Codex workspace with no mint falls
+        back to the newest adoption-gated session in the workspace's own scan.
+        This is a request-time reader, not an activity-poll resolution: it may
+        read the bounded transcript listing because an explicit recollection
+        request earns that cost.
+        """
+        state = self._manager.get(workspace_id)
+        listings = self.for_workspace(workspace_id)
+        if state.agent_session_id:
+            for listing in listings:
+                if listing.summary.session_id == state.agent_session_id:
+                    return listing
+        if listings:
+            return listings[0]
+        raise GroveError(f"workspace {workspace_id} has no readable agent session")
+
     def candidates_for(self, workspace_id: str) -> tuple[SessionListing, ...]:
         """Every session recorded in one workspace's directories, newest-first,
         UNGATED — the remap-picker seam.
@@ -417,6 +457,19 @@ class SessionExplorer:
                             duration=self._duration(adapter, cwd, summary.session_id),
                         )
                     )
+        # NEWEST-FIRST, and deliberately NOT "the workspace's own session
+        # first". Both consumers of this order are browse surfaces — the
+        # sessions listing a human scans and the remap picker they choose a
+        # REPLACEMENT from — and recency is the right order for both; hoisting
+        # the current pin to the top of a picker is actively unhelpful.
+        #
+        # The corollary is that `[0]` MEANS "most recently written", never "this
+        # workspace's own", and a caller wanting the latter must SELECT rather
+        # than index: under ROOT placement every workspace in a repo scans the
+        # same cwd, so this list holds every other workspace's transcript and
+        # every hand-started one. The public share reader took `[0]` and served
+        # strangers for it; it now resolves an id through
+        # `WorkspaceManager.shared_session_id` and looks that id up here.
         listings.sort(key=lambda ls: ls.summary.modified_at or _EPOCH, reverse=True)
         return tuple(listings)
 
@@ -503,6 +556,56 @@ class SessionExplorer:
             return None
         ctx = state.transcript_context
         return ctx.config_dir if ctx is not None else None
+
+    @staticmethod
+    def queries_from_messages(messages: Sequence[AgentMessage]) -> tuple[SessionQuery, ...]:
+        """Project direct human messages from an adapter-filtered message spine.
+
+        The adapter has already applied its provider-specific real-turn filter
+        while assigning the ``user`` role; this generic projection deliberately
+        makes no second classification judgement.
+        """
+        return tuple(
+            SessionQuery(
+                ordinal=index,
+                timestamp=message.timestamp,
+                sent_at=message.sent_at,
+                text=message.text(),
+            )
+            for index, message in enumerate(
+                (
+                    message
+                    for message in messages
+                    if message.role == "user" and not message.is_sidechain
+                ),
+                start=1,
+            )
+        )
+
+    def recollect_for(
+        self, listing: SessionListing, *, last: int | None = None
+    ) -> tuple[SessionQuery, ...]:
+        """Every direct user query in one session, oldest first.
+
+        Reads the complete normalized message spine before applying ``last``:
+        a user query can follow any amount of agent work, and compaction only
+        changes the agent's context, never the transcript. The adapter's
+        existing real-turn filter is authoritative — it excludes provider and
+        harness machinery while admitting human slash commands and messages
+        delivered while the agent was busy. A slash command is included because
+        it is an explicit direct instruction from the user, not an echo.
+        """
+        adapter = get_adapter(listing.summary.adapter_kind)
+        with self._manager.transcript_config_dir_scope(
+            listing.summary.adapter_kind, self._transcript_config_dir(listing)
+        ):
+            messages = adapter.read_messages(self._session_cwd(listing), listing.summary.session_id)
+        queries = self.queries_from_messages(messages)
+        return queries[-last:] if last is not None else queries
+
+    def recollect(self, ref: str, *, last: int | None = None) -> tuple[SessionQuery, ...]:
+        """Every direct user query in the uniquely resolved session, oldest first."""
+        return self.recollect_for(self.resolve(ref), last=last)
 
     def turns_for(
         self, listing: SessionListing, *, last: int | None = None
@@ -940,4 +1043,5 @@ __all__ = [
     "SessionCatalog",
     "SessionExplorer",
     "SessionListing",
+    "SessionQuery",
 ]

@@ -2,12 +2,14 @@
 
 import { BellRingIcon, CheckIcon, ListFilterIcon } from "lucide-react";
 
+import type { LucideIcon } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { activeFilterCount, NO_FILTER, type FleetFacets, type FleetFilter } from "./filter";
-import { agentLabel } from "./tokens";
+import { agentGlyph, agentLabel } from "./tokens";
 import type { AgentState } from "./types";
 
 /**
@@ -91,6 +93,7 @@ export function FleetFilterMenu({
                 onToggle={() => toggleState(state)}
                 count={count}
                 testId={`fleet-filter-state-${state}`}
+                icon={agentGlyph(state)}
               >
                 <span className="truncate">{agentLabel(state)}</span>
               </FilterRow>
@@ -151,12 +154,14 @@ function FilterRow({
   onToggle,
   count,
   testId,
+  icon: Icon,
   children,
 }: {
   checked: boolean;
   onToggle: () => void;
   count: number;
   testId: string;
+  icon?: LucideIcon;
   children: React.ReactNode;
 }): React.ReactNode {
   return (
@@ -170,6 +175,7 @@ function FilterRow({
       data-testid={testId}
     >
       <CheckIcon className={checked ? "size-4 shrink-0" : "size-4 shrink-0 opacity-0"} aria-hidden />
+      {Icon ? <Icon className="size-3.5 shrink-0 text-content-tertiary" aria-hidden /> : null}
       {children}
       <span className="text-muted-foreground ml-auto text-xs tabular-nums">{count}</span>
     </Button>

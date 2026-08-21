@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from grove._mcp_sdk import McpSdk
+from grove._truststore import CA_PATH_ENV, TrustStoreError, use_system_trust_store
 from grove.client import BackendConfig, GroveClient
 from grove.mcp.instructions import SERVER_INSTRUCTIONS
 from grove.mcp.tools import GroveTools
@@ -335,12 +336,14 @@ class GroveMcpServer:
             (t.get_workspace, "grove_get_workspace", False),
             (t.list_agents, "grove_list_agents", False),
             (t.list_sessions, "grove_list_sessions", False),
+            (t.recollect_session, "grove_recollect_session", False),
             (t.peek_workspace, "grove_peek_workspace", False),
             (t.get_fleet_status, "grove_get_fleet_status", False),
             (t.get_workspace_phase, "grove_get_workspace_phase", False),
             (t.get_workspace_todo, "grove_get_workspace_todo", False),
             (t.attach_instruction, "grove_attach_instruction", False),
             (t.create_workspace, "grove_create_workspace", True),
+            (t.update_workspace, "grove_update_workspace", True),
             (t.pause_workspace, "grove_pause_workspace", True),
             (t.resume_workspace, "grove_resume_workspace", True),
             (t.respawn_workspace, "grove_respawn_workspace", True),
@@ -366,6 +369,14 @@ class GroveMcpServer:
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point for ``grove-mcp`` / ``python -m grove.mcp``."""
+    # Before the client is ever built: an operator's daemon may sit behind their
+    # own TLS, and this process's only report channel is stderr, so a trust
+    # failure here would surface as an opaque connection error to the harness.
+    try:
+        use_system_trust_store(os.environ.get(CA_PATH_ENV))
+    except TrustStoreError as exc:
+        print(f"grove-mcp: {exc}", file=sys.stderr)
+        sys.exit(2)
     parser = argparse.ArgumentParser(
         prog="grove-mcp",
         description=(

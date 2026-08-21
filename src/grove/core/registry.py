@@ -17,12 +17,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from grove.core.config import GroveConfig
 from grove.core.git import detect_root
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
+from grove.core.workspace import ShareToken, WorkspaceState
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,54 @@ class RepoRegistry:
             if self._on_project_registered is not None:
                 self._on_project_registered(key)
         return mgr
+
+    def resolve_share(self, token: str) -> tuple[WorkspaceManager, WorkspaceState] | None:
+        """The workspace a public share token names, or ``None``.
+
+        The ONE place a token becomes an identity, which is why it belongs here
+        rather than on a Manager: a token is host-wide by construction (the
+        public reader is handed a bare string and has no repo to scope it with),
+        so resolution has to happen above the per-repo cache.
+
+        It reads the STORE directly rather than walking ``known_roots()`` and
+        asking each Manager. One store read answers for every repo, where the
+        walk would resolve every project's whole config cascade — and instantiate
+        a Manager per repo — on a request that is unauthenticated by design.
+        Only the single matching repo's Manager is then materialized, through the
+        ordinary cache.
+
+        ``None`` covers every failure identically: no such token, an expired
+        token, a token belonging to a workspace that has since been unshared, or
+        an empty string. A caller must not distinguish them; the whole point of
+        the capability is that a wrong guess learns nothing.
+        """
+        if not token:
+            return None
+        now = datetime.now(UTC)
+        for state in self._store.load_all():
+            if not ShareToken.matches(token, state.share_token):
+                continue
+            if state.share_expires_at is not None and now >= state.share_expires_at:
+                return None
+            return self.get(Path(state.repo_root)), state
+        return None
+
+    def shared_in(self, repo_root: Path) -> list[WorkspaceState]:
+        """Every publicly-shared workspace in one repo, newest first.
+
+        What the public view's rail lists. Scoped by ``repo_root`` — the repo,
+        not the nested ``Project`` — because "the same project" to somebody
+        reading a shared link means the codebase, and a security-adjacent path
+        is the wrong place to introduce a second notion of project identity.
+
+        The caller is trusted to already hold a token for ONE of these, and the
+        consequence is deliberate and stated on the wire contract: sharing a
+        workspace makes it discoverable from every other shared workspace in its
+        repo. A private workspace never appears here.
+        """
+        target = str(Path(repo_root).resolve())
+        shared = [s for s in self._store.load_all() if s.share_token and s.repo_root == target]
+        return sorted(shared, key=lambda s: s.updated_at, reverse=True)
 
     def known_roots(self) -> list[Path]:
         """Repos that exist, by union of two sources.

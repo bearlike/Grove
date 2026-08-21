@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { TriangleAlertIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, DiffIcon, TriangleAlertIcon } from "lucide-react";
 
 import { AgentMark } from "@/components/grove/agent-mark";
 import { SectionCard } from "@/components/grove/card";
@@ -160,16 +160,29 @@ export function WorkspaceCard({
           className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-content-tertiary"
           data-testid="card-metrics"
         >
-          <span className="truncate">{state.agent_name}</span>
-          {/* No `text-success`/`text-destructive` on these, deliberately: §4.7
-              forbids a coloured figure with no word beside it, and `+12 −4`
-              carries a sign, not a word. The colour on this row is spent on the
-              one figure that has a glyph AND a bounded denominator. */}
-          <span className="tabular-nums" title="lines added / removed in this worktree">
+          <span className="truncate" title={`Agent: ${state.agent_name}`}>
+            {state.agent_name}
+          </span>
+          {/* The marks turn two runs of signs into named metrics. Their visible
+              number is still compact; the label travels through the accessible
+              name and hover, so neither colour nor punctuation bears meaning. */}
+          <span
+            className="inline-flex items-center gap-1 tabular-nums"
+            title={`${workspace.diff_added} lines added and ${workspace.diff_removed} removed in this worktree`}
+            aria-label={`${workspace.diff_added} lines added and ${workspace.diff_removed} removed in this worktree`}
+          >
+            <DiffIcon aria-hidden className="size-3 shrink-0" />
             +{workspace.diff_added} −{workspace.diff_removed}
           </span>
-          <span className="tabular-nums" title="commits ahead of / behind the base branch">
-            ↑{workspace.base_ahead} ↓{workspace.base_behind}
+          <span
+            className="inline-flex items-center gap-1 tabular-nums"
+            title={`${workspace.base_ahead} commits ahead of and ${workspace.base_behind} behind the base branch`}
+            aria-label={`${workspace.base_ahead} commits ahead of and ${workspace.base_behind} behind the base branch`}
+          >
+            <ArrowUpIcon aria-hidden className="size-3 shrink-0" />
+            {workspace.base_ahead}
+            <ArrowDownIcon aria-hidden className="size-3 shrink-0" />
+            {workspace.base_behind}
           </span>
           {workspace.todo ? <TodoBadge todo={workspace.todo} /> : null}
         </div>

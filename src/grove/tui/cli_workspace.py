@@ -76,14 +76,18 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
+import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, ClassVar
 
 import humanize
 import typer
+from loguru import logger
 
 from grove.core import (
     ActivityService,
@@ -108,9 +112,11 @@ from grove.core import (
 from grove.core.agents import SessionTurn, TodoList
 from grove.core.contracts.activity import DashboardSnapshotView
 from grove.core.contracts.tickets import TicketRef
+from grove.core.contracts.views import WorkspaceDefaultsView, WorkspaceStateView
 from grove.core.issueops import HandoverKey, PickupEngine
 from grove.core.phase import PHASE_ORDER, PhaseReport, TaskPhase, TicketClaim
 from grove.core.store import JsonWorkspaceStore
+from grove.tui.cli_complete import Complete
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +180,90 @@ class BranchFlags:
         # No branch flag → the default: slug the title off the base.
         return AutoBranch(base_ref=self.base or "HEAD")
 
+    @property
+    def any_set(self) -> bool:
+        """Whether the user picked a branch source at all.
+
+        The discriminator for "may a saved ``branch_mode`` default apply here":
+        an explicit flag always wins, so the default is only consulted when
+        every one of them is unset. ``base`` is excluded deliberately — it
+        modifies whichever source is chosen rather than choosing one.
+        """
+        return (
+            self.branch is not None
+            or self.checkout is not None
+            or self.track is not None
+            or self.root
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QuickCreate:
+    """What a ``grove create`` flag left unset resolves to.
+
+    The precedence is explicit flag > saved default > the engine's own
+    per-field cascade. :class:`WorkspaceDefaultsView` has already folded the
+    last two together for ``model``/``runtime``/``brief``/``base_ref``, so the
+    command can forward those straight through. This class owns the two answers
+    that resolution does *not* cover, plus the generated title:
+
+    * **agent** — ``CreateWorkspaceRequest.agent_name`` is required, so an
+      unset flag with no saved default has to fail here rather than reach the
+      engine as an empty string.
+    * **branch plan** — nothing engine-side consults ``branch_mode``; the TUI
+      applies it while building its request, so every other client must too or
+      it silently discards the user's saved branch default.
+
+    Kept off the Typer command body for the same reason as
+    :class:`BranchFlags`: the policy is unit-testable without ``CliRunner``.
+    """
+
+    defaults: WorkspaceDefaultsView
+
+    #: Width of the generated title's random suffix, in hex characters. Six is
+    #: ~16.7M values — collision-proof enough for one human's workspace list,
+    #: and short enough to stay readable in a `grove ls` row.
+    ID_HEX_CHARS: ClassVar[int] = 6
+
+    def title(self, explicit: str | None) -> str:
+        """A human's title, or a generated short id standing in for one.
+
+        Neither a title nor a prompt belongs before the workspace exists — a
+        person names a task once they have started it — so the quick path mints
+        an identifier that seeds the worktree path and tmux session name and
+        stays renameable afterwards. This is also why ``WorkspaceDefaults``
+        refuses to store a title: it names one task, never a default.
+        """
+        if explicit is not None:
+            return explicit
+        return f"wk-{secrets.token_hex(self.ID_HEX_CHARS // 2)}"
+
+    def agent(self, explicit: str | None) -> str:
+        """The agent to launch, or a loud refusal naming the way to set one."""
+        chosen = explicit or self.defaults.agent
+        if not chosen:
+            raise GroveError(
+                "no agent given and no saved default; pass --agent (see "
+                "`grove config show`) or save one from the TUI create form"
+            )
+        return chosen
+
+    def branch_plan(self, flags: BranchFlags) -> BranchPlan:
+        """Honour an explicit branch flag, else the saved ``branch_mode``.
+
+        Only ``root`` and the two name-less new-branch modes are reachable from
+        a default: ``WorkspaceDefaults`` deliberately stores no concrete branch
+        or remote name, so ``existing``/``remote`` have nothing to check out and
+        fall through to Auto — which is what a create with no name would do
+        anyway. ``new`` collapses onto Auto for the same reason: with no saved
+        name, "create a fresh branch" *is* Auto.
+        """
+        if flags.any_set:
+            return flags.to_plan()
+        if self.defaults.branch_mode == "root":
+            return RootBranch()
+        return AutoBranch(base_ref=flags.base or self.defaults.base_ref or "HEAD")
+
 
 # Same prompt/role glyphs the TUI transcript surfaces use (cli_sessions mirrors
 # them); deliberate, not mistyped ASCII. The prompt chevron is the zsh glyph too.
@@ -229,6 +319,24 @@ def _ago(when: datetime | None) -> str:
     if when is None:
         return "-"
     return humanize.naturaldelta(datetime.now(UTC) - when) + " ago"
+
+
+def _hyperlink(text: str, url: str | None) -> str:
+    """``text`` as an OSC 8 terminal hyperlink to ``url``, or unchanged.
+
+    The escape wraps the label and carries the URL out-of-band, so a ticket id
+    becomes clickable at **zero rendered width** — which is what makes showing
+    the link affordable on a line that already crops. A terminal without OSC 8
+    support ignores the sequence and prints the label alone.
+
+    Gated on ``isatty`` for the same reason the colour is: a redirected stdout
+    is being read by a program, and an escape sequence in that stream is
+    corruption rather than presentation. That gate is also what keeps this out
+    of ``--json``, where a link would be part of the value.
+    """
+    if not url or not sys.stdout.isatty():
+        return text
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
 def _emit_runtime_marks(state: WorkspaceState) -> None:
@@ -299,6 +407,57 @@ def _emit_compose_mark(state: WorkspaceState) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class _ResolvedRefs:
+    """Enriched ticket refs plus the reason any of them stayed bare.
+
+    Two fields rather than one list because a bare ref is ambiguous on its own:
+    "this ticket has no title" and "the tracker could not be reached" render
+    identically, and a reader acts on them very differently. ``failure`` is the
+    first error's text, shown once beneath the list — the same "cannot tell must
+    not be spelled as an answer" rule the engine applies to container liveness.
+    """
+
+    refs: tuple[TicketRef, ...]
+    failure: str | None = None
+
+
+def _resolve_refs(manager: WorkspaceManager, refs: Sequence[TicketRef]) -> _ResolvedRefs:
+    """Fetch each stored ref's live title/status. Best-effort, one GET per ref.
+
+    A ref is persisted BARE (provider + id + kind) on purpose — display fields
+    are an on-demand fetch rather than stale persisted state — so a title only
+    exists if something asks the tracker for it. That ask is network I/O, and
+    the tickets layer confines a provider's I/O face to an EDGE: a command body
+    qualifies, a lifecycle path never does, which is why this is a module
+    function here rather than a manager method.
+
+    Every failure degrades to the bare ref rather than raising — an unreachable
+    tracker, a missing credential, a deleted ticket and a provider that is not
+    configured all still render an id and a working link — but the reason is
+    CARRIED OUT rather than swallowed. A pull request goes to the pulls
+    namespace because the issues endpoint calls a merged PR "closed".
+
+    One-shot by design: a CLI process lives for seconds, so there is no memo
+    here. A ticking surface must not reuse this as-is.
+    """
+    resolved: list[TicketRef] = []
+    failure: str | None = None
+    for ref in refs:
+        try:
+            provider = manager.ticket_providers.get(ref.provider)
+            resolved.append(
+                provider.get_pull_request(ref.id)
+                if ref.kind == "pull_request"
+                else provider.get_ticket(ref.id)
+            )
+        except Exception as exc:  # enrichment never fails a read command
+            logger.debug("ticket enrichment failed for {}: {}", ref.key, exc)
+            failure = failure or str(exc)
+            resolved.append(ref)
+    return _ResolvedRefs(tuple(resolved), failure)
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceInspection:
     """One workspace's read-only multi-perspective snapshot for `grove show`.
 
@@ -312,6 +471,12 @@ class WorkspaceInspection:
     primary: SessionListing | None
     turns: tuple[SessionTurn, ...]
     todo: TodoList | None = None
+    tickets: _ResolvedRefs = _ResolvedRefs(())
+    """The attached issues/PRs with their display fields resolved, so the
+    inspector can name a ticket rather than only number it. Defaulted empty for
+    the same reason ``todo`` and ``phase`` are: the value still constructs from
+    the fields that predate it."""
+
     phase: PhaseReport | None = None
     """The task axis. Defaulted like ``todo`` so the value still constructs from
     the fields that predate it, and rendered as its own section because `show`
@@ -361,13 +526,21 @@ class WorkspaceInspection:
             # (that's a `None`, the common answer); this catches only the store
             # lookup around it, so the inspector degrades like every section.
             phase = None
-        return cls(peek=peek, primary=primary, turns=turns, todo=todo, phase=phase)
+        return cls(
+            peek=peek,
+            primary=primary,
+            turns=turns,
+            tickets=_resolve_refs(manager, peek.state.ticket_refs),
+            todo=todo,
+            phase=phase,
+        )
 
     def emit(self) -> None:
         """Print the inspection in sections, each a small method over this
         value's own state. Empty sections degrade to a short note rather than a
         blank — the reader always learns *why* a perspective is missing."""
         self._emit_identity()
+        self._emit_tickets()
         self._emit_git()
         self._emit_agent()
         self._emit_todo()
@@ -377,6 +550,13 @@ class WorkspaceInspection:
     def _emit_identity(self) -> None:
         state = self.peek.state
         typer.secho(f"{state.id}  {state.title}", fg=typer.colors.GREEN, bold=True)
+        # Description sits directly under the title because the two are one
+        # fact — what this workspace IS — and it is the pair `grove edit`
+        # writes. Absent renders as nothing at all rather than a "(none)" note:
+        # unlike the sections below, a missing description is not a perspective
+        # that failed to resolve, it is a field nobody filled in.
+        if state.description:
+            typer.echo(f"  {_truncate(state.description, cap=200)}")
         typer.echo(f"  branch:    {state.branch}  (base {state.base_branch})")
         typer.echo(f"  agent:     {state.agent_name}")
         typer.echo(f"  status:    {state.status.value}")
@@ -388,6 +568,21 @@ class WorkspaceInspection:
         typer.echo(f"  worktree:  {state.worktree_path}")
         typer.echo(f"  runtime:   {state.runtime.value}")
         _emit_runtime_marks(state)
+
+    def _emit_tickets(self) -> None:
+        """The attached issues/PRs, each with the phase claimed ABOUT IT.
+
+        The join is a pure ``dict`` lookup on ``TicketRef.key`` against the
+        phase report this inspection already gathered — the same key the store
+        deduplicates on and the same one the webapp joins by — so the whole
+        per-ticket axis costs no extra read. A ref with no claim renders
+        without a phase segment: absence of a report is not step zero.
+        """
+        if not self.tickets.refs:
+            return
+        typer.secho("\ntickets", fg=typer.colors.CYAN, bold=True)
+        claims = {c.ticket: c for c in self.phase.tickets} if self.phase else {}
+        _emit_ticket_refs(self.tickets, claims)
 
     def _emit_git(self) -> None:
         p = self.peek
@@ -497,7 +692,7 @@ def resolve_workspace(manager: WorkspaceManager, ref: str) -> WorkspaceState:
     return matches[0]
 
 
-def _resolve_or_infer_workspace(manager: WorkspaceManager, ref: str | None) -> WorkspaceState:
+def resolve_or_infer_workspace(manager: WorkspaceManager, ref: str | None) -> WorkspaceState:
     """The workspace named by ``ref`` (id-prefix), or — when ref is omitted —
     the one whose worktree contains the cwd. Ambiguous/none → GroveError
     listing candidates, same currency as :func:`resolve_workspace`.
@@ -540,25 +735,28 @@ def _resolve_or_infer_workspace(manager: WorkspaceManager, ref: str | None) -> W
 
 
 def create_workspace(
-    title: str = typer.Argument(
-        ...,
+    title: str | None = typer.Argument(
+        None,
         help="Human label for the workspace; its slug seeds the worktree path "
-        "and tmux session name. Example: grove create 'fix login bug' --agent claude",
+        "and tmux session name. Omit it and Grove mints a short id like wk-8f3a2c. "
+        "Example: grove create 'fix login bug' --agent claude",
     ),
     *,
-    agent: str = typer.Option(
-        ...,
+    agent: str | None = typer.Option(
+        None,
         "--agent",
         "-a",
         help="Agent to launch (must match a name in your config's agents list, "
-        "e.g. claude). See `grove config show`.",
+        "e.g. claude). Defaults to your saved answer; see `grove config show`.",
+        autocompletion=Complete.agents,
     ),
     model: str | None = typer.Option(
         None,
         "--model",
         "-m",
-        help="Model id for the agent tool (e.g. claude: sonnet/opus/haiku · codex: "
+        help="Model id for the agent tool (e.g. claude: fable/opus/sonnet/haiku · codex: "
         "gpt-5.5). Any id accepted; omit for the tool's default.",
+        autocompletion=Complete.models,
     ),
     branch: str | None = typer.Option(
         None,
@@ -574,6 +772,7 @@ def create_workspace(
         "-c",
         help="Check out an EXISTING local branch into the worktree "
         "(e.g. --checkout my-wip). Kept on kill (it's your branch).",
+        autocompletion=Complete.local_branches,
     ),
     track: str | None = typer.Option(
         None,
@@ -581,6 +780,7 @@ def create_workspace(
         "-t",
         help="Track a remote branch by creating a fresh local tracking branch "
         "(e.g. --track origin/feature/login).",
+        autocompletion=Complete.remote_branches,
     ),
     root: bool = typer.Option(
         False,
@@ -593,6 +793,7 @@ def create_workspace(
         "--base",
         help="Git ref to base a NEW branch on (default HEAD). Only valid with "
         "the default Auto branch or --branch (e.g. --base origin/main).",
+        autocompletion=Complete.refs,
     ),
     description: str | None = typer.Option(
         None, "--description", "-d", help="Optional free-form note attached to the workspace."
@@ -616,15 +817,43 @@ def create_workspace(
         help="Continue an EXISTING agent session in the new workspace instead of "
         "starting fresh (claude --resume / codex resume <id>). Pass a session id "
         "or a unique id prefix (see `grove sessions list`). Only claude/codex agents.",
+        autocompletion=Complete.sessions,
+    ),
+    cwd: str | None = typer.Option(
+        None,
+        "--cwd",
+        help="Start the agent in this subdirectory instead of the worktree root, "
+        "given RELATIVE TO THE REPO ROOT (e.g. --cwd webapp). The worktree, the "
+        "branch and the init script still anchor at the root — only the agent "
+        "session moves, which is what makes two subdirectories of one repo "
+        "distinct projects. An absolute path is taken as-is. Omit it to use the "
+        "repo's configured default (`agent_cwds.default`), or the worktree root "
+        "where none is declared; `grove config show` lists the declared set.",
+        autocompletion=Complete.cwds,
+    ),
+    attach: bool | None = typer.Option(
+        None,
+        "--attach/--no-attach",
+        help="Hand your terminal to the new workspace's agent once it is up. "
+        "Unset, this happens whenever the output is a terminal — a script whose "
+        "output is piped keeps its process. Pass either form to decide "
+        "explicitly.",
     ),
 ) -> None:
     """Create a workspace and launch its agent (in-process, like the TUI).
 
-    With no branch flag Grove auto-creates ``{branch_prefix}{slug(title)}-{ts}``
-    off ``--base`` (default HEAD) — the historical default. Pick exactly one
-    branch flag to override the source:
+    With no arguments at all this resolves your saved project defaults, mints a
+    short id for the title, creates the workspace and drops you into it — an
+    explicit flag beats a saved default, a saved default beats the per-field
+    cascade. With no branch flag Grove auto-creates
+    ``{branch_prefix}{slug(title)}-{ts}`` off ``--base`` (default HEAD) unless
+    your saved ``branch_mode`` says otherwise. Pick exactly one branch flag to
+    override the source:
 
     \b
+      grove create                            # saved defaults, created, attached
+      grove create --agent codex              # same, agent overridden
+      grove create --cwd webapp               # agent starts in ./webapp
       grove create "fix login" --agent claude
       grove create "fix login" --agent claude --branch fix/login --base origin/main
       grove create "review pr" --agent claude --checkout existing-wip
@@ -635,31 +864,48 @@ def create_workspace(
     surfaces an engine error (unknown agent, branch conflict) with a clean
     message and a non-zero exit.
     """
+    instruction = None
     with clean_exit():
-        plan = BranchFlags(
-            branch=branch, checkout=checkout, track=track, root=root, base=base
-        ).to_plan()
+        manager = build()
+        quick = QuickCreate(defaults=WorkspaceDefaultsView.from_config(manager.config))
+        flags = BranchFlags(branch=branch, checkout=checkout, track=track, root=root, base=base)
         request = CreateWorkspaceRequest(
-            agent_name=agent,
-            title=title,
+            agent_name=quick.agent(agent),
+            title=quick.title(title),
             description=description,
-            branch_plan=plan,
-            skip_init=no_init,
+            branch_plan=quick.branch_plan(flags),
+            skip_init=no_init or quick.defaults.skip_init,
             initial_prompt=prompt,
             resume_session_id=resume_session,
-            model=model,
-            runtime=runtime,
-            brief=brief,
+            model=model or quick.defaults.model,
+            runtime=runtime or Runtime(quick.defaults.runtime),
+            brief=quick.defaults.brief if brief is None else brief,
+            project_cwd=Path(cwd) if cwd is not None else None,
         )
-        state = build().create(request)
+        state = manager.create(request)
         typer.secho(f"created {state.id}", fg=typer.colors.GREEN)
         typer.echo(f"  title:    {state.title}")
         typer.echo(f"  agent:    {state.agent_name}")
         typer.echo(f"  branch:   {state.branch}")
         typer.echo(f"  worktree: {state.worktree_path}")
+        if state.project_subpath:
+            typer.echo(f"  cwd:      {state.agent_cwd}")
         typer.echo(f"  session:  {state.tmux_session}")
         typer.echo(f"  runtime:  {state.runtime.value}")
         _emit_runtime_marks(state)
+        # Handing the terminal over means REPLACING this process, so an unset
+        # flag must not do it to a caller that cannot possibly want it: a piped
+        # or redirected `grove create` is a script by definition, and `--attach`
+        # is there for the one that redirects and still wants the handoff.
+        if attach or (attach is None and sys.stdout.isatty()):
+            # The id is already in hand, so this needs no second workspace
+            # lookup — unlike `grove attach`, which has to resolve a prefix.
+            instruction = manager.attach(state.id)
+    if instruction is not None:
+        # Outside clean_exit for the same reason `grove attach` is: exec
+        # replaces this process, so it never returns and raises no GroveError.
+        argv = instruction.terminal_argv()
+        os.execvp(argv[0], argv)
 
 
 def message_workspace(
@@ -667,6 +913,7 @@ def message_workspace(
         ...,
         help="Workspace id or unique id prefix (see `grove ls`). "
         "Example: grove message a1b2 'run the tests'",
+        autocompletion=Complete.workspaces,
     ),
     text: str = typer.Argument(..., help="The follow-up text to type into the agent and submit."),
 ) -> None:
@@ -692,9 +939,12 @@ def message_workspace(
 # run the op, report. The engine owns every rule (a non-running pause, a root
 # pause, a missing worktree) and raises the typed error clean_exit renders.
 
+# One Argument object shared by every lifecycle verb, so the completer is
+# attached in exactly one place and a new verb inherits it for free.
 _WORKSPACE_ARG = typer.Argument(
     ...,
     help="Workspace id or unique id prefix (see `grove ls`).",
+    autocompletion=Complete.workspaces,
 )
 
 
@@ -809,27 +1059,107 @@ def attach_workspace(workspace: str = _WORKSPACE_ARG) -> None:
 
 def show_workspace(
     workspace: str | None = typer.Argument(
-        None, help="Workspace id / unique prefix; omit to infer from the current directory."
+        None,
+        help="Workspace id / unique prefix; omit to infer from the current directory.",
+        autocompletion=Complete.workspaces,
     ),
     *,
     last: int = typer.Option(10, "--last", "-l", help="Recent transcript turns to show."),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the workspace record as JSON instead of the human view."
+    ),
 ) -> None:
-    """Inspect a single workspace (read-only): git, agent, transcript tail, live pane.
+    """Inspect a single workspace (read-only): identity, tickets, git, agent, transcript, pane.
 
     The CLI analogue of the TUI peek rail — composes the engine's best-effort
     read seams into one multi-perspective view. With no argument it infers the
     workspace from the cwd (run it from inside a worktree); otherwise it resolves
     an id-prefix like ``grove message`` / ``grove pause``. Never mutates.
 
+    ``--json`` emits ``WorkspaceStateView`` — the same shape ``GET
+    /workspaces/{id}`` returns, so a script parsing it already knows the schema.
+    It is the record only: the git/agent/transcript perspectives are a rendering
+    of several best-effort reads, and freezing them into a second wire shape
+    here is how two serialisations of one workspace start to drift. Note it
+    carries ``share_token`` — this is local authenticated state, not something
+    to paste into a ticket.
+
     \b
       grove show            # infer from the current worktree
       grove show a1b2 -l 20
+      grove show --json | jq .description
     """
     with clean_exit():
         manager = build()
-        state = _resolve_or_infer_workspace(manager, workspace)
+        state = resolve_or_infer_workspace(manager, workspace)
+        if as_json:
+            typer.echo(WorkspaceStateView.from_state(state).model_dump_json(indent=2))
+            return
         explorer = SessionExplorer.from_cwd(Path.cwd())
         WorkspaceInspection.gather(manager, explorer, state.id, last_turns=last).emit()
+
+
+def edit_workspace(
+    workspace: str | None = typer.Argument(
+        None,
+        help="Workspace id / unique prefix; omit to infer from the current directory.",
+        autocompletion=Complete.workspaces,
+    ),
+    *,
+    title: str | None = typer.Option(None, "--title", "-t", help="New title (1..120 chars)."),
+    description: str | None = typer.Option(
+        None, "--description", "-d", help="New description; pass an empty string to clear it."
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the updated workspace record as JSON."
+    ),
+) -> None:
+    """Rename a workspace or change its description — metadata only.
+
+    The write half of ``grove show``, over the same ``WorkspaceManager.update``
+    seam the TUI's edit modal and ``PATCH /workspaces/{id}`` use, so all three
+    normalise identically. Nothing about the workspace MOVES: the worktree path,
+    the tmux session and the branch are derived from the title once at create
+    and are never re-derived, because renaming them would break every attached
+    client.
+
+    This exists because a workspace could name itself and not rename itself. The
+    quick-create path deliberately titles a workspace with a generated short id
+    on the promise that it stays renameable, and until now the only ways to keep
+    that promise were the TUI or a bearer token.
+
+    Omitting both flags is a refusal rather than a silent no-op: an update that
+    changes nothing still looks like it worked.
+
+    \b
+      grove edit --title "quota gateway"        # infer from the current worktree
+      grove edit a1b2 -d "spike, do not merge"
+      grove edit --description ""               # clear it
+    """
+    with clean_exit():
+        if title is None and description is None:
+            raise GroveError("nothing to change: pass --title and/or --description")
+        manager = build()
+        state = resolve_or_infer_workspace(manager, workspace)
+        # Forward only what was named. `update` separates "leave alone" from
+        # "clear" with its own sentinel, and an empty --description is a real
+        # instruction (clear it) rather than an omission, so the two must not be
+        # collapsed here. `Any` mirrors the daemon's PATCH handler for the same
+        # reason it does: a `**kwargs` splat cannot be typed more narrowly than
+        # the widest parameter it may reach, and the `is not None` guards are
+        # the narrowing — only named fields ever get there.
+        fields: dict[str, Any] = {}
+        if title is not None:
+            fields["title"] = title
+        if description is not None:
+            fields["description"] = description
+        updated = manager.update(state.id, **fields)
+        if as_json:
+            typer.echo(WorkspaceStateView.from_state(updated).model_dump_json(indent=2))
+            return
+        typer.secho(f"{updated.id}  {updated.title}", fg=typer.colors.GREEN, bold=True)
+        if updated.description:
+            typer.echo(f"  {_truncate(updated.description, cap=200)}")
 
 
 # ─── phase verb (the task-phase axis, grove.core.phase) ───────────────────────
@@ -889,6 +1219,7 @@ def phase_workspace(
         "— the common shape for an agent reporting its own progress. Omit "
         "both arguments (or pass the literal `show`) to just print the "
         "current phase.",
+        autocompletion=Complete.workspaces_or_phases,
     ),
     phase: TaskPhase | None = _PHASE_ARGUMENT,
     *,
@@ -901,6 +1232,7 @@ def phase_workspace(
         help='Scope this claim to one attached ticket (its "provider:id" key) '
         "rather than the workspace as a whole — for a workspace working "
         "several attached tickets at once.",
+        autocompletion=Complete.tickets,
     ),
     blocked: bool = typer.Option(
         False,
@@ -940,7 +1272,7 @@ def phase_workspace(
             target_ref = None
 
         if target_phase is not None:
-            state = _resolve_or_infer_workspace(manager, target_ref)
+            state = resolve_or_infer_workspace(manager, target_ref)
             written = manager.set_phase(
                 state.id, target_phase, note, blocked=blocked, ticket=ticket
             )
@@ -960,7 +1292,7 @@ def phase_workspace(
             raise GroveError(
                 "--blocked only applies when setting a phase, e.g. `grove phase planning --blocked`"
             )
-        state = _resolve_or_infer_workspace(manager, target_ref)
+        state = resolve_or_infer_workspace(manager, target_ref)
         current = manager.phase(state.id)
         _emit_phase(state, current)
 
@@ -1013,6 +1345,18 @@ _TICKET_REF_ARGUMENT = typer.Argument(
     "tracker (Gitea/GitHub/Linear) — inferred from the reference and the "
     "repo's enabled providers. Ambiguous across two enabled trackers? "
     "Qualify with a full URL or 'owner/repo#id'.",
+    # No completer, deliberately: attach/handover/handback take a ref from the
+    # TRACKER, whose domain is every issue on a remote forge — a network round
+    # trip per TAB. Detach is the one verb whose domain is already local, so it
+    # gets its own argument below rather than constraining this shared one.
+)
+
+_TICKET_DETACH_ARGUMENT = typer.Argument(
+    ...,
+    help="Issue/PR reference to detach — the same shapes `grove tickets attach` "
+    "accepts (URL / '#42' / 'owner/repo#42'), so the ref you attached with "
+    "also detaches it.",
+    autocompletion=Complete.tickets,
 )
 
 # `-w` not `-r`/positional: a second positional would be ambiguous with `ref`
@@ -1025,6 +1369,7 @@ _TICKET_WORKSPACE_OPTION = typer.Option(
     "-w",
     help="Workspace id or unique id prefix. Omit to infer from the current "
     "worktree — the common shape for an agent acting on its own workspace.",
+    autocompletion=Complete.workspaces,
 )
 
 tickets_app = typer.Typer(
@@ -1034,14 +1379,51 @@ tickets_app = typer.Typer(
 )
 
 
-def _emit_ticket_refs(refs: Sequence[TicketRef]) -> None:
-    if not refs:
+def _ticket_line(ref: TicketRef, claim: TicketClaim | None = None) -> str:
+    """One attached ticket as a terminal line — the SINGLE composer, so
+    ``grove tickets attach/list/detach`` and ``grove show`` cannot disagree
+    about what a ticket looks like.
+
+    The id is the link target rather than the title, because the id is the
+    stable handle a person quotes and the title is the thing they read; making
+    the whole line clickable would leave nothing safe to select. The URL itself
+    is never printed — it was the width problem that got the link dropped from
+    these surfaces in the first place, and OSC 8 costs no columns.
+
+    Each optional segment is omitted entirely when absent rather than rendered
+    as a placeholder: an unresolved title, an unreported phase and a
+    non-ambiguous ref are all ordinary, and a line of "(none)" notes would bury
+    the ones that carry information.
+    """
+    kind = "PR" if ref.kind == "pull_request" else "issue"
+    line = f"  {_hyperlink(f'{ref.provider}#{ref.id}', ref.url)}  ({kind})"
+    if ref.title:
+        line += f"  {_truncate(ref.title, cap=72)}"
+    if ref.status:
+        line += f"  [{ref.status}]"
+    if claim is not None:
+        line += f"  · {claim.phase}"
+        if claim.blocked:
+            line += " (blocked)"
+    if ref.ambiguous:
+        line += "  ⚠ ambiguous"
+    return line
+
+
+def _emit_ticket_refs(
+    resolved: _ResolvedRefs, claims: dict[str, TicketClaim] | None = None
+) -> None:
+    if not resolved.refs:
         typer.echo("  (no tickets attached)")
         return
-    for ref in refs:
-        kind = "PR" if ref.kind == "pull_request" else "issue"
-        marker = "  ⚠ ambiguous" if ref.ambiguous else ""
-        typer.echo(f"  {ref.provider}#{ref.id}  ({kind}){marker}")
+    by_key = claims or {}
+    for ref in resolved.refs:
+        typer.echo(_ticket_line(ref, by_key.get(ref.key)))
+    # Say WHY a title is missing. Without this line an unreachable tracker is
+    # indistinguishable from a set of untitled tickets, and the reader spends
+    # the difference debugging the wrong thing.
+    if resolved.failure:
+        typer.secho(f"  (titles unresolved: {_truncate(resolved.failure)})", fg=typer.colors.YELLOW)
 
 
 def tickets_attach(
@@ -1064,10 +1446,10 @@ def tickets_attach(
     """
     with clean_exit():
         manager = build()
-        state = _resolve_or_infer_workspace(manager, workspace)
+        state = resolve_or_infer_workspace(manager, workspace)
         updated = manager.attach_link(state.id, ref)
         typer.secho(f"attached to {state.id} ({state.title})", fg=typer.colors.GREEN)
-        _emit_ticket_refs(updated.ticket_refs)
+        _emit_ticket_refs(_resolve_refs(manager, updated.ticket_refs))
 
 
 def tickets_list(
@@ -1082,13 +1464,22 @@ def tickets_list(
     """
     with clean_exit():
         manager = build()
-        state = _resolve_or_infer_workspace(manager, workspace)
+        state = resolve_or_infer_workspace(manager, workspace)
         typer.secho(f"{state.id}  {state.title}", fg=typer.colors.GREEN, bold=True)
-        _emit_ticket_refs(state.ticket_refs)
+        # The phase read is what turns a list of refs into a progress report,
+        # and it is one file read the listing can afford. Best-effort by the
+        # same contract every other read here follows: a workspace whose agent
+        # never reported still lists its tickets.
+        try:
+            report = manager.phase(state.id)
+        except GroveError:
+            report = None
+        claims = {c.ticket: c for c in report.tickets} if report else {}
+        _emit_ticket_refs(_resolve_refs(manager, state.ticket_refs), claims)
 
 
 def tickets_detach(
-    ref: str = _TICKET_REF_ARGUMENT,
+    ref: str = _TICKET_DETACH_ARGUMENT,
     *,
     workspace: str | None = _TICKET_WORKSPACE_OPTION,
 ) -> None:
@@ -1103,13 +1494,13 @@ def tickets_detach(
     """
     with clean_exit():
         manager = build()
-        state = _resolve_or_infer_workspace(manager, workspace)
+        state = resolve_or_infer_workspace(manager, workspace)
         selector = manager.ticket_providers.resolve_link(ref)
         updated = manager.detach_ticket(state.id, selector.provider, selector.id)
         typer.secho(
             f"detached {selector.provider}#{selector.id} from {state.id}", fg=typer.colors.GREEN
         )
-        _emit_ticket_refs(updated.ticket_refs)
+        _emit_ticket_refs(_resolve_refs(manager, updated.ticket_refs))
 
 
 def _handover_key(manager: WorkspaceManager, ref: str) -> HandoverKey:
@@ -1208,9 +1599,16 @@ def register(app: typer.Typer) -> None:
     app.command("kill")(kill_workspace)
     app.command("attach")(attach_workspace)
     app.command("show")(show_workspace)
+    app.command("edit")(edit_workspace)
     app.command("phase")(phase_workspace)
     app.command("fleet")(fleet_status)
     app.add_typer(tickets_app, name="tickets")
 
 
-__all__ = ["BranchFlags", "WorkspaceInspection", "register", "resolve_workspace"]
+__all__ = [
+    "BranchFlags",
+    "WorkspaceInspection",
+    "register",
+    "resolve_or_infer_workspace",
+    "resolve_workspace",
+]

@@ -50,9 +50,19 @@ def all_adapters() -> tuple[AgentAdapter, ...]:
 
 
 MODEL_CATALOG_CAP = 10
-"""Max models any create-form picker OFFERS for one agent (the ≤10 rule). Config
-or live discovery may name more; the surface stays scannable. The cap is display
-only — a caller can still submit any id (the provider boundary)."""
+"""Max models DISCOVERY may offer for one agent, so a picker stays scannable.
+
+Display only — a caller can still submit any id (the provider boundary).
+
+**It does not apply to a configured list, and that asymmetry is the point.** The
+cap exists because live discovery answers with whatever a tool happens to
+publish: `codex debug models` returns everything, and a gateway measured on a
+real host returned 22 models under one prefix. Nobody chose those, so trimming
+them is a kindness. A list in `AgentSpec.models` is the opposite — somebody
+typed it, in order, to say *these are the ones I use*. Capping that silently
+discards the back half of an explicit answer with nothing said, which is the
+failure this repo keeps re-learning: a truncated list is indistinguishable from
+a complete one, so it reads as Grove ignoring its own config."""
 
 
 def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tuple[str, ...]:
@@ -66,9 +76,13 @@ def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tup
     This is the ONE place the catalog is composed, so every surface (webapp,
     TUI, CLI, MCP) shows the same list. Never an allowlist: create still
     forwards any model id verbatim, so an id absent here is valid."""
-    raw = tuple(configured) if configured else get_adapter(kind).available_models(command)
+    curated = bool(configured)
+    raw = tuple(configured) if curated else get_adapter(kind).available_models(command)
     seen: dict[str, None] = {}
     for model in raw:
         if model and model not in seen:
             seen[model] = None
-    return tuple(seen)[:MODEL_CATALOG_CAP]
+    # A curated list is returned WHOLE; only discovery is capped. See
+    # MODEL_CATALOG_CAP for why silently trimming an explicit answer is worse
+    # than a long picker.
+    return tuple(seen) if curated else tuple(seen)[:MODEL_CATALOG_CAP]

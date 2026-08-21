@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { PlusIcon } from "lucide-react";
 
 import {
   EmptyState,
@@ -56,34 +57,45 @@ export function FleetDashboard(): React.ReactNode {
 
   return (
     <div className="flex flex-col gap-5" data-testid="fleet-dashboard">
-      <div className="flex flex-wrap items-center gap-2">
-        {/* The rail's search control, not a second one. It depends on no
-            thread-list primitive — it forwards to `Input` — and brings the
-            leading glyph and `type="search"` a bare `Input` here did not, so
-            the fleet's two search boxes are one control. `h-9` matches this
-            toolbar's 36px buttons; the rail's pair are 32 together. */}
-        <div className="w-full max-w-xs">
-          <ThreadListSearch
-            value={filter.query}
-            onValueChange={(query) => setFilter({ ...filter, query })}
-            placeholder="Search workspaces, branches, tickets"
-            aria-label="Search the fleet"
-            className="h-9"
-            data-testid="fleet-search"
-          />
+      {/* The route title names the destination. This lead names the job the page
+          performs, then keeps the scan tools together as one instrument band. */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-lg font-medium text-content-primary">Your workspaces</p>
+            <p className="text-sm text-content-secondary">
+              Recent activity across every project, ready to resume.
+            </p>
+          </div>
+          {/* ONE create button. Each repo used to carry its own, which is five
+              buttons to say one thing — the dialog already asks which repo. */}
+          <Button onClick={() => openCreate(firstRepoRoot)} data-testid="fleet-create">
+            <PlusIcon aria-hidden />
+            New workspace
+          </Button>
         </div>
-        <FleetFilterMenu filter={filter} onFilterChange={setFilter} facets={facets} />
-        {/* Page chrome, not a card part. This borrowed `CardDescription` for
-            muted text, which is how a card primitive ends up defining type
-            outside any card — the secondary scale says it directly. */}
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {workspaceCountLabel(visible.length, rows.length)}
-        </span>
-        {/* ONE create button. Each repo used to carry its own, which is five
-            buttons to say one thing — the dialog already asks which repo. */}
-        <Button className="ml-auto" onClick={() => openCreate(firstRepoRoot)} data-testid="fleet-create">
-          New workspace
-        </Button>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The rail's search control, not a second one. It depends on no
+              thread-list primitive — it forwards to `Input` — and brings the
+              leading glyph and `type="search"` a bare `Input` here did not, so
+              the fleet's two search boxes are one control. `h-9` matches this
+              toolbar's 36px buttons; the rail's pair are 32 together. */}
+          <div className="w-full max-w-xs">
+            <ThreadListSearch
+              value={filter.query}
+              onValueChange={(query) => setFilter({ ...filter, query })}
+              placeholder="Search workspaces, branches, tickets"
+              aria-label="Search the fleet"
+              className="h-9"
+              data-testid="fleet-search"
+            />
+          </div>
+          <FleetFilterMenu filter={filter} onFilterChange={setFilter} facets={facets} />
+          <span className="text-xs text-content-tertiary tabular-nums">
+            {workspaceCountLabel(visible.length, rows.length)}
+          </span>
+        </div>
       </div>
 
       {query.error ? (
@@ -107,15 +119,21 @@ export function FleetDashboard(): React.ReactNode {
       ) : null}
 
       {visible.length > 0 ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(22rem,1fr))] gap-3">
-          {visible.map((row) => (
-            <WorkspaceCard
-              key={row.workspace.state.id}
-              workspace={row.workspace}
-              repoName={row.repoName}
-            />
-          ))}
-        </div>
+        <section aria-label="Recent workspaces" className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-content-primary">Recent activity</p>
+            <span className="text-xs text-content-tertiary">Newest first</span>
+          </div>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(22rem,1fr))] gap-3">
+            {visible.map((row) => (
+              <WorkspaceCard
+                key={row.workspace.state.id}
+                workspace={row.workspace}
+                repoName={row.repoName}
+              />
+            ))}
+          </div>
+        </section>
       ) : null}
     </div>
   );

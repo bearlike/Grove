@@ -13,12 +13,15 @@ import typer
 from loguru import logger
 
 from grove import __version__
+from grove._truststore import TrustStoreError, use_system_trust_store
 from grove.core import GroveError, build, load_config, paths
 from grove.core.agents.hook import run_hook_from_stdin
 from grove.core.config import add_known_project, dump_config_json, dump_schema_json, write_schema
 from grove.core.git import detect_root
 from grove.tui.cli_agent import register as register_agent_commands
 from grove.tui.cli_code import register as register_code_commands
+from grove.tui.cli_complete import Complete
+from grove.tui.cli_complete import register as register_completion_commands
 from grove.tui.cli_doctor import doctor_app
 from grove.tui.cli_onboarding import (
     AgentChoice,
@@ -27,7 +30,8 @@ from grove.tui.cli_onboarding import (
     run_onboarding,
 )
 from grove.tui.cli_onboarding import register as register_onboarding_commands
-from grove.tui.cli_sessions import sessions_app
+from grove.tui.cli_quota import register as register_quota_commands
+from grove.tui.cli_sessions import recollect_session, sessions_app
 from grove.tui.cli_shell import register as register_shell_commands
 from grove.tui.cli_usage import usage_app
 from grove.tui.cli_workspace import register as register_workspace_commands
@@ -52,15 +56,34 @@ auth_app = typer.Typer(
 )
 app.add_typer(auth_app, name="auth")
 app.add_typer(sessions_app, name="sessions")
+
+# `grove recollect` — the SAME function as `grove sessions recollect`, grafted
+# flat like `ls` and `version`. Not a second implementation: Typer registers the
+# one callable under both names, so they cannot drift.
+#
+# It earns the flat name on DISCOVERABILITY, which is the whole point of the
+# verb. Its caller is an agent that has just lost the earlier half of its own
+# context to compaction and needs to recover what it was asked — and an agent in
+# that state guesses `grove recollect`, not a subgroup it would have to enumerate
+# first. The grouped name stays because it is genuinely a per-session drill-in
+# alongside `list`/`show`/`dump`; the reasoning for that lives on the function.
+app.command("recollect")(recollect_session)
 app.add_typer(doctor_app, name="doctor")
 app.add_typer(usage_app, name="usage")
 
 # Flat workspace verbs (`grove create` / `grove message`) — grafted on like
 # `ls`/`version` rather than nested under a `workspace` subgroup.
 register_workspace_commands(app)
+register_quota_commands(app)
 
 # `grove skills install` / `grove mcp install` — onboard Claude/Codex.
 register_onboarding_commands(app)
+
+
+# `grove completions install` — teach the user's shell to complete `grove`.
+# A sibling of the onboarding verbs rather than part of them: those install
+# Grove INTO an agent tool, this one installs Grove into a shell.
+register_completion_commands(app)
 
 
 # `grove code` — open a containerized workspace's container in VS Code.
@@ -84,6 +107,19 @@ register_agent_commands(app)
 def main(ctx: typer.Context) -> None:
     """Default entry: launch the TUI when no subcommand is given."""
     _configure_logging()
+    # A user-level CA covers the process rather than one repo: `grove config
+    # show` may read a project, but a forge call from any subcommand is equally
+    # entitled to the configured deployment trust.
+    try:
+        tls = load_config(None).tls
+        degraded = use_system_trust_store(tls.ca_path)
+    except (GroveError, TrustStoreError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    # A host whose system store itself cannot be read still gets Grove's bundled
+    # public roots. A configured additional root is never allowed that fallback.
+    if degraded is not None:
+        logger.debug("using the bundled CA roots: {}", degraded)
     if ctx.invoked_subcommand is not None:
         return
     # Lazy import: subcommands like `version` shouldn't pay the textual import cost.
@@ -142,6 +178,11 @@ def config_show() -> None:
     typer.echo(dump_config_json(cfg))
 
 
+# Deliberately NO `autocompletion=`. Click's `_custom_shell_complete` REPLACES
+# the parameter type's own completion rather than adding to it, so a completer
+# here would trade the filesystem — the actual domain of "a repo to register" —
+# for a list of repos Grove already knows, i.e. exactly the ones that are no-ops.
+# A bare `Path` completes directories, which is the right answer.
 _PROJECT_PATH_ARGUMENT = typer.Argument(
     None, help="Repo path (default: the current directory's repo)."
 )
@@ -343,9 +384,16 @@ def auth_pending() -> None:
         )
 
 
+_CHALLENGE_ARGUMENT = typer.Argument(
+    ...,
+    help="Challenge id from `auth pending`.",
+    autocompletion=Complete.pairing_challenges,
+)
+
+
 @auth_app.command("approve")
 def auth_approve(
-    challenge_id: str = typer.Argument(..., help="Challenge id from `auth pending`."),
+    challenge_id: str = _CHALLENGE_ARGUMENT,
 ) -> None:
     """Approve a pending pairing request. The requesting client picks up the
     token via its own polling endpoint — this command never prints a token."""
@@ -365,7 +413,7 @@ def auth_approve(
 
 @auth_app.command("deny")
 def auth_deny(
-    challenge_id: str = typer.Argument(..., help="Challenge id from `auth pending`."),
+    challenge_id: str = _CHALLENGE_ARGUMENT,
 ) -> None:
     """Deny a pending pairing request."""
     try:
@@ -399,7 +447,11 @@ def auth_sessions() -> None:
 
 @auth_app.command("revoke")
 def auth_revoke(
-    session_id: str = typer.Argument(..., help="Session id from `auth sessions`."),
+    session_id: str = typer.Argument(
+        ...,
+        help="Session id from `auth sessions`.",
+        autocompletion=Complete.auth_sessions,
+    ),
 ) -> None:
     """Revoke an active session (kicks that device until it pairs again)."""
     try:

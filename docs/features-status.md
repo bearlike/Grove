@@ -193,6 +193,11 @@ launch environment as `GROVE_PHASE_FILE`.
   the file's mtime.
 - Excluded from git automatically, and a malformed file is ignored
   silently, never surfaced as an error.
+- Working several attached tickets at once? Add a `tickets` map keyed
+  `provider:id`; each entry is that ticket's own claim, published to
+  that ticket's own comment, independent of the workspace's.
+- `blocked` is a flag beside a phase, at either level, never a seventh
+  phase: it says the agent is stuck on the step, not which step.
 
 Writing a file, not calling an API, is deliberate. A containerized
 agent reaches neither the loopback bound daemon nor the absent `grove`
@@ -205,7 +210,9 @@ The file is the only channel guaranteed everywhere. A host workspace
 gets three more optional surfaces.
 
 - **CLI**: `grove phase <phase> --note "..."`, inferring the workspace
-  from your directory like `grove show`.
+  from your directory like `grove show`. Add `--ticket provider:id` to
+  scope the claim to one attached ticket, or `--blocked` to flag the
+  current step as stuck.
   [CLI: `grove phase`](use-cli.md#grove-phase).
 - **MCP**: `grove_set_workspace_phase` and `grove_get_workspace_phase`.
   [MCP tools](use-mcp.md#tools).

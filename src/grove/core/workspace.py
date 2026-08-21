@@ -8,6 +8,7 @@ no I/O — those live in `git.py`, `tmux.py`, and `store.py`.
 from __future__ import annotations
 
 import re
+import secrets
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -33,6 +34,67 @@ if TYPE_CHECKING:
     # field defaults to None, so no symbol is needed at runtime.
     from grove.core.container_runtime import ContainerRuntimeState
     from grove.core.contracts.tickets import TicketRef
+
+
+class ShareToken:
+    """The capability that makes a workspace publicly readable.
+
+    Two operations, kept together because they are two halves of one security
+    property and a call site that got either wrong would look perfectly fine.
+    ``mint`` decides the entropy; ``matches`` decides how a candidate is
+    compared. Splitting them across the manager (which mints) and the registry
+    (which resolves) is how a 16-byte token or a ``==`` comparison ends up
+    shipping without anyone noticing.
+
+    There is no ``revoke``: revoking is setting the field to ``None``, which is
+    the store's job, not this class's.
+    """
+
+    #: 32 bytes → 256 bits, ~43 URL-safe characters. Sized so the token is
+    #: unguessable rather than merely long: this is the ONLY thing standing
+    #: between a public link and the workspace behind it, and it is handed to
+    #: an unauthenticated caller who may try as often as they like.
+    ENTROPY_BYTES: ClassVar[int] = 32
+
+    @staticmethod
+    def mint() -> str:
+        """A fresh token. ``token_urlsafe`` so it survives a URL path segment
+        untouched — no percent-encoding, nothing a copy-paste can mangle."""
+        return secrets.token_urlsafe(ShareToken.ENTROPY_BYTES)
+
+    @staticmethod
+    def resolve(*, enabled: bool, current: str | None) -> str | None:
+        """The token a workspace should hold, given what it holds now.
+
+        The whole sharing policy, as one pure expression: enabling KEEPS an
+        existing token (so re-sharing never invalidates a link already in
+        circulation, and the caller's own equality check then sees a genuine
+        no-op), enabling a private workspace mints one, and disabling clears —
+        permanently, because a cleared token cannot be recovered and a later
+        re-share mints a fresh one.
+
+        It lives here rather than inline in the manager so the policy sits with
+        the class that owns what a token IS, and so it can be tested without a
+        store, a worktree or a workspace.
+        """
+        if not enabled:
+            return None
+        return current or ShareToken.mint()
+
+    @staticmethod
+    def matches(candidate: str, stored: str | None) -> bool:
+        """Whether ``candidate`` is ``stored``, compared in constant time.
+
+        ``compare_digest`` rather than ``==`` is close to free here and removes
+        the question entirely; at 256 bits a timing oracle is not the realistic
+        attack, but a lookup that short-circuits on the first differing byte is
+        the kind of thing that stops being fine when somebody later shortens the
+        token. A stored ``None`` (a private workspace) never matches anything,
+        including an empty candidate.
+        """
+        if not stored or not candidate:
+            return False
+        return secrets.compare_digest(candidate, stored)
 
 
 class WorkspaceStatus(StrEnum):
@@ -524,6 +586,41 @@ class WorkspaceState:
     # workspace and for one that used the project's own config, so legacy
     # records decode as the historical shape.
     runtime_default_config: bool = False
+    # The capability token that makes this workspace publicly readable, or None
+    # for the default — private. ONE field carries both halves of the question:
+    # presence IS "this workspace is shared" and the value IS the link, so there
+    # is no second boolean that can disagree with it and no state where a
+    # workspace is marked public with no way to reach it.
+    #
+    # Revoking is setting this back to None, which permanently invalidates the
+    # link already in circulation rather than parking it — re-sharing mints a
+    # fresh token. That is the honest semantics for a capability nobody can
+    # recall from whoever they sent it to.
+    #
+    # It never reaches an unauthenticated reader: the public views are built
+    # from an explicit allowlist that does not include it. Legacy records load
+    # as None (private), which is the safe direction and needs no migration.
+    share_token: str | None = None
+    # A share link's expiry is fixed when its capability is issued, rather than
+    # joined from the current project policy at read time. Changing the project's
+    # TTL therefore affects new and re-issued links only; resolving a public link
+    # remains one record lookup on the unauthenticated path.
+    share_expires_at: datetime | None = None
+    # WHICH TRANSCRIPT THE LINK SHOWS, recorded when the capability is issued
+    # rather than derived when it is read. A shared link is handed to somebody
+    # who cannot see this record, so the thing it renders must not change
+    # identity underneath them — a respawn mints a new session id, adoption can
+    # promote a different one, and under ROOT placement the workspace's scan cwd
+    # is the shared repo root where every OTHER workspace's transcript also
+    # lives. Derived at read time, all three silently re-point the same URL at a
+    # different conversation; recorded once, none of them can.
+    #
+    # None means NOT PINNED — every record written before this existed, and the
+    # honest state for one whose pin was never captured. The reader then falls
+    # back to the workspace's own primary session, which is the same answer the
+    # authenticated surface gives. Cleared with the token, because a pin without
+    # a link is a claim about nothing.
+    share_session_id: str | None = None
 
     @property
     def runtime_no_tmux(self) -> bool:

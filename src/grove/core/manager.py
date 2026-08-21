@@ -20,7 +20,7 @@ import re
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -98,6 +98,7 @@ from grove.core.workspace import (
     ProvisionProgress,
     ProvisionStatus,
     Runtime,
+    ShareToken,
     TranscriptContext,
     WorkspaceDiff,
     WorkspaceIdentity,
@@ -437,11 +438,33 @@ class WorkspaceManager:
         shape). Otherwise the path must be the repo root or a descendant of it;
         anything else is a loud ``GroveError`` raised before any side effect.
         Both sides are ``resolve()``d (the registry keys ``repo_root`` that way),
-        so a symlinked or relative ``project_cwd`` still maps correctly.
+        so a symlinked ``project_cwd`` still maps correctly.
+
+        **A RELATIVE path anchors on the repo root, never the process cwd.**
+        Resolving it against the caller's own directory gives the same request
+        different meanings in every client — the daemon serves repos it does not
+        stand in, so `"webapp"` there would resolve under the systemd unit's
+        working directory and fail containment for reasons no user could see.
+        The repo root is the one anchor every caller already agrees on, and it
+        is what someone naming a subdirectory of a project means.
+
+        **An omitted cwd resolves the repo's own configured default
+        (``agent_cwds.default``) HERE, in the engine, and not in any client.**
+        The precedent is `defaults.branch_mode`, which nothing engine-side
+        reads: the TUI applies it while building its request, so every other
+        client silently discards the user's saved answer. Resolving it at this
+        one seam means the CLI, the TUI, the daemon, MCP and issue-ops all
+        inherit it. A repo that declares no default still gets ``""`` — the
+        historical worktree root — so nothing changes for anyone who has not
+        opted in.
         """
         if project_cwd is None:
-            return ""
-        resolved = project_cwd.expanduser().resolve()
+            configured = self._cfg.agent_cwds.default_path()
+            if configured is None:
+                return ""
+            project_cwd = Path(configured)
+        given = project_cwd.expanduser()
+        resolved = (given if given.is_absolute() else self._repo_root / given).resolve()
         try:
             rel = resolved.relative_to(self._repo_root)
         except ValueError:
@@ -1590,14 +1613,43 @@ class WorkspaceManager:
                 logger.warning("worktree_prune during kill failed: {}", exc)
         return branch_deleted, residue
 
+    @staticmethod
+    def _validated_title(title: str) -> str:
+        """A title, stripped and checked. Raises rather than returning a flag —
+        an invalid title is a caller error, not a state the record may hold."""
+        stripped = title.strip()
+        if not stripped:
+            raise WorkspaceStateError("title must not be empty")
+        if len(stripped) > 120:
+            raise WorkspaceStateError("title must be 120 characters or fewer")
+        return stripped
+
+    @staticmethod
+    def _normalized_description(description: str | None) -> str | None:
+        """A description as the record stores it: stripped, with empty and
+        ``None`` collapsing to ``None`` so "cleared" has exactly one
+        representation and a no-op re-clear compares equal."""
+        if description is None:
+            return None
+        stripped = description.strip()
+        if len(stripped) > 2000:
+            raise WorkspaceStateError("description must be 2000 characters or fewer")
+        return stripped or None
+
     def update(
         self,
         workspace_id: str,
         *,
         title: str | _Unset = _UNSET,
         description: str | None | _Unset = _UNSET,
+        share: bool | _Unset = _UNSET,
+        # The daemon resolves the project policy before invoking this manager.
+        # A future CLI/MCP sharing entry point must do the same or it deliberately
+        # mints a non-expiring link when this remains `_UNSET`.
+        share_ttl_seconds: int | None | _Unset = _UNSET,
+        share_session_id: str | _Unset = _UNSET,
     ) -> WorkspaceState:
-        """Rename the title or set/clear the description on a workspace.
+        """Rename the title, set/clear the description, or share the workspace.
 
         Metadata-only — never touches the worktree, the tmux session, or
         the branch. Title is the slug seed for the worktree path and tmux
@@ -1612,14 +1664,63 @@ class WorkspaceManager:
         (stored as None — empty string and None are equivalent and we
         normalize on write). ``description="..."`` sets it.
 
-        Refuses if both args are unset (nothing to do) and if the
-        workspace is ORPHANED (worktree gone; record headed for kill).
-        Emits an ``"updated"`` event with ``title_changed`` /
-        ``description_changed`` flags so subscribers know what shifted
-        without diffing themselves.
+        ``share=True`` mints a public capability token (and ``share=False``
+        clears it), which is what makes the workspace readable through the
+        daemon's unauthenticated ``/public`` namespace. It lives here rather
+        than on a ``share()`` method of its own because this method already
+        owns all four things such a method would need: the ORPHANED gate, the
+        read-modify-write against persisted state, the no-op short-circuit, and
+        the ``updated`` event. A second copy of those is how two mutation paths
+        drift.
+
+        Enabling is IDEMPOTENT — an already-shared workspace keeps the token it
+        has, so re-enabling never invalidates a link somebody is already
+        holding. Disabling clears it outright, which permanently kills that
+        link; a later re-share mints a fresh one rather than resurrecting it.
+
+        **Minting a token also PINS the transcript the link will show**, to the
+        workspace's session as resolved at that moment
+        (:meth:`_todo_session_id`). A link is a capability handed to somebody
+        who cannot see this record, so what it renders must not change identity
+        under them — and derived at read time it does, three ways: a respawn
+        mints a new session id, adoption can promote a different one, and under
+        ROOT placement the scan cwd is the shared repo root holding every other
+        workspace's transcript. Revoking clears the pin with the token.
+
+        ``share_session_id`` RE-PINS explicitly, and it is the only way to move
+        a live link: enabling is idempotent, so re-sharing an already-shared
+        workspace cannot re-pin by itself, and that silence is deliberate —
+        clicking "share" twice must not quietly change what a circulated URL
+        shows. It resolves through :meth:`_resolve_session_ref` (unique prefix,
+        kind-checked, no birth-gate) BEFORE any write, exactly like
+        ``remap_session``, and requires ``share=True`` because a pin without a
+        link is a claim about nothing.
+
+        Refuses if every arg is unset (nothing to do) and if the workspace is
+        ORPHANED (worktree gone; record headed for kill). Emits an ``"updated"``
+        event with ``title_changed`` / ``description_changed`` / ``share_changed``
+        / ``share_session_changed`` flags so subscribers know what shifted
+        without diffing themselves. The event carries only the FLAGS, never the
+        token — an event bus fans out to subscribers with no business holding a
+        credential. The pinned session id is not a credential and rides the
+        ordinary state view, but it is still not on the event: a subscriber that
+        needs it re-reads the record, the same rule ``share_changed`` follows.
         """
-        if title is _UNSET and description is _UNSET:
-            raise WorkspaceStateError("update requires at least one of title, description")
+        if title is _UNSET and description is _UNSET and share is _UNSET:
+            raise WorkspaceStateError("update requires at least one of title, description, share")
+        if not isinstance(share_ttl_seconds, _Unset) and share is not True:
+            raise WorkspaceStateError("share_ttl_seconds requires share=True")
+        if not isinstance(share_session_id, _Unset) and share is not True:
+            raise WorkspaceStateError("share_session_id requires share=True")
+        if (
+            not isinstance(share_ttl_seconds, _Unset)
+            and share_ttl_seconds is not None
+            and share_ttl_seconds <= 0
+        ):
+            raise WorkspaceStateError("share_ttl_seconds must be positive")
+        # Project policy is resolved at the daemon boundary, where the repo-wide
+        # policy belongs. The manager only stamps its result onto a newly issued
+        # capability, keeping existing links fixed when the policy later changes.
         # Read persisted state for the write path (preserves the persisted
         # intent — RUNNING/PAUSED/ERROR — that the store can round-trip),
         # AND a reconciled view for the validation path so ORPHANED is
@@ -1630,28 +1731,30 @@ class WorkspaceManager:
         changes: dict[str, object] = {}
         title_changed = False
         if not isinstance(title, _Unset):
-            new_title = title.strip()
-            if not new_title:
-                raise WorkspaceStateError("title must not be empty")
-            if len(new_title) > 120:
-                raise WorkspaceStateError("title must be 120 characters or fewer")
+            new_title = self._validated_title(title)
             if new_title != persisted.title:
                 changes["title"] = new_title
                 title_changed = True
 
         description_changed = False
         if not isinstance(description, _Unset):
-            new_description: str | None
-            if description is None:
-                new_description = None
-            else:
-                stripped = description.strip()
-                if len(stripped) > 2000:
-                    raise WorkspaceStateError("description must be 2000 characters or fewer")
-                new_description = stripped or None
+            new_description = self._normalized_description(description)
             if new_description != persisted.description:
                 changes["description"] = new_description
                 description_changed = True
+
+        share_changed = False
+        share_session_changed = False
+        if not isinstance(share, _Unset):
+            share_changes = self._share_changes(
+                persisted,
+                enabled=share,
+                ttl_seconds=share_ttl_seconds,
+                session_ref=share_session_id,
+            )
+            changes.update(share_changes)
+            share_changed = "share_token" in share_changes
+            share_session_changed = "share_session_id" in share_changes
 
         if not changes:
             # Nothing actually changed (caller passed the same values).
@@ -1666,6 +1769,8 @@ class WorkspaceManager:
             {
                 "title_changed": "true" if title_changed else "false",
                 "description_changed": "true" if description_changed else "false",
+                "share_changed": "true" if share_changed else "false",
+                "share_session_changed": "true" if share_session_changed else "false",
             },
         )
         return new_state
@@ -1795,28 +1900,128 @@ class WorkspaceManager:
         """
         persisted = self._store.get(workspace_id)
         ensure_can_update(self._reconcile_status(persisted))
-        try:
-            listing = self._session_explorer().resolve(session_ref)
-        except GroveError as exc:
-            # resolve() raises a bare GroveError for no-match / ambiguous-prefix;
-            # re-raise in the session domain so the daemon maps it to 404 rather
-            # than a generic 500. The original message (candidate ids on an
-            # ambiguous prefix) is preserved so the user can extend the prefix.
-            raise AgentSessionNotFound(str(exc)) from exc
-        resolved_id = listing.summary.session_id
-        kind = self.effective_kind(persisted)
-        if listing.summary.adapter_kind != kind:
-            raise AgentSessionNotFound(
-                f"session {resolved_id} is a {listing.summary.adapter_kind} session, but "
-                f"workspace {persisted.id} runs a {kind} agent whose adapter cannot read a "
-                f"{listing.summary.adapter_kind} transcript"
-            )
+        resolved_id = self._resolve_session_ref(persisted, session_ref)
         if persisted.agent_session_id == resolved_id:
             return persisted  # idempotent: already pinned to this session
         new_state = _replace(persisted, updated_at=_utcnow(), agent_session_id=resolved_id)
         self._store.save(new_state)
         self._emit("updated", new_state.id, {"session_remapped": resolved_id})
         return new_state
+
+    def _share_changes(
+        self,
+        state: WorkspaceState,
+        *,
+        enabled: bool,
+        ttl_seconds: int | None | _Unset,
+        session_ref: str | _Unset,
+    ) -> dict[str, object]:
+        """The field writes one ``share=`` argument implies — token, expiry, pin.
+
+        Split out of :meth:`update` because the three move TOGETHER on rules
+        that are not obvious, and a reader auditing "what can change my link"
+        should find all of them in one place rather than inferring the coupling
+        from three branches interleaved with title and description handling.
+        Returns only the fields that actually change, so the caller's no-op
+        short-circuit and its per-field event flags both read straight off the
+        keys present.
+        """
+        # Resolve an explicit pin BEFORE anything is written, so a bad ref
+        # refuses the whole update rather than half-applying it — the ordering
+        # `remap_session` already keeps, for the same reason.
+        requested_pin = (
+            self._resolve_session_ref(state, session_ref)
+            if not isinstance(session_ref, _Unset)
+            else None
+        )
+        changes: dict[str, object] = {}
+        # The policy itself lives on `ShareToken.resolve` — enabling an
+        # already-shared workspace returns the SAME string, so it falls through
+        # this equality check as a genuine no-op.
+        new_token = ShareToken.resolve(enabled=enabled, current=state.share_token)
+        minted_or_revoked = new_token != state.share_token
+        if minted_or_revoked:
+            changes["share_token"] = new_token
+            seconds = ttl_seconds if isinstance(ttl_seconds, int) else None
+            changes["share_expires_at"] = (
+                _utcnow() + timedelta(seconds=seconds) if enabled and seconds is not None else None
+            )
+        # The pin is captured with the MINT and cleared with the revoke — the
+        # two edges where the token itself moves — and deliberately NOT on the
+        # idempotent re-share, which must leave a circulated link showing what
+        # it has always shown. An explicit ref is the one override.
+        if requested_pin is not None:
+            new_pin = requested_pin
+        elif not enabled:
+            new_pin = None
+        elif minted_or_revoked:
+            new_pin = self._todo_session_id(state)
+        else:
+            new_pin = state.share_session_id
+        if new_pin != state.share_session_id:
+            changes["share_session_id"] = new_pin
+        return changes
+
+    def _resolve_session_ref(self, state: WorkspaceState, session_ref: str) -> str:
+        """A caller-supplied session ref → a full id this workspace can read.
+
+        The one resolution shared by every TRUSTED pin — :meth:`remap_session`
+        (which session the workspace tracks) and :meth:`update`'s
+        ``share_session_id`` (which session its public link shows). Both take a
+        string from an authenticated operator, both must fail before any write,
+        and both have exactly the same notion of a usable answer, so a second
+        copy is how one of them silently loses the kind check.
+
+        Resolution runs through the project's :class:`SessionExplorer`, so a
+        unique id-prefix works and a typo or a foreign id raises
+        :class:`AgentSessionNotFound` (404) rather than the bare ``GroveError``
+        ``resolve`` emits — the ambiguous-prefix message, which lists candidates,
+        is preserved so the user can extend the prefix.
+
+        Adapter-kind equality is enforced and the birth-gate is not: an
+        operator's explicit choice outranks the adoption heuristic, but a session
+        this workspace's adapter can never read is a dead pointer that answers
+        200, which is worse than a refusal.
+        """
+        try:
+            listing = self._session_explorer().resolve(session_ref)
+        except GroveError as exc:
+            raise AgentSessionNotFound(str(exc)) from exc
+        resolved_id = listing.summary.session_id
+        kind = self.effective_kind(state)
+        if listing.summary.adapter_kind != kind:
+            raise AgentSessionNotFound(
+                f"session {resolved_id} is a {listing.summary.adapter_kind} session, but "
+                f"workspace {state.id} runs a {kind} agent whose adapter cannot read a "
+                f"{listing.summary.adapter_kind} transcript"
+            )
+        return resolved_id
+
+    def shared_session_id(self, state: WorkspaceState) -> str | None:
+        """Which transcript this workspace's PUBLIC link shows.
+
+        THE SINGLE RESOLVER, and being single is the whole point. The public
+        overview names a session and the public turns route serves one; while
+        those were two independent derivations they disagreed in production —
+        the overview reported the workspace's own session while the transcript
+        rendered whichever file in the scan cwd had been touched most recently,
+        which under ROOT placement is another workspace's conversation entirely.
+        Any future public read that needs a session calls THIS, never a listing
+        index.
+
+        The recorded pin wins. ``None`` — a link issued before pinning existed,
+        or one whose pin was never captured — falls back to
+        :meth:`_todo_session_id`, the same per-request resolution the todo and
+        task-text axes use, which is the workspace's own primary session. So an
+        unpinned link is not broken, merely un-frozen: it follows the workspace
+        the way the authenticated surface does.
+
+        The answer may name a session with no transcript on disk yet (a mint
+        inside the STARTING window). That is honest rather than a failure — the
+        turns route finds no listing for it and says the workspace has nothing
+        readable, which is exactly the state it is in.
+        """
+        return state.share_session_id or self._todo_session_id(state)
 
     def _session_explorer(self) -> SessionExplorer:
         """A read-only :class:`SessionExplorer` over this same manager.
@@ -3600,8 +3805,26 @@ class WorkspaceManager:
         """
         if not (state.brief and self._briefed_by_hook(state, agent)):
             return {}
-        rendered = AgentBrief.render(paths.agent_brief_path())
+        rendered = AgentBrief.render(paths.agent_brief_path(state.id), self._brief_text(state))
         return {} if rendered is None else {AgentBrief.PATH_ENV: str(rendered)}
+
+    def _brief_text(self, state: WorkspaceState) -> str:
+        """This workspace's brief: Grove's own, plus whatever the cascade adds.
+
+        The one composer, so the hook road and the initial-prompt road cannot
+        hand an agent two different briefs — which is exactly the drift that
+        would go unnoticed, since a given workspace only ever takes one of them.
+
+        ``self_naming`` is gated on an empty description rather than on how the
+        title was made: title generation happens in the CLIENT (``grove create``
+        and the web composer each mint their own), so the engine never learns it
+        without a new request field threaded through every caller — and the
+        description is the better question anyway.
+        """
+        return AgentBrief.compose(
+            appended=self._cfg.brief.instructions,
+            unnamed=self._cfg.brief.self_naming and not (state.description or "").strip(),
+        )
 
     def _brief_prompt(
         self, state: WorkspaceState, agent: AgentSpec, initial_prompt: str | None
@@ -3638,7 +3861,7 @@ class WorkspaceManager:
             or self._briefed_by_hook(state, agent)
         ):
             return initial_prompt
-        return f"{AgentBrief.TEXT}\n{initial_prompt}"
+        return f"{self._brief_text(state)}\n{initial_prompt}"
 
     @staticmethod
     def _phase_env(state: WorkspaceState, agent_slot: str | None) -> dict[str, str]:

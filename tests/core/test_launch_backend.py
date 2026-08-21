@@ -124,7 +124,7 @@ def test_create_routes_the_assembled_command_through_the_backend(
         # reason: the hook process inherits the agent's env, and the settings
         # file it lives in is host-global so it cannot carry a per-workspace
         # answer.
-        AgentBrief.PATH_ENV: str(paths.agent_brief_path()),
+        AgentBrief.PATH_ENV: str(paths.agent_brief_path(state.id)),
     }
     # Identity stamping rides every launch, telemetry credentials or not — and
     # the correlation attribute is what later joins Grove's own spans to the

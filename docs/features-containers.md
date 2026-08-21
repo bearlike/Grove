@@ -10,6 +10,7 @@ the agent runtime the work, ungated.
 <video preload="auto" poster="../img/posters/devcontainer-still.png">
   <source src="../videos/3-grove-devcontainer.mp4" type="video/mp4" />
 </video>
+
 ## Host or container
 
 Runtime is a per workspace choice, so two workspaces in one repo can differ.

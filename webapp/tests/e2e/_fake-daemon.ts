@@ -109,9 +109,45 @@ export function startFakeDaemon(port: number): Promise<Server> {
 
     app.get("/activity", (_req, res) => res.json(FIXTURE_ACTIVITY));
     app.get("/sessions", (_req, res) => res.json(FIXTURE_SESSIONS));
-    app.get("/sessions/:sessionId/turns", (_req, res) => res.json(TRANSCRIPT_TURNS));
+
+    /**
+     * `/turns` answers a WINDOW, never a bare array.
+     *
+     * The turns fixture is the turn LIST; the route has to wrap it in the
+     * `SessionDetailView` envelope the daemon actually sends. Serving the array
+     * raw made `turns.data.turns` undefined, and the workspace surface reads
+     * `turns.data?.turns.length` — an optional chain that guards `data` but not
+     * `turns` — so the whole page died with "Cannot read properties of
+     * undefined (reading 'length')" and rendered nothing.
+     */
+    const turnWindow = (sessionId: string) => ({
+      session: FIXTURE_SESSIONS.find((s) => s.session_id === sessionId) ?? FIXTURE_SESSIONS[0],
+      turns: TRANSCRIPT_TURNS,
+      total_turns: TRANSCRIPT_TURNS.length,
+      first_turn_index: 0,
+      incremental: false,
+    });
+    app.get("/sessions/:sessionId/turns", (req, res) => res.json(turnWindow(req.params.sessionId)));
     app.get("/workspaces/:id/sessions", (_req, res) => res.json(FIXTURE_SESSIONS));
-    app.get("/workspaces/:id/sessions/:sessionId/turns", (_req, res) => res.json(TRANSCRIPT_TURNS));
+    app.get("/workspaces/:id/sessions/:sessionId/turns", (req, res) => res.json(turnWindow(req.params.sessionId)));
+
+    // Routes the workspace and composer surfaces call on mount. Absent, each
+    // 404s into a console error, which the route smoke asserts against — so a
+    // missing route here reads as a product defect.
+    app.get("/workspaces/:id/queue", (_req, res) => res.json({ messages: [], supported: true }));
+    app.get("/defaults", (_req, res) =>
+      res.json({
+        agent: null,
+        runtime: "host",
+        brief: false,
+        model: null,
+        branch_mode: "auto",
+        base_ref: null,
+        skip_init: false,
+        agent_cwds: [],
+        agent_cwd: null,
+      }),
+    );
 
     app.get("/usage/summary", (_req, res) => res.json(FIXTURE_USAGE.summary));
     app.get("/usage/activity", (_req, res) => res.json(FIXTURE_USAGE.activity));

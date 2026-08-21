@@ -35,6 +35,31 @@ The merge runs once per CLI invocation and once per TUI launch. Pydantic
 validates the result once, with `extra="forbid"`, so a typo in any layer
 raises loudly.
 
+## Workspace defaults put the user first
+
+`defaults` is the one exception to Grove's project-last rule. A workspace
+form is a private workbench: the repository can suggest its usual setup, but
+it must not replace a preference you made for this machine.
+
+For `defaults` only, the order from lowest to highest is:
+
+1. built-in fallback
+2. project committed (`.grove/config.json`)
+3. project-local (`.grove/config.local.json`)
+4. user (`${user_config_dir}/grove/config.json`)
+5. declared environment variables, where a field has one
+6. `GROVE_<SECTION>__<FIELD>` environment variables
+7. CLI flags
+
+The inversion is field-by-field. A committed project default is a team's
+suggestion, not a mandate. A project value still applies when the user layer
+leaves that field unset. Environment and CLI overrides remain above user,
+so an operator can still make a deployment or one-shot choice win.
+
+Use **Save as defaults** in the new-workspace modal to write these answers.
+See [new-workspace defaults](configure-project.md#new-workspace-defaults) for
+the fields and storage scopes.
+
 ## Lists merge by name (only `agents`)
 
 Every other list (`ui.keybindings`, for example) replaces wholesale.

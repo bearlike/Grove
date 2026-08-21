@@ -12,13 +12,23 @@ Grove is a terminal program first. The web dashboard puts the same fleet on any 
 
 ## The rail
 
-A collapsible rail runs down the left of every route ([`app-sidebar.tsx`](repo:webapp/components/grove/shell/app-sidebar.tsx)): a **New workspace** button, a search box and a filter menu, then the fleet as one flat list sorted by recency — each row an agent mark, title, `project · branch`, and a single trailing glyph for whatever is most urgent about that row (an attention mark, or how far along its task phase is). Below the list sit the destinations that are not "a workspace" — **Usage** and **Sessions** — and the account menu, which carries your identity, the theme toggle, and sign out. ++bracket-left++ hides the rail, a phone opens it as a drawer.
+A collapsible rail runs down the left of every route ([`app-sidebar.tsx`](repo:webapp/components/grove/shell/app-sidebar.tsx)): a **New workspace** button, a search box and a filter menu, then the fleet as one flat list sorted by recency — each row an agent mark, title, `project · branch`, and a single trailing glyph for whatever is most urgent about that row (an attention mark, or how far along its task phase is). Below the list sit two destinations that are not a workspace, **Fleet** and **Usage**, then the account menu, which carries **Sessions**, your identity, the theme toggle, and sign out. ++bracket-left++ hides the rail, a phone opens it as a drawer.
 
 The filter menu ([`fleet-filter.tsx`](repo:webapp/components/grove/fleet/fleet-filter.tsx)) is the one place narrowing happens, reused by both the rail and the fleet grid: **Needs attention**, agent state, and project, each with a live count. A flat list rather than one grouped by project is deliberate — a Grove workspace is often empty and often momentary, so a heading per repo mostly reads "0, no workspaces yet."
 
+## Starting a workspace
+
+The landing route (`/`) is a composer, not a dashboard ([`launch-surface.tsx`](repo:webapp/components/grove/launch/launch-surface.tsx)): one wide prompt under the headline "What would you like to work on?" Type the task and send it. Everything else pre-fills from the [configuration cascade](features-cascade.md) and shows as a row of pills under the prompt: project, working directory, agent, model, runtime, and branch placement. Touch a pill to change that one answer. Leave the rest alone and Grove resolves them the same way `grove create` would from a terminal in that project.
+
+A model pill can also take a typed id. Choose **Custom…** and enter a provider model id directly, useful for a gateway model that has not reached the picker yet. Grove validates the shape of what you type and forwards it to the agent unchanged, since it is the provider that decides whether an id is real.
+
+A brief does not always fit one line. The expand button next to send opens the same draft in a full page editor, and closing it returns you to the composer with everything you typed still there.
+
+**More options**, under the composer, opens the [full create form](#creating-a-workspace): a ticket to link, an explicit branch name, or any field the quick path leaves to the cascade. **Go to fleet** takes you to the grid of everything already running.
+
 ## The fleet
 
-The landing route (`/`) is the fleet itself ([`fleet-dashboard.tsx`](repo:webapp/components/grove/fleet/fleet-dashboard.tsx)): the same search and filter as the rail, above a grid of workspace cards, newest activity first.
+**Fleet** in the rail (`/fleet`) is the grid ([`fleet-dashboard.tsx`](repo:webapp/components/grove/fleet/fleet-dashboard.tsx)): the same search and filter as the rail, above a grid of workspace cards, newest activity first.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/webapp-home.png" alt="Grove's fleet dashboard: a flat, attention-sorted grid of workspace cards behind a session rail listing every workspace by recency" /></div>
@@ -29,7 +39,7 @@ Each card ([`workspace-card.tsx`](repo:webapp/components/grove/fleet/workspace-c
 
 ## Creating a workspace
 
-**New workspace**, in the rail or on the fleet page, opens a dialog ([`create-workspace-dialog.tsx`](repo:webapp/components/grove/fleet/create-workspace-dialog.tsx)). Only the project, title and agent are required — everything else falls through to the [configuration cascade](features-cascade.md), which already holds better defaults than a form would:
+**New workspace**, in the rail or on the fleet page, opens a dialog ([`create-workspace-dialog.tsx`](repo:webapp/components/grove/fleet/create-workspace-dialog.tsx)), the same form the composer's **More options** opens. Only the project, title and agent are required — everything else falls through to the [configuration cascade](features-cascade.md), which already holds better defaults than a form would:
 
 - **Task**, sent to the agent as its first message. Optional — you can also start it blank and type the first message once the workspace opens.
 - **Agent**, and a **Model** for agents that expose a catalog.
@@ -54,10 +64,12 @@ The header ([`shell-header.tsx`](repo:webapp/components/grove/shell/shell-header
 | **Terminal** | The agent's live tmux pane, colors and box-drawing intact, over its own SSE stream. |
 | **Changes** | Divergence from the base branch, working-tree churn, and the commit list since the fork point. |
 | **Files** | The per-file diffs the agent itself reported. |
-| **Info** | Task phase, linked tickets, activity metrics, identity, branch, timeline, and the lifecycle actions. |
-| **Controls** | The model catalog with a switch, plus enumerated slash commands, skills, and configured MCP servers. Empty for an agent with none. |
+| **Info** | Task progress, linked tickets and each one's own reported phase, activity metrics, identity, branch, timeline, and the lifecycle actions. |
+| **Controls** | The model catalog with a switch, a copyable command for attaching to this workspace from a terminal, a public share link, plus enumerated slash commands, skills, and configured MCP servers. Empty for an agent with none. |
 
 A wide window's pane switcher splits transcript and panel side by side; narrower it opens single-pane, transcript first. Lifecycle — **Pause**, **Resume**, **Respawn**, **Kill** — lives on the Info tab, not the header: the engine's own gate is the real authority, and these buttons mirror it rather than assume it.
+
+The share link on the Controls tab needs no login: anyone holding it can read the transcript and identity read-only, until it expires or you revoke it. Set an expiry and an optional passcode when you turn it on. Revoking clears it for good, since a link already sent cannot be recalled.
 
 ---
 
@@ -67,11 +79,13 @@ The transcript ([`thread.tsx`](repo:webapp/components/grove/workspace/thread.tsx
 
 A live question from the agent renders as a card riding in the thread's own footer, a sibling of the message stream rather than a message itself ([`pending-question.tsx`](repo:webapp/components/grove/workspace/pending-question.tsx)): a single choice sends on tap, a multi-select or free-text question shows a **Submit**. An agent asking to proceed with its plan has no answer shape on the wire, so it renders read-only — you approve it the same way you would in the terminal.
 
+A message sent while the agent is already working joins a queue instead of interrupting it. The queue panel starts collapsed, so a message arriving does not push the composer down the page while you are typing the next one. A count in its header tells you something is waiting, and opening it shows the text.
+
 ---
 
 ## The Session Catalog
 
-**Sessions** in the rail lists every agent session Grove can find on the machine, searchable by title, location, agent kind or branch. Open one with a known location and the conversation renders read only, with no composer mounted. [Session history](features-activity.md#session-history) covers the same ground in the TUI and CLI.
+**Sessions**, in the account menu, lists every agent session Grove can find on the machine, searchable by title, location, agent kind or branch. Open one with a known location and the conversation renders read only, with no composer mounted. [Session history](features-activity.md#session-history) covers the same ground in the TUI and CLI.
 
 ---
 

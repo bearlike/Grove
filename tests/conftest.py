@@ -304,7 +304,10 @@ def _isolated_agent_hook_paths(
     # The first-turn brief is rendered by `_launch_env` on every claude_code
     # host launch — another raw `platformdirs` config path, and `brief.enabled`
     # defaults True, so it is reached exactly as widely as the hook settings.
-    monkeypatch.setattr("grove.core.paths.agent_brief_path", lambda: base / "agent-brief.md")
+    monkeypatch.setattr(
+        "grove.core.paths.agent_brief_path",
+        lambda workspace_id: base / "agent-briefs" / f"{workspace_id}.md",
+    )
     # The handover log is the same class of hazard one directory over: any test
     # that reaches `PickupEngine()` or the daemon's `AssigneePoller` without
     # injecting a path resolves it through raw `platformdirs`, and a claim is a

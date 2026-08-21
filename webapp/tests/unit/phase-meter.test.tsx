@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { PhaseMeter } from "@/components/grove/workspace/phase-meter";
+import { PhaseMeter, TicketRollupMeter } from "@/components/grove/workspace/phase-meter";
 import { FIXTURE_PHASE } from "../e2e/_fixtures";
 
 /**
@@ -13,12 +13,56 @@ function render(phase: Parameters<typeof PhaseMeter>[0]["phase"]): string {
   return renderToStaticMarkup(<PhaseMeter phase={phase} />);
 }
 
+function renderRollup(rollup: Parameters<typeof TicketRollupMeter>[0]["rollup"]): string {
+  return renderToStaticMarkup(<TicketRollupMeter rollup={rollup} />);
+}
+
+const ROLLUP = {
+  total: 4,
+  reported: 3,
+  unreported: 1,
+  done: 1,
+  blocked: 1,
+  phases: {
+    scoping: 0,
+    planning: 1,
+    implementing: 0,
+    verifying: 1,
+    delivering: 0,
+    done: 1,
+  },
+  fraction: 0.45,
+} as const;
+
+/** Each step's own markup, so a claim about which chip OWNS a connector can be
+ * made per chip rather than over the whole document — where a leading and a
+ * trailing layout are indistinguishable. */
+function steps(html: string): string[] {
+  return html.split("<li").slice(1);
+}
+
 describe("PhaseMeter", () => {
   it("renders nothing at all when the agent has reported no phase", () => {
     // Not a fake step 0: a containerized agent that never wrote its phase file
     // has said nothing, and inventing "scoping" would be a claim Grove cannot
     // make.
     expect(render(null)).toBe("");
+  });
+
+  it("reports every phase count and keeps blocked outside the phase ramp", () => {
+    const html = renderRollup(ROLLUP);
+
+    expect(html).toContain('data-testid="ticket-phase-counts"');
+    for (const [phase, count] of Object.entries(ROLLUP.phases)) {
+      expect(html).toContain(`${phase} ${count}`);
+    }
+    expect(html).toContain('data-testid="rollup-blocked"');
+    expect(html).toContain("1 blocked");
+    expect(html).toContain('data-testid="rollup-unreported"');
+  });
+
+  it("does not invent a blocked ticket where the count is zero", () => {
+    expect(renderRollup({ ...ROLLUP, blocked: 0 })).not.toContain('data-testid="rollup-blocked"');
   });
 
   it("marks every phase before the reported one done, and that one current", () => {
@@ -128,5 +172,51 @@ describe("PhaseMeter", () => {
     const html = render({ ...FIXTURE_PHASE, phase: "implementing", index: 2, note: null });
     expect(html.match(/data-done="true"/g)).toHaveLength(2);
     expect(html.match(/data-current="true"/g)).toHaveLength(1);
+  });
+
+  /**
+   * The wrap behaviour, which is a real regression rather than a nicety: chips
+   * were joined by a LEADING connector, so a chip that wrapped took its
+   * connector with it — leaving a stub dangling at the start of the new row and
+   * nothing joining it to the row above.
+   */
+  it("trails each connector behind its own chip, so a wrapped row never opens with a dangling rule", () => {
+    // The discriminator between the two layouts, and the reason it is asserted
+    // per-`li` rather than on the document: BOTH draw five rules for six chips,
+    // so counting them cannot tell them apart. Which chip OWNS a rule can.
+    // Leading: the first chip has none and the last carries one. Trailing: the
+    // first carries one and the last has none — which is what stops a wrapped
+    // row starting with a rule attached to nothing above it.
+    const items = steps(render(FIXTURE_PHASE));
+
+    expect(items).toHaveLength(6);
+    expect(items[0]).toContain("bg-border");
+    expect(items.at(-1)).not.toContain("bg-border");
+  });
+
+  it("gives the last phase no trailing connector, so the sequence has a definite end", () => {
+    const html = render({ ...FIXTURE_PHASE, phase: "done", index: 5, note: null });
+
+    // Six chips, five joins — never a rule running off the end of `done`.
+    expect(html.match(/bg-border/g)).toHaveLength(5);
+    expect(steps(html).at(-1)).not.toContain("bg-border");
+  });
+
+  it("lets the connector absorb the slack, so each row spans its width instead of packing left", () => {
+    // A fixed-width rule leaves every row ragged, which is what reads as
+    // "wrapped under protest" rather than as a track.
+    expect(render(FIXTURE_PHASE)).toContain("flex-1");
+  });
+
+  it("spaces wrapped rows apart vertically without opening a gap the connector cannot cross", () => {
+    // Scoped to the track's own class list: the note paragraph below it
+    // legitimately uses `gap-x`, and asserting over the whole document would
+    // fail on a line that has nothing to do with the chips.
+    const track = render(FIXTURE_PHASE).match(/<ol class="([^"]*)"/)![1];
+
+    expect(track).toContain("gap-y-2");
+    // A `gap-x` here would disconnect every chip from its neighbour to solve a
+    // vertical problem; horizontal spacing stays the connector's job.
+    expect(track).not.toMatch(/\bgap-x-/);
   });
 });

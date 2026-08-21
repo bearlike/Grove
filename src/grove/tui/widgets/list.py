@@ -41,6 +41,7 @@ from textual.widgets import ListView
 
 from grove.core import WorkspaceState
 from grove.core.agents import AgentActivityState
+from grove.core.phase import PhaseReport
 from grove.tui.widgets.card import WorkspaceCard
 
 
@@ -161,6 +162,20 @@ class WorkspaceList(ListView):
         """
         for card in self.query(WorkspaceCard):
             card.set_agent_state(states.get(card.workspace_id))
+
+    def set_phases(self, phases: dict[str, PhaseReport]) -> None:
+        """Push the task-phase axis onto every mounted WorkspaceCard.
+
+        The exact shape and ownership of :meth:`set_agent_states` — same tick,
+        same iterate-my-own-cards split, and an id missing from *phases* maps
+        to ``None``, which clears a stale segment rather than freezing it.
+
+        Absence is load-bearing here in a way it is not for the agent axis: a
+        workspace whose agent never reported has no claim, and rendering one
+        would assert progress on work nobody said anything about.
+        """
+        for card in self.query(WorkspaceCard):
+            card.set_phase(phases.get(card.workspace_id))
 
     # ─── internal ─────────────────────────────────────────────────────────
 

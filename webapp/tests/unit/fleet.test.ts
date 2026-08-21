@@ -70,6 +70,68 @@ describe("sortedFleetRows", () => {
     ]);
     expect(ids(sortedFleetRows(mixed))).toEqual(["grove-new", "docs-mid", "grove-old"]);
   });
+
+  it("breaks identical activity instants by workspace id, regardless of snapshot order", () => {
+    const at = "2026-08-11T09:00:00Z";
+    const forward = snapshot([
+      project("grove", "/repos/grove", [
+        workspace({ id: "bravo", lastEventAt: at }),
+        workspace({ id: "alpha", lastEventAt: at }),
+      ]),
+    ]);
+    const reverse = snapshot([
+      project("grove", "/repos/grove", [
+        workspace({ id: "alpha", lastEventAt: at }),
+        workspace({ id: "bravo", lastEventAt: at }),
+      ]),
+    ]);
+
+    expect(ids(sortedFleetRows(forward))).toEqual(["alpha", "bravo"]);
+    expect(ids(sortedFleetRows(reverse))).toEqual(["alpha", "bravo"]);
+  });
+
+  it("does not re-rank two workspaces active within the same minute", () => {
+    // The reported defect: with one or two live agents the rail reordered
+    // itself several times a second, because `lastActivityAt` advances on every
+    // event and the list is sorted by it. Ranking is bucketed to the minute, so
+    // a seconds-apart advance does NOT move a row.
+    //
+    // `bravo` is genuinely NEWER here and still sorts second — that is the
+    // trade being pinned, not an accident: inside one bucket the order is the
+    // stable id, and a rail that holds still is worth more than a strict
+    // ordering nobody can read at that timescale.
+    const rows = (bravoAt: string) =>
+      ids(
+        sortedFleetRows(
+          snapshot([
+            project("grove", "/repos/grove", [
+              workspace({ id: "alpha", lastEventAt: "2026-08-11T09:00:00Z" }),
+              workspace({ id: "bravo", lastEventAt: bravoAt }),
+            ]),
+          ]),
+        ),
+      );
+
+    expect(rows("2026-08-11T09:00:01Z")).toEqual(["alpha", "bravo"]);
+    expect(rows("2026-08-11T09:00:30Z")).toEqual(["alpha", "bravo"]);
+    expect(rows("2026-08-11T09:00:59Z")).toEqual(["alpha", "bravo"]);
+  });
+
+  it("still promotes a workspace once it crosses into a newer minute", () => {
+    // The bucket must not become "recency no longer matters". A real gap still
+    // reorders, which is what keeps the rail's whole premise true.
+    const rows = ids(
+      sortedFleetRows(
+        snapshot([
+          project("grove", "/repos/grove", [
+            workspace({ id: "alpha", lastEventAt: "2026-08-11T09:00:00Z" }),
+            workspace({ id: "bravo", lastEventAt: "2026-08-11T09:01:00Z" }),
+          ]),
+        ]),
+      ),
+    );
+    expect(rows).toEqual(["bravo", "alpha"]);
+  });
 });
 
 describe("workspaceCountLabel", () => {
@@ -277,8 +339,12 @@ describe("sectionFor", () => {
     );
   });
 
-  it("falls back to the fleet for the root and for anything unlisted", () => {
-    expect(sectionFor("/").label).toBe("Fleet");
-    expect(sectionFor("/w/some-workspace").label).toBe("Fleet");
+  it("falls back to the first destination for the root and for anything unlisted", () => {
+    // `/` is Launch now, and the fallback is deliberately positional — the head
+    // of NAV_ITEMS — rather than a hard-coded section name. Pinning "Fleet"
+    // here would fail every time the landing surface changes, which says
+    // nothing about whether the fallback still works.
+    expect(sectionFor("/").label).toBe(NAV_ITEMS[0]!.label);
+    expect(sectionFor("/w/some-workspace").label).toBe(NAV_ITEMS[0]!.label);
   });
 });

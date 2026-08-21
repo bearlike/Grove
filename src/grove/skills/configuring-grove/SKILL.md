@@ -364,6 +364,11 @@ dashboard. Leave the defaults unless there is a clear reason:
   `working-in-grove` skill. Resolved at create and persisted, so flipping it
   never re-decides for a workspace that already exists; `grove create --no-brief`
   overrides per workspace.
+- `instructions` (string, default `""`). Appends your short project or user
+  guidance to that brief through the normal cascade; use it for facts only your
+  team knows, not rules already available in repository guidance.
+- `self_naming` (bool, default `true`). Nudges an agent to name a workspace whose
+  description is empty after it understands the task.
 
 ### `notifications`
 Push on workspace edges, off by default. `enabled` (bool, `false`) is the master

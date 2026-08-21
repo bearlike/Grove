@@ -25,6 +25,7 @@ import signal
 import types
 
 import pytest
+import uvicorn
 
 from grove.daemon import cli as daemon_cli
 
@@ -41,8 +42,14 @@ class _FakeServer:
 
 @pytest.fixture(autouse=True)
 def _fake_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(daemon_cli.uvicorn, "Config", lambda *a, **k: object())
-    monkeypatch.setattr(daemon_cli.uvicorn, "Server", _FakeServer)
+    # Patch the `uvicorn` module itself, not a `daemon_cli.uvicorn` attribute:
+    # `serve()` imports uvicorn inside its own body (deferred so mounting the
+    # `daemon` subcommand stops costing every `grove` invocation ~125 ms), so
+    # there is no module-scope name to rebind. Patching the real module still
+    # intercepts, because the deferred import resolves the same object out of
+    # `sys.modules`.
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: object())
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
 
 
 def test_serve_arms_pdeathsig_for_print_port_on_linux(monkeypatch: pytest.MonkeyPatch) -> None:

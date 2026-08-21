@@ -102,24 +102,28 @@ export function TicketRollupMeter({ rollup }: { rollup: TicketRollup | null }) {
 
       <Progress value={percent} aria-label="Completion across every attached ticket" />
 
-      {/* Only the facts that are true right now get a chip. A zero is a fact
-          nobody needs — "0 blocked" spends a reader's attention to tell them
-          nothing, and a row of zeroes is how a summary stops being read. */}
-      {(rollup.blocked > 0 || rollup.unreported > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {rollup.blocked > 0 && (
-            <Badge variant="destructive" data-testid="rollup-blocked">
-              <OctagonAlertIcon aria-hidden />
-              {rollup.blocked} blocked
-            </Badge>
-          )}
-          {rollup.unreported > 0 && (
-            <Badge variant="outline" data-testid="rollup-unreported">
-              {rollup.unreported} not reported
-            </Badge>
-          )}
-        </div>
-      )}
+      {/* The phase ramp is an ACCOUNTING OF CLAIMS, and the flags sit beside it:
+          `blocked` is not a seventh phase, and unreported work has no phase at
+          all. Printing zeroes makes the complete vocabulary readable without
+          asking a reader to infer whether `verifying` was omitted or empty. */}
+      <div className="flex flex-wrap items-center gap-1.5" data-testid="ticket-phase-counts">
+        {PHASES.map((phase) => (
+          <Badge key={phase} variant="outline" className="tabular-nums">
+            {phase} {rollup.phases[phase]}
+          </Badge>
+        ))}
+        {rollup.blocked > 0 && (
+          <Badge variant="destructive" data-testid="rollup-blocked">
+            <OctagonAlertIcon aria-hidden />
+            {rollup.blocked} blocked
+          </Badge>
+        )}
+        {rollup.unreported > 0 && (
+          <Badge variant="outline" data-testid="rollup-unreported">
+            {rollup.unreported} not reported
+          </Badge>
+        )}
+      </div>
     </div>
   );
 }
@@ -167,15 +171,40 @@ export function PhaseMeter({ phase }: { phase: PhaseView | null }) {
             blocked
           </Badge>
         )}
-        <ol className="flex flex-wrap items-center" aria-label="Task phase">
+        {/* THE CONNECTOR TRAILS ITS OWN CHIP AND GROWS; both halves are what
+            make a wrapped track still read as one sequence.
+
+            TRAILING, because a LEADING connector belongs to the chip after it
+            and therefore wraps WITH it — landing a dangling stub at the start
+            of the new row while the row above ends flush, which is the exact
+            "planning and implementing are not connected" break. Trailing puts
+            the stub at the END of the row it belongs to, so a row reads as
+            continuing past its right edge and the next begins clean at the
+            left, the way wrapped text does.
+
+            GROWING (`flex-1`), because a fixed 12px rule leaves each row
+            packed left with ragged space after it — the look of something
+            wrapped under protest. Letting the rule absorb the slack spans
+            every row edge to edge, so the track occupies the width it was
+            given instead of ending wherever the chips happened to stop. The
+            last chip carries no connector, so it alone keeps its natural
+            width and the sequence has a definite end.
+
+            `gap-y-2` is the other half of the report: the row gap was simply
+            absent, so wrapped rows sat flush and the track read as one dense
+            block. Horizontal spacing stays the connector's job — a `gap-x`
+            would open a gap the rule does not cross, disconnecting every chip
+            from its neighbour to fix the space between rows. */}
+        <ol className="flex flex-1 flex-wrap items-center gap-y-2" aria-label="Task phase">
           {PHASES.map((name, index) => {
             const state = stateOf(index, reached);
             const Glyph = GLYPH[state];
+            const last = index === PHASES.length - 1;
             return (
-              <li key={name} className="flex items-center">
-                {index > 0 && <span aria-hidden className="mx-1 h-px w-3 shrink-0 bg-border" />}
+              <li key={name} className={last ? "flex items-center" : "flex flex-1 items-center"}>
                 <Badge
                   variant={TONE[state]}
+                  className="shrink-0"
                   aria-current={state === "current" ? "step" : undefined}
                   data-done={state === "complete" || undefined}
                   data-current={state === "current" || undefined}
@@ -183,6 +212,7 @@ export function PhaseMeter({ phase }: { phase: PhaseView | null }) {
                   <Glyph aria-hidden />
                   {name}
                 </Badge>
+                {!last && <span aria-hidden className="mx-1 h-px min-w-3 flex-1 bg-border" />}
               </li>
             );
           })}

@@ -16,6 +16,11 @@ function render(queue: WorkspaceQueueView): string {
   return renderToStaticMarkup(<QueuePanel queue={queue} />);
 }
 
+/** The same card with its list open — what a reader sees after one click. */
+function renderOpen(queue: WorkspaceQueueView): string {
+  return renderToStaticMarkup(<QueuePanel queue={queue} defaultOpen />);
+}
+
 const SENT_AT = "2026-08-11T02:50:00Z";
 
 describe("QueuePanel", () => {
@@ -34,20 +39,23 @@ describe("QueuePanel", () => {
     ).toBe("");
   });
 
-  it("renders the card OPEN once there is a real backlog", () => {
-    // Open, not collapsed: this card only exists when something is waiting, and
-    // the complaint it answers was "I send a steer message and never see it". A
-    // shut disclosure would reproduce that bug with a card in front of it.
+  it("renders the card COLLAPSED once there is a real backlog", () => {
+    // Collapsed, and the card still ANNOUNCES the backlog: it only mounts when
+    // something is waiting, and the count rides the summary. So a reader still
+    // learns their message landed and how many are ahead of it — a shut
+    // disclosure withholds only the message TEXT. Opening on arrival was the
+    // real defect: it moves the composer down the page mid-sentence.
     const html = render({
       messages: [{ text: "keep going", sent_at: SENT_AT, position: 0 }],
       supported: true,
     });
 
     expect(html).toContain('data-testid="queue-card"');
-    expect(html).toContain('data-collapsed="false"');
+    expect(html).toContain('data-collapsed="true"');
     expect(html).toContain("Queued");
     expect(html).toContain("1 message waiting");
-    expect(html).toContain("keep going");
+    // The announcement survives; the payload does not.
+    expect(html).not.toContain("keep going");
   });
 
   it("gives the card a header — a decorative glyph plus a tint-and-rule boundary", () => {
@@ -79,8 +87,8 @@ describe("QueuePanel", () => {
     expect(html).toContain("2 messages waiting");
   });
 
-  it("carries every message's text and a relative wait time", () => {
-    const html = render({
+  it("carries every message's text and a relative wait time once opened", () => {
+    const html = renderOpen({
       messages: [{ text: "run the migration next", sent_at: SENT_AT, position: 0 }],
       supported: true,
     });
@@ -94,7 +102,7 @@ describe("QueuePanel", () => {
   it("wraps a long message rather than truncating it — it is a sentence, not a name", () => {
     const long =
       "This is a much longer steering instruction that a reader typed while the agent was busy, and clipping it would discard the half it was sent for.";
-    const html = render({ messages: [{ text: long, sent_at: SENT_AT, position: 0 }], supported: true });
+    const html = renderOpen({ messages: [{ text: long, sent_at: SENT_AT, position: 0 }], supported: true });
 
     expect(html).toContain(long);
     expect(html).not.toContain("truncate");
@@ -102,7 +110,7 @@ describe("QueuePanel", () => {
   });
 
   it("renders 'unknown' rather than a timestamp when the harness reports no send time", () => {
-    const html = render({
+    const html = renderOpen({
       messages: [{ text: "typed straight into the pane", sent_at: null, position: 0 }],
       supported: true,
     });

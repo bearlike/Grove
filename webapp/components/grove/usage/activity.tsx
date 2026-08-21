@@ -1,5 +1,6 @@
 "use client";
 
+import { useLayoutEffect, useRef } from "react";
 import { ChartColumnIcon } from "lucide-react";
 
 import type { UsageActivityView } from "@/lib/grove/api";
@@ -39,6 +40,20 @@ export function UsageActivity({
   const points =
     activity?.buckets.map((bucket) => ({ date: bucket.day, count: bucket.value })) ?? [];
   const measured = activity !== undefined && points.length > 0 && activity.total > 0;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const initialScroll = useRef(false);
+
+  // A calendar runs oldest-to-newest, but the current work is the question this
+  // card opens to answer. The point count changes when its initial data lands,
+  // after the scroll box itself first mounts. Do this once: a later refetch must
+  // not take control back from someone reading older activity.
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (scroll && !initialScroll.current) {
+      scroll.scrollLeft = scroll.scrollWidth;
+      initialScroll.current = true;
+    }
+  }, [points.length]);
 
   return (
     <UsageSection
@@ -107,7 +122,7 @@ export function UsageActivity({
           every cell keeps its hover tooltip.
         */
         <div className="min-w-0 p-3">
-          <div className="min-w-0 overflow-x-auto">
+          <div ref={scrollRef} className="min-w-0 overflow-x-auto">
             <div className="min-w-[56rem]">
               <ActivityHeatmap data={points} />
             </div>

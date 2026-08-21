@@ -425,6 +425,40 @@ async def test_attach_ticket_passes_ref_straight_through(fake_client: FakeGroveC
     assert fake_client.calls[-1] == ("attach_ticket_by_ref", {"ws_id": "ws-1", "ref": "#42"})
 
 
+async def test_update_workspace_forwards_only_the_fields_it_was_given(
+    fake_client: FakeGroveClient,
+) -> None:
+    """`None` means "leave alone" all the way down — a tool that echoed the
+    current title back would turn every description edit into a rename."""
+    tools = GroveTools(fake_client)
+
+    await tools.update_workspace("ws-1", description="what this is for")
+    assert fake_client.calls[-1] == (
+        "update_workspace",
+        {"ws_id": "ws-1", "title": None, "description": "what this is for"},
+    )
+
+    result = await tools.update_workspace("ws-1", title="renamed")
+    assert result.id == "ws-1"
+    assert fake_client.calls[-1] == (
+        "update_workspace",
+        {"ws_id": "ws-1", "title": "renamed", "description": None},
+    )
+
+
+async def test_update_workspace_clears_a_description_with_an_empty_string(
+    fake_client: FakeGroveClient,
+) -> None:
+    """Empty string is an instruction, not an omission — the one distinction a
+    caller cannot express any other way."""
+    tools = GroveTools(fake_client)
+    await tools.update_workspace("ws-1", description="")
+    assert fake_client.calls[-1] == (
+        "update_workspace",
+        {"ws_id": "ws-1", "title": None, "description": ""},
+    )
+
+
 async def test_detach_ticket_passes_ref_straight_through(fake_client: FakeGroveClient) -> None:
     tools = GroveTools(fake_client)
     result = await tools.detach_ticket("ws-1", "#42")

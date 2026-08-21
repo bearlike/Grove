@@ -216,5 +216,5 @@ class TestWindowFramer:
 
     def test_build_uses_default_style_when_none_given(self) -> None:
         framer = WindowFramer.build()
-        assert framer.style.canvas_size == (2400, 1350)
-        assert framer.backdrop.size == (2400, 1350)
+        assert framer.style.canvas_size == (1920, 1080)
+        assert framer.backdrop.size == (1920, 1080)

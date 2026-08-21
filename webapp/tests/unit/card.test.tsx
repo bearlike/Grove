@@ -160,7 +160,12 @@ describe("every surface inherits the anatomy", () => {
     // fetches, the provider is only what lets the tab mount.
     const html = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
-        <InfoTab peek={FIXTURE_PEEK} activity={null} onKilled={() => {}} />
+        <InfoTab
+          peek={FIXTURE_PEEK}
+          activity={null}
+          repoRoot={FIXTURE_PEEK.state.repo_root}
+          privileged={{ state: FIXTURE_PEEK.state, onKilled: () => {} }}
+        />
       </QueryClientProvider>,
     );
     const headers = html.match(/data-slot="card-header"[^>]*/g) ?? [];

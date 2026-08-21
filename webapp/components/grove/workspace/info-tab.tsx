@@ -3,19 +3,22 @@
 import {
   ActivityIcon,
   ClockIcon,
-  FingerprintIcon,
-  GitBranchIcon,
-  GitForkIcon,
   ListChecksIcon,
   PowerIcon,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import type { WorkspaceActivityView, WorkspacePeekView } from "@/lib/grove/api";
-import { baseBranchOf, lastActivityIso } from "@/lib/grove/adapters";
-import { IdentityBadges } from "./identity";
+import type { WorkspaceStateView } from "@/lib/grove/api";
+import { newestActivityIso } from "@/lib/grove/adapters";
+import { WorkspaceIdentityCard } from "./identity";
 import { LifecycleActions } from "./lifecycle-actions";
-import { CardGrid, SectionCard, CardField, CardFields, CardStat } from "@/components/grove/card";
+import {
+  CardGrid,
+  SectionCard,
+  CardField,
+  CardFields,
+  CardStat,
+} from "@/components/grove/card";
 import { duration } from "@/components/grove/duration";
 import { Explain } from "@/components/grove/glossary";
 import { PreciseAge } from "@/components/grove/relative-time";
@@ -27,30 +30,63 @@ import {
   sessionLatency,
   ticketRollup,
   tokenClassStats,
+  type ActivityRead,
+  type WorkspaceRead,
 } from "./selectors";
 
 /**
  * The workspace's whole identity read, in reading order: what the work IS
  * (task phase, linked tickets), what it is DOING (activity), what it IS
- * (identity chips, branch), and what may be done to it (lifecycle).
+ * (the owner-only identity and branch card), and what may be done to it
+ * (lifecycle).
  *
  * Deliberately omits `worktree_path`: a host filesystem path is host-private
  * and is never rendered anywhere in this UI.
+ *
+ * ONE COMPONENT SERVES TWO AUDIENCES, and the props are what make that safe
+ * rather than a branch inside the body:
+ *
+ * - `peek` and `activity` are the narrowed `WorkspaceRead` / `ActivityRead`
+ *   shapes (see `selectors.ts`), so the public share payload — which carries no
+ *   host path at all — satisfies them structurally and this file needs no
+ *   knowledge that a public view exists.
+ * - `privileged` is OPTIONAL, and it carries the full record AND the kill
+ *   handler as ONE object rather than two loose props. That is what makes the
+ *   owner-only cards unforgeable: the lifecycle verbs need `branch_provenance`,
+ *   which the narrowed identity above deliberately does not carry, so a caller
+ *   cannot ask for them without producing a record that supports them. A
+ *   `readOnly` boolean beside a handler could disagree with itself; this cannot.
+ *
+ *   It gates TWO cards, not one, and the grouping is editorial rather than
+ *   technical: Lifecycle and Identity answer "what is this workspace made of,
+ *   and what may I do to it" — the owner's question. Somebody reading a shared
+ *   link came for the WORK: the task, the activity, the tickets, the timeline.
+ *   An agent name, a placement, a runtime and a pair of branch refs are
+ *   machinery they cannot act on, and on a page whose whole job is to be
+ *   readable by a stranger they are noise. Withholding them is a PRODUCT
+ *   decision — the security boundary is the daemon's three read-only routes,
+ *   and nothing here is load-bearing for it.
+ * - `repoRoot` is `null` to mean "do not resolve tickets from the browser" —
+ *   a client-side resolve spends the host's tracker credential, which an
+ *   anonymous reader must never be able to spend, and needs a repo path the
+ *   public payload does not carry. The public view gets its ticket titles
+ *   resolved daemon-side instead, already on the refs by the time they arrive.
  */
 export function InfoTab({
   peek,
   activity,
-  onKilled,
+  repoRoot,
+  privileged,
 }: {
-  peek: WorkspacePeekView;
-  activity: WorkspaceActivityView | null;
-  onKilled: () => void;
+  peek: WorkspaceRead;
+  activity: ActivityRead | null;
+  repoRoot: string | null;
+  privileged?: { state: WorkspaceStateView; onKilled: () => void };
 }) {
   const state = peek.state;
   const stats = activityStats(activity);
   const tokenClasses = tokenClassStats(activity);
   const todo = activity?.todo;
-  const base = baseBranchOf(state);
   const clocks = sessionClocks(activity);
   const latency = sessionLatency(activity);
   const rollup = ticketRollup(state.ticket_refs, activity?.phase ?? null);
@@ -66,7 +102,11 @@ export function InfoTab({
         description="What the agent says it is doing about the job."
         action={
           todo ? (
-            <Badge variant="outline" className="tabular-nums" data-testid="todo-progress">
+            <Badge
+              variant="outline"
+              className="tabular-nums"
+              data-testid="todo-progress"
+            >
               {todo.completed}/{todo.total} todos
             </Badge>
           ) : undefined
@@ -93,7 +133,11 @@ export function InfoTab({
         )}
       </SectionCard>
 
-      <SectionCard icon={<ActivityIcon />} title="Activity" description="This session so far">
+      <SectionCard
+        icon={<ActivityIcon />}
+        title="Activity"
+        description="This session so far"
+      >
         {stats ? (
           <>
             {/* `auto-fit` rather than a column count: figures sit on one line
@@ -104,7 +148,11 @@ export function InfoTab({
               data-testid="metrics"
             >
               {stats.map((stat) => (
-                <CardStat key={stat.label} label={stat.label} value={stat.value} />
+                <CardStat
+                  key={stat.label}
+                  label={stat.label}
+                  value={stat.value}
+                />
               ))}
             </div>
             {/* The folded `tokens in` figure can read in the hundreds of
@@ -119,7 +167,13 @@ export function InfoTab({
                 {tokenClasses.map((row) => (
                   <CardField
                     key={row.label}
-                    label={row.term ? <Explain term={row.term}>{row.label}</Explain> : row.label}
+                    label={
+                      row.term ? (
+                        <Explain term={row.term}>{row.label}</Explain>
+                      ) : (
+                        row.label
+                      )
+                    }
                   >
                     {row.value}
                   </CardField>
@@ -134,46 +188,7 @@ export function InfoTab({
         )}
       </SectionCard>
 
-      <SectionCard icon={<FingerprintIcon />} title="Identity">
-        <IdentityBadges state={state} />
-      </SectionCard>
-
-      {/* TWO chips, matching the Identity card beside it. The earlier shape put
-          the branch on a badge and the base branch in a bare tertiary span, on
-          the reasoning that only the branch you are ON is a state worth marking.
-          The same review that flattened Identity found the same defect here: a
-          pill followed by loose prose reads as one marked fact and one stray
-          one, and the eye cannot tell that `from` introduces a ref rather than
-          a sentence. Both are refs, so both take an edge and a glyph, and RANK
-          is carried by which glyph — `GitBranch` for the branch that moves,
-          `GitFork` for the settled origin.
-
-          The no-base case stays a SENTENCE and not a chip: there is nothing to
-          mark, because this workspace adopted the repo's live checkout. A chip
-          reading "none" would be an edge drawn around an absence. */}
-      <SectionCard icon={<GitBranchIcon />} title="Branch">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <Badge variant="outline" className="min-w-0" title="This workspace's branch">
-            <GitBranchIcon aria-hidden className="size-[1em] shrink-0" />
-            <span className="sr-only">Branch: </span>
-            <span className="max-w-56 truncate font-mono">{state.branch}</span>
-          </Badge>
-          {base ? (
-            <Badge variant="outline" className="min-w-0" title={`Forked from ${base}`}>
-              <GitForkIcon aria-hidden className="size-[1em] shrink-0" />
-              <span className="sr-only">Forked from: </span>
-              <span className="max-w-56 truncate font-mono">{base}</span>
-            </Badge>
-          ) : (
-            <span
-              className="text-xs text-content-tertiary"
-              title="This workspace runs in the repo's own checkout, so its branch is the base"
-            >
-              no separate base branch
-            </span>
-          )}
-        </div>
-      </SectionCard>
+      {privileged && <WorkspaceIdentityCard state={state} />}
 
       {/* Ages, not instants: "is this still moving" is the question a timeline
           is asked, and the exact instant stays one hover away rather than being
@@ -220,7 +235,21 @@ export function InfoTab({
               something". Falls back to the record's stamp inside the
               derivation, so a session-less workspace still reports an age. */}
           <CardField label="Last activity">
-            <PreciseAge iso={activity ? lastActivityIso(activity) : state.updated_at} />
+            {/* The record's stamps are passed IN rather than read off an
+                embedded workspace state, because the public payload carries
+                the two objects separately — see `newestActivityIso`. Same
+                rule, same fallback order, one implementation. */}
+            <PreciseAge
+              iso={
+                activity
+                  ? newestActivityIso(
+                      activity.sessions,
+                      state.updated_at,
+                      state.created_at,
+                    )
+                  : state.updated_at
+              }
+            />
           </CardField>
           <CardField label="Created">
             <PreciseAge iso={state.created_at} />
@@ -258,7 +287,9 @@ export function InfoTab({
               <CardField label={<Explain term="model_wait" />}>
                 {duration(clocks.generation_ms)}
               </CardField>
-              <CardField label={<Explain term="tool_time" />}>{duration(clocks.tool_ms)}</CardField>
+              <CardField label={<Explain term="tool_time" />}>
+                {duration(clocks.tool_ms)}
+              </CardField>
             </>
           )}
           {/* Only once a generation had a measurable interval — the same
@@ -288,19 +319,30 @@ export function InfoTab({
           above already renders, handed down rather than fetched — both halves of
           the join are on this tab, so the card gains no request. */}
       <TicketRefsCard
-        repoRoot={state.repo_root}
+        repoRoot={repoRoot}
         refs={state.ticket_refs}
         phase={activity?.phase ?? null}
       />
 
-      <SectionCard
-        icon={<PowerIcon />}
-        title="Lifecycle"
-        description="The engine is the real gate; these are the verbs it will accept."
-        className="@xl:col-span-2"
-      >
-        <LifecycleActions state={state} onKilled={onKilled} />
-      </SectionCard>
+      {/* WITHHELD WITHOUT `privileged`, which is how the public share view gets
+          no verbs at all. The card is the affordance AND the explanation of the
+          affordance, so hiding it is right where disabling its buttons would
+          leave a reader wondering what they were missing — somebody reading a
+          shared link was never going to act on this workspace, so there is
+          nothing to explain. */}
+      {privileged && (
+        <SectionCard
+          icon={<PowerIcon />}
+          title="Lifecycle"
+          description="The engine is the real gate; these are the verbs it will accept."
+          className="@xl:col-span-2"
+        >
+          <LifecycleActions
+            state={privileged.state}
+            onKilled={privileged.onKilled}
+          />
+        </SectionCard>
+      )}
     </CardGrid>
   );
 }

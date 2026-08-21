@@ -233,6 +233,7 @@ class GitHubProvider(NumberTicketProvider):
             title=issue.get("title") or None,
             url=issue.get("html_url") or None,
             status=self._status(issue),
+            draft=bool(issue.get("draft")),
             assignee=self._assignee(issue),
         )
 

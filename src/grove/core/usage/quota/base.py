@@ -95,13 +95,54 @@ class QuotaAccount:
         """
         resolved = resolve_root(root)
         digest = hashlib.sha256(f"{provider}\0{resolved}".encode()).hexdigest()
-        account_id = f"{provider}-{digest[:_ID_DIGEST_CHARS]}"
-        default = resolved.name or str(resolved)
+        return cls._build(
+            provider=provider,
+            account_id=f"{provider}-{digest[:_ID_DIGEST_CHARS]}",
+            root=resolved,
+            default_label=resolved.name or str(resolved),
+            labels=labels,
+        )
+
+    @classmethod
+    def from_handle(
+        cls,
+        *,
+        provider: UsageProvider,
+        handle: str,
+        label: str,
+        labels: Mapping[str, str] | None = None,
+    ) -> QuotaAccount:
+        """Build an aggregate-source account from its stable remote ``handle``.
+
+        Aggregate sources have no credential root to hash. The handle remains
+        opaque and is namespaced by its vendor so the shared ledger cannot
+        conflate two providers that happen to use the same subscription id.
+        """
+        account_id = f"{provider}-gateway:{handle}"
+        return cls._build(
+            provider=provider,
+            account_id=account_id,
+            root=Path(),
+            default_label=label,
+            labels=labels,
+        )
+
+    @classmethod
+    def _build(
+        cls,
+        *,
+        provider: UsageProvider,
+        account_id: str,
+        root: Path,
+        default_label: str,
+        labels: Mapping[str, str] | None,
+    ) -> QuotaAccount:
+        """Construct one account after its identity has been selected."""
         return cls(
             account_id=account_id,
             provider=provider,
-            root=resolved,
-            label=(labels or {}).get(account_id) or default,
+            root=root,
+            label=(labels or {}).get(account_id) or default_label,
         )
 
 
@@ -145,6 +186,21 @@ class QuotaProvider(ABC):
     Defaults to ``True`` so a provider added without anyone thinking about this
     inherits the careful treatment rather than the free one.
     """
+
+    enumerates_accounts: ClassVar[bool] = False
+    """Whether this provider discovers its own accounts from one aggregate read."""
+
+    def accounts(
+        self, *, labels: Mapping[str, str], known_account_ids: tuple[str, ...]
+    ) -> tuple[QuotaAccount, ...]:
+        """Accounts this provider can enumerate without a profile-root selection.
+
+        Root-backed providers are selected by ``usage.quota.profiles`` and leave
+        this empty. Aggregate sources may use persisted account ids to retain
+        their last-known-good views when their roster endpoint is unavailable.
+        """
+        del labels, known_account_ids
+        return ()
 
     @abstractmethod
     def describe(self, account: QuotaAccount) -> BillingAccountView:

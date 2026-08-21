@@ -1,9 +1,20 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+/** The group reads its running/failed counts through the vendored state hook.
+ * Only `ToolCallGroup` touches it, so stubbing the one export leaves every
+ * other renderer in this file on the real module. */
+let groupParts: readonly unknown[] = [];
+vi.mock("@assistant-ui/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@assistant-ui/react")>()),
+  useAuiState: (selector: (state: unknown) => unknown) =>
+    selector({ message: { parts: groupParts } }),
+}));
 
 import { NestLevel } from "@/components/grove/workspace/nesting";
 import {
   ToolCallDetail,
+  ToolCallGroup,
   ToolCallPart,
   ToolInvocationMeta,
 } from "@/components/grove/workspace/tool-call-part";
@@ -198,5 +209,41 @@ describe("the invocation line on a card that owns its own disclosure", () => {
     );
     expect(markup).toContain("1.4s");
     expect(markup).toContain("capped");
+  });
+});
+
+/**
+ * A group's disclosure follows its own liveness.
+ *
+ * THESE DO NOT COVER THE FALLING EDGE, and that was verified by mutation
+ * rather than assumed: reintroducing the `if (live) setOpen(true)` bug leaves
+ * all of them green. A transition needs re-renders, SSR mounts once, and this
+ * host cannot load the DOM test environment (see webapp/CLAUDE.md) — so the
+ * auto-collapse is currently pinned by nothing here. Say so rather than let
+ * the neighbouring test names imply otherwise.
+ *
+ * What they DO pin is the pair of mount states, which is what would break if
+ * the initial value ever went back to an unconditional open.
+ */
+describe("a group of tool calls", () => {
+  function group(running: number): string {
+    groupParts = [
+      { type: "tool-call", artifact: { ...BASH, status: running > 0 ? "running" : "ok" } },
+    ];
+    return renderToStaticMarkup(
+      <ToolCallGroup group={{ indices: [0] } as never}>
+        <span>call body</span>
+      </ToolCallGroup>,
+    );
+  }
+
+  it("stays folded up once every call in it has settled", () => {
+    expect(group(0)).toContain('data-state="closed"');
+  });
+
+  it("opens itself while a call is in flight, so a spinner is never one click deep", () => {
+    const markup = group(1);
+    expect(markup).toContain('data-state="open"');
+    expect(markup).toContain("1 running");
   });
 });

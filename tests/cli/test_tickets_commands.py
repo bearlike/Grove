@@ -20,7 +20,7 @@ from typer.testing import CliRunner
 from grove.core import paths as paths_mod
 from grove.core.contracts.tickets import TicketRef
 from grove.tui.cli import app
-from grove.tui.cli_workspace import _emit_ticket_refs
+from grove.tui.cli_workspace import _emit_ticket_refs, _ResolvedRefs
 from tests.conftest import FakeTmux
 
 
@@ -208,7 +208,7 @@ def test_detach_never_attached_is_a_noop(runner: CliRunner, project: Path) -> No
 
 
 def test_emit_ticket_refs_empty(capsys: pytest.CaptureFixture[str]) -> None:
-    _emit_ticket_refs([])
+    _emit_ticket_refs(_ResolvedRefs(()))
     assert "(no tickets attached)" in capsys.readouterr().out
 
 
@@ -217,7 +217,7 @@ def test_emit_ticket_refs_marks_ambiguous_and_kind(capsys: pytest.CaptureFixture
         TicketRef(provider="gitea", id="1", kind="issue"),
         TicketRef(provider="github", id="2", kind="pull_request", ambiguous=True),
     ]
-    _emit_ticket_refs(refs)
+    _emit_ticket_refs(_ResolvedRefs(tuple(refs)))
     out = capsys.readouterr().out
     assert "gitea#1  (issue)" in out
     assert "github#2  (PR)" in out

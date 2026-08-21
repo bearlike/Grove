@@ -362,6 +362,113 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/share-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Share Policy
+         * @description The authenticated project's public-share policy, never its hash.
+         */
+        get: operations["get_share_policy_share_policy_get"];
+        /**
+         * Save Share Policy
+         * @description Replace the authenticated project's public-share policy.
+         */
+        put: operations["save_share_policy_share_policy_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Workspace
+         * @description Everything a shared page renders except its transcript and its diff.
+         *
+         *     The payload is an explicit allowlist built in ``contracts/public.py`` —
+         *     no host path, no container identity, no pane, no token. It is also what
+         *     the page POLLS, since the public view has no SSE to ride (``/events`` is
+         *     a cross-project fan-out over every workspace on the host).
+         *
+         *     Runs off the loop: it peeks the worktree (git) and resolves the session
+         *     activity (transcript parse), which is exactly the "no route calls a
+         *     manager method on the loop" rule this file holds everywhere else.
+         */
+        get: operations["public_workspace_public__token__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/{token}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Turns
+         * @description The shared workspace's transcript, windowed — the LIVE half.
+         *
+         *     Takes no session id: the token names a workspace and the daemon picks
+         *     the session, so an unauthenticated caller holds no coordinate it could
+         *     tamper with. ``after_turn`` and ``last`` mean exactly what they mean on
+         *     the authenticated route (one ``turn_window``, shared), which is what
+         *     lets the browser reuse its whole cursor-merge path unchanged.
+         *
+         *     ``null`` means this workspace has no readable transcript yet — a real
+         *     state for a workspace shared right after it was created, not an error.
+         */
+        get: operations["public_turns_public__token__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/{token}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Diff
+         * @description The shared workspace's working-tree patch, same scope and bounds as
+         *     the authenticated route.
+         *
+         *     The changed code is the thing a shared link exists to show, so it is not
+         *     trimmed for being public — ``?path=`` is the same per-file drill-in the
+         *     Changes tab already uses.
+         */
+        get: operations["public_diff_public__token__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/whoami": {
         parameters: {
             query?: never;
@@ -584,12 +691,18 @@ export interface paths {
         head?: never;
         /**
          * Update Workspace
-         * @description Partial metadata update — title and/or description.
+         * @description Partial metadata update — title, description and/or public sharing.
          *
          *     Wire semantics: ``null`` / omitted = "do not change". Empty
          *     string in ``description`` clears it; title cannot be cleared.
          *     Mapping wire → engine kwargs: an absent field translates to
          *     "kwarg not passed" so the manager's ``_UNSET`` sentinel works.
+         *
+         *     ``share`` is the one field with a security consequence, and omission is
+         *     what makes it safe: a client renaming a workspace must never revoke a
+         *     public link by not mentioning it. The minted token comes back on the
+         *     response's ``share_token`` — this route is where a client learns the
+         *     link, and there is no second endpoint that hands one out.
          */
         patch: operations["update_workspace_workspaces__ws_id__patch"];
         trace?: never;
@@ -1376,6 +1489,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/queries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Session Queries
+         * @description Every direct user query in one session, oldest first.
+         *
+         *     A transcript is unbounded in session length, while this response is
+         *     bounded by how many times a human typed something — usually dozens, not
+         *     thousands — so full query text is affordable here where it is not for
+         *     the transcript's bounded turn view. ``last`` is an opt-in tail only;
+         *     the complete normalized message spine is always read before it applies.
+         *
+         *     Like the workspace-less turns drill-in, the session is addressed by the
+         *     catalog row's ``(kind, cwd, session_id)`` coordinates. ``cwd`` must be
+         *     passed back byte-for-byte from that row, and a coordinate mismatch is a
+         *     typed 404 rather than a chance to expose a different transcript.
+         */
+        get: operations["session_queries_sessions__session_id__queries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects": {
         parameters: {
             query?: never;
@@ -1434,6 +1578,39 @@ export interface paths {
          */
         get: operations["list_agents_agents_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Defaults
+         * @description Resolved create-form defaults for one registered repo's cascade.
+         *
+         *     The raw ``defaults`` section is deliberately not returned: runtime,
+         *     brief, branch mode, and init behavior already have create-path fallbacks,
+         *     and a remote form needs the same pre-selected answers the TUI sees.
+         */
+        get: operations["get_workspace_defaults_defaults_get"];
+        /**
+         * Save Defaults
+         * @description Replace one config layer's complete create-defaults object.
+         *
+         *     This is not a patch: ``save_workspace_defaults`` replaces the whole
+         *     ``defaults`` object, so callers must send every answer they intend to
+         *     retain or an omitted field is cleared. Project scopes require a registered
+         *     ``repo``; the user scope deliberately has no repository requirement.
+         */
+        put: operations["save_defaults_defaults_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1659,6 +1836,21 @@ export interface components {
              */
             questions: components["schemas"]["AgentQuestionView"][];
             live?: components["schemas"]["LiveCountersView"] | null;
+        };
+        /**
+         * AgentCwdView
+         * @description One labelled working directory a create surface may offer.
+         *
+         *     ``path`` is repo-relative and is what a client SENDS (as
+         *     ``CreateWorkspaceRequest.project_cwd``); ``label`` is only ever displayed.
+         *     Keeping the label off the wire is what lets a project rename one without
+         *     invalidating any workspace already created from it.
+         */
+        AgentCwdView: {
+            /** Label */
+            label: string;
+            /** Path */
+            path: string;
         };
         /**
          * AgentQuestionOptionView
@@ -2132,6 +2324,12 @@ export interface components {
             /** Needs Attention */
             needs_attention: number;
         };
+        /**
+         * DefaultsScope
+         * @description Which config layer a "save as defaults" write lands in.
+         * @enum {string}
+         */
+        DefaultsScope: "user" | "project" | "project-local";
         /**
          * DigestEntryView
          * @description Wire mirror of ``grove.core.agents.DigestEntry`` (text capped).
@@ -2685,6 +2883,199 @@ export interface components {
          */
         ProvisionStatus: "ok" | "failed" | "skipped" | "provisioning";
         /**
+         * PublicActivityView
+         * @description What the agent is doing, for a reader who cannot steer it.
+         *
+         *     Two fields, because two are what the shared surface renders: the session
+         *     rows behind the activity figures, and the task phase. ``WorkspaceActivityView``
+         *     is NOT reused — it embeds a whole ``WorkspaceStateView``, so shipping it
+         *     would hand over every host path this module exists to withhold, through a
+         *     field nobody would think to look at.
+         *
+         *     ``pane_target`` is absent for the same reason the pane is absent from
+         *     ``PublicPeekView``.
+         */
+        PublicActivityView: {
+            /**
+             * Sessions
+             * @default []
+             */
+            sessions: components["schemas"]["SessionActivityView"][];
+            phase?: components["schemas"]["PhaseView"] | null;
+        };
+        /**
+         * PublicGroveView
+         * @description Who made the thing you are looking at.
+         *
+         *     A shared link is the one Grove surface reached by people who have never
+         *     installed it, so it is also the only one that has to introduce itself. The
+         *     version comes from the running daemon rather than a constant in the browser
+         *     bundle, for the reason ``/api/version`` already argues: a number baked into
+         *     the front end describes the bundle, which can be a different release from
+         *     the process that answered.
+         */
+        PublicGroveView: {
+            /** Version */
+            version: string;
+            /**
+             * Repo Url
+             * @default https://github.com/bearlike/Grove
+             */
+            repo_url: string;
+            /**
+             * Tagline
+             * @default The terminal workspace manager for AI coding agents. Spin up a forest of isolated agent workspaces. Reach any of them asynchronously from your terminal, your browser, or another agent.
+             */
+            tagline: string;
+        };
+        /**
+         * PublicPeekView
+         * @description The working-tree read, shaped like ``WorkspacePeekView`` minus the pane.
+         *
+         *     Field-for-field with the authenticated peek except that ``state`` is the
+         *     narrowed view above and the two pane fields are gone — a public reader may
+         *     not see the terminal, and the surest way to enforce that is for the pane
+         *     never to be in a shape they can receive.
+         */
+        PublicPeekView: {
+            state: components["schemas"]["PublicWorkspaceStateView"];
+            /** Base Ahead */
+            base_ahead: number;
+            /** Base Behind */
+            base_behind: number;
+            /** Diff Added */
+            diff_added: number;
+            /** Diff Removed */
+            diff_removed: number;
+            /** Dirty Files */
+            dirty_files: number;
+            /** Recent Commits */
+            recent_commits: components["schemas"]["CommitSummaryView"][];
+        };
+        /**
+         * PublicSharedWorkspaceView
+         * @description One shared workspace in the repo, as the public rail lists it.
+         *
+         *     **This list INCLUDES the workspace being viewed**, which is why it is not
+         *     called `siblings` — a sibling list excludes self by definition, and the name
+         *     would then be a lie about the payload. It first shipped self-excluding, and
+         *     the result was a rail that showed every shared workspace in the project
+         *     except the one you were reading: the reader cannot see where they are, the
+         *     count is off by one against any other surface, and a project with exactly
+         *     one shared workspace renders an empty list on a page that plainly is one.
+         *     Membership is the caller's answer; which row is current is the client's, and
+         *     it already has the token to work that out.
+         *
+         *     Each row carries a token, which is the point and is worth stating plainly:
+         *     sharing a workspace makes it reachable from every other shared workspace in
+         *     its repo. That is the requested behaviour rather than an oversight, and the
+         *     containment is that an unshared workspace has no token and therefore cannot
+         *     appear here at all.
+         */
+        PublicSharedWorkspaceView: {
+            /** Token */
+            token: string;
+            /** Title */
+            title: string;
+            status: components["schemas"]["WorkspaceStatus"];
+            /** Branch */
+            branch: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * PublicWorkspaceStateView
+         * @description A workspace as an unauthenticated reader may see it.
+         *
+         *     The hand-written allowlist this module's docstring describes. Field names
+         *     match ``WorkspaceStateView`` wherever they overlap, on purpose: the browser
+         *     renders both through the SAME components, which is only possible while a
+         *     public payload structurally satisfies the shape those components read.
+         */
+        PublicWorkspaceStateView: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Description */
+            description?: string | null;
+            status: components["schemas"]["WorkspaceStatus"];
+            /** Branch */
+            branch: string;
+            /** Base Branch */
+            base_branch: string;
+            /** Base Commit */
+            base_commit?: string | null;
+            /** Agent Name */
+            agent_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Paused At */
+            paused_at?: string | null;
+            /** @default worktree */
+            placement: components["schemas"]["Placement"];
+            /** @default host */
+            runtime: components["schemas"]["Runtime"];
+            /** Runtime Fallback Reason */
+            runtime_fallback_reason?: string | null;
+            /**
+             * Runtime Default Config
+             * @default false
+             */
+            runtime_default_config: boolean;
+            /**
+             * Ticket Refs
+             * @default []
+             */
+            ticket_refs: components["schemas"]["TicketRef"][];
+            /** Project */
+            project: string;
+        };
+        /**
+         * PublicWorkspaceView
+         * @description The whole public overview — one request, everything the page renders.
+         *
+         *     One route rather than the four the authenticated surface uses (peek,
+         *     commits, phase, activity), because this payload is POLLED: the public view
+         *     has no SSE (``/events`` is a cross-project fan-out carrying every workspace
+         *     on the host and can never be exposed), so freshness here is one cheap
+         *     repeated GET. Four of them per tick would be four times the work for one
+         *     answer.
+         *
+         *     ``session_id`` is resolved server-side and handed over, so the transcript
+         *     route never has to accept a session id from an unauthenticated caller — the
+         *     token names the workspace and the daemon picks the session, which means
+         *     there is no coordinate for a caller to tamper with.
+         */
+        PublicWorkspaceView: {
+            peek: components["schemas"]["PublicPeekView"];
+            activity: components["schemas"]["PublicActivityView"];
+            /** Session Id */
+            session_id?: string | null;
+            /**
+             * Session Pinned
+             * @default false
+             */
+            session_pinned: boolean;
+            /**
+             * Shared
+             * @default []
+             */
+            shared: components["schemas"]["PublicSharedWorkspaceView"][];
+            grove: components["schemas"]["PublicGroveView"];
+        };
+        /**
          * QuestionAnswerItem
          * @description One question's answer: chosen option indexes XOR free text — exactly one.
          *
@@ -2945,6 +3336,26 @@ export interface components {
             is_grove_managed: boolean;
         };
         /**
+         * SessionQueryView
+         * @description Wire mirror of one full-text direct user query.
+         *
+         *     This deliberately does not reuse ``SessionTurnView``: turns carry an
+         *     unbounded collection of entries and cap each chat-sized body, while a
+         *     recollection is the much smaller list of times a human directly typed. Its
+         *     text is uncapped because recovering the complete instruction is this
+         *     endpoint's purpose.
+         */
+        SessionQueryView: {
+            /** Ordinal */
+            ordinal: number;
+            /** Timestamp */
+            timestamp: string | null;
+            /** Sent At */
+            sent_at?: string | null;
+            /** Text */
+            text: string;
+        };
+        /**
          * SessionSummaryView
          * @description One session row — wire mirror of ``SessionListing`` (project scope) and
          *     of ``CatalogEntry`` (host scope, the Session Catalog).
@@ -3098,6 +3509,33 @@ export interface components {
             blocked: boolean;
             /** Ticket */
             ticket?: string | null;
+        };
+        /**
+         * SharePolicyUpdateRequest
+         * @description Replace a project's public-share policy.
+         *
+         *     Both values are required so ``null`` has one unambiguous meaning: clear the
+         *     corresponding protection. The plaintext passcode is accepted only to produce
+         *     a hash and is never returned through ``SharePolicyView``.
+         */
+        SharePolicyUpdateRequest: {
+            /** Ttl Seconds */
+            ttl_seconds: number | null;
+            /** Passcode */
+            passcode: string | null;
+        };
+        /**
+         * SharePolicyView
+         * @description The policy an authenticated client may inspect, without its secret.
+         */
+        SharePolicyView: {
+            /** Ttl Seconds */
+            ttl_seconds?: number | null;
+            /**
+             * Passcode Set
+             * @default false
+             */
+            passcode_set: boolean;
         };
         /**
          * SubagentActivityView
@@ -3342,6 +3780,11 @@ export interface components {
             url?: string | null;
             /** Status */
             status?: string | null;
+            /**
+             * Draft
+             * @default false
+             */
+            draft: boolean;
             /** Assignee */
             assignee?: string | null;
             /**
@@ -3552,6 +3995,10 @@ export interface components {
             title?: string | null;
             /** Description */
             description?: string | null;
+            /** Share */
+            share?: boolean | null;
+            /** Share Session Id */
+            share_session_id?: string | null;
         };
         /**
          * UsageActivityBucketView
@@ -4394,6 +4841,83 @@ export interface components {
             fleet?: components["schemas"]["FleetProgressView"] | null;
         };
         /**
+         * WorkspaceDefaults
+         * @description Pre-filled answers for the new-workspace form.
+         *
+         *     Every field is optional and ``None`` means "no saved default" — the field
+         *     falls through to whatever the existing per-field cascade already resolved
+         *     (``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's
+         *     own default for model). Title is deliberately absent: it names one task,
+         *     never a default. So are concrete branch/remote names, for the same reason.
+         */
+        WorkspaceDefaults: {
+            /** Agent */
+            agent?: string | null;
+            /** Runtime */
+            runtime?: ("host" | "container") | null;
+            /** Brief */
+            brief?: boolean | null;
+            /** Model */
+            model?: string | null;
+            /** Branch Mode */
+            branch_mode?: ("auto" | "new" | "existing" | "remote" | "root") | null;
+            /** Base Ref */
+            base_ref?: string | null;
+            /** Skip Init */
+            skip_init?: boolean | null;
+        };
+        /**
+         * WorkspaceDefaultsSaveView
+         * @description Where a complete workspace-defaults replacement landed.
+         *
+         *     ``shadowed`` names submitted fields whose user-layer defaults still outrank
+         *     a project-targeted write.
+         */
+        WorkspaceDefaultsSaveView: {
+            /** Path */
+            path: string;
+            /** Shadowed */
+            shadowed: string[];
+        };
+        /**
+         * WorkspaceDefaultsView
+         * @description Resolved answers a new-workspace form should pre-select.
+         *
+         *     Unlike the raw ``WorkspaceDefaults`` config section, this fills values the
+         *     create path already resolves through the wider cascade. ``None`` remains
+         *     meaningful for agent and model: their providers decide when no saved answer
+         *     exists.
+         */
+        WorkspaceDefaultsView: {
+            /** Agent */
+            agent: string | null;
+            /**
+             * Runtime
+             * @enum {string}
+             */
+            runtime: "host" | "container";
+            /** Brief */
+            brief: boolean;
+            /** Model */
+            model: string | null;
+            /**
+             * Branch Mode
+             * @enum {string}
+             */
+            branch_mode: "auto" | "new" | "existing" | "remote" | "root";
+            /** Base Ref */
+            base_ref: string | null;
+            /** Skip Init */
+            skip_init: boolean;
+            /**
+             * Agent Cwds
+             * @default []
+             */
+            agent_cwds: components["schemas"]["AgentCwdView"][];
+            /** Agent Cwd */
+            agent_cwd?: string | null;
+        };
+        /**
          * WorkspaceDiffView
          * @description Wire mirror of ``grove.core.workspace.WorkspaceDiff`` — a RAW unified patch.
          *
@@ -4562,6 +5086,10 @@ export interface components {
              * @default false
              */
             runtime_no_tmux: boolean;
+            /** Share Token */
+            share_token?: string | null;
+            /** Share Session Id */
+            share_session_id?: string | null;
         };
         /**
          * WorkspaceStatus
@@ -5236,6 +5764,176 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthView"];
+                };
+            };
+        };
+    };
+    get_share_policy_share_policy_get: {
+        parameters: {
+            query: {
+                repo: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharePolicyView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_share_policy_share_policy_put: {
+        parameters: {
+            query: {
+                repo: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharePolicyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharePolicyView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_workspace_public__token__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-grove-share-passcode"?: string | null;
+            };
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWorkspaceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_turns_public__token__turns_get: {
+        parameters: {
+            query?: {
+                last?: number | null;
+                after_turn?: number | null;
+            };
+            header?: {
+                "x-grove-share-passcode"?: string | null;
+            };
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDetailView"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_diff_public__token__diff_get: {
+        parameters: {
+            query?: {
+                path?: string | null;
+            };
+            header?: {
+                "x-grove-share-passcode"?: string | null;
+            };
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceDiffView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6368,6 +7066,41 @@ export interface operations {
             };
         };
     };
+    session_queries_sessions__session_id__queries_get: {
+        parameters: {
+            query: {
+                kind: string;
+                cwd: string;
+                last?: number | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionQueryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_projects_projects_get: {
         parameters: {
             query?: never;
@@ -6406,6 +7139,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentSummaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_defaults_defaults_get: {
+        parameters: {
+            query: {
+                repo: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceDefaultsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_defaults_defaults_put: {
+        parameters: {
+            query: {
+                scope: components["schemas"]["DefaultsScope"];
+                repo?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceDefaults"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceDefaultsSaveView"];
                 };
             };
             /** @description Validation Error */

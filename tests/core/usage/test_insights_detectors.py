@@ -139,6 +139,7 @@ def test_recurring_failures_are_scoped_and_include_success_rate(tmp_path: Path) 
 
     assert len(findings) == 1
     assert findings[0].count == 3
+    assert findings[0].title == "Recurring failures in `Read`"
     assert (
         findings[0].detail == "3 of 10 observed results failed (70% success); category: not_found."
     )

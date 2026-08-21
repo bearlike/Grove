@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+import { RAIL_WIDTH } from "@/components/grove/shell/rail-width";
+
 /**
  * SOURCE assertions, deliberately — these are Tailwind classes on JSX
  * elements, not exported constants, so there is nothing pure to import and
@@ -19,7 +21,12 @@ const workPanel = readFileSync("components/grove/workspace/work-panel.tsx", "utf
 
 describe("the desktop rail widened twice: 260px → 328px → 392px", () => {
   it("expands to w-98 (392px) — 328px * 1.2 = 393.6px, and Tailwind's spacing unit is 4px", () => {
-    expect(shell).toContain('collapsed ? "w-12" : "w-98"');
+    // The measure moved OUT of this file when a second rail appeared (the
+    // public share view), so the width is now asserted at its single source
+    // and the shell is only checked for using it. Asserting the old literal
+    // here would pin the spelling of a call site rather than the measure.
+    expect(RAIL_WIDTH).toBe("w-98");
+    expect(shell).toContain('collapsed ? "w-12" : RAIL_WIDTH');
     expect(shell).not.toContain("w-65");
     expect(shell).not.toContain('"w-82"');
   });
@@ -56,17 +63,23 @@ describe("the mobile sheet takes the complete viewport width when expanded", () 
  */
 describe("the fleet list fills whichever container renders it (#57)", () => {
   it("carries no fixed pixel width of its own", () => {
-    // DERIVED from the shell rather than written out, so this assertion cannot
+    // IMPORTED rather than regexed out of the shell, so this assertion cannot
     // go stale the next time the rail is widened — which is exactly the drift
-    // that produced #57 in the first place.
-    const railWidth = shell.match(/collapsed \? "w-12" : "(w-\d+)"/)?.[1];
-    expect(railWidth).toBeDefined();
-    expect(fleetTree).not.toContain(`"${railWidth}`);
+    // that produced #57 in the first place. It used to derive the value from
+    // `app-shell.tsx`'s source text; now that the measure has its own module
+    // the test reads the same export the components do, which is strictly
+    // better: the previous form silently passed `undefined` into the
+    // assertions below the moment the call site's spelling changed.
+    expect(fleetTree).not.toContain(`"${RAIL_WIDTH}`);
+    expect(fleetTree).not.toContain("RAIL_WIDTH");
     expect(fleetTree).not.toMatch(/collapsed \? "w-12/);
   });
 
   it("is w-full in both the collapsed and expanded states", () => {
-    expect(fleetTree).toContain('collapsed ? "w-full overflow-hidden px-2 pt-1"');
+    // Asserted as the two class strings rather than one concatenated
+    // expression: the formatter is free to wrap the ternary across lines, and
+    // the contract is what each state renders, not where the line breaks.
+    expect(fleetTree).toContain('"w-full overflow-hidden px-2 pt-1"');
     expect(fleetTree).toContain(': "w-full overflow-y-auto p-3"');
   });
 });
@@ -121,7 +134,10 @@ describe("the rail gutters its contents, and gutters them the same everywhere", 
   it("collapsed, every band stays px-2 — 8 + a 32px icon + 8 IS the 48px rail", () => {
     // A wider gutter here does not look roomier, it pushes the icons off
     // centre, so the collapsed state is deliberately excluded from all of it.
-    expect(fleetTree).toContain('collapsed ? "w-full overflow-hidden px-2 pt-1"');
+    // Asserted as the two class strings rather than one concatenated
+    // expression: the formatter is free to wrap the ternary across lines, and
+    // the contract is what each state renders, not where the line breaks.
+    expect(fleetTree).toContain('"w-full overflow-hidden px-2 pt-1"');
     expect(shell).toContain('"w-12"');
   });
 });
@@ -188,7 +204,10 @@ describe("the work panel's tab strip is a layer below the header, not part of it
 
 describe("a workspace row is taller, and its title now outranks its entity line by SIZE", () => {
   it("grew its own padding for a more comfortable row", () => {
-    expect(fleetTree).toContain('"h-auto w-full justify-start py-2 font-normal"');
+    // Token-wise, so the row can gain padding on the trailing edge (it did, to
+    // clear the row's own menu button) without this failing for a reason that
+    // has nothing to do with the vertical rhythm it is pinning.
+    expect(fleetTree).toMatch(/"h-auto w-full justify-start py-2[^"]*font-normal"/);
     expect(fleetTree).not.toContain("py-1.5");
   });
 
@@ -206,8 +225,11 @@ describe("a workspace row is taller, and its title now outranks its entity line 
 describe("a project name keeps 8 characters before a branch beside it may crowd it out", () => {
   it("the rail row and the fleet card both apply the shared floor to the project only", () => {
     const card = readFileSync("components/grove/fleet/workspace-card.tsx", "utf8");
-    expect(fleetTree).toMatch(/<ProjectLabel name=\{row\.repoName\} className=\{PROJECT_MIN_WIDTH\} \/>/);
-    expect(card).toMatch(/<ProjectLabel name=\{repoName\} className=\{PROJECT_MIN_WIDTH\} \/>/);
+    // `\s+` rather than a single space: the formatter wraps a long element
+    // across lines, and which side of the wrap the props land on says nothing
+    // about whether the floor is applied.
+    expect(fleetTree).toMatch(/<ProjectLabel\s+name=\{row\.repoName\}\s+className=\{PROJECT_MIN_WIDTH\}\s*\/>/);
+    expect(card).toMatch(/<ProjectLabel\s+name=\{repoName\}\s+className=\{PROJECT_MIN_WIDTH\}\s*\/>/);
     // Neither site puts the floor on the branch — it is the one side of the
     // pair that is meant to keep shrinking once the project hits its own.
     expect(fleetTree).not.toMatch(/<BranchLabel name=\{state\.branch\} className=/);

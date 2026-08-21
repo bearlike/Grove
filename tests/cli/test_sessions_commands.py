@@ -136,6 +136,39 @@ def test_show_renders_turns_and_json(runner: CliRunner, project: Path) -> None:
     assert payload["turns"][0]["entries"][-1]["text"] == "Done."
 
 
+def test_recollect_emits_full_direct_queries(runner: CliRunner, project: Path) -> None:
+    claude = Path(os.environ["CLAUDE_CONFIG_DIR"])
+    path = claude / "projects" / _ClaudeHome.encode_cwd(project) / f"{SID}.jsonl"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            '{"type":"user","uuid":"noise","timestamp":"2026-06-09T08:00:06.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":'
+            '[{"type":"tool_result","tool_use_id":"x","content":"ok"}]}}\n'
+        )
+        fh.write(
+            '{"type":"user","uuid":"direct","timestamp":"2026-06-09T08:00:07.000Z",'
+            '"isSidechain":false,"message":{"role":"user","content":"/compact"}}\n'
+        )
+
+    human = runner.invoke(app, ["sessions", "recollect", SID[:8]])
+    assert human.exit_code == 0, human.output
+    assert "do the thing" in human.output
+    assert "/compact" in human.output
+    assert "tool output" not in human.output
+
+    structured = runner.invoke(app, ["sessions", "recollect", SID[:8], "--json", "--last", "1"])
+    assert structured.exit_code == 0, structured.output
+    payload = json.loads(structured.output)
+    assert payload == [
+        {
+            "ordinal": 2,
+            "timestamp": "2026-06-09T08:00:07+00:00",
+            "sent_at": None,
+            "text": "/compact",
+        }
+    ]
+
+
 def test_dump_default_and_jsonl(runner: CliRunner, project: Path) -> None:
     del project
     result = runner.invoke(app, ["sessions", "dump", SID[:8]])

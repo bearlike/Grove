@@ -2,6 +2,11 @@
 
 ## Connect your issue tracker
 
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.png" alt="Grove's workspace list with resolved ticket references on each row: Gitea, GitHub and Linear identifiers side by side, and a pull request marked open" /></div>
+  <figcaption class="ms-shot__body">Once a provider is on, every workspace carries the tickets its branch names. All three can resolve at once.</figcaption>
+</figure>
+
 Grove links each workspace to the ticket it serves, read off the branch
 name. Turn it on with a `tickets` section, which cascades like every
 other: pin providers in project config, adjust locally. See [ticket

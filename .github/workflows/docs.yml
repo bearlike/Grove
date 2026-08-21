@@ -2,7 +2,7 @@
 # runtime from github.server_url:
 #   * github.com -> versioned GitHub Pages (mike, gh-pages branch)
 #   * otherwise  -> the internal docs host (static tar upload)
-# Internal host details come from repo variables (DOCS_HOST / DOCS_RESOLVE_IP),
+# Internal host details come from an owner-level variable (DOCS_HOST),
 # which are empty on github.com, so that path is skipped and nothing
 # environment-specific is committed.
 name: Docs
@@ -23,7 +23,6 @@ concurrency:
 
 env:
   DOCS_HOST: ${{ vars.DOCS_HOST }}
-  DOCS_RESOLVE_IP: ${{ vars.DOCS_RESOLVE_IP }}
 
 jobs:
   deploy:
@@ -82,13 +81,12 @@ jobs:
       - name: Publish to internal docs host
         if: github.server_url != 'https://github.com' && github.ref != 'refs/heads/current'
         run: |
-          slug="grove"
-          [ "${{ github.event_name }}" = "pull_request" ] && slug="grove-pr-${{ github.event.pull_request.number }}"
+          slug="$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')"
+          [ "${{ github.event_name }}" = "pull_request" ] && slug="${slug}-pr-${{ github.event.pull_request.number }}"
           sed -i "s|^site_url:.*|site_url: https://${DOCS_HOST}/${slug}/|" mkdocs.yml
           uv run mkdocs build --strict -d site
           tar -C site -cf site.tar .
           curl -fsS -k --retry 5 --retry-all-errors --retry-delay 4 --max-time 180 \
-            --resolve "${DOCS_HOST}:443:${DOCS_RESOLVE_IP}" \
             -X PUT -H 'Content-Type: application/x-tar' --data-binary @site.tar \
             "https://${DOCS_HOST}/${slug}/"
 
@@ -103,6 +101,6 @@ jobs:
     steps:
       - name: Remove PR preview
         run: |
+          slug="$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')-pr-${{ github.event.pull_request.number }}"
           curl -fsS -k --retry 3 --retry-all-errors --retry-delay 4 \
-            --resolve "${DOCS_HOST}:443:${DOCS_RESOLVE_IP}" \
-            -X DELETE "https://${DOCS_HOST}/grove-pr-${{ github.event.pull_request.number }}/" || true
+            -X DELETE "https://${DOCS_HOST}/${slug}/" || true

@@ -14,18 +14,28 @@ const cookieName = "grove_session";
  *
  * Keep additions here rather than inventing a second mechanism: one list of
  * public paths is auditable, and a security-relevant exemption scattered across
- * files is not. Prefix-matched families (`/api/auth/**`, the pairing endpoints)
- * are handled below.
+ * files is not. Prefix-matched families (`/api/auth/**`, `/public/**` and its
+ * BFF, the pairing endpoints) are handled below.
  */
 const publicPaths = new Set(["/login", "/api/version"]);
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\..*).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\..*).*)",
+  ],
 };
 
 export function middleware(request: NextRequest): NextResponse {
   const pathname = request.nextUrl.pathname;
-  if (publicPaths.has(pathname) || pathname.startsWith("/api/auth/") || pathname.startsWith("/_next/")) return NextResponse.next();
+  if (
+    publicPaths.has(pathname) ||
+    pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/public/") ||
+    pathname.startsWith("/api/public/") ||
+    pathname.startsWith("/_next/")
+  ) {
+    return NextResponse.next();
+  }
   if (request.cookies.get(cookieName)?.value) return NextResponse.next();
 
   const redirect = request.nextUrl.clone();

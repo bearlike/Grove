@@ -16,7 +16,34 @@ Aider, Cursor's CLI, Gemini, or a plain shell.
 | `kind`        | string | no  | Session adapter: `claude_code`, `codex`, `mewbo`, or `generic` (default). See [below](#telling-grove-what-kind-of-agent-it-is). |
 | `description` | string | no  | One-line picker label. |
 | `env`         | object | no  | Extra environment variables for the tmux window. |
+| `env_unset`   | `array<string>` | no  | Variable names cleared before `env` is applied, so an ambient value (like a `CLAUDE_CONFIG_DIR` inherited from the daemon) cannot leak into the agent's window. |
 | `models`      | `array<string>` | no  | Curated model ids for the create-form picker, overriding auto-discovery. |
+| `tools_offline` | boolean | no | Launch with network-facing tools disallowed (Claude Code drops `WebFetch`/`WebSearch`, Codex disables sandbox networking). No effect on `generic`/`mewbo`. |
+
+## Models in the create form
+
+The model field is a picker for the agent you selected. It offers that
+agent's discovered models, plus **Agent default** and **Custom**. Pick
+**Custom** to enter any model id yourself.
+
+Operators curate the picker with `AgentSpec.models`. This is a convenience
+list for people opening the form, never a validated allowlist. Grove forwards
+any selected or custom id verbatim to the provider.
+
+```json title=".grove/config.json"
+{
+  "agents": [
+    {
+      "name": "claude",
+      "models": ["sonnet", "opus", "my-gateway-model"]
+    }
+  ]
+}
+```
+
+An empty `models` list keeps the agent's normal discovery. A configured list
+can pin, reorder, or add the ids your team wants to see, but it cannot prevent
+a custom id from being sent.
 
 ## Defaults
 

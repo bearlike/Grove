@@ -87,6 +87,19 @@ wrong path.
 `config_loaded: true`. `grove config show` shows the merged result and
 which layer wins. See the [configuration cascade](features-cascade.md).
 
+## Ticket titles never resolve, or a tracker call fails with a certificate error
+
+This is TLS, not a ticket bug: your tracker sits behind a certificate Grove's
+trust store does not carry, usually an internal CA on a self-hosted forge.
+Grove degrades a failed enrichment to a bare id instead of raising, so the
+certificate problem hides behind a symptom that looks unrelated to it.
+
+Add the CA with [`tls.ca_path`](configure-project.md#trust-a-private-deployment-ca)
+or `GROVE_TLS_CA_PATH`, both of which fail loudly at startup on a bad path
+rather than falling back silently. If other tools on the same machine trust
+the certificate fine, check your Python version: 3.13 rejects a CA whose
+`basicConstraints` is not marked critical, where 3.12 let it pass.
+
 ## JSON Schema autocomplete not working
 
 The IDE does not autocomplete `.grove/config.json`. Either `$schema` does not

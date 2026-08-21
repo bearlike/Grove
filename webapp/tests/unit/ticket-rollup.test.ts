@@ -55,7 +55,22 @@ describe("ticketRollup", () => {
     // A bare 0% cannot tell "nobody has said" from "nothing has happened", and
     // the reader acts differently on each.
     const r = ticketRollup([ref("1"), ref("2")], view([]));
-    expect(r).toEqual({ total: 2, reported: 0, unreported: 2, done: 0, blocked: 0, fraction: 0 });
+    expect(r).toEqual({
+      total: 2,
+      reported: 0,
+      unreported: 2,
+      done: 0,
+      blocked: 0,
+      phases: {
+        scoping: 0,
+        planning: 0,
+        implementing: 0,
+        verifying: 0,
+        delivering: 0,
+        done: 0,
+      },
+      fraction: 0,
+    });
   });
 
   it("puts done at exactly 1 and scoping at exactly 0 — the ramp's real endpoints", () => {
@@ -96,7 +111,21 @@ describe("ticketRollup", () => {
     );
     // (1 + 0.6 + 0 + 0.2) / 4
     expect(r?.fraction).toBeCloseTo(0.45);
-    expect(r).toMatchObject({ total: 4, reported: 4, unreported: 0, done: 1, blocked: 1 });
+    expect(r).toMatchObject({
+      total: 4,
+      reported: 4,
+      unreported: 0,
+      done: 1,
+      blocked: 1,
+      phases: {
+        scoping: 1,
+        planning: 1,
+        implementing: 0,
+        verifying: 1,
+        delivering: 0,
+        done: 1,
+      },
+    });
   });
 
   it("ignores a claim naming a ticket this workspace does not hold", () => {

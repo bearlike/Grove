@@ -19,34 +19,6 @@
       "command": "npx",
       "args": ["-y", "tmux-mcp"]
     },
-    "deepwiki": {
-      "type": "http",
-      "url": "http://mcp.hurricane.home/mcp/Deepwiki-OSS",
-      "headers": {
-        "Authorization": "Bearer ${KRISHNA_PA_MCP_BEARER_TOKEN}"
-      }
-    },
-    "internet-search": {
-      "type": "http",
-      "url": "http://mcp.hurricane.home/mcp/Internet-Search",
-      "headers": {
-        "Authorization": "Bearer ${KRISHNA_PA_MCP_BEARER_TOKEN}"
-      }
-    },
-    "gitea": {
-      "type": "http",
-      "url": "http://mcp.hurricane.home/mcp/Gitea-Hurricane",
-      "headers": {
-        "Authorization": "Bearer ${KRISHNA_PA_MCP_BEARER_TOKEN}"
-      }
-    },
-    "mewbo": {
-      "type": "http",
-      "url": "http://mcp.hurricane.home/mcp/Mewbo",
-      "headers": {
-        "Authorization": "Bearer ${KRISHNA_PA_MCP_BEARER_TOKEN}"
-      }
-    },
     "openalex": {
       "type": "http",
       "url": "https://openalex.caseyjhand.com/mcp"

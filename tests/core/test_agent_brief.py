@@ -27,7 +27,7 @@ from grove.core.config import GroveConfig
 from grove.core.container_infra import slugify_project
 from grove.core.container_runtime import ContainerRuntimeState
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.manager import WorkspaceManager
+from grove.core.manager import WorkspaceManager, build
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import Runtime, WorkspaceState, WorkspaceStatus
 from tests.conftest import (
@@ -136,10 +136,62 @@ def test_the_brief_points_and_does_not_restate() -> None:
     the file contract and the PR rule, and duplicating any of it here would
     spend context every session and drift the day either copy is edited."""
     assert BRIEF_SKILL in AgentBrief.TEXT
-    assert len(AgentBrief.TEXT.split()) < 120
+    # The always-delivered todo-list reminder costs one short paragraph, but the
+    # skill remains the home of its rules rather than the brief becoming a spec.
+    assert len(AgentBrief.TEXT.split()) < 150
     lowered = AgentBrief.TEXT.lower()
     assert "implementing" not in lowered  # the phase vocabulary
     assert "grove_phase_file" not in lowered  # the file contract
+
+
+# ─── composition and rendering ──────────────────────────────────────────────
+
+
+def test_composing_without_options_is_groves_own_text() -> None:
+    assert AgentBrief.compose() == AgentBrief.TEXT
+
+
+def test_composing_an_unnamed_workspace_adds_the_naming_nudge() -> None:
+    composed = AgentBrief.compose(unnamed=True)
+
+    assert composed == f"{AgentBrief.TEXT}\n{AgentBrief.NAMING_TEXT}"
+
+
+def test_operator_instructions_follow_groves_text_and_the_naming_nudge() -> None:
+    operator_text = "Run the project gate before pushing."
+
+    composed = AgentBrief.compose(appended=operator_text, unnamed=True)
+
+    assert composed == f"{AgentBrief.TEXT}\n{AgentBrief.NAMING_TEXT}\n{operator_text}\n"
+
+
+@pytest.mark.parametrize("unnamed", [False, True])
+def test_blank_operator_instructions_render_byte_identically_to_no_instructions(
+    unnamed: bool,
+) -> None:
+    expected = AgentBrief.compose(unnamed=unnamed)
+
+    assert AgentBrief.compose(appended=" \t\n ", unnamed=unnamed) == expected
+
+
+def test_render_writes_explicit_text_and_creates_parent_directories(tmp_path: Path) -> None:
+    target = tmp_path / "nested" / "brief.md"
+
+    rendered = AgentBrief.render(target, "The operator's brief.\n")
+
+    assert rendered == target
+    assert target.read_text(encoding="utf-8") == "The operator's brief.\n"
+
+
+def test_render_returns_none_when_the_brief_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "brief.md"
+    monkeypatch.setattr(
+        Path, "write_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only"))
+    )
+
+    assert AgentBrief.render(target, "unwritable") is None
 
 
 # ─── the engine: who gets the env var, who gets the prompt ──────────────────
@@ -212,6 +264,77 @@ def test_the_config_default_can_be_flipped(
     assert asked_for.brief is True
     assert AgentBrief.PATH_ENV not in _env_of(mgr, default_off)
     assert AgentBrief.PATH_ENV in _env_of(mgr, asked_for)
+
+
+def _write_project_config(repo: Path, payload: dict[str, object]) -> None:
+    grove_dir = repo / ".grove"
+    grove_dir.mkdir(exist_ok=True)
+    (grove_dir / "config.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_create_uses_the_cascaded_brief_configuration(
+    tmp_state_dir: Path, tmp_repo: Path, fake_tmux: FakeTmux
+) -> None:
+    """The per-repo cascade reaches the actual rendered file, not just config parsing."""
+    del tmp_state_dir
+    instructions = "Run the project gate before pushing."
+    _write_project_config(
+        tmp_repo,
+        {"brief": {"instructions": instructions}, "container": {"enabled": False}},
+    )
+    mgr = build(tmp_repo)
+
+    unnamed = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="unnamed"))
+    described = mgr.create(
+        CreateWorkspaceRequest(
+            agent_name="claude", title="described", description="Improve brief coverage."
+        )
+    )
+
+    rendered_by_session = {
+        session: Path(env[AgentBrief.PATH_ENV]).read_text(encoding="utf-8")
+        for session, env, _unset in fake_tmux.launch_envs
+    }
+    assert AgentBrief.NAMING_TEXT in rendered_by_session[unnamed.tmux_session]
+    assert instructions in rendered_by_session[unnamed.tmux_session]
+    assert AgentBrief.NAMING_TEXT not in rendered_by_session[described.tmux_session]
+    assert instructions in rendered_by_session[described.tmux_session]
+
+
+def test_create_honors_a_cascaded_self_naming_opt_out(
+    tmp_state_dir: Path, tmp_repo: Path, fake_tmux: FakeTmux
+) -> None:
+    del tmp_state_dir
+    _write_project_config(
+        tmp_repo,
+        {"brief": {"self_naming": False}, "container": {"enabled": False}},
+    )
+    mgr = build(tmp_repo)
+
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="unnamed"))
+
+    rendered = next(
+        Path(env[AgentBrief.PATH_ENV]).read_text(encoding="utf-8")
+        for session, env, _unset in fake_tmux.launch_envs
+        if session == state.tmux_session
+    )
+    assert AgentBrief.NAMING_TEXT not in rendered
+
+
+def test_hook_and_initial_prompt_roads_deliver_the_same_composed_brief(
+    manager: WorkspaceManager,
+) -> None:
+    """Different delivery channels must not grow their own composition rules."""
+    host = manager.create(CreateWorkspaceRequest(agent_name="claude", title="host"))
+    codex = manager.create(CreateWorkspaceRequest(agent_name="codex", title="codex"))
+    claude = manager._agent_spec("claude")
+    initial_prompt = "Fix the parser."
+
+    env = manager._brief_env(host, claude)
+    hook_text = Path(env[AgentBrief.PATH_ENV]).read_text(encoding="utf-8")
+    prompt = manager._brief_prompt(codex, manager._agent_spec("codex"), initial_prompt)
+
+    assert prompt == f"{hook_text}\n{initial_prompt}"
 
 
 def test_disabling_hooks_disables_the_hook_channel(

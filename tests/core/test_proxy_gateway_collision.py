@@ -20,7 +20,7 @@ from loguru import logger
 
 from grove.core.config import ProxyConfig
 
-GATEWAY = "http://gateway.internal.home:8317"
+GATEWAY = "http://gateway.acme.home:8317"
 
 
 @pytest.fixture

@@ -466,7 +466,7 @@ Every colour decision this app has made, including the ones that previously exis
 | Scrollbars are styled once, globally, unscoped | Every surface creates a scroller; a per-surface opt-in leaves whichever one nobody remembered wearing the browser default. | shipped |
 | `--content-*` and the type ramp | See §1 and §2. **They shipped GLOBALLY ahead of per-surface adoption** — see the migration state below. | shipped |
 | Terminal ANSI colour is exempt | It arrives in the data and `fancy-ansi` injects it. Content is not chrome. | shipped |
-| `PhaseMeter`/`TicketRollupMeter` never spend a TONE on position, only on `blocked` | Progress carries no hue of its own here — position is shape (`✓ ◔ ◑ ◕ ● ✓` via §4.7's tone table) and TONE stays `secondary`/`default`/`outline`. So there is no ramp for `destructive` to contradict when `blocked` claims it: it is simply 4.1's ordinary rule ("state colour is gated on run state") applied to the one fact on this axis that changes state — the same reconciliation `contracts/phase_palette.py` states for the TUI's lime ramp, where amber overrides the ramp rather than joining it. | shipped |
+| `PhaseBadge`/`TicketRollupMeter` never spend a TONE on phase position, only on `blocked` | Their position is the grayscale-safe shape-and-word ramp (`○ ◔ ◑ ◕ ● ✓`), so `destructive` can mean blocked without contradicting a green or amber phase. `PhaseMeter` is deliberately different: its six connected checkpoints are one composite sequence, and its `secondary`/`default`/`outline` table ranks reached/current/ahead positions while the glyphs still carry them without hue. In either shape, `blocked` is a flag across the phase axis, never a seventh position. | shipped |
 
 ### 4.9 The check only a human can run
 
@@ -544,7 +544,9 @@ The measured cost of not having had this rule: the Info tab renders `outline` ×
 
 **An aggregate must still say what fraction of it is silence, not just what fraction is done.** `TicketRollupMeter` scores an unclaimed ticket as zero rather than excluding it — excluding would let a workspace holding five untouched tickets and one finished one read 100% complete. Zero can only ever understate, so the honest fix is stating the coverage beside the number (`N not reported`), the same `Showing 100 of 2.5K` discipline §10 already asks of every partial read.
 
-**Where TWO parties make claims about one object, the copy keeps them apart by ATTRIBUTION, never by wording.** A ticket row shows the tracker's state beside Grove's phase, and `closed` next to `scoping` reads as a contradiction the reader has to resolve — until every sentence names its claimant: *"The agent is reading the ticket…"* against *"Gitea says this issue is closed."* Then it is two true statements, which is what it always was. Merging them into one sentence is the conflation the explanation exists to undo, so a tooltip composer returns the claims **separately** (`phaseTooltip`) and the renderer stacks them; concatenating in the composer makes the halves untestable and invites a single voice to smooth over the disagreement. A state Grove cannot normalize quotes the tracker's own word rather than inventing a controlled one.
+**Where TWO parties make claims about one object, the copy keeps them apart by ATTRIBUTION, never by wording.** A ticket row shows the tracker's state beside Grove's phase, and `closed` next to `scoping` reads as a contradiction the reader has to resolve — until every sentence names its claimant: *"The agent is reading the ticket…"* against *"Gitea says this issue is closed."* Then it is two true statements, which is what it always was. Merging them into one sentence is the conflation the explanation exists to undo, so the shared `phaseTooltip` composer returns the claims **separately** and both the ticket row and fleet phase badge stack them; concatenating in either surface makes the halves untestable and invites a single voice to smooth over the disagreement. A state Grove cannot normalize quotes the tracker's own word rather than inventing a controlled one.
+
+**A progress tooltip leads with the agent's per-ticket note, verbatim, then states the phase meaning, the blocked reason where present, and the tracker-attributed claim.** The note is the only firsthand task context and must not be paraphrased or buried under Grove's explanation; quotation and italics keep it visibly somebody else's words. The fixed sentences that follow give an unfamiliar reader the phase vocabulary, state why it cannot advance, and then make the independent tracker claim legible without pretending the two systems agree. A missing note simply omits that row — it does not invent a substitute.
 
 **A mark that encodes a position in a vocabulary the reader was never taught needs the vocabulary, not a louder mark.** `◐ 3/6` says how far along without ever saying what "along" measures, which is why a phase badge reads as an arbitrary process. The definitions belong in the hover, written once — the same six sentences the agent's own skill defines, turned from second person into third — because two independent explanations of one word teach it twice and trust neither. `Badge` is a bare `<span>`, so an explanation carried only by `title` is mouse-only: the trigger takes `tabIndex`, and the `aria-label` carries every claim the tooltip shows.
 
@@ -581,6 +583,12 @@ Each of these means one thing, everywhere, forever. Adding a row is a change to 
 | Skill | `SparklesIcon` | call site |
 | Issue (a ticket) | by state, below | `ticketGlyph` in `workspace/selectors.ts` |
 | Pull request | by state, below | `ticketGlyph` in `workspace/selectors.ts` |
+
+### Fleet state — one word and mark per axis
+
+Every workspace lifecycle state and agent state has one sentence-case label and one Lucide mark in `fleet/tokens.ts`; the rail, filters, cards and palette consume that total table rather than spelling or decorating a state locally. The ordinary-English labels need no hover explanation. Only `provisioning`, `offline`, `orphaned`, and the agent's `blocked` state take the glossary, because they carry a Grove-specific meaning a newcomer cannot reliably infer. `active` and wire-level `running` deliberately render as the same reader-facing state, **Active**, with the same radio mark: the distinction is an implementation detail, not a second condition to teach.
+
+The lifecycle and agent tables share `LoaderCircleIcon` for starting work and `CircleXIcon` for error, because those are the same claim on distinct axes; all other marks are distinct **within their own axis**. Runtime belongs to the same presentation owner (`ServerIcon` / `BoxIcon`) but retains its fixed-property `outline` treatment, not a lifecycle or agent-state tone.
 
 ### Ticket state — the one entity whose glyph varies
 
@@ -790,7 +798,7 @@ Each surface against this system, with the specific deltas it needs. **One PR pe
 
 They share `card.tsx` and `assistant-ui/badge`, so the two shared deltas land first as one PR, then each tab takes its own.
 
-**The badge migration is done except `files-tab.tsx`,** the last importer. **The census is `grep -rl "assistant-ui/badge" components/grove/`, never a list written here** — this row was written as six named files and was wrong in both directions within a day: `ticket-refs` had already migrated off it, `selectors.ts` had been importing it the whole time and was never named, and `phase-meter` matched only a *comment*. `grep -rl` counts comments; `grep -rn "^import.*assistant-ui/badge"` is the census.
+**The badge migration is done except `files-tab.tsx`,** the last importer. **The census is `grep -rn "^import.*assistant-ui/badge" components/grove/`, never a list written here** — this row was written as six named files and was wrong in both directions within a day: `ticket-refs` had already migrated off it, `selectors.ts` had been importing it the whole time and was never named, and `phase-meter` matched only a *comment*. `grep -rl` counts comments, so it cannot establish the import census.
 
 **The shared `card.tsx` deltas are done, and the lesson is where the defect was, not what it was.** The work panel's "mono metric" leak was one line in `CardStat`, not five per-tab bugs — no tab styles its own figures. **When the same defect appears on every surface of a family, look for the primitive before you write a row per surface**; the map cost five rows and a sixth on Usage describing a single line.
 
@@ -884,3 +892,11 @@ Type, tiers, the null state, the colour and the badge tables are done. **Two fin
 6. Glyphs from the table in section 7. If your entity is not in it, add a row here first.
 7. Build all six states from section 10 before calling it done. The empty and degraded states are quiet.
 8. Run `npm run gate`.
+
+---
+
+**ADD — Launch composer input: `min-h-24 max-h-64`.** The vendored composer is sized for a reply in a running conversation, where the message above carries context; Launch's composer is the whole screen and holds a task brief, so it needs the taller range.
+
+This is also the one place Launch mixes two vendored composers, and the reason is worth keeping: the shell, toolbar, action group and send button all come from `components/elements/composer` — which ships `ComposerToolbar` as a `justify-between` row and is therefore the slot the control pills sit in — but its `ComposerInput` is a single-line `<input>`, and there is no multi-line input anywhere in the vendored elements tree. So the text area alone is assistant-ui's `ComposerPrimitive.Input`. That single substitution is the *only* reason the Launch surface mounts a runtime at all; anyone replacing it with `ComposerInput` must remove the runtime in the same change.
+
+**§7 — Launch takes `SproutIcon`.** Not a rocket. A rocket is the stock glyph for anything named "launch" and would be exactly the undesigned default §0 warns about; Grove's vocabulary is a forest, Fleet already holds `TreesIcon`, and starting a workspace is planting one. The mark currently renders nowhere — `RAIL_ITEMS` excludes `/` because the brand mark links there — but `NavItem.icon` is required, and a required field still takes a decided value rather than the first plausible one.

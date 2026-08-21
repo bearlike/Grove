@@ -59,6 +59,21 @@ drop it for TUI-only.
     Re-run with `--upgrade` to update. On an externally managed Python,
     add `--break-system-packages`, or use pipx instead.
 
+### Tab completion (optional)
+
+One command teaches your shell to complete Grove, including live values:
+workspace ids, your configured agents, each agent's models, branches and
+sessions.
+
+```bash
+grove completions install     # zsh, bash or fish
+exec $SHELL                   # start a new shell to pick it up
+```
+
+It writes one file where your shell already looks and never edits your
+rc file. See [tab completion](use-cli.md#tab-completion) for what
+completes where, and what to do if nothing happens when you press TAB.
+
 ## Configure it
 
 Grove runs on defaults you can tune later, from two files that layer
@@ -97,7 +112,7 @@ grove                  # launch the TUI
 A fresh repo lands on the empty state, prompting a first workspace.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-empty.svg" alt="Grove TUI empty state" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-empty.png" alt="Grove TUI empty state" /></div>
   <figcaption class="ms-shot__body">Empty state. Keys available are listed in the footer.</figcaption>
 </figure>
 
@@ -107,7 +122,7 @@ configured, spawns a tmux session with `agent` and `shell` windows, and
 sends in the agent's command.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.svg" alt="Create workspace modal" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-create-modal.png" alt="Create workspace modal" /></div>
   <figcaption class="ms-shot__body">Create modal. Picking a branch source activates only that variant's inputs.</figcaption>
 </figure>
 

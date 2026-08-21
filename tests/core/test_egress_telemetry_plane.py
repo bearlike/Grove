@@ -31,7 +31,7 @@ from grove.core.container_policy import EgressPolicy
 #: exception — a LAN name on a private TLD, resolvable only from inside that
 #: network, and frequently not from inside a bridge-network container.
 SELF_HOSTED = {
-    "LANGFUSE_HOST": "https://langfuse.observability.home",
+    "LANGFUSE_HOST": "https://langfuse.acme.home",
     "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
     "LANGFUSE_SECRET_KEY": "sk-lf-test",
 }
@@ -57,7 +57,7 @@ def test_a_self_hosted_endpoint_joins_the_allowlist() -> None:
         telemetry=TelemetryConfig(enabled=True),
         env=SELF_HOSTED,
     )
-    assert "langfuse.observability.home" in policy.hosts
+    assert "langfuse.acme.home" in policy.hosts
     # The endpoint's PATH is not a destination, and neither is its scheme.
     assert not any(entry.startswith("https://") for entry in policy.hosts)
 
@@ -96,9 +96,9 @@ def test_a_partial_credential_set_still_allows_the_host() -> None:
         EgressConfig(),
         kind="claude_code",
         telemetry=TelemetryConfig(enabled=True),
-        env={"LANGFUSE_HOST": "https://langfuse.observability.home"},
+        env={"LANGFUSE_HOST": "https://langfuse.acme.home"},
     )
-    assert "langfuse.observability.home" in policy.hosts
+    assert "langfuse.acme.home" in policy.hosts
 
 
 def test_a_host_variable_without_a_scheme_is_reported(warnings_logged: list[str]) -> None:
@@ -108,9 +108,9 @@ def test_a_host_variable_without_a_scheme_is_reported(warnings_logged: list[str]
         EgressConfig(),
         kind="claude_code",
         telemetry=TelemetryConfig(enabled=True),
-        env={**SELF_HOSTED, "LANGFUSE_HOST": "langfuse.observability.home:3000"},
+        env={**SELF_HOSTED, "LANGFUSE_HOST": "langfuse.acme.home:3000"},
     )
-    assert "langfuse.observability.home" not in policy.hosts
+    assert "langfuse.acme.home" not in policy.hosts
     assert any("names no host" in message for message in warnings_logged)
 
 
@@ -129,7 +129,7 @@ def test_deny_mode_says_telemetry_cannot_get_out(warnings_logged: list[str]) -> 
     )
     assert policy.mode == "deny"
     assert any(
-        "langfuse.observability.home" in message and "dropped at the firewall" in message
+        "langfuse.acme.home" in message and "dropped at the firewall" in message
         for message in warnings_logged
     )
 
@@ -206,4 +206,4 @@ def test_an_unresolvable_telemetry_host_leaves_the_firewall_standing(tmp_path: P
     result = subprocess.run([sh, str(driver)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert "loop survived" in result.stdout
-    assert "grove: egress allowlist skipping langfuse.observability.home" in result.stderr
+    assert "grove: egress allowlist skipping langfuse.acme.home" in result.stderr

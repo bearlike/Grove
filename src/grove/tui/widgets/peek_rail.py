@@ -38,7 +38,7 @@ churn.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import ClassVar, Final
 
 import humanize
 from rich.markup import escape
@@ -50,14 +50,20 @@ from textual.widgets import Static, TabbedContent, TabPane
 
 from grove.core import CommitSummary, InitStatus, WorkspacePeek, WorkspaceState, WorkspaceStatus
 from grove.core.agents import AgentActivity, SessionTurn
+from grove.core.contracts import ticket_sort_key
 from grove.core.contracts.tickets import TicketRef
+from grove.core.phase import TicketClaim
 from grove.core.workspace import LIVE_STATUSES, ProvisionProgress
 from grove.tui._status import (
+    BLOCKED_GLYPH,
+    PHASE_GLYPH,
     PR_GLYPH,
     agent_state_color,
     agent_state_label,
+    blocked_color,
     chrome_color,
     init_status_color,
+    phase_color,
     pr_status_color,
     ref_color,
     status_color,
@@ -73,6 +79,30 @@ _PANE_TAIL_LINES = 30
 # its tail. 200 is comfortably more than one line at the rail's
 # default 60% width.
 _DESCRIPTION_TRIM = 200
+# Ticket notes share their row with the pill, title, status and phase. Keep the
+# agent's sentence present without letting it consume that bounded glance view.
+_TICKET_NOTE_TRIM: Final = 80
+
+
+def _ticket_state(ref: TicketRef) -> str:
+    """Normalize provider status for the shared cross-client ticket ordering."""
+    if ref.draft:
+        return "draft"
+    return {
+        "open": "open",
+        "opened": "open",
+        "reopened": "open",
+        "merged": "merged",
+        "closed": "closed",
+        "done": "closed",
+        "completed": "closed",
+        "draft": "draft",
+    }.get((ref.status or "").strip().lower(), "unknown")
+
+
+def _trim_ticket_note(note: str) -> str:
+    """Bound a note to its ticket row without changing absent-ticket bytes."""
+    return note if len(note) <= _TICKET_NOTE_TRIM else note[: _TICKET_NOTE_TRIM - 1] + "…"
 
 
 class PeekRail(Vertical):
@@ -205,6 +235,8 @@ class PeekRail(Vertical):
         agent: AgentActivity | None = None,
         turns: tuple[SessionTurn, ...] = (),
         provision: ProvisionProgress | None = None,
+        tickets: tuple[TicketRef, ...] | None = None,
+        ticket_claims: dict[str, TicketClaim] | None = None,
     ) -> None:
         """Render the rail for `peek`, or show the empty placeholder if None.
 
@@ -232,7 +264,7 @@ class PeekRail(Vertical):
 
         if peek is None:
             self._set_workspace(ws_card, self._EMPTY_PLACEHOLDER)
-            self._update_tickets([])
+            self._update_tickets([], None)
             self._hide_tabs()
             self.add_class("-empty")
             return
@@ -244,7 +276,12 @@ class PeekRail(Vertical):
                 peek, dark=self.app.current_theme.dark, agent=agent, provision=provision
             ),
         )
-        self._update_tickets(peek.state.ticket_refs)
+        # Enriched refs when the screen has resolved them, the stored bare ones
+        # until then — so a title APPEARS when it lands rather than the panel
+        # waiting on a network read the rail must never make itself.
+        self._update_tickets(
+            list(tickets) if tickets is not None else peek.state.ticket_refs, ticket_claims
+        )
         live = peek.state.status in LIVE_STATUSES
         # Progress only counts while the status still says PROVISIONING: the
         # stamps and the log outlive the build, so a settled workspace would
@@ -303,7 +340,7 @@ class PeekRail(Vertical):
         self._workspace_text = plain
         card.update(content)
 
-    def _update_tickets(self, refs: list[TicketRef]) -> None:
+    def _update_tickets(self, refs: list[TicketRef], claims: dict[str, TicketClaim] | None) -> None:
         """Diff-guarded update of the tickets panel; hidden when `refs` is empty.
 
         Tickets live here rather than inline in the workspace card because
@@ -325,7 +362,7 @@ class PeekRail(Vertical):
         # already disambiguates "tickets 1" from "tickets 3", so there's no
         # singular-form branch to keep in sync with the other panel titles.
         container.border_title = f"tickets {len(refs)}"
-        content = _render_tickets_panel(refs, dark=self.app.current_theme.dark)
+        content = _render_tickets_panel(refs, dark=self.app.current_theme.dark, claims=claims)
         plain = content.plain
         if plain == self._tickets_text:
             return
@@ -591,7 +628,12 @@ def _agent_line(agent: AgentActivity, *, dark: bool) -> Text:
     return text
 
 
-def _render_tickets_panel(refs: list[TicketRef], *, dark: bool) -> Text:
+def _render_tickets_panel(
+    refs: list[TicketRef],
+    *,
+    dark: bool,
+    claims: dict[str, TicketClaim] | None = None,
+) -> Text:
     """Tickets panel body — one line per ref, or nothing when there are none.
 
     Lives in its own bounded, scrollable panel (`PeekRail._update_tickets`),
@@ -613,23 +655,49 @@ def _render_tickets_panel(refs: list[TicketRef], *, dark: bool) -> Text:
     (default fg, bold — the human-readable identity), ``status`` and
     ``assignee`` share the one-line budget with the pill; absent fields are
     skipped, never blank-filled — same convention as the agent line.
-    ``url`` is deliberately dropped here: a full URL on every row was most
-    of the original bloat, and it isn't clickable in a terminal anyway.
+    **The URL is carried, never printed.** The original rule here dropped it
+    because "a full URL on every row was most of the bloat, and it isn't
+    clickable in a terminal anyway". The first half is still right and is why
+    no URL text appears; the second half was wrong. Terminals have supported
+    OSC 8 hyperlinks for years and Rich emits them from a `link` style, so the
+    pill itself becomes the click target at ZERO rendered width — which is
+    exactly what made the URL unaffordable before. A terminal without OSC 8
+    ignores the sequence and shows the pill as plain text.
+
+    ``claims`` maps ``TicketRef.key`` → the phase claimed about THAT ticket. It
+    is a pure dict lookup on the key the store already deduplicates by, so the
+    per-ticket axis costs no read of its own. A ref with no claim renders no
+    phase segment at all: absence of a report is not step zero, the same rule
+    every optional segment on this surface follows.
+
     Empty ``refs`` yields an empty ``Text`` so the panel stays hidden.
     """
     text = Text()
     if not refs:
         return text
+    by_key = claims or {}
     info_hex = ref_color("info", dark=dark)
     muted_hex = chrome_color("muted", dark=dark)
-    for i, ref in enumerate(refs):
+    ordered_refs = sorted(
+        refs,
+        key=lambda ref: ticket_sort_key(
+            ref.kind,
+            _ticket_state(ref),
+            claim.phase if (claim := by_key.get(ref.key)) is not None else None,
+            ref.id,
+        ),
+    )
+    for i, ref in enumerate(ordered_refs):
         if i:
             text.append("\n")
         is_pr = ref.kind == "pull_request"
         pill_hex = pr_status_color(ref.status, dark=dark) if is_pr else info_hex
         if is_pr:
             text.append(f"{PR_GLYPH} ", style=f"bold {pill_hex}")
-        text.append(ticket_pill(ref), style=f"bold {pill_hex}")
+        pill_style = f"bold {pill_hex}"
+        if ref.url:
+            pill_style += f" link {ref.url}"
+        text.append(ticket_pill(ref), style=pill_style)
         if ref.title:
             text.append("  ")
             text.append(ref.title, style="bold")
@@ -643,6 +711,21 @@ def _render_tickets_panel(refs: list[TicketRef], *, dark: bool) -> Text:
             text.append("· ", style=muted_hex)
             text.append("assignee ", style=muted_hex)
             text.append(ref.assignee, style="bold")
+        claim = by_key.get(ref.key)
+        if claim is not None:
+            # The phase claimed about THIS ticket, not the workspace's. A
+            # workspace holding an issue and the PR closing it can legitimately
+            # be delivering one while blocked on the other, and one shared
+            # phase could only ever be right about one of them.
+            text.append("  ")
+            text.append(f"{PHASE_GLYPH[claim.phase]} ", style=phase_color(claim.phase, dark=dark))
+            text.append(claim.phase, style=phase_color(claim.phase, dark=dark))
+            if claim.blocked:
+                text.append(f" {BLOCKED_GLYPH}", style=blocked_color(dark=dark))
+            if claim.note:
+                text.append("  ")
+                text.append("· ", style=muted_hex)
+                text.append(_trim_ticket_note(claim.note), style=chrome_color("muted", dark=dark))
     # Cropping is the panel's own `text-wrap: nowrap` / `text-overflow`
     # style, not an attribute set here — see the comment on that rule.
     return text

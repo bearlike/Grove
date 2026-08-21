@@ -35,7 +35,7 @@ In the TUI, tiles group by project. Quiet ones stay compact, and a working,
 waiting, blocked or erroring one expands to a terminal tail.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-dashboard.svg" alt="The TUI Activity Dashboard: agent tiles grouped by project, working and waiting tiles promoted with token metrics and a live pane tail" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-dashboard.png" alt="The TUI Activity Dashboard: agent tiles grouped by project, working and waiting tiles promoted with token metrics and a live pane tail" /></div>
   <figcaption class="ms-shot__body">The same wall in the terminal.</figcaption>
 </figure>
 

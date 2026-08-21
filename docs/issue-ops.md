@@ -2,6 +2,11 @@
 
 ## Drive agents from an issue
 
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done" /></div>
+  <figcaption class="ms-shot__body">One comment per ticket, rewritten in place as the work moves.</figcaption>
+</figure>
+
 Comment `@grove fix the flaky test` on an issue and your self-hosted agent picks it up. A sticky comment
 tracks the session: [task phase](features-status.md#the-third-axis-task-phase), a live todo checklist, the
 tickets touched, and a link to the workspace (`grove tickets attach` copies it to the pull request too).

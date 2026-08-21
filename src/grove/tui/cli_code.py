@@ -10,13 +10,17 @@ the same verb are deliberately out of scope — this is the CLI surface.
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 import typer
 
-from grove.client.vscode import ContainerTarget, VsCodeAttach
 from grove.core import GroveError, build
 from grove.core.workspace import WorkspaceState
+from grove.tui.cli_complete import Complete
 from grove.tui.cli_workspace import clean_exit, resolve_workspace
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from grove.client.vscode import ContainerTarget
 
 # Mirrors cli_workspace.py's private ``_WORKSPACE_ARG`` verbatim rather than
 # importing it — that name is underscore-prefixed on purpose (an internal
@@ -25,6 +29,7 @@ from grove.tui.cli_workspace import clean_exit, resolve_workspace
 _WORKSPACE_ARG = typer.Argument(
     ...,
     help="Workspace id or unique id prefix (see `grove ls`).",
+    autocompletion=Complete.workspaces,
 )
 
 
@@ -55,6 +60,11 @@ def code_workspace(workspace: str = _WORKSPACE_ARG) -> None:
     \b
       grove code a1b2
     """
+    # Deferred: `grove.client` reaches `asyncssh` (~117 ms measured), which only
+    # this command needs — and this module is imported by every `grove`
+    # invocation, so a module-scope import taxes each shell-completion TAB too.
+    from grove.client.vscode import VsCodeAttach  # noqa: PLC0415
+
     with clean_exit():
         manager = build()
         state = resolve_workspace(manager, workspace)

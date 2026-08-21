@@ -82,7 +82,10 @@ def test_code_launches_vscode_for_a_containerized_workspace(
         async def start(self) -> None:
             calls.append(self.uri)
 
-    monkeypatch.setattr("grove.tui.cli_code.VsCodeAttach", _FakeAttach)
+    # Patch the DEFINING module, not `cli_code`'s namespace: the command imports
+    # `VsCodeAttach` inside its own body (deferred so every `grove` invocation
+    # stops paying asyncssh's import), so there is no module-scope name to bind.
+    monkeypatch.setattr("grove.client.vscode.VsCodeAttach", _FakeAttach)
 
     result = runner.invoke(app, ["code", workspace_id])
 

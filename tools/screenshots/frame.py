@@ -30,7 +30,7 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -216,19 +216,25 @@ class FrameStyle(BaseModel):
     """Every visual parameter of the frame, plus the geometry it implies.
 
     Ratios rather than pixels throughout, so one style renders identically at
-    any canvas size. The defaults — canvas, padding, radius and shadow
-    numbers — are carried over from the reference implementation's own
-    measured values, not re-derived: a 2400x1350 canvas, a window inset
-    about 5.1% vertically and centred, a small corner radius, and a large
-    soft shadow displaced slightly downward.
+    any canvas size. The padding, radius and shadow numbers are carried over
+    from the reference implementation's own measured values, not re-derived:
+    a window inset about 5.1% vertically and centred, a small corner radius,
+    and a large soft shadow displaced slightly downward. The canvas is the
+    one default that was re-measured against this theme — see `canvas_width`.
 
     Cost class: O(1). Every method is arithmetic over the canvas dimensions.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    canvas_width: int = Field(default=2400, ge=16)
-    canvas_height: int = Field(default=1350, ge=9)
+    canvas_width: int = Field(default=1920, ge=16)
+    canvas_height: int = Field(default=1080, ge=9)
+    """Full HD, 16:9. Every capture feeding this is shot at twice its published
+    size (a 1600x900 viewport at `deviceScaleFactor: 2`, a 1629x928 terminal
+    rasterized at 2x), so the window is always DOWNsampled into the frame, which
+    is the direction that stays sharp. The canvas was 2400x1350 and that bought
+    nothing a reader could see: the theme caps content at 960px, and the extra
+    56% of area cost roughly a megabyte per screenshot."""
 
     backdrop: Backdrop = ImageBackdrop()
     """What fills the canvas behind the window. The committed wallpaper by
@@ -420,13 +426,37 @@ class WindowFramer(BaseModel):
         return canvas
 
 
+PALETTE_COLORS: Final[int] = 256
+"""Palette size for a published frame.
+
+A framed shot is a photograph (the wallpaper) wrapped around flat UI, which is
+the worst case for PNG: it cannot exploit the photo's smoothness the way JPEG
+would, and it pays full truecolour for the UI's handful of colours. Measured on
+`tui-list` at 1920x1080: 1066 KB truecolour, 347 KB at 256 colours with
+Floyd-Steinberg dithering, for a mean absolute difference of 0.85/255 and no
+banding visible in the sky, which is the region that would show it first.
+
+Dithering is what makes that true, so do not drop it to save the noise: the
+gradient bands immediately without it. `FASTOCTREE` measured smaller again
+(232 KB) and is not worth the quality it gives back.
+"""
+
+
+def save_framed(image: Image.Image, path: Path) -> None:
+    """Write a framed image as a dithered, palette-compressed PNG."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.quantize(
+        colors=PALETTE_COLORS,
+        method=Image.Quantize.MEDIANCUT,
+        dither=Image.Dither.FLOYDSTEINBERG,
+    ).save(path, optimize=True)
+
+
 def _frame_file(framer: WindowFramer, source_path: Path, out_path: Path) -> None:
     """Frame one PNG on disk, creating `out_path`'s parent directory if needed."""
     with Image.open(source_path) as handle:
         source = handle.convert("RGB")
-    framed = framer.frame(source)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    framed.save(out_path)
+    save_framed(framer.frame(source), out_path)
 
 
 def main(argv: list[str] | None = None) -> int:

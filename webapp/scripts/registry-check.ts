@@ -1,5 +1,5 @@
 /**
- * Re-fetch every vendored registry component and diff it against the tree.
+ * Verify every vendored component against the version we deliberately adopted.
  *
  * WHY this exists: `webapp/CLAUDE.md` states "vendored verbatim, never
  * hand-edited" as prose, and prose rots silently. A hand-tweaked colour in
@@ -12,14 +12,44 @@
  * item, or it fails as unverifiable — a hand-written file in a vendored tree is
  * itself the violation.
  *
- * Requires network. That is the point: the upstream registry is the oracle.
+ * TWO ORACLES, AND THE DEFAULT IS THE PINNED ONE. The upstream registry is
+ * UNVERSIONED — `r.assistant-ui.com/<item>.json` always serves current HEAD —
+ * so checking against it directly makes this gate fail on days nobody touched
+ * the repo, purely because upstream shipped. That is indistinguishable from a
+ * real hand-edit, which is the failure the gate exists to catch, and a gate
+ * that cries wolf gets ignored or deleted. So:
+ *
+ *   default      diff disk against `registry.lock.json`, the hash of what we
+ *                adopted. Offline, deterministic, and it still catches every
+ *                hand-edit — which is the stated purpose.
+ *   --upstream   diff disk against the live registry. Answers "is there an
+ *                upgrade waiting", and is advisory rather than a gate.
+ *   --refresh    same fetch, but rewrite the lockfile. This is the deliberate
+ *                upgrade: re-add the components, then run this, and the new
+ *                hashes land in the same commit as the new files.
+ *
+ * The lockfile is what makes an upgrade a reviewable event instead of a thing
+ * that happens to you.
  */
 
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 /** Directories whose contents are upstream source we merely store. */
 const VENDORED_DIRS = ["components/assistant-ui", "components/elements", "components/ui", "components/icons"] as const;
+
+/** The adopted-version record. Committed, and only ever moved by `--refresh`. */
+const BASELINE_PATH = "registry.lock.json";
+
+interface BaselineEntry {
+  sha256: string;
+  item: string;
+  source: Source;
+}
+type Baseline = Record<string, BaselineEntry>;
+
+const sha256 = (content: string): string => createHash("sha256").update(content, "utf8").digest("hex");
 
 const AUI_INDEX = "https://r.assistant-ui.com/registry.json";
 const AUI_ITEM = (name: string): string => `https://r.assistant-ui.com/${name}.json`;
@@ -108,8 +138,67 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return results;
 }
 
-async function main(): Promise<void> {
-  const root = process.cwd();
+/**
+ * The default gate: disk against the adopted hashes. No network.
+ *
+ * Everything it can catch — a hand-edit, a deleted vendored file, a
+ * hand-written file smuggled into a vendored directory — is a fact about THIS
+ * repository, so none of it needs the registry to adjudicate.
+ */
+function checkBaseline(root: string): void {
+  const path = join(root, BASELINE_PATH);
+  if (!existsSync(path)) {
+    console.error(
+      `registry:check — no ${BASELINE_PATH}. Run \`npm run registry:refresh\` to adopt\n` +
+        "  the current upstream and write the baseline.",
+    );
+    process.exit(1);
+  }
+  const baseline = JSON.parse(readFileSync(path, "utf8")) as Baseline;
+  const onDisk = scanVendoredTree(root);
+
+  const edited: string[] = [];
+  const unverifiable: string[] = [];
+  for (const file of onDisk) {
+    const held = baseline[file];
+    if (!held) {
+      unverifiable.push(file);
+      continue;
+    }
+    if (sha256(readFileSync(join(root, file), "utf8")) !== held.sha256) {
+      edited.push(`${file}  (${held.source} item "${held.item}")`);
+    }
+  }
+  // A baselined file that left the tree is drift too, in the other direction.
+  const absent = Object.keys(baseline).filter((p) => !existsSync(join(root, p)));
+
+  if (edited.length) {
+    console.error(`\n✗ ${edited.length} vendored file(s) differ from the adopted version:`);
+    for (const e of edited) console.error(`    ${e}`);
+    console.error(
+      "\n  Vendored components are upstream source. Restore the file (`git checkout`)\n" +
+        "  and move the change into components/grove/ composition instead. To adopt a\n" +
+        "  NEW upstream on purpose, re-add the item then `npm run registry:refresh`.",
+    );
+  }
+  if (unverifiable.length) {
+    console.error(`\n✗ ${unverifiable.length} file(s) in a vendored directory are not in the baseline:`);
+    for (const u of unverifiable) console.error(`    ${u}`);
+    console.error(
+      "\n  Hand-written components live in components/grove/, never in a vendored tree.\n" +
+        "  If this file really is vendored, `npm run registry:refresh` to record it.",
+    );
+  }
+  if (absent.length) {
+    console.error(`\n✗ ${absent.length} baselined file(s) are no longer in the tree:`);
+    for (const a of absent) console.error(`    ${a}`);
+  }
+
+  if (edited.length + unverifiable.length + absent.length > 0) process.exit(1);
+  console.log(`✓ registry:check — all ${onDisk.length} vendored files match the adopted version.`);
+}
+
+async function checkUpstream(root: string, write: boolean): Promise<void> {
   const onDisk = scanVendoredTree(root);
 
   const index = await fetchJson<RegistryIndex>(AUI_INDEX);
@@ -164,6 +253,7 @@ async function main(): Promise<void> {
   const drifted: string[] = [];
   const missing: string[] = [];
   const seen = new Set<string>();
+  const adopted: Baseline = {};
 
   for (const { name, source, item } of fetched) {
     for (const file of item.files ?? []) {
@@ -179,6 +269,11 @@ async function main(): Promise<void> {
         continue;
       }
       seen.add(path);
+      // Hash what is ON DISK, never the registry's copy: --refresh records the
+      // version we actually adopted, and those differ whenever a file is
+      // drifted. Recording upstream's hash would write a baseline the tree does
+      // not satisfy, and the next plain run would fail on a file nobody touched.
+      adopted[path] = { sha256: sha256(readFileSync(abs, "utf8")), item: name, source };
       if (readFileSync(abs, "utf8") !== normalizeImports(file.content)) {
         drifted.push(`${path}  (${source} item "${name}")`);
       }
@@ -216,8 +311,33 @@ async function main(): Promise<void> {
     console.error("\n  This is a bug in registry-check.ts, not in the tree — its path mapping is wrong.");
   }
 
+  // Refuse to write a baseline off an incomplete read. `missing`/`unverifiable`
+  // /`unchecked` all mean some vendored file never got a hash, and a partial
+  // lockfile silently un-gates exactly the files it omits.
+  if (write) {
+    if (missing.length + unverifiable.length + unchecked.length > 0) {
+      console.error("\n✗ refusing to write the baseline from an incomplete read — fix the above first.");
+      process.exit(1);
+    }
+    const ordered = Object.fromEntries(Object.keys(adopted).sort().map((k) => [k, adopted[k]]));
+    writeFileSync(join(root, BASELINE_PATH), `${JSON.stringify(ordered, null, 2)}\n`, "utf8");
+    console.log(
+      `✓ registry:refresh — adopted ${Object.keys(ordered).length} vendored files into ${BASELINE_PATH}.` +
+        (drifted.length ? `\n  ${drifted.length} of them differ from upstream and were adopted AS THEY ARE ON DISK.` : ""),
+    );
+    return;
+  }
+
   if (failed) process.exit(1);
   console.log(`✓ registry:check — all ${seen.size} vendored files match upstream (${wanted.size} registry items).`);
+}
+
+async function main(): Promise<void> {
+  const root = process.cwd();
+  const argv = process.argv.slice(2);
+  const refresh = argv.includes("--refresh");
+  if (refresh || argv.includes("--upstream")) return checkUpstream(root, refresh);
+  checkBaseline(root);
 }
 
 main().catch((err: unknown) => {

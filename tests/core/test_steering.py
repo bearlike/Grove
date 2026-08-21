@@ -304,7 +304,7 @@ def test_session_controls_composes_scan_with_model_catalog(
     assert "review" in {c.name for c in controls.commands}
     # Model catalog is the manager's contribution (claude's stable aliases),
     # never the adapter's fs scan.
-    assert controls.models == ("sonnet", "opus", "haiku")
+    assert controls.models == ("fable", "opus", "sonnet", "haiku")
     assert controls.current_model is None  # no transcript minted yet
     assert controls.permission_mode is None  # permission answering off by default
 

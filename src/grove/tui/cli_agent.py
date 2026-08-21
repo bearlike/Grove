@@ -25,6 +25,7 @@ import typer
 
 from grove.core import build
 from grove.core.container_agent import ContainerAgent
+from grove.tui.cli_complete import Complete
 from grove.tui.cli_workspace import clean_exit, resolve_workspace
 
 agent_app = typer.Typer(
@@ -33,8 +34,16 @@ agent_app = typer.Typer(
     no_args_is_help=True,
 )
 
-_WORKSPACE_ARG = typer.Argument(..., help="Workspace id or unique id prefix (see `grove ls`).")
-_NAME_ARG = typer.Argument(..., help="Agent name (see `grove agent list`).")
+_WORKSPACE_ARG = typer.Argument(
+    ...,
+    help="Workspace id or unique id prefix (see `grove ls`).",
+    autocompletion=Complete.workspaces,
+)
+_NAME_ARG = typer.Argument(
+    ...,
+    help="Agent name (see `grove agent list`).",
+    autocompletion=Complete.container_agent_names,
+)
 
 
 def _render(agents: tuple[ContainerAgent, ...]) -> None:
@@ -70,12 +79,22 @@ def list_agents(workspace: str = _WORKSPACE_ARG) -> None:
 def add_agent(
     workspace: str = _WORKSPACE_ARG,
     agent: str | None = typer.Option(
-        None, "--agent", "-a", help="Configured agent to run (default: the workspace's own)."
+        None,
+        "--agent",
+        "-a",
+        help="Configured agent to run (default: the workspace's own).",
+        autocompletion=Complete.agents,
     ),
     name: str | None = typer.Option(
         None, "--name", "-n", help="Name for the new agent (default: the next free <session>-N)."
     ),
-    model: str | None = typer.Option(None, "--model", "-m", help="Model id, forwarded verbatim."),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model id, forwarded verbatim.",
+        autocompletion=Complete.models,
+    ),
     prompt: str | None = typer.Option(
         None, "--prompt", "-p", help="Initial prompt the agent boots already working on."
     ),

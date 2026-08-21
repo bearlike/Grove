@@ -25,7 +25,6 @@ from grove.core.agents.onboarding import (
     OnboardOutcome,
     OnboardTarget,
 )
-from grove.core.devcontainer import DefaultDevcontainerConfig
 from grove.core.errors import GroveError
 from grove.core.git import detect_root
 from grove.tui.cli_workspace import clean_exit
@@ -186,6 +185,11 @@ def init_devcontainer(
         if target.exists() and not force:
             raise GroveError(f"{target} already exists — pass --force to overwrite")
         target.parent.mkdir(parents=True, exist_ok=True)
+        # Deferred for the same reason as the usage import in cli_quota.py:
+        # only this one command needs it, and every `grove` invocation —
+        # including each shell-completion round trip — would otherwise pay it.
+        from grove.core.devcontainer import DefaultDevcontainerConfig  # noqa: PLC0415
+
         config = DefaultDevcontainerConfig.load()
         target.write_text(config.to_json(), encoding="utf-8")
     typer.secho(f"wrote {target}", fg=typer.colors.GREEN)

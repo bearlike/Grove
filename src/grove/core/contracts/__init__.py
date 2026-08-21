@@ -56,9 +56,12 @@ from grove.core.contracts.sessions import (
     DigestEntryView,
     RemapSessionRequest,
     SessionDetailView,
+    SessionQueryView,
     SessionSummaryView,
     SessionTurnView,
 )
+from grove.core.contracts.share_policy import SharePolicyUpdateRequest, SharePolicyView
+from grove.core.contracts.ticket_order import ticket_sort_key
 from grove.core.contracts.tickets import (
     TicketProviderName,
     TicketProviderView,
@@ -163,9 +166,12 @@ __all__ = [
     "RootBranch",
     "SessionActivityView",
     "SessionDetailView",
+    "SessionQueryView",
     "SessionSummaryView",
     "SessionTurnView",
     "SessionView",
+    "SharePolicyUpdateRequest",
+    "SharePolicyView",
     "SourceHealth",
     "SubscriptionWindowView",
     "TicketProviderName",
@@ -203,4 +209,5 @@ __all__ = [
     "WorkspacePeekView",
     "WorkspaceStateView",
     "attach_instruction_view",
+    "ticket_sort_key",
 ]

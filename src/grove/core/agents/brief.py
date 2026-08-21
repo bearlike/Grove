@@ -84,33 +84,82 @@ your todo list, and the pull request you attach — is published onto every tick
 attached to this workspace, where people who never read your transcript are \
 watching.
 
+Keep a todo list from your first turn and keep it current as you go, using \
+whatever todo or task tool you have. It is the checklist people read to see \
+what is left, so a list you never wrote reads as no plan and a list you never \
+tick reads as no progress.
+
 Load the `{BRIEF_SKILL}` skill and follow it. It carries the whole contract; \
 this note only tells you that it applies to you.
 """
-    """The brief. Two paragraphs, on purpose.
+    """The brief. Three paragraphs, on purpose.
 
-    It says three things and no more: where the agent is, that what it reports
-    is published to an audience, and the name of the skill that says what to do
-    about it. Everything a reader might want to add here — the phase vocabulary,
-    the file path, the note length, the PR-attach call — is already in the skill,
-    one tool call away, and is read there when it is needed rather than paid for
-    in every session that never reports anything."""
+    It says four things and no more: where the agent is, that what it reports
+    is published to an audience, that the todo list is one of the things being
+    read, and the name of the skill that says what to do about it. Everything
+    else a reader might want to add here — the phase vocabulary, the file path,
+    the note length, the PR-attach call — is already in the skill, one tool call
+    away, and is read there when it is needed rather than paid for in every
+    session that never reports anything.
+
+    **The todo paragraph is the one deliberate exception to "point, never
+    restate", and it is here because the skill's own delivery is conditional.**
+    A skill is loaded on demand; an agent that never loads it never learns the
+    obligation, and the observed failure was exactly that — Grove-launched
+    agents routinely ran whole tasks with no list at all, so the ticket comment
+    published an empty checklist. A pointer cannot fix a miss whose cause is
+    that the pointer was not followed. It stays two sentences, and the *rules*
+    for a good list stay in the skill."""
+
+    NAMING_TEXT: Final = """\
+This workspace has no description, and its title may be a generated id. Once \
+you know what the task actually is — usually within your first few turns — give \
+it a real title and a one-line description with `grove edit` or the \
+`grove_update_workspace` tool. Somebody watching the fleet reads that name to \
+tell your workspace from twenty others.
+"""
+    """The self-naming nudge, appended only when the description is empty.
+
+    Deliberately keyed on the DESCRIPTION rather than on "was the title
+    generated", which is not a fact the engine holds: title generation happens
+    client-side (`grove create` and the web composer each mint their own), so
+    the engine would need a new request field threaded through every caller to
+    learn it. An empty description is the same signal one layer down, already
+    persisted, and it is the better question anyway — a workspace a person
+    described needs no nudge whatever its title looks like."""
 
     @classmethod
-    def render(cls, path: Path) -> Path | None:
+    def compose(cls, *, appended: str = "", unnamed: bool = False) -> str:
+        """The full brief text for one workspace: Grove's, then the operator's.
+
+        Order is load-bearing in one direction only — Grove's own paragraphs
+        establish what a Grove workspace *is*, and an operator's addition is
+        read against that rather than the other way round.
+        """
+        parts = [cls.TEXT]
+        if unnamed:
+            parts.append(cls.NAMING_TEXT)
+        extra = appended.strip()
+        if extra:
+            parts.append(f"{extra}\n")
+        return "\n".join(parts)
+
+    @classmethod
+    def render(cls, path: Path, text: str | None = None) -> Path | None:
         """Write the brief to *path*; ``None`` if it could not be written.
 
-        Rewritten on every launch so an edit to :attr:`TEXT` reaches an existing
-        installation the next time a workspace starts, and best-effort like every
-        other rendered control file: an unwritable config dir costs the brief,
-        never the launch. Returning ``None`` is what lets the caller withhold the
+        Rewritten on every launch so an edit to :attr:`TEXT` — or to the
+        operator's own appended instructions — reaches an existing installation
+        the next time a workspace starts, and best-effort like every other
+        rendered control file: an unwritable config dir costs the brief, never
+        the launch. Returning ``None`` is what lets the caller withhold the
         env var, so the variable and the file can never disagree — a variable
         naming a file that does not exist is a hook that reads nothing on every
         prompt of every session.
         """
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(cls.TEXT, encoding="utf-8")
+            path.write_text(cls.TEXT if text is None else text, encoding="utf-8")
         except OSError:
             return None
         return path

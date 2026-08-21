@@ -204,6 +204,20 @@ class FakeGroveClient(GroveClient):
         self.calls.append(("remap_session", {"ws_id": ws_id, "session_ref": session_ref}))
         return make_state(ws_id)
 
+    async def update_workspace(
+        self,
+        ws_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> WorkspaceStateView:
+        # Records what crossed rather than what the tool was called with, so a
+        # tool that stopped forwarding a field would be visible here.
+        self.calls.append(
+            ("update_workspace", {"ws_id": ws_id, "title": title, "description": description})
+        )
+        return make_state(ws_id, title=title or "ws")
+
     async def attach_ticket_by_ref(self, ws_id: str, ref: str) -> WorkspaceStateView:
         # Resolution is server-side: the fake just records the raw ref it was
         # handed, mirroring the daemon route's actual contract instead of

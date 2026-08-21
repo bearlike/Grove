@@ -3,6 +3,7 @@
 import { TriangleAlertIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { titleRuns } from "@/components/grove/workspace/selectors";
 import type { UsageFindingsView } from "@/lib/grove/api";
 import { AbbreviatedNumber } from "./abbreviated-number";
 import { CardScroll } from "@/components/grove/card";
@@ -75,7 +76,7 @@ export function UsageFindings({
                 <Badge variant="secondary" className="shrink-0">
                   {humanize(finding.kind)}
                 </Badge>
-                <span className="min-w-0 flex-1 truncate">{finding.title}</span>
+                <span className="min-w-0 flex-1 truncate"><FindingTitle title={finding.title} /></span>
                 <span className="shrink-0 text-xs text-content-tertiary">
                   <AbbreviatedNumber value={finding.count} />
                 </span>
@@ -89,5 +90,22 @@ export function UsageFindings({
         </p>
       )}
     </UsageSection>
+  );
+}
+
+/** Titles originate with the deterministic audit; paired backticks mark literal subjects. */
+function FindingTitle({ title }: { title: string }): React.ReactNode {
+  return (
+    <>
+      {titleRuns(title).map((run, index) =>
+        run.code ? (
+          <code key={index} className="font-mono">
+            {run.text}
+          </code>
+        ) : (
+          <span key={index}>{run.text}</span>
+        ),
+      )}
+    </>
   );
 }

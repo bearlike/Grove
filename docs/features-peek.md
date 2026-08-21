@@ -7,10 +7,13 @@ the selected workspace without attaching. It is the per-workspace companion of
 the [Activity Dashboard](features-activity.md). Every helper is best-effort: a
 failure returns zero, not a blocked render loop.
 
-<figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.svg" alt="Grove TUI with the peek rail showing the summary card and the transcript tab" /></div>
-  <figcaption class="ms-shot__body">The <em>summary</em> card carries branch, git stats, agent metrics and recent commits. <em>Tickets</em> sits under it, the <em>preview</em> under that with transcript and terminal tabs.</figcaption>
-</figure>
+<video preload="auto" poster="../img/posters/terminal-still.png">
+  <source src="../videos/1-grove-terminal.mp4" type="video/mp4" />
+</video>
+
+The *summary* card carries branch, git stats, agent metrics and recent commits.
+*Tickets* sits under it, and the *preview* under that, with transcript and
+terminal tabs.
 
 ## What the rail shows
 

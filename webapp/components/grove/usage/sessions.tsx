@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { HistoryIcon } from "lucide-react";
 
 import {
@@ -86,7 +87,7 @@ export function UsageSessions({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className={HEAD_CELL}>Session</TableHead>
+                <TableHead className={`${CAPPED_COL} ${HEAD_CELL}`}>Session</TableHead>
                 <TableHead className={`${LABEL_COL} ${HEAD_CELL}`}>Project</TableHead>
                 <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Turns</TableHead>
                 <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Tools</TableHead>
@@ -131,38 +132,7 @@ export function UsageSessions({
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <TableRow key={`${row.source_id}:${row.session_id}`}>
-                  <TableCell className="font-mono text-xs" title={row.session_id}>
-                    {row.session_id.slice(0, 8)}
-                    <span className="ms-2 font-sans text-content-tertiary">
-                      {row.account_label ?? row.provider}
-                    </span>
-                  </TableCell>
-                  <TableCell
-                    className={LABEL_CELL}
-                    title={row.project ?? row.cwd ?? "unknown project"}
-                  >
-                    {projectLabel(row.project ?? row.cwd)}
-                  </TableCell>
-                  <TableCell className={NUMERIC}>
-                    <AbbreviatedNumber value={row.turns} />
-                  </TableCell>
-                  <TableCell className={NUMERIC}>
-                    <AbbreviatedNumber value={row.tool_calls} />
-                  </TableCell>
-                  <TableCell className={NUMERIC}>
-                    <AbbreviatedNumber value={tokenTotal(row.tokens)} />
-                  </TableCell>
-                  <TableCell className={NUMERIC}>
-                    <DelegatedShare row={row} />
-                  </TableCell>
-                  <TableCell className={NUMERIC}>{duration(row.duration.active_ms)}</TableCell>
-                  <TableCell className={NUMERIC}>{duration(row.duration.generation_ms)}</TableCell>
-                  <TableCell className={NUMERIC}>{duration(row.duration.tool_ms)}</TableCell>
-                  <TableCell className="w-px whitespace-nowrap text-content-tertiary">
-                    {timestamp(row.last_event_at ?? row.started_at)}
-                  </TableCell>
-                </TableRow>
+                <UsageSessionRow key={`${row.source_id}:${row.session_id}`} row={row} />
               ))}
             </TableBody>
           </Table>
@@ -173,6 +143,72 @@ export function UsageSessions({
         </p>
       )}
     </UsageSection>
+  );
+}
+
+function UsageSessionRow({ row }: { row: UsageSessionRowView }): React.ReactNode {
+  const cwd = row.cwd ?? null;
+
+  return (
+    <TableRow
+      className={cwd === null ? undefined : "relative hover:bg-muted/50 focus-within:bg-muted/50"}
+    >
+      <TableCell className="font-mono text-xs" title={row.session_id}>
+        <UsageSessionIdentity row={row} cwd={cwd} />
+        <span className="ms-2 font-sans text-content-tertiary">
+          {row.account_label ?? row.provider}
+        </span>
+      </TableCell>
+      <TableCell className={LABEL_CELL} title={row.project ?? row.cwd ?? "unknown project"}>
+        {projectLabel(row.project ?? row.cwd)}
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        <AbbreviatedNumber value={row.turns} />
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        <AbbreviatedNumber value={row.tool_calls} />
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        <AbbreviatedNumber value={tokenTotal(row.tokens)} />
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        <DelegatedShare row={row} />
+      </TableCell>
+      <TableCell className={NUMERIC}>{duration(row.duration.active_ms)}</TableCell>
+      <TableCell className={NUMERIC}>{duration(row.duration.generation_ms)}</TableCell>
+      <TableCell className={NUMERIC}>{duration(row.duration.tool_ms)}</TableCell>
+      <TableCell className="w-px whitespace-nowrap text-content-tertiary">
+        {timestamp(row.last_event_at ?? row.started_at)}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/**
+ * The coordinate the transcript route requires is complete only with a recorded
+ * location. A missing `cwd` stays visibly unlinked rather than becoming a 404.
+ */
+function UsageSessionIdentity({
+  row,
+  cwd,
+}: {
+  row: UsageSessionRowView;
+  cwd: string | null;
+}): React.ReactNode {
+  const short = row.session_id.slice(0, 8);
+  if (cwd === null) return short;
+
+  return (
+    <Link
+      href={{
+        pathname: `/sessions/${encodeURIComponent(row.session_id)}`,
+        query: { kind: row.provider, cwd },
+      }}
+      className="underline-offset-2 after:absolute after:inset-0 after:cursor-pointer hover:underline focus-visible:underline focus-visible:outline-none"
+      title={row.session_id}
+    >
+      {short}
+    </Link>
   );
 }
 

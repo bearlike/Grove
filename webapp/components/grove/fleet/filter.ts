@@ -62,17 +62,57 @@ export function fleetRows(snapshot: DashboardSnapshotView | undefined): FleetRow
 }
 
 /**
+ * How coarsely recency RANKS a row. Rows whose activity falls in the same
+ * minute hold a stable order relative to each other.
+ *
+ * This is the whole answer to "the rail reorders constantly with only one or
+ * two sessions active", and the reason is structural rather than a bug in the
+ * comparator: **sorting by a value that advances continuously produces a list
+ * that reorders continuously.** `lastActivityAt` moves every time an agent
+ * emits anything, so at full precision two busy workspaces trade places on
+ * every SSE delta — several times a second — and the row a person was about to
+ * click moves out from under them. A navigation rail exists to let somebody
+ * FIND a workspace, and constant re-ranking defeats exactly that.
+ *
+ * A minute is chosen because it is well below the threshold at which "what
+ * moved most recently" stops being true at a glance, and far above the SSE
+ * cadence that was causing the churn. Note the deliberate consequence: within
+ * one bucket the top row is not necessarily the very newest — it is the
+ * lowest id. That trade is the point.
+ *
+ * It does NOT change what the row DISPLAYS. The rail still renders the precise
+ * age from `lastActivityIso`, so the guide's rule that a list sorted by a value
+ * must show that value still holds; only the ranking is quantized.
+ */
+const RANK_BUCKET_MS = 60_000;
+
+/**
  * The whole fleet as ONE list, newest activity first.
  *
  * Flat rather than grouped by project because a Grove fleet is not read by
  * repo: a workspace is often empty, often momentary, and the question a person
- * actually asks is "what moved most recently". `Array.sort` is stable, so rows
- * with identical recency keep the engine's own ordering.
+ * actually asks is "what moved most recently".
+ *
+ * TOTAL by construction, and both halves earn their place. The bucket above
+ * stops a live agent from re-ranking the list on every event. The workspace-id
+ * tiebreaker under it stops rows that have NOT moved from shuffling when the
+ * snapshot's own source order changes — the daemon builds it from set- and
+ * dict-derived scans, so its order is not contractually stable, and
+ * `Array.prototype.sort` being stable means equal keys simply inherit whatever
+ * order arrived. Without the tiebreaker the rail is only as steady as an
+ * ordering nobody promised.
  */
 export function sortedFleetRows(snapshot: DashboardSnapshotView | undefined): FleetRow[] {
-  return fleetRows(snapshot).sort(
-    (a, b) => lastActivityAt(b.workspace) - lastActivityAt(a.workspace),
-  );
+  const rank = (row: FleetRow) => Math.floor(lastActivityAt(row.workspace) / RANK_BUCKET_MS);
+  return fleetRows(snapshot).sort((a, b) => {
+    const recency = rank(b) - rank(a);
+    if (recency !== 0) return recency;
+    return a.workspace.state.id < b.workspace.state.id
+      ? -1
+      : a.workspace.state.id > b.workspace.state.id
+        ? 1
+        : 0;
+  });
 }
 
 /**

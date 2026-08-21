@@ -177,7 +177,7 @@ describe("UsageFindings", () => {
     total: 2475,
     findings: Array.from({ length: 2475 }, (_, index) => ({
       kind: "edit_churn" as const,
-      title: `Repeated edits to file-${index}`,
+      title: `Repeated edits to \`file-${index}\``,
       detail: null,
       count: 362 - index,
       impact: 1,
@@ -207,6 +207,10 @@ describe("UsageFindings", () => {
     // of something it was not testing.
     expect(html).toContain("max-h-72");
     expect(html).toContain("overflow-y-auto");
+  });
+
+  it("renders a backticked subject as a code span", () => {
+    expect(html).toContain("<code class=\"font-mono\">file-0</code>");
   });
 });
 
@@ -256,6 +260,12 @@ describe("UsageSessions", () => {
 
   it("shortens the path to what distinguishes two checkouts", () => {
     expect(html).toContain("owner/repo");
+  });
+
+  it("links a session with its complete transcript coordinate", () => {
+    expect(html).toContain(
+      'href="/sessions/019fe7d6-1d1c-76a3-825a-f31cdb338cf3?kind=codex&amp;cwd=%2Frepos%2Fowner%2Frepo"',
+    );
   });
 
   it("bounds its own height", () => {

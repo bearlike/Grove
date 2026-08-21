@@ -1,4 +1,6 @@
 export { GroveClient, GroveProtocolError } from "./client";
+export { PublicClient, publicClient } from "./public-client";
+export type { PublicWorkspaceView } from "./public-client";
 export { subscribeToEventStream } from "./sse";
 export type { EventStream, EventStreamHandlers } from "./sse";
 

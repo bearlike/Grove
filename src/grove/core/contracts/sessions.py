@@ -45,7 +45,7 @@ if TYPE_CHECKING:
         TodoList,
         ToolCall,
     )
-    from grove.core.sessions import CatalogEntry, ProjectContext, SessionListing
+    from grove.core.sessions import CatalogEntry, ProjectContext, SessionListing, SessionQuery
 
 # A diff is legitimately bigger than a chat line — a generous ceiling well
 # above ``_ENTRY_TEXT_CAP`` (4000) so an ordinary file edit never truncates,
@@ -716,6 +716,33 @@ class SessionControlsView(BaseModel):
             models=list(c.models),
             current_model=c.current_model,
             permission_mode=c.permission_mode,
+        )
+
+
+class SessionQueryView(BaseModel):
+    """Wire mirror of one full-text direct user query.
+
+    This deliberately does not reuse ``SessionTurnView``: turns carry an
+    unbounded collection of entries and cap each chat-sized body, while a
+    recollection is the much smaller list of times a human directly typed. Its
+    text is uncapped because recovering the complete instruction is this
+    endpoint's purpose.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ordinal: int
+    timestamp: datetime | None
+    sent_at: datetime | None = None
+    text: str
+
+    @classmethod
+    def from_query(cls, query: SessionQuery) -> SessionQueryView:
+        return cls(
+            ordinal=query.ordinal,
+            timestamp=query.timestamp,
+            sent_at=query.sent_at,
+            text=query.text,
         )
 
 

@@ -72,6 +72,9 @@ class TicketRef(BaseModel):
     title: str | None = None
     url: str | None = None
     status: str | None = None
+    draft: bool = False
+    """Whether this pull request remains a draft. Defaults false so existing
+    stored refs retain their pre-draft semantics until they are enriched."""
     assignee: str | None = None
     ambiguous: bool = False
     """True when this ref was inferred from a branch that matched more than one

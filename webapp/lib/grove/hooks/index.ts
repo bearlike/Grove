@@ -7,6 +7,7 @@
  */
 
 export { groveClient, POLL_MS } from "./client";
+export { usePublicDiff, usePublicTurns, usePublicWorkspace } from "./public";
 export { groveKeys } from "./keys";
 
 export {
@@ -17,6 +18,7 @@ export {
   useProvisionProgress,
   useSessionCatalog,
   useSessionControls,
+  useSharePolicy,
   useSessionTurns,
   useTicketProviders,
   useTickets,
@@ -34,13 +36,28 @@ export {
 export type { SessionTurnsQuery, TicketResolutions } from "./queries";
 
 export {
+  useAssignedTickets,
+  useSaveDefaults,
+  useWorkspaceDefaults,
+} from "./launch";
+export type {
+  DefaultsScope,
+  SaveDefaultsInput,
+  TicketRef,
+  WorkspaceDefaultsSaveView,
+  WorkspaceDefaultsView,
+} from "./launch";
+
+export {
   useAnswerQuestion,
   useCreateWorkspace,
   useInterrupt,
   useInvokeControl,
   useRemapSession,
   useSendMessage,
+  useSaveSharePolicy,
   useSwitchModel,
+  useUpdateWorkspace,
   useWorkspaceActions,
   withOptimisticSend,
 } from "./mutations";

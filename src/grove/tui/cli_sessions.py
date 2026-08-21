@@ -21,8 +21,9 @@ from grove.core import GroveError, SessionExplorer, SessionListing, build
 from grove.core.agents import SessionTurn
 from grove.core.config import load_config
 from grove.core.registry import RepoRegistry
-from grove.core.sessions import CatalogEntry, SessionCatalog
+from grove.core.sessions import CatalogEntry, SessionCatalog, SessionQuery
 from grove.core.store import JsonWorkspaceStore
+from grove.tui.cli_complete import Complete
 from grove.tui.cli_workspace import clean_exit, resolve_workspace
 
 sessions_app = typer.Typer(
@@ -200,6 +201,15 @@ def _turn_payload(turn: SessionTurn) -> dict[str, Any]:
     }
 
 
+def _query_payload(query: SessionQuery) -> dict[str, Any]:
+    return {
+        "ordinal": query.ordinal,
+        "timestamp": query.timestamp.isoformat() if query.timestamp else None,
+        "sent_at": query.sent_at.isoformat() if query.sent_at else None,
+        "text": query.text,
+    }
+
+
 @sessions_app.command("list")
 def list_sessions(
     *,
@@ -212,10 +222,17 @@ def list_sessions(
         ),
     ),
     agent: str | None = typer.Option(
-        None, "--agent", help="Only sessions from this adapter kind (e.g. claude_code)."
+        None,
+        "--agent",
+        help="Only sessions from this adapter kind (e.g. claude_code).",
+        autocompletion=Complete.adapter_kinds,
     ),
     workspace: str | None = typer.Option(
-        None, "--workspace", "-w", help="Workspace id prefix or title substring."
+        None,
+        "--workspace",
+        "-w",
+        help="Workspace id prefix or title substring.",
+        autocompletion=Complete.workspaces,
     ),
     since: str | None = typer.Option(
         None, "--since", help="Only sessions modified since (30m/6h/2d/1w or ISO date)."
@@ -275,7 +292,11 @@ def list_sessions(
 
 @sessions_app.command("show")
 def show_session(
-    ref: str = typer.Argument(..., help="Session id or unique prefix (see `sessions list`)."),
+    ref: str = typer.Argument(
+        ...,
+        help="Session id or unique prefix (see `sessions list`).",
+        autocompletion=Complete.sessions,
+    ),
     *,
     last: int | None = typer.Option(None, "--last", "-l", help="Only the most recent N turns."),
     as_json: bool = typer.Option(False, "--json", help="Emit structured turns as JSON."),
@@ -322,9 +343,63 @@ def show_session(
                 typer.echo(f"  ⏺ {_truncate(entry.text, _SHOW_TEXT_CAP)}")
 
 
+@sessions_app.command("recollect")
+def recollect_session(
+    session: str | None = typer.Argument(
+        None,
+        help=("Session id or unique prefix. Omit inside a workspace to read its primary session."),
+        autocompletion=Complete.sessions,
+    ),
+    *,
+    last: int | None = typer.Option(
+        None, "--last", "-l", min=1, help="Keep only the most recent N queries."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit structured queries as JSON."),
+) -> None:
+    """Recover every direct user query from a complete session transcript.
+
+    This lives under ``grove sessions`` rather than as a top-level verb: like
+    ``list``, ``show``, and ``dump``, it is a drill-in over one session's
+    recorded history. ``grove fleet`` is top-level because it is an explicitly
+    host-wide, transcript-plus-git aggregation with a different cost class than
+    cwd-bound workspace reads; recollection has neither property. Human slash
+    commands count as queries because they are direct instructions; harness and
+    provider envelopes do not. With no session argument, the current workspace's
+    primary readable session is used.
+    """
+    explorer = _explorer()
+    try:
+        if session is None:
+            from grove.tui.cli_workspace import resolve_or_infer_workspace  # noqa: PLC0415
+
+            state = resolve_or_infer_workspace(build(), None)
+            listing = explorer.primary_for_workspace(state.id)
+        else:
+            listing = explorer.resolve(session)
+        queries = explorer.recollect_for(listing, last=last)
+    except GroveError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    if as_json:
+        typer.echo(json.dumps([_query_payload(query) for query in queries], indent=2))
+        return
+    if not queries:
+        typer.echo("no direct user queries found")
+        return
+    for query in queries:
+        when = query.timestamp.isoformat(timespec="seconds") if query.timestamp else ""
+        typer.echo(f"\n── query {query.ordinal} {when}".rstrip())
+        typer.echo(query.text)
+
+
 @sessions_app.command("dump")
 def dump_session(
-    ref: str = typer.Argument(..., help="Session id or unique prefix (see `sessions list`)."),
+    ref: str = typer.Argument(
+        ...,
+        help="Session id or unique prefix (see `sessions list`).",
+        autocompletion=Complete.sessions,
+    ),
     *,
     jsonl: bool = typer.Option(
         False, "--jsonl", help="Stream the raw transcript lines verbatim instead of JSON."
@@ -386,9 +461,15 @@ def dump_session(
 
 @sessions_app.command("remap")
 def remap_session(
-    workspace: str = typer.Argument(..., help="Workspace id or unique id prefix (see `grove ls`)."),
+    workspace: str = typer.Argument(
+        ...,
+        help="Workspace id or unique id prefix (see `grove ls`).",
+        autocompletion=Complete.workspaces,
+    ),
     session: str = typer.Argument(
-        ..., help="Session id or unique id prefix to pin as this workspace's primary."
+        ...,
+        help="Session id or unique id prefix to pin as this workspace's primary.",
+        autocompletion=Complete.sessions,
     ),
 ) -> None:
     """Pin an existing agent session as a workspace's tracked primary.

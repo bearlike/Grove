@@ -73,6 +73,25 @@ def test_gitea_list_assigned_normalizes_and_scopes() -> None:
     )
 
 
+def test_gitea_get_pull_request_maps_draft() -> None:
+    routes = {
+        "/api/v1/repos/o/r/pulls/5": {
+            "number": 5,
+            "title": "Work in progress",
+            "html_url": "https://git/x/5",
+            "state": "open",
+            "draft": True,
+        }
+    }
+    p = GiteaProvider(
+        GiteaTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=_transport(routes),
+    )
+    r = p.get_pull_request("5")
+    assert (r.kind, r.draft) == ("pull_request", True)
+
+
 def test_gitea_get_ticket() -> None:
     routes = {
         "/api/v1/repos/o/r/issues/5": {
@@ -168,6 +187,25 @@ def test_github_list_assigned_drops_pull_requests() -> None:
     refs = p.list_assigned()
     assert [r.id for r in refs] == ["42"]
     assert refs[0].assignee == "carol"
+
+
+def test_github_get_pull_request_maps_draft() -> None:
+    routes = {
+        "/repos/o/r/pulls/7": {
+            "number": 7,
+            "title": "Work in progress",
+            "html_url": "https://gh/7",
+            "state": "open",
+            "draft": True,
+        }
+    }
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=_transport(routes),
+    )
+    r = p.get_pull_request("7")
+    assert (r.kind, r.draft) == ("pull_request", True)
 
 
 def test_github_get_ticket_and_bearer_header() -> None:

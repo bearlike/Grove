@@ -3,12 +3,19 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PlusIcon } from "lucide-react";
+import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ThreadListSearch } from "@/components/assistant-ui/thread-list";
 import { ConnectionState } from "@/components/elements/connection-state";
 import { ErrorState } from "@/components/elements/error-state";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
@@ -18,10 +25,17 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { AgentMark } from "@/components/grove/agent-mark";
-import { BranchLabel, PROJECT_MIN_WIDTH, ProjectLabel } from "@/components/grove/entity";
+import {
+  BranchLabel,
+  PROJECT_MIN_WIDTH,
+  ProjectLabel,
+} from "@/components/grove/entity";
 import { absoluteTime, RelativeTime } from "@/components/grove/relative-time";
-import { useCreateWorkspaceUi } from "./create-store";
 import { FleetFilterMenu } from "./fleet-filter";
+import {
+  RenameWorkspaceDialog,
+  type WorkspaceEditField,
+} from "./rename-workspace-dialog";
 import {
   activeFilterCount,
   agentStateOf,
@@ -32,7 +46,7 @@ import {
   sortedFleetRows,
   type FleetFilter,
 } from "./filter";
-import { agentAccent, agentTone, phaseGlyph } from "./tokens";
+import { agentAccent, agentGlyph, agentLabel, agentTone, phaseGlyph, phaseLabel } from "./tokens";
 import type { AgentState, FleetRow } from "./types";
 import type { FleetStream } from "./use-fleet";
 
@@ -76,13 +90,14 @@ export function FleetTree({
 }): React.ReactNode {
   const pathname = usePathname();
   const [filter, setFilter] = useState<FleetFilter>(NO_FILTER);
-  const openCreate = useCreateWorkspaceUi((state) => state.openFor);
 
-  const rows = useMemo(() => sortedFleetRows(stream.snapshot), [stream.snapshot]);
+  const rows = useMemo(
+    () => sortedFleetRows(stream.snapshot),
+    [stream.snapshot],
+  );
   const facets = useMemo(() => fleetFacets(rows), [rows]);
   const visible = useMemo(() => filterRows(rows, filter), [rows, filter]);
 
-  const firstRepoRoot = stream.snapshot?.projects[0]?.repo_root ?? "";
   const loading = stream.isPending && stream.snapshot === undefined;
   // Same predicate the dashboard uses, so "you have filtered something out"
   // means one thing in both places rather than being re-derived per surface.
@@ -133,10 +148,12 @@ export function FleetTree({
         // which is not a gutter but an arithmetic fit: 8 + a 32px icon button
         // + 8 is exactly the 48px icon rail, and `px-3` would push it off
         // centre.
-        collapsed ? "w-full overflow-hidden px-2 pt-1" : "w-full overflow-y-auto p-3",
+        collapsed
+          ? "w-full overflow-hidden px-2 pt-1"
+          : "w-full overflow-y-auto p-3",
       )}
     >
-      <NewWorkspaceButton collapsed={collapsed} onClick={() => openCreate(firstRepoRoot)} />
+      <NewWorkspaceButton collapsed={collapsed} active={pathname === "/"} />
 
       <div
         aria-hidden={collapsed}
@@ -169,7 +186,11 @@ export function FleetTree({
                 data-testid="fleet-filter"
               />
             </div>
-            <FleetFilterMenu filter={filter} onFilterChange={setFilter} facets={facets} />
+            <FleetFilterMenu
+              filter={filter}
+              onFilterChange={setFilter}
+              facets={facets}
+            />
           </div>
         ) : null}
 
@@ -232,35 +253,46 @@ export function FleetTree({
  * the list, full width when expanded, an icon button when collapsed. The
  * tooltip only mounts while collapsed — with the label visible it would just
  * repeat it.
+ *
+ * It NAVIGATES to `/` rather than opening the create dialog. Starting a
+ * workspace is the landing surface's whole job — a brief you type, with the
+ * cascade's answers already on the controls under it — and a modal form asking
+ * the same questions in fewer words was the older, narrower door to the same
+ * verb. The dialog is still reachable as "More options" from that page, which
+ * is where a form belongs relative to the composer it elaborates. Being a
+ * destination, it also marks itself when it IS the route, exactly like the
+ * workspace rows beneath it.
  */
 function NewWorkspaceButton({
   collapsed,
-  onClick,
+  active,
 }: {
   collapsed: boolean;
-  onClick: () => void;
+  active: boolean;
 }): React.ReactNode {
   const button = (
     <Button
-      variant="ghost"
+      asChild
+      variant={active ? "secondary" : "ghost"}
       size="sm"
-      onClick={onClick}
-      aria-label="New workspace"
-      data-testid="fleet-create-rail"
       className={cn(
         "h-8 justify-start overflow-hidden font-normal transition-all duration-200",
-        collapsed ? "w-8 gap-0 px-2 has-[>svg]:px-2" : "w-full gap-2 px-2.5 has-[>svg]:px-2.5",
+        collapsed
+          ? "w-8 gap-0 px-2 has-[>svg]:px-2"
+          : "w-full gap-2 px-2.5 has-[>svg]:px-2.5",
       )}
     >
-      <PlusIcon className="size-4" />
-      <span
-        className={cn(
-          "overflow-hidden whitespace-nowrap transition-all duration-200",
-          collapsed ? "max-w-0 opacity-0" : "max-w-32 opacity-100",
-        )}
-      >
-        New workspace
-      </span>
+      <Link href="/" aria-label="New workspace" data-testid="fleet-create-rail">
+        <PlusIcon className="size-4" />
+        <span
+          className={cn(
+            "overflow-hidden whitespace-nowrap transition-all duration-200",
+            collapsed ? "max-w-0 opacity-0" : "max-w-32 opacity-100",
+          )}
+        >
+          New workspace
+        </span>
+      </Link>
     </Button>
   );
 
@@ -268,7 +300,9 @@ function NewWorkspaceButton({
     <TooltipProvider delayDuration={0}>
       <Tooltip>
         <TooltipTrigger asChild>{button}</TooltipTrigger>
-        {collapsed ? <TooltipContent side="right">New workspace</TooltipContent> : null}
+        {collapsed ? (
+          <TooltipContent side="right">New workspace</TooltipContent>
+        ) : null}
       </Tooltip>
     </TooltipProvider>
   );
@@ -298,84 +332,154 @@ function NewWorkspaceButton({
  * line is the typed pair, and a third token wedged in beside two glyphs is
  * where the density this rail has been tuned for would go.
  */
-function WorkspaceRow({ row, active }: { row: FleetRow; active: boolean }): React.ReactNode {
+function WorkspaceRow({
+  row,
+  active,
+}: {
+  row: FleetRow;
+  active: boolean;
+}): React.ReactNode {
   const { state, phase } = row.workspace;
-  const badge = row.workspace.needs_attention ? "!" : phase ? phaseGlyph(phase.phase) : null;
-  const hue = activityHue(agentStateOf(row.workspace));
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editField, setEditField] = useState<WorkspaceEditField>("title");
+  const agentState = agentStateOf(row.workspace);
+  const AgentStateIcon = agentGlyph(agentState);
+  const phaseMark = phase ? phaseGlyph(phase.phase, phase.blocked) : null;
+  const rowMarkLabel = row.workspace.needs_attention
+    ? `${agentLabel(agentState)} — needs attention`
+    : phase
+      ? `${phaseLabel(phase.phase)} — step ${phase.index + 1} of ${phase.total}`
+      : agentLabel(agentState);
+  const hue = activityHue(agentState);
   const updatedIso = lastActivityIso(row.workspace);
 
+  const openEditor = (field: WorkspaceEditField): void => {
+    setEditField(field);
+    setMenuOpen(false);
+    setDialogOpen(true);
+  };
+
+  const stopMenuButtonNavigation = (event: React.SyntheticEvent): void => {
+    event.stopPropagation();
+  };
+
   return (
-    <Button
-      asChild
-      variant={active ? "secondary" : "ghost"}
-      size="sm"
-      className="h-auto w-full justify-start py-2 font-normal"
-      data-testid="fleet-row"
-      data-workspace-id={state.id}
-    >
-      <Link
-        href={`/w/${state.id}`}
-        title={[
-          `${state.title} — ${row.repoName} (${state.agent_name})`,
-          `Created ${absoluteTime(state.created_at)}`,
-          updatedIso ? `Updated ${absoluteTime(updatedIso)}` : null,
-        ]
-          .filter((line) => line !== null)
-          .join("\n")}
-      >
-        <AgentMark agentName={state.agent_name} />
-        <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-          <span className="flex w-full min-w-0 items-baseline gap-2">
-            {/* `text-sm`, RE-MEASURED against the CURRENT rail, not the one
-                this used to say. `Frontend UI migration` needs 128px at this
-                size, and the docked column was 123px when this was written —
-                against a 260px rail, since grown twice, to 392px. The tightest
-                realistic column here (icon, gap, a badge, the age column, all
-                present) is now ~228px even after the wider `p-3` gutter took
-                8px back — comfortably over. That puts the title a full ramp
-                step above the entity line beneath it, which is what actually
-                makes "project and branch smaller" true — pinning both to the
-                same `text-xs` left no size gap for
-                a 1px step to read at, so the only lever left was tier, not
-                size. Moving the TITLE up leaves the entity line free to stay
-                at the type floor and still read as visibly smaller. */}
-            <span className="min-w-0 flex-1 truncate text-sm text-content-primary">
-              {state.title}
-            </span>
-            {/* `max-w-16` and `truncate` are not defensive. Before mount this
-                renders the ABSOLUTE time — that is what makes it hydration-safe
-                — and an unbounded `8/10/2026, 3:12:07 PM` would crush the title
-                to nothing on every first paint. Capped, it clips for one frame
-                and then becomes "2h ago", which needs half the width. */}
-            <RelativeTime
-              iso={updatedIso}
-              className="text-content-tertiary max-w-16 shrink-0 truncate text-xs tabular-nums"
-            />
-          </span>
-          {/* Typed entities, so no middot — same treatment as the fleet card.
-              The glyphs already say where one ends and the next begins.
-              `PROJECT_MIN_WIDTH` on the project only: it is the identifying
-              half of the pair, so it keeps 8 characters before the branch
-              beside it may shrink further — see `entity.tsx` for why a
-              minimum, not a cap, is what lets this same row also fill the
-              mobile sheet's much wider column without clipping either name. */}
-          <span className="text-content-tertiary flex w-full min-w-0 items-center gap-2 text-xs">
-            <ProjectLabel name={row.repoName} className={PROJECT_MIN_WIDTH} />
-            <BranchLabel name={state.branch} />
-          </span>
-        </span>
-        {badge ? (
-          <span
-            aria-hidden
-            className={cn("shrink-0 text-xs", hue ?? "text-muted-foreground")}
-            data-testid="fleet-row-mark"
-            data-hue={hue ?? "neutral"}
+    <>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <div
+          className="group relative"
+          data-testid="fleet-row"
+          data-workspace-id={state.id}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setMenuOpen(true);
+          }}
+        >
+          <Button
+            asChild
+            variant={active ? "secondary" : "ghost"}
+            size="sm"
+            className="h-auto w-full justify-start py-2 pr-8 font-normal"
           >
-            {badge}
-          </span>
-        ) : null}
-      </Link>
-    </Button>
+            <Link
+              href={`/w/${state.id}`}
+              title={[
+                `${state.title} — ${row.repoName} (${state.agent_name})`,
+                `Created ${absoluteTime(state.created_at)}`,
+                updatedIso ? `Updated ${absoluteTime(updatedIso)}` : null,
+              ]
+                .filter((line) => line !== null)
+                .join("\n")}
+            >
+              <AgentMark agentName={state.agent_name} />
+              <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+                <span className="flex w-full min-w-0 items-baseline gap-2">
+                  {/* `text-sm`, RE-MEASURED against the CURRENT rail, not the one
+                    this used to say. `Frontend UI migration` needs 128px at this
+                    size, and the docked column was 123px when this was written —
+                    against a 260px rail, since grown twice, to 392px. The tightest
+                    realistic column here (icon, gap, a badge, the age column, all
+                    present) is now ~228px even after the wider `p-3` gutter took
+                    8px back — comfortably over. That puts the title a full ramp
+                    step above the entity line beneath it, which is what actually
+                    makes "project and branch smaller" true — pinning both to the
+                    same `text-xs` left no size gap for
+                    a 1px step to read at, so the only lever left was tier, not
+                    size. Moving the TITLE up leaves the entity line free to stay
+                    at the type floor and still read as visibly smaller. */}
+                  <span className="min-w-0 flex-1 truncate text-sm text-content-primary">
+                    {state.title}
+                  </span>
+                  {/* `max-w-16` and `truncate` are not defensive. Before mount this
+                    renders the ABSOLUTE time — that is what makes it hydration-safe
+                    — and an unbounded `8/10/2026, 3:12:07 PM` would crush the title
+                    to nothing on every first paint. Capped, it clips for one frame
+                    and then becomes "2h ago", which needs half the width. */}
+                  <RelativeTime
+                    iso={updatedIso}
+                    className="text-content-tertiary max-w-16 shrink-0 truncate text-xs tabular-nums"
+                  />
+                </span>
+                {/* Typed entities, so no middot — same treatment as the fleet card.
+                  The glyphs already say where one ends and the next begins.
+                  `PROJECT_MIN_WIDTH` on the project only: it is the identifying
+                  half of the pair, so it keeps 8 characters before the branch
+                  beside it may shrink further — see `entity.tsx` for why a
+                  minimum, not a cap, is what lets this same row also fill the
+                  mobile sheet's much wider column without clipping either name. */}
+                <span className="text-content-tertiary flex w-full min-w-0 items-center gap-2 text-xs">
+                  <ProjectLabel
+                    name={row.repoName}
+                    className={PROJECT_MIN_WIDTH}
+                  />
+                  <BranchLabel name={state.branch} />
+                </span>
+              </span>
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1",
+                  hue ?? "text-muted-foreground",
+                )}
+                data-testid="fleet-row-mark"
+                data-hue={hue ?? "neutral"}
+                aria-label={rowMarkLabel}
+                title={rowMarkLabel}
+              >
+                {phaseMark ? <span aria-hidden className="text-xs">{phaseMark}</span> : <AgentStateIcon aria-hidden className="size-3" />}
+                <span className="sr-only">{rowMarkLabel}</span>
+              </span>
+            </Link>
+          </Button>
+          <DropdownMenuTrigger asChild>
+            <TooltipIconButton
+              tooltip="Workspace options"
+              aria-label="Workspace options"
+              className="absolute top-1/2 right-1 invisible -translate-y-1/2 group-focus-within:visible group-hover:visible"
+              onClick={stopMenuButtonNavigation}
+              onPointerDown={stopMenuButtonNavigation}
+            >
+              <MoreHorizontalIcon />
+            </TooltipIconButton>
+          </DropdownMenuTrigger>
+        </div>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => openEditor("title")}>
+            Rename…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openEditor("description")}>
+            Edit description…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <RenameWorkspaceDialog
+        state={state}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        initialFocus={editField}
+      />
+    </>
   );
 }
 
@@ -388,7 +492,11 @@ function WorkspaceRow({ row, active }: { row: FleetRow; active: boolean }): Reac
  */
 function FleetSkeleton(): React.ReactNode {
   return (
-    <div className="flex flex-col gap-1.5" role="status" aria-label="Loading workspaces">
+    <div
+      className="flex flex-col gap-1.5"
+      role="status"
+      aria-label="Loading workspaces"
+    >
       {Array.from({ length: 5 }, (_, index) => (
         <div key={index} className="flex h-12 items-center gap-2 px-2.5">
           <Skeleton className="size-4 shrink-0" />

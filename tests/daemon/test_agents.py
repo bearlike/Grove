@@ -62,7 +62,7 @@ def test_agents_resolves_per_kind_model_catalog(daemon: TestClient, tmp_repo: Pa
     resp = daemon.get(f"/agents?repo={tmp_repo}")
     assert resp.status_code == 200, resp.text
     by_name = {item["name"]: item for item in resp.json()}
-    assert by_name["claude"]["models"] == ["sonnet", "opus", "haiku"]
+    assert by_name["claude"]["models"] == ["fable", "opus", "sonnet", "haiku"]
     assert by_name["codex"]["models"] == ["gpt-5.5", "gpt-5.4"]
     assert by_name["shell"]["models"] == []
 

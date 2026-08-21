@@ -32,7 +32,12 @@ function isUpstreamNoise(text: string): boolean {
 
 test.describe("route smoke", () => {
   for (const [name, path, marker] of [
-    ["fleet dashboard", "/", "fleet-page"],
+    // `/` is the LAUNCH COMPOSER; the fleet lives at `/fleet`. This list said
+    // `/` for the fleet long after the composer took that route, so the case
+    // failed on a missing testid while the app was working correctly — the
+    // route moved and the smoke list did not.
+    ["launch composer", "/", "launch-page"],
+    ["fleet dashboard", "/fleet", "fleet-page"],
     ["workspace", `/w/${WORKSPACE_ID}`, "workspace-page"],
     ["usage", "/usage", "usage-page"],
     ["sessions", "/sessions", "sessions-page"],

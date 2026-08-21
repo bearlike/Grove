@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect } from "react";
-
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { RAIL_WIDTH } from "./rail-width";
 import { AppSidebar } from "@/components/grove/shell/app-sidebar";
-import { useSidebarShortcuts, useSidebarUi } from "@/components/grove/shell/sidebar-state";
+import {
+  useSidebarShortcuts,
+  useSidebarUi,
+} from "@/components/grove/shell/sidebar-state";
 import { FleetOverlays, useFleetStream } from "@/components/grove/fleet";
-import { useCreateWorkspaceUi } from "@/components/grove/fleet/create-store";
 
 /**
  * The ONE app shell, with assistant-ui's base-demo rail anatomy:
@@ -62,23 +63,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const mobileOpen = useSidebarUi((state) => state.mobileOpen);
   const setMobileOpen = useSidebarUi((state) => state.setMobileOpen);
   const stream = useFleetStream();
-  const createOpen = useCreateWorkspaceUi((state) => state.open);
   useSidebarShortcuts();
 
-  // Starting a workspace DISMISSES the drawer, exactly as the reference shell
-  // dismisses it on `aui_thread-list-new` and not only on a thread trigger.
-  // Measured at 420px before this existed: the drawer stayed open at 0–260px
-  // with the create dialog laid over it at 16–404px — two stacked modals, the
-  // form's own left edge underneath the thing that launched it.
-  //
-  // Keyed on the create store rather than on the click, because that store is
-  // already the channel every opener of this dialog speaks through, and a DOM
-  // predicate would have to name each one. Narrowing still must not dismiss:
-  // searching and filtering never touch this state.
-  useEffect(() => {
-    if (createOpen) setMobileOpen(false);
-  }, [createOpen, setMobileOpen]);
-
+  // NOTE: there is deliberately no create-dialog watcher here any more. The
+  // drawer used to dismiss on the create store opening, because the rail's
+  // create action opened a dialog OVER the still-open sheet — measured at
+  // 420px as two stacked modals. That action is now a link to `/`, so the
+  // link delegation below covers it, and every remaining opener of the dialog
+  // lives outside the sheet where it cannot be reached while the sheet is up.
   return (
     <div className="relative flex h-dvh w-full overflow-hidden">
       <aside
@@ -86,17 +78,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         data-collapsed={collapsed}
         className={cn(
           "bg-surface-sunken hidden h-full shrink-0 flex-col overflow-hidden transition-[width] duration-200 md:flex",
-          // 392px expanded (`w-98`), up from 328px (`w-82`) — the closest step
-          // on the 4px spacing scale to another 20% (393.6px would be exact).
-          // The rail is THE ONLY place a rail width may be written: everything
-          // inside it is `w-full`, so this literal has no second copy to drift
-          // from and the mobile Sheet is unaffected by it.
+          // The expanded width lives in `rail-width.ts` — everything inside a
+          // rail is `w-full`, and there is now a SECOND rail (the public share
+          // view), so the measure is a shared export rather than a literal
+          // either one could drift from. The mobile Sheet is unaffected by it.
           //
           // `w-12` collapsed is deliberately untouched by all of this. It is
           // not a width, it is an arithmetic fit: 8px + a 32px icon button +
           // 8px. Every gutter below therefore stays `px-2` while collapsed,
           // and only the expanded state takes the wider one.
-          collapsed ? "w-12" : "w-98",
+          collapsed ? "w-12" : RAIL_WIDTH,
         )}
       >
         <AppSidebar collapsed={collapsed} stream={stream} />
@@ -111,18 +102,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           breakpoint (640px) while still narrower than `md` (768px), where the
           hamburger trigger that opens it is the only way in. */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-        <SheetContent side="left" className="flex w-full flex-col p-0 sm:max-w-none">
+        <SheetContent
+          side="left"
+          className="flex w-full flex-col p-0 sm:max-w-none"
+        >
           <SheetTitle className="sr-only">Grove workspaces</SheetTitle>
           {/* Navigating out of the sheet has served its purpose, so the sheet
               closes — otherwise a phone lands on the new page with the drawer
               still covering it. Scoped to links: searching and filtering happen
-              INSIDE the drawer and must not dismiss it, and the drawer's other
-              exit — the create action — is handled by state above, since it
-              opens a dialog rather than a route. */}
+              INSIDE the drawer and must not dismiss it. Every exit from this
+              drawer is now a route, the create action included, so this one
+              predicate is the whole rule. */}
           <div
             className="flex min-h-0 flex-1 flex-col"
             onClick={(event) => {
-              if (event.target instanceof Element && event.target.closest("a[href]")) {
+              if (
+                event.target instanceof Element &&
+                event.target.closest("a[href]")
+              ) {
                 setMobileOpen(false);
               }
             }}
@@ -140,7 +137,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           position, so the step is the ladder's and not an accident of what
           happened to be behind it. */}
       <div className="bg-surface-sunken flex h-full min-w-0 flex-1 flex-col overflow-hidden p-2 md:pl-0">
-        <div className="shell-panel flex min-h-0 flex-1 flex-col">{children}</div>
+        <div className="shell-panel flex min-h-0 flex-1 flex-col">
+          {children}
+        </div>
       </div>
 
       <FleetOverlays snapshot={stream.snapshot} />

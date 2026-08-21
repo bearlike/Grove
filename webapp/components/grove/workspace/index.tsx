@@ -1,13 +1,14 @@
 "use client";
 
-import { Activity, useCallback, useEffect, useState } from "react";
-import { SquareIcon } from "lucide-react";
+import { Activity, useCallback, useEffect, useRef, useState } from "react";
+import { GlobeIcon, SquareIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
 
 import { AgentStatus } from "@/components/elements/agent-status";
 import { ErrorState } from "@/components/elements/error-state";
 import { ShellHeader } from "@/components/grove/shell/shell-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ResizableHandle,
@@ -15,10 +16,15 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { agentStatusProps, findWorkspaceActivity, primarySessionId } from "@/lib/grove/adapters";
+import {
+  agentStatusProps,
+  findWorkspaceActivity,
+  primarySessionId,
+} from "@/lib/grove/adapters";
 import {
   useActivityStream,
   useRemapSession,
+  useSessionTurns,
   useWorkspaceCommits,
   useWorkspacePeek,
   useWorkspaceSessions,
@@ -31,12 +37,13 @@ import { TranscriptSkeleton } from "./transcript-skeleton";
 import { WorkPanel } from "./work-panel";
 import {
   panesShown,
-  restoredView,
-  restoredWorkTab,
-  tabOnViewChange,
+  storedView,
+  storedWorkTab,
   visiblePane,
+  resolvedWorkspaceSelection,
   type PanelTab,
   type PaneView,
+  type WorkspaceSelection,
 } from "./selectors";
 import { useMinWidth } from "./use-min-width";
 
@@ -56,7 +63,8 @@ const SPLIT_PANELS = ["transcript", "work"];
  * so it never renders on the server or on the first client paint.
  */
 const SPLIT_STORAGE: LayoutStorage = {
-  getItem: (key) => (typeof window === "undefined" ? null : window.localStorage.getItem(key)),
+  getItem: (key) =>
+    typeof window === "undefined" ? null : window.localStorage.getItem(key),
   setItem: (key, value) => {
     if (typeof window !== "undefined") window.localStorage.setItem(key, value);
   },
@@ -76,8 +84,7 @@ const workTabStorageKey = (id: string) => `grove-workspace-work-tab:${id}`;
 
 /** Defensive `localStorage` read: missing key, no `window` (SSR/edge), and a
  * disabled or throwing store (private browsing in some browsers) all read as
- * `null`, which `restoredView`/`restoredWorkTab` already treat as "use the
- * default" — there is no separate error path to wire up here. */
+ * `null`, which remains "no reader choice" and lets the live default decide. */
 function readPaneStorage(key: string): string | null {
   if (typeof window === "undefined") return null;
   try {
@@ -123,7 +130,10 @@ export function Workspace({ id }: { id: string }) {
 
   const sessions = useWorkspaceSessions(id);
   const { mutate: remapMutate } = useRemapSession(id);
-  const switchSession = useCallback((next: string) => remapMutate(next), [remapMutate]);
+  const switchSession = useCallback(
+    (next: string) => remapMutate(next),
+    [remapMutate],
+  );
   const thread = useGroveThread({
     workspaceId: id,
     sessionId,
@@ -132,8 +142,36 @@ export function Workspace({ id }: { id: string }) {
     onSwitchSession: switchSession,
   });
 
+  // This is intentionally a second observer of the same query `useGroveThread`
+  // reads. React Query deduplicates it, and the raw turn count is the only
+  // reliable boundary between an unborn transcript and a real (possibly later
+  // growing) one.
+  const turns = useSessionTurns(id, sessionId).query;
+  const hasTranscript = (turns.data?.turns.length ?? 0) > 0;
   const wideEnoughToSplit = useMinWidth(SPLIT_MIN_WIDTH);
-  const [view, setView] = useState<PaneView>("transcript");
+  const [selection, setSelection] = useState<WorkspaceSelection>({
+    view: null,
+    workTab: null,
+  });
+  const selectionWorkspaceId = useRef(id);
+
+  // Navigating between workspace routes can retain this component instance. A
+  // selection belongs to one workspace, never to the route slot, so clear it
+  // synchronously before the new workspace first paints. The ref is a route
+  // guard rather than UI state: it lets the restore effect reject a stale route
+  // without adding a second render-state field.
+  if (selectionWorkspaceId.current !== id) {
+    selectionWorkspaceId.current = id;
+    setSelection({ view: null, workTab: null });
+  }
+
+  // `null` is a deliberate state, not an encoded default: only it follows the
+  // transcript rule. A stored or freshly clicked value remains authoritative
+  // when the first turn arrives asynchronously.
+  const { view, workTab } = resolvedWorkspaceSelection(
+    hasTranscript,
+    selection,
+  );
   // Never render `view` directly: below the breakpoint `split` is not on offer,
   // and holding it would leave no tab selected. See `visiblePane`.
   const paneView = visiblePane(view, wideEnoughToSplit);
@@ -151,71 +189,45 @@ export function Workspace({ id }: { id: string }) {
   // synchronously before commit, and converges in one extra pass because
   // the second check always finds the flag already set.
   const shown = panesShown(paneView);
-  const [transcriptMounted, setTranscriptMounted] = useState(() => shown.includes("transcript"));
+  const [transcriptMounted, setTranscriptMounted] = useState(() =>
+    shown.includes("transcript"),
+  );
   const [workMounted, setWorkMounted] = useState(() => shown.includes("work"));
-  if (!transcriptMounted && shown.includes("transcript")) setTranscriptMounted(true);
+  if (!transcriptMounted && shown.includes("transcript"))
+    setTranscriptMounted(true);
   if (!workMounted && shown.includes("work")) setWorkMounted(true);
 
-  // Held here, not inside `WorkPanel`: crossing `SPLIT_MIN_WIDTH` moves that
-  // component from directly under this page to one level deeper inside the
-  // `ResizablePanelGroup` below (and back), which unmounts and remounts it.
-  // Every sub-tab stays valid at every width — nothing here is `split`'s
-  // breakpoint-gated option — so there is no invalid state to fall back from;
-  // the only bug was losing a still-good choice to the remount. State living
-  // here survives it.
-  // "info" matches `tabOnViewChange`'s default landing tab — this initial
-  // value is only ever visibly reached the first time `view` moves off
-  // "transcript", and by then `changeView` has already run `tabOnViewChange`
-  // and overwritten it, so the two must agree or the very first switch to
-  // Work/Split would flash the wrong tab for one render.
-  const [workTab, setWorkTab] = useState<PanelTab>("info");
+  // `WorkPanel` moves under a `ResizablePanelGroup` across
+  // `SPLIT_MIN_WIDTH`, which unmounts it. Keeping its explicit selection here
+  // preserves a tab chosen before that structural move.
 
-  // Restores the pane and work tab this WORKSPACE was last left on — an
-  // EFFECT, not a `useState` initializer, and that is the hazard being paid
-  // deliberately: the server has no `localStorage`, so both the server
-  // render and the client's first (hydrating) render must use today's plain
-  // defaults ("transcript" / "info") to agree with each other, exactly the
-  // same SSR-safe shape as `useMinWidth` above (`matches` starts `false` and
-  // only an effect corrects it). Reading the real value straight into
-  // `useState`'s initializer would run that read again during hydration and
-  // could disagree with what the server sent, which is the hydration
-  // mismatch the brief said not to ship. The cost is a real one: a brief
-  // default-pane flash on every full load of a workspace route, corrected
-  // one render later, once this effect can safely touch `window`.
-  //
-  // Keyed on `id` alone, not on `wideEnoughToSplit`: the viewport is only
-  // consulted HERE, at restore time (via `restoredView`, which threads it
-  // through the same `visiblePane` guard the live switcher uses) — a later
-  // resize must not re-fire this and throw away a choice the user already
-  // made this session. `paneView` above re-derives from `view` on every
-  // render regardless, so `visiblePane` still protects a stale `view` seen
-  // across a resize.
+  // Server and first client render must agree, so storage is restored only
+  // after mount. Valid stored values are choices; absent and invalid ones stay
+  // null and therefore continue to follow `resolvedWorkspaceSelection`. The
+  // captured id rejects a stale effect from a route we have already left; the
+  // functional update also makes a click that happens before this effect
+  // authoritative.
   useEffect(() => {
-    setView(restoredView(readPaneStorage(viewStorageKey(id)), wideEnoughToSplit));
-    setWorkTab(restoredWorkTab(readPaneStorage(workTabStorageKey(id))));
-    // `wideEnoughToSplit` is deliberately read, not listed as a dependency —
-    // see the paragraph above.
+    const stored = {
+      view: storedView(readPaneStorage(viewStorageKey(id))),
+      workTab: storedWorkTab(readPaneStorage(workTabStorageKey(id))),
+    };
+    setSelection((current) => {
+      if (selectionWorkspaceId.current !== id) return current;
+      return {
+        view: current.view ?? stored.view,
+        workTab: current.workTab ?? stored.workTab,
+      };
+    });
   }, [id]);
 
-  // The one place `workTab` changes outside a direct tab click, so the write
-  // lives beside it rather than in a blanket effect on `workTab` — an effect
-  // watching `workTab` cannot tell "the user changed it" from "the restore
-  // above just set it," and would immediately write the just-restored value
-  // back over itself on mount, which is harmless here only by coincidence
-  // and not a pattern to repeat.
   const persistWorkTab = (tab: PanelTab) => {
-    setWorkTab(tab);
+    setSelection((current) => ({ ...current, workTab: tab }));
     writePaneStorage(workTabStorageKey(id), tab);
   };
 
-  // A plain handler rather than an effect on `view`: an effect would repaint
-  // the panel on a second frame, and would re-fire for any unrelated re-render
-  // that left `view` at `split` on its first pass. The rule itself is
-  // `tabOnViewChange`, so it is pinned by a test rather than by a render.
   const changeView = (next: PaneView) => {
-    const tab = tabOnViewChange(view, next);
-    if (tab) persistWorkTab(tab);
-    setView(next);
+    setSelection((current) => ({ ...current, view: next }));
     writePaneStorage(viewStorageKey(id), next);
   };
 
@@ -285,8 +297,8 @@ export function Workspace({ id }: { id: string }) {
       peek={peek.data}
       activity={activity}
       commits={commits.data}
-      sessionId={sessionId}
-      onKilled={() => router.push("/")}
+      repoRoot={peek.data.state.repo_root}
+      privileged={{ peek: peek.data, onKilled: () => router.push("/") }}
       tab={workTab}
       onTabChange={persistWorkTab}
     />
@@ -304,10 +316,14 @@ export function Workspace({ id }: { id: string }) {
             status={activity}
             canInterrupt={thread.canInterrupt}
             onInterrupt={thread.interrupt}
+            isPublic={peek.data.state.share_token !== null}
           />
         }
       />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="workspace-page">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        data-testid="workspace-page"
+      >
         {showSplit ? (
           // Each pane is its own scroll owner, so a long transcript never drags
           // the terminal with it. `autoSaveId` persists the ratio; the vendored
@@ -387,7 +403,9 @@ export function Workspace({ id }: { id: string }) {
               </Activity>
             )}
             {workMounted && (
-              <Activity mode={paneView === "work" ? "visible" : "hidden"}>{workPanel}</Activity>
+              <Activity mode={paneView === "work" ? "visible" : "hidden"}>
+                {workPanel}
+              </Activity>
             )}
           </div>
         )}
@@ -426,6 +444,7 @@ function HeaderActions({
   status,
   canInterrupt,
   onInterrupt,
+  isPublic,
 }: {
   view: PaneView;
   onChange: (view: PaneView) => void;
@@ -433,6 +452,7 @@ function HeaderActions({
   status: ReturnType<typeof findWorkspaceActivity>;
   canInterrupt: boolean;
   onInterrupt: () => void;
+  isPublic: boolean;
 }) {
   const live = status?.sessions[0]?.activity;
   const options: readonly PaneView[] = splitOffered
@@ -441,13 +461,26 @@ function HeaderActions({
 
   return (
     <div className="flex min-w-0 items-center gap-2">
+      {isPublic && (
+        <Badge variant="secondary">
+          <GlobeIcon aria-hidden />
+          Public
+        </Badge>
+      )}
       {live && (
         <div className="hidden min-w-0 sm:block">
-          <AgentStatus {...agentStatusProps(live, status?.phase ?? null, new Date())} />
+          <AgentStatus
+            {...agentStatusProps(live, status?.phase ?? null, new Date())}
+          />
         </div>
       )}
       {canInterrupt && (
-        <Button size="xs" variant="outline" onClick={onInterrupt} data-testid="chat-interrupt">
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={onInterrupt}
+          data-testid="chat-interrupt"
+        >
           <SquareIcon aria-hidden />
           Interrupt
         </Button>
@@ -455,7 +488,11 @@ function HeaderActions({
       <Tabs value={view} onValueChange={(value) => onChange(value as PaneView)}>
         <TabsList variant="line" aria-label="Workspace panes">
           {options.map((option) => (
-            <TabsTrigger key={option} value={option} data-testid={`pane-${option}`}>
+            <TabsTrigger
+              key={option}
+              value={option}
+              data-testid={`pane-${option}`}
+            >
               {LABELS[option]}
             </TabsTrigger>
           ))}

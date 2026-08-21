@@ -10,6 +10,29 @@ minted per *profile root* rather than per tool.
 The package's whole difficulty is that reading quota is itself a metered act.
 Everything below follows from that one sentence.
 
+## Aggregate gateway sources retain vendor identity
+
+A gateway is a third `QuotaProvider` *source*, not a `UsageProvider`. Its one
+snapshot may hold subscriptions for several vendors, and each subscription's
+payload `provider` selects the existing vendor label on its `QuotaAccount`.
+Adding a synthetic gateway provider value would make the dashboard's existing
+per-vendor grouping lie and force every downstream projection to special-case
+one transport.
+
+The subscription `id` is the account's stable remote handle; it is namespaced
+under that vendor as `provider-gateway:<id>`, never derived from a filesystem
+root and never replaced with an email. The endpoint is read once while accounts
+are enumerated, then that same validated envelope supplies every account's
+view — one GET must not become N account requests. `metered = False` skips the
+TTL, but failures still enter the existing durable ledger; on an unavailable
+endpoint the provider rebuilds the known gateway account roster from that
+ledger so its ordinary last-known-good path renders them stale instead of
+dropping them.
+
+`age_seconds` and `stale` are gateway evidence. Grove converts the former to
+`observed_at` against its injected clock only to fit the existing wire shape;
+it does not infer freshness from the time its own GET completed.
+
 ## The two providers are not two implementations of one thing
 
 They have opposite cost shapes, and every rule here exists because of the

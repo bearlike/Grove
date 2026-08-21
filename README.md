@@ -12,7 +12,14 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
-<p align="center"><strong>Supports Codex and Claude Code.</strong></p>
+<p align="center"><strong>Supports</strong></p>
+<p align="center">
+  <a href="https://github.com/anthropics/claude-code"><img src="docs/logos/support/claude-code.png" alt="Claude Code" title="Claude Code" width="44" height="44" /></a>&nbsp;
+  <a href="https://github.com/openai/codex"><img src="docs/logos/support/codex.png" alt="Codex" title="Codex" width="44" height="44" /></a>&nbsp;
+  <a href="https://linear.app"><img src="docs/logos/support/linear.png" alt="Linear" title="Linear" width="44" height="44" /></a>&nbsp;
+  <a href="https://github.com"><img src="docs/logos/support/github.png" alt="GitHub" title="GitHub" width="44" height="44" /></a>&nbsp;
+  <a href="https://about.gitea.com/"><img src="docs/logos/support/gitea.png" alt="Gitea" title="Gitea" width="44" height="44" /></a>
+</p>
 
 ## 🌳 Overview
 
@@ -35,6 +42,20 @@ Grove is a terminal program first. Run `grove` in a repo and create, attach, pau
 </td>
 <td width="50%">
   <a href="https://bearlike.github.io/Grove/latest/use-tui/"><img src="docs/img/screenshots/tui-list.png" alt="The Grove TUI: a project-scoped workspace list with a live agent peek rail showing the summary, recent commits, and transcript" width="100%" /></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### The whole fleet in your browser
+
+Reach every agent over your network to read a transcript, steer a run mid-flight, or spin up a workspace from the fleet grid, all behind a one-time device pairing that keeps the daemon on loopback.
+
+[Docs →](https://bearlike.github.io/Grove/latest/use-webapp/)
+
+</td>
+<td width="50%">
+  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-tour.gif" alt="Grove's web dashboard cycling through five views: the launch composer, the host-wide session catalog, one workspace with its agent transcript beside the work panel, the usage audit, and the attention-sorted fleet grid" width="100%" /></a>
 </td>
 </tr>
 <tr>
@@ -63,20 +84,6 @@ Grove ships an MCP server. Claude Code, Codex, OpenCode and other orchestrators 
 </td>
 <td width="50%">
   <a href="https://bearlike.github.io/Grove/latest/use-mcp/"><img src="docs/img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" width="100%" /></a>
-</td>
-</tr>
-<tr>
-<td width="50%" valign="middle">
-
-### The whole fleet in your browser
-
-Reach every agent over your network to read a transcript, steer a run mid-flight, or spin up a workspace from the fleet grid, all behind a one-time device pairing that keeps the daemon on loopback.
-
-[Docs →](https://bearlike.github.io/Grove/latest/use-webapp/)
-
-</td>
-<td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/use-webapp/"><img src="docs/img/screenshots/webapp-fleet-workspace.gif" alt="Grove's web dashboard alternating between two views: a flat, attention-sorted grid of workspace cards beside a session rail, and a single workspace showing its agent transcript next to the work panel" width="100%" /></a>
 </td>
 </tr>
 <tr>

@@ -1,5 +1,21 @@
 import type { VariantProps } from "class-variance-authority";
-import { BoxIcon, ServerIcon, type LucideIcon } from "lucide-react";
+import {
+  BotIcon,
+  BoxIcon,
+  CircleAlertIcon,
+  CircleDashedIcon,
+  CirclePauseIcon,
+  CirclePlayIcon,
+  CircleXIcon,
+  Clock3Icon,
+  HammerIcon,
+  LoaderCircleIcon,
+  MessageCircleQuestionIcon,
+  RadioTowerIcon,
+  ServerIcon,
+  UnplugIcon,
+  type LucideIcon,
+} from "lucide-react";
 
 import type { badgeVariants } from "@/components/ui/badge";
 import type { GlossaryTerm } from "@/components/grove/glossary";
@@ -59,14 +75,44 @@ const AGENT_TONE: Record<AgentState, BadgeVariant> = {
   unknown: "secondary",
 };
 
-const AGENT_LABEL: Record<AgentState, string> = {
-  starting: "starting",
-  working: "working",
-  waiting: "waiting for you",
-  blocked: "blocked",
-  idle: "idle",
-  error: "error",
-  unknown: "no session",
+/**
+ * The human wording and glyph of every fleet state.
+ *
+ * **All UI labels are sentence case**: only the first word and proper names
+ * capitalize. State words are labels rather than headings, so title case turns
+ * a compact set of facts into visual noise. Keeping the word and its mark in
+ * one total table means the rail, filter, card and palette cannot slowly teach
+ * different names for the same state.
+ *
+ * The marks deliberately preserve the TUI's meaning without copying its
+ * terminal glyphs: live/run, quiet/wait, pause, unavailable, stranded, error;
+ * and spin-up, work, human input, quiet, unknown. A Lucide shape is the web
+ * expression of that vocabulary, not decoration picked at a call site.
+ */
+const STATUS_PRESENTATION: Record<WorkspaceStatus, { label: string; Icon: LucideIcon }> = {
+  active: { label: "Active", Icon: RadioTowerIcon },
+  running: { label: "Active", Icon: RadioTowerIcon },
+  provisioning: { label: "Provisioning", Icon: LoaderCircleIcon },
+  idle: { label: "Idle", Icon: Clock3Icon },
+  paused: { label: "Paused", Icon: CirclePauseIcon },
+  offline: { label: "Offline", Icon: UnplugIcon },
+  orphaned: { label: "Orphaned", Icon: HammerIcon },
+  error: { label: "Error", Icon: CircleXIcon },
+};
+
+const AGENT_PRESENTATION: Record<AgentState, { label: string; Icon: LucideIcon }> = {
+  starting: { label: "Starting", Icon: LoaderCircleIcon },
+  working: { label: "Working", Icon: CirclePlayIcon },
+  waiting: { label: "Waiting for you", Icon: MessageCircleQuestionIcon },
+  blocked: { label: "Blocked", Icon: CircleAlertIcon },
+  idle: { label: "Idle", Icon: CircleDashedIcon },
+  error: { label: "Error", Icon: CircleXIcon },
+  unknown: { label: "No session", Icon: BotIcon },
+};
+
+const RUNTIME_PRESENTATION: Record<Runtime, { label: string; Icon: LucideIcon }> = {
+  host: { label: "Host", Icon: ServerIcon },
+  container: { label: "Container", Icon: BoxIcon },
 };
 
 /**
@@ -96,22 +142,18 @@ const AGENT_GLOSSARY: Partial<Record<AgentState, GlossaryTerm>> = {
 };
 
 /**
- * The phase glyph is a fill stage, not decoration: ○ ◔ ◑ ◕ ● ✓ carries
- * progress through the pipeline even in grayscale, and it is the same
- * character the TUI prints — one vocabulary across both clients.
+ * A task phase is a named position, not merely a fraction. The web preserves
+ * its established grayscale-safe ramp while stating the phase in sentence case
+ * beside it; the TUI uses its own terminal-safe rendering of the same ordered
+ * phases.
  */
-const PHASE_GLYPH: Record<TaskPhase, string> = {
-  scoping: "○",
-  planning: "◔",
-  implementing: "◑",
-  verifying: "◕",
-  delivering: "●",
-  done: "✓",
-};
-
-const RUNTIME_LABEL: Record<Runtime, string> = {
-  host: "host",
-  container: "container",
+const PHASE_PRESENTATION: Record<TaskPhase, { label: string; glyph: string }> = {
+  scoping: { label: "Scoping", glyph: "○" },
+  planning: { label: "Planning", glyph: "◔" },
+  implementing: { label: "Implementing", glyph: "◑" },
+  verifying: { label: "Verifying", glyph: "◕" },
+  delivering: { label: "Delivering", glyph: "●" },
+  done: { label: "Done", glyph: "✓" },
 };
 
 /**
@@ -221,8 +263,20 @@ export function progressAccent(done: number, total: number): string | undefined 
   return done >= total ? ACCENT.done : ACCENT.progress;
 }
 
+export function statusLabel(status: WorkspaceStatus): string {
+  return STATUS_PRESENTATION[status].label;
+}
+
+export function statusGlyph(status: WorkspaceStatus): LucideIcon {
+  return STATUS_PRESENTATION[status].Icon;
+}
+
 export function agentLabel(state: AgentState): string {
-  return AGENT_LABEL[state];
+  return AGENT_PRESENTATION[state].label;
+}
+
+export function agentGlyph(state: AgentState): LucideIcon {
+  return AGENT_PRESENTATION[state].Icon;
 }
 
 export function statusGlossaryTerm(status: WorkspaceStatus): GlossaryTerm | undefined {
@@ -250,30 +304,24 @@ export function agentGlossaryTerm(state: AgentState): GlossaryTerm | undefined {
  */
 const BLOCKED_GLYPH = "⊘";
 
+export function phaseLabel(phase: TaskPhase): string {
+  return PHASE_PRESENTATION[phase].label;
+}
+
 export function phaseGlyph(phase: TaskPhase, blocked = false): string {
-  return blocked ? BLOCKED_GLYPH : PHASE_GLYPH[phase];
+  return blocked ? BLOCKED_GLYPH : PHASE_PRESENTATION[phase].glyph;
 }
 
 export function runtimeLabel(runtime: Runtime): string {
-  return RUNTIME_LABEL[runtime];
+  return RUNTIME_PRESENTATION[runtime].label;
 }
 
 /**
- * The runtime's glyph, in ONE place.
- *
- * §7 makes this table the owner of the container/host marks, and it was being
- * chosen inline in `fleet/badges.tsx` — fine while that was the only renderer,
- * and immediately two owners the moment the workspace Identity card wanted the
- * same pair. A second call site picking its own glyph is the drift the entity
- * table exists to prevent, so the decision moved here rather than being copied.
+ * The runtime's glyph, in ONE place. `ServerIcon` / `BoxIcon` retain the TUI's
+ * machine-versus-boundary distinction without treating a container as a parcel.
  */
-const RUNTIME_GLYPH: Record<Runtime, LucideIcon> = {
-  host: ServerIcon,
-  container: BoxIcon,
-};
-
 export function runtimeGlyph(runtime: Runtime): LucideIcon {
-  return RUNTIME_GLYPH[runtime];
+  return RUNTIME_PRESENTATION[runtime].Icon;
 }
 
 export function runtimeGlossaryTerm(runtime: Runtime): GlossaryTerm {

@@ -1500,7 +1500,7 @@ export const FIXTURE_AGENTS: AgentSummaryView[] = [
     name: "Claude Code (default)",
     kind: "claude_code",
     description: "Claude Code, default config dir, skip-permissions",
-    models: ["sonnet", "opus", "haiku"],
+    models: ["fable", "opus", "sonnet", "haiku"],
   },
 ];
 

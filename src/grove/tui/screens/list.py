@@ -28,7 +28,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import replace as _dc_replace
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from loguru import logger
 from textual import events
@@ -60,6 +60,9 @@ from grove.core import (
 )
 from grove.core.activity import ActivityService
 from grove.core.agents import AgentActivity, SessionTurn
+from grove.core.contracts.tickets import TicketRef
+from grove.core.contracts.usage import UsageQuotasView
+from grove.core.phase import PhaseReport, TicketClaim
 from grove.core.tmux import ContainerAttach, fit_window_to_client
 from grove.core.usage import UsageService
 from grove.core.workspace import LIVE_STATUSES, Placement, ProvisionProgress
@@ -83,6 +86,7 @@ from grove.tui.widgets.filter_bar import FilterBar
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
 from grove.tui.widgets.list import WorkspaceList
 from grove.tui.widgets.peek_rail import PeekRail
+from grove.tui.widgets.quota_footer import QuotaFooter
 from grove.tui.widgets.status import FlashLevel, StatusBar
 
 _PEEK_DEBOUNCE_SECONDS = 0.08
@@ -99,6 +103,30 @@ _RAIL_TURNS = 20
 # == ACTIVE` watcher; non-ACTIVE rows skip entirely. When no visible row
 # is ACTIVE the tick early-exits and CPU is zero.
 _PULSE_TICK_SECONDS = 0.25
+
+
+class QuotasLoaded(Message):
+    """One-shot quota snapshot returned by the list screen's worker."""
+
+    def __init__(self, quotas: UsageQuotasView) -> None:
+        super().__init__()
+        self.quotas = quotas
+
+
+class TicketsResolved(Message):
+    """Live ticket display fields, resolved for one workspace off the UI thread.
+
+    A `TicketRef` is persisted BARE, so a title exists only once something asks
+    the tracker — which is network I/O, and therefore never on Textual's single
+    thread. `post_message` is the marshalling primitive here for the same reason
+    it is everywhere else on this screen: it is thread-safe from either side,
+    where `call_from_thread` raises when it happens to run on the app's own.
+    """
+
+    def __init__(self, workspace_id: str, refs: tuple[TicketRef, ...]) -> None:
+        super().__init__()
+        self.workspace_id = workspace_id
+        self.refs = refs
 
 
 class LifecycleDone(Message):
@@ -290,6 +318,12 @@ class WorkspaceListScreen(Screen[None]):
         # the rail's provisioning branch disappear the moment the container
         # comes up. Read on the same slow path as the peek.
         self._cached_provision: ProvisionProgress | None = None
+        # Resolved ticket display fields, keyed by workspace id. Populated by
+        # a one-shot thread worker per selection and kept for the session:
+        # a title changes on a human timescale, and re-reading it per tick
+        # would put a forge request on the render path.
+        self._ticket_refs: dict[str, tuple[TicketRef, ...]] = {}
+        self._cached_phase: PhaseReport | None = None
         # True between handing the terminal to an attach and the user's next
         # input. Every periodic tick asks `_ticks_live()` before doing any
         # work, so a screen the user cannot see costs nothing.
@@ -315,6 +349,7 @@ class WorkspaceListScreen(Screen[None]):
                         )
                 yield PeekRail()
             yield StatusBar(self._manager.repo_root)
+        yield QuotaFooter()
         yield ContextualFooter()
 
     def on_mount(self) -> None:
@@ -338,6 +373,10 @@ class WorkspaceListScreen(Screen[None]):
         # client re-checks on its own TTL). `thread=True` keeps the blocking GET
         # off the UI loop; `exclusive` coalesces if mount ever re-fires.
         self.run_worker(self._poll_release, thread=True, group="release", exclusive=True)
+        # Quota collection can contact a metered provider. It runs once per TUI
+        # launch; the collector's durable TTL and cool-off coordinate all other
+        # Grove processes. It must never share the render/tick path.
+        self.run_worker(self._read_quotas, thread=True, group="quota", exclusive=True)
 
     def on_unmount(self) -> None:
         if self._unsub is not None:
@@ -610,7 +649,11 @@ class WorkspaceListScreen(Screen[None]):
         # UpdateWorkspaceRequest's None on a field means "do not change";
         # the manager accepts the same convention via its _UNSET sentinel,
         # so we forward only the fields the user actually populated.
-        kwargs: dict[str, str] = {}
+        # `Any`, not `str`: `update` also takes a bool `share`, so a
+        # str-valued dict no longer type-checks at the splat. This screen never
+        # sets it — sharing is a browser affordance — but the splat is typed
+        # against the whole signature, not against the subset used here.
+        kwargs: dict[str, Any] = {}
         if result.title is not None:
             kwargs["title"] = result.title
         if result.description is not None:
@@ -864,6 +907,34 @@ class WorkspaceListScreen(Screen[None]):
                 fresh[state.id] = sessions[0].activity
         self._agent_activity = fresh
         ws_list.set_agent_states({wid: act.state for wid, act in fresh.items()})
+        ws_list.set_phases(self._visible_phases(ws_list))
+
+    def _visible_phases(self, ws_list: WorkspaceList) -> dict[str, PhaseReport]:
+        """Each visible workspace's reported phase, for the card axis.
+
+        It rides this tick rather than getting one of its own because the cost
+        is a rounding error next to what the tick already pays: measured on
+        this host, one `phase()` is **0.47 ms** against the transcript parse
+        `sessions_for` costs per row immediately above — so a 20-row fleet adds
+        ~10 ms per 3 s tick, well under a percent of a core.
+
+        That measurement is the whole reason the axis is pushed to every card
+        instead of staying on the peek rail's selected workspace. The cost was
+        assumed to be per-row file I/O worth avoiding; it is not.
+
+        Best-effort per row, like the agent axis: an unreadable phase file
+        leaves that card with no segment rather than failing the tick.
+        """
+        phases: dict[str, PhaseReport] = {}
+        for state in ws_list.visible_states:
+            try:
+                report = self._manager.phase(state.id)
+            except Exception as exc:  # best-effort, peek contract
+                logger.debug("phase for {} failed: {}", state.id, exc)
+                continue
+            if report is not None:
+                phases[state.id] = report
+        return phases
 
     def _tick_pane(self) -> None:
         """Fast ticker: tmux-only pane snapshot, spliced into the cached peek.
@@ -901,7 +972,11 @@ class WorkspaceListScreen(Screen[None]):
         # tick would re-add them (flicker). The fast tick stays tmux-only:
         # no transcript parse on this path.
         self.query_one(PeekRail).set_peek(
-            spliced, agent=self._agent_activity.get(wid), turns=self._cached_turns
+            spliced,
+            agent=self._agent_activity.get(wid),
+            turns=self._cached_turns,
+            tickets=self._ticket_refs.get(wid),
+            ticket_claims=self._ticket_claims(),
         )
 
     def _tick_pulse(self) -> None:
@@ -947,6 +1022,8 @@ class WorkspaceListScreen(Screen[None]):
         self._cached_turns = self._recent_turns(wid)
         self._turns_wid = wid
         self._cached_provision = self._provision_progress(peek)
+        self._cached_phase = self._phase_report(wid)
+        self._resolve_tickets(peek.state)
         # The agent map is fed by the slow tick; a row it hasn't covered yet
         # (fresh selection, sessionless workspace) simply renders no line.
         rail.set_peek(
@@ -954,7 +1031,84 @@ class WorkspaceListScreen(Screen[None]):
             agent=self._agent_activity.get(wid),
             turns=self._cached_turns,
             provision=self._cached_provision,
+            tickets=self._ticket_refs.get(wid),
+            ticket_claims=self._ticket_claims(),
         )
+
+    def _ticket_claims(self) -> dict[str, TicketClaim] | None:
+        """Per-ticket phase claims, keyed the way `TicketRef.key` spells them.
+
+        A pure projection of the phase report this screen already read — the
+        join needs no second source, because the agent writes its claims under
+        the same `provider:id` string the store deduplicates refs by.
+        """
+        if self._cached_phase is None:
+            return None
+        return {claim.ticket: claim for claim in self._cached_phase.tickets}
+
+    def _phase_report(self, wid: str) -> PhaseReport | None:
+        """The selection's reported phase. One file read, on the slow path.
+
+        Best-effort like every other read here: a workspace whose agent never
+        reported has no file, which is a `None` rather than a failure.
+        """
+        try:
+            return self._manager.phase(wid)
+        except Exception as exc:  # best-effort, peek contract
+            logger.debug("phase read for {} failed: {}", wid, exc)
+            return None
+
+    def _resolve_tickets(self, state: WorkspaceState) -> None:
+        """Resolve this selection's ticket titles once, off the UI thread.
+
+        The read is a forge request per ref, so it can never run inline: Textual
+        is single-threaded, and a slow tracker would freeze every timer, every
+        keypress and the whole repaint. It is also not on any tick — one shot
+        per workspace per session, cached, because a ticket title moves on a
+        human timescale while this screen repaints at 4 Hz.
+        """
+        if not state.ticket_refs or state.id in self._ticket_refs:
+            return
+        # Claim the slot before the worker starts so a second selection of the
+        # same row cannot queue a duplicate fetch; the stored value is replaced
+        # with the resolved one when it lands.
+        self._ticket_refs[state.id] = tuple(state.ticket_refs)
+        wid, refs = state.id, tuple(state.ticket_refs)
+        self.run_worker(
+            lambda: self._read_tickets(wid, refs),
+            thread=True,
+            group="tickets",
+        )
+
+    def _read_tickets(self, wid: str, refs: tuple[TicketRef, ...]) -> None:
+        """Worker body: one GET per ref, every failure degrading to the bare ref."""
+        providers = self._manager.ticket_providers
+        resolved: list[TicketRef] = []
+        for ref in refs:
+            try:
+                provider = providers.get(ref.provider)
+                resolved.append(
+                    provider.get_pull_request(ref.id)
+                    if ref.kind == "pull_request"
+                    else provider.get_ticket(ref.id)
+                )
+            except Exception as exc:  # enrichment never breaks the rail
+                logger.debug("ticket enrichment failed for {}: {}", ref.key, exc)
+                resolved.append(ref)
+        self.post_message(TicketsResolved(wid, tuple(resolved)))
+
+    def on_tickets_resolved(self, message: TicketsResolved) -> None:
+        """Store the resolved refs and repaint if they are still on screen."""
+        self._ticket_refs[message.workspace_id] = message.refs
+        if self._selected_id() == message.workspace_id and self._cached_peek is not None:
+            self.query_one(PeekRail).set_peek(
+                self._cached_peek,
+                agent=self._agent_activity.get(message.workspace_id),
+                turns=self._cached_turns,
+                provision=self._cached_provision,
+                tickets=message.refs,
+                ticket_claims=self._ticket_claims(),
+            )
 
     def _provision_progress(self, peek: WorkspacePeek) -> ProvisionProgress | None:
         """Build progress for a PROVISIONING selection, else ``None``.
@@ -1195,6 +1349,23 @@ class WorkspaceListScreen(Screen[None]):
         bar = self.query_one(StatusBar)
         bar.update_available = status.update_available
         bar.latest_version = status.latest or ""
+
+    def _read_quotas(self) -> None:
+        """Read quotas once off-loop; failures leave existing chrome untouched."""
+        service: UsageService | None = None
+        try:
+            service = UsageService(cfg=self._manager.config, registry=self._registry)
+            quotas = service.quotas()
+        except Exception as exc:  # best-effort chrome must not surface a failure
+            logger.debug("quota footer read failed: {}", exc)
+            return
+        finally:
+            if service is not None:
+                service.close()
+        self.post_message(QuotasLoaded(quotas))
+
+    def on_quotas_loaded(self, message: QuotasLoaded) -> None:
+        self.query_one(QuotaFooter).set_quotas(message.quotas)
 
     def _refresh_footer(self) -> None:
         groups = self._footer_groups()

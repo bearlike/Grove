@@ -16,6 +16,7 @@ export {
   findWorkspaceActivity,
   lastActivityAt,
   lastActivityIso,
+  newestActivityIso,
   peekFromActivity,
   pendingQuestions,
   primarySessionId,
@@ -26,6 +27,8 @@ export {
 export type { StreamAction } from "./activity";
 
 export { baseBranchOf } from "./branch";
+
+export { branchPlanFor, buildCreateRequest, customModelError, deriveTitle } from "./launch";
 
 export { mergeTurns, turnCursor } from "./turns";
 export type { HeldWindow, TurnMerge, TurnWindow } from "./turns";
