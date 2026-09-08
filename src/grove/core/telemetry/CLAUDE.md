@@ -139,6 +139,66 @@ instance, so a blank row is work that was recorded and cannot be found.
   `grove.agent.attachment` (`spawn_tool` | `turn_window`), because one is
   evidence about causation and the other is a clock, and a reader comparing two
   sub-agents needs to know which they are looking at.
+- **A `grove.*` attribute is STORED and UNFINDABLE, so anything a consumer must
+  SELECT on is written a second time, flat (`shell.py`, `semconv.filterable_identity`).**
+  LangFuse files every attribute it does not recognise under `metadata.attributes`
+  and every resource attribute under `metadata.resourceAttributes`, and its own
+  docs state that only top-level `metadata` keys are filterable — so the whole
+  identity vocabulary above was correct, present and matched nothing, which is
+  the worst of the three states because the data is visibly there. The escape is
+  the documented `langfuse.observation.metadata.<key>` prefix. **Dots are folded
+  to underscores** on the way through: the vendor's filterable examples are all
+  flat identifiers and a dotted key is exactly the shape its nesting rules use,
+  so `grove.tool.category` risks re-creating the nesting the prefix exists to
+  escape. The flat name is DERIVED from the attribute it mirrors, never a second
+  hand-written table. The flat set is deliberately a third, smaller projection
+  beside attributes and tags: attributes are the complete record, tags are what
+  a human clicks, metadata is what an automated rule filters a cohort on.
+- **A shell call is the one tool call worth normalizing across harnesses, and it
+  is normalized in `SpanRecord.tool` so BOTH tiers get it from one place.**
+  Claude spells it `Bash`/`command`, Codex spells it `exec_command`/`cmd`, and
+  the native OTLP spells it `full_command` on the span with `bash_command` on a
+  `tool.output` event (both measured in the checked-in capture). An evaluator is
+  one rule with one variable mapping and cannot hold a per-harness case, so
+  `telemetry/shell.py` publishes one category, one metadata block and stable
+  `input.command` / `output.content` envelopes. **Classification is by exact
+  provider tool NAME** (`agents/shell.py`, shared with the usage audit so the
+  two cannot disagree) — never by substring, never by sniffing the payload, and
+  never converting an arbitrary tool into a shell observation. The category is
+  therefore also the EXCLUSION filter: an external hook exporting the same
+  transcript beside Grove carries no category at all, so selecting on it is
+  structurally safe without disabling anybody's hook.
+- **Result evidence and process outcome are TWO keys, and success is asserted
+  from a recorded exit code alone.** `empty` + `succeeded` is the case that
+  forces the split: a command that printed nothing and exited zero is a
+  complete, successful call, and one enum would have to drop one of those facts.
+  The absence of a tool-error flag is never evidence — Codex records no
+  structural flag on a shell result at all, so a published `false` there reads
+  as "this worked" to any consumer that does not know which harness wrote it,
+  and only `true` is ever emitted. `redacted` exists for the same reason at the
+  other end: a content policy nulls the TEXT of a call that plainly finished, so
+  folding it onto `pending` reported a redacting fleet as permanently
+  mid-command. **Whether a result LANDED cannot be read off whether its text is
+  present** — the caller holds the record and must say (`resolved`).
+- **Clipping an ENCODED payload produces a document that is a valid attribute
+  and invalid JSON, and nothing on the wire admits it.** `json.dumps(x)[:CAP]`
+  cuts mid-token. Fitting now happens on the PAYLOAD before encoding, optional
+  keys are shed before the graded text is cut, and the flag rides inside the
+  payload (it only ever flips `false` → `true`, which shortens the encoding, so
+  a payload measured as fitting cannot stop fitting when marked). **The search
+  for the surviving prefix is exact rather than arithmetic**: JSON escaping is
+  not length-preserving, so a budget from the unescaped length overflows on
+  precisely the multi-line output the cap exists to carry. `ATTR_TEXT_CAP` is
+  Grove's own conservative ceiling, not a vendor limit — LangFuse documents a
+  5 MB request ceiling and no per-attribute limit — and it stays because a
+  receiver rejecting one oversized span drops the batch it rode in.
+- **Changing a span's attributes changes `TraceManifest.fingerprint`, which is a
+  HISTORY decision, not a schema one.** `telemetry_backfill` compares that hash
+  against a completed checkpoint and reports `degraded` on a mismatch: it never
+  re-exports and never deletes. So a canonical-shape change applies to sessions
+  replayed from here on and leaves history exactly as it was — which is the
+  correct default, and the reason no reindex is needed. Do not "fix" the
+  mismatch by clearing checkpoints.
 - **A generation span is zero-width and that is the honest answer, so do not
   "fix" it.** A transcript stamps a message once, when it was written, and
   carries no request-start or first-token time; tool spans get real durations

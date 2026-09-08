@@ -17,6 +17,9 @@ export const groveKeys = {
   peek: (id: string) => ["grove", "workspaces", id, "peek"] as const,
   queue: (id: string) => ["grove", "workspaces", id, "queue"] as const,
   todo: (id: string) => ["grove", "workspaces", id, "todo"] as const,
+  history: (id: string) => ["grove", "workspaces", id, "history"] as const,
+  panels: (id: string) => ["grove", "workspaces", id, "panels"] as const,
+  diagram: (id: string) => ["grove", "workspaces", id, "diagram"] as const,
   commits: (id: string) => ["grove", "workspaces", id, "commits"] as const,
   diff: (id: string) => ["grove", "workspaces", id, "diff"] as const,
   controls: (id: string) => ["grove", "workspaces", id, "controls"] as const,
@@ -29,6 +32,10 @@ export const groveKeys = {
     ["grove", "workspaces", id, "sessions", sessionId, "turns"] as const,
 
   catalog: (limit?: number) => ["grove", "sessions", "catalog", limit ?? null] as const,
+  gallery: () => ["grove", "gallery"] as const,
+  galleryDocument: (id: string) => ["grove", "gallery", id, "document"] as const,
+  galleryPreview: (id: string, digest: string) =>
+    ["grove", "gallery", id, "preview", digest] as const,
   catalogTurns: (sessionId: string, kind: string, cwd: string) =>
     ["grove", "sessions", sessionId, "turns", kind, cwd] as const,
 
@@ -42,6 +49,10 @@ export const groveKeys = {
     ["grove", "tickets", repo, provider, id] as const,
 
   agents: (repo: string) => ["grove", "agents", repo] as const,
+  // Keyed by agent as well as repo: two agents on one repo legitimately offer
+  // different catalogs, and a shared key would serve one agent's models to the
+  // other for as long as the query stayed fresh.
+  models: (repo: string, agent: string) => ["grove", "models", repo, agent] as const,
   branches: (repo: string, scope: "local" | "remote") =>
     ["grove", "branches", repo, scope] as const,
   defaults: (repo: string) => ["grove", "defaults", repo] as const,

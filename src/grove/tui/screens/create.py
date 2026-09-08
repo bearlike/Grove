@@ -329,6 +329,9 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
     CreateWorkspaceScreen #skip-init {
         margin-bottom: 1;
     }
+    CreateWorkspaceScreen #native {
+        margin-bottom: 1;
+    }
     CreateWorkspaceScreen #runtime-hint {
         color: $text-muted;
         margin-bottom: 1;
@@ -421,21 +424,20 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         self._has_devcontainer = (repo_root / ".devcontainer" / "devcontainer.json").exists()
         # The Runtime picker offers exactly Host/Container — no third "default
         # (config)" option — and pre-selects whichever one the cascade would
-        # pick for an unopinionated create. `container.enabled` IS that cascade
-        # default (`core/runtime.py`'s `RuntimeResolver.resolve` reads this same
-        # field when `requested is None`); reusing it here rather than a copy
-        # is what keeps this in sync with the engine instead of drifting.
-        cascade_runtime = Runtime.CONTAINER if cfg.container.enabled else Runtime.HOST
-        self._default_runtime = (
-            Runtime(defaults.runtime) if defaults.runtime is not None else cascade_runtime
-        )
+        # pick for an unopinionated create. `cfg.default_runtime` IS that
+        # answer (`core/runtime.py`'s `RuntimeResolver.resolve` reads the same
+        # property when `requested is None`); reusing it rather than re-deriving
+        # from `container.enabled` is what keeps the picker honest. This screen
+        # displaying one runtime while the engine chose another is the bug that
+        # moved the resolution into config in the first place.
+        self._default_runtime = Runtime(cfg.default_runtime)
         # Presentation hint only, same reasoning as `_default_runtime` above:
         # `cfg.brief.enabled` IS the cascade's answer for an unopinionated
         # create, reused here (never re-derived) to name it on the "cascade"
         # option instead of leaving it an ambiguous blank.
-        self._default_brief = cfg.brief.enabled
+        self._default_brief = cfg.default_brief
         self._default_brief_choice = self._brief_default(defaults.brief)
-        self._default_skip_init = bool(defaults.skip_init)
+        self._default_skip_init = cfg.default_skip_init
 
     def _agent_default(self, agent: str | None) -> str:
         """Use a saved agent only while it still belongs to this roster."""
@@ -645,6 +647,9 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
     def _build_remote_options(self) -> list[tuple[str, str]]:
         return [(b.name, b.name) for b in self._remote_branches]
 
+    def _spec(self, name: str) -> AgentSpec | None:
+        return next((spec for spec in self._agents if spec.name == name), None)
+
     def compose(self) -> ComposeResult:
         agent_options = [(a.name, a.name) for a in self._agents]
         with Vertical(classes="grove-dialog"):
@@ -655,6 +660,18 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 value=self._default_agent,
                 id="agent",
                 allow_blank=False,
+            )
+            # The launch MODE is a per-create choice over the entry's own
+            # default, never a second roster entry: any profile (a gateway, a
+            # pinned config dir) can run either way. Shown only for a kind with
+            # a native protocol; the box starts on the entry's `native` and
+            # re-seeds when the agent changes, so an untouched box always says
+            # what this create will actually do.
+            yield Checkbox(
+                "Grove-owned native session (headless; interrupt, model switch and answers "
+                "go to the agent's own protocol)",
+                value=self._native_default(self._default_agent),
+                id="native",
             )
             yield Label("Runtime:", classes="field-label")
             yield Select(
@@ -757,6 +774,7 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             ]
         )
         self.query_one("#title", Input).focus()
+        self._sync_native_visibility(self._default_agent)
 
     # ─── live preview / mode toggling ──────────────────────────────────────
 
@@ -767,9 +785,21 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             self._title_user_edited = bool(event.value.strip())
         self._refresh_preview()
 
+    def _native_default(self, agent: str) -> bool:
+        spec = self._spec(agent)
+        return spec is not None and spec.owns_native_session
+
+    def _sync_native_visibility(self, agent: str) -> None:
+        """Show the mode box only where a mode exists; re-seed it to the entry's default."""
+        spec = self._spec(agent)
+        box = self.query_one("#native", Checkbox)
+        box.display = spec is not None and spec.kind in AgentSpec.NATIVE_KINDS
+        box.value = self._native_default(agent)
+
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "agent":
             self._sync_model_options(str(event.select.value))
+            self._sync_native_visibility(str(event.select.value))
         elif event.select.id == "model":
             self._sync_custom_model_visibility()
         elif event.select.id == "cwd":
@@ -980,15 +1010,22 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         # at modal-open.
         brief_value = str(self.query_one("#brief", Select).value)
         brief = None if brief_value == _BRIEF_CASCADE else brief_value == _BRIEF_ON
+        agent_name = str(self.query_one("#agent", Select).value)
+        # The box is only meaningful for a kind with a protocol; for any other
+        # it is hidden and the request says nothing, so the engine's kind gate
+        # decides rather than a stale checkbox value.
+        native_box = self.query_one("#native", Checkbox)
+        native = native_box.value if native_box.display else None
         try:
             request = CreateWorkspaceRequest(
-                agent_name=str(self.query_one("#agent", Select).value),
+                agent_name=agent_name,
                 title=title,
                 branch_plan=plan,
                 skip_init=skip_init,
                 model=model,
                 runtime=runtime,
                 brief=brief,
+                native=native,
                 project_cwd=self._cwd_value(),
             )
         except Exception:

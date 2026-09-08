@@ -95,6 +95,13 @@ class Turn(BaseModel):
     reply: str = ""
     thinking: str | None = None
     tools: tuple[ToolStep, ...] = ()
+    burst: int = Field(default=0, ge=0)
+    """Extra synthetic tool calls drawn from the history corpus and inserted
+    BEFORE the authored ``tools``. A hand-written turn carries a handful of
+    legible calls; a real one carries dozens, and the Activity card's counts and
+    token classes only read as a real snapshot when the transcript does. The
+    authored steps stay last so a turn that ends open still ends on its own
+    named call, and the planter, not this model, draws the burst."""
 
     @property
     def open_step(self) -> ToolStep | None:

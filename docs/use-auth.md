@@ -32,7 +32,7 @@ Pairing is a three-step handshake, out of band, and a browser's first visit land
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/tui-pair-approve.png" alt="Grove TUI pairing modal prompting to approve a new device">
-        <figcaption>Step 3, on the host. The TUI pops this modal on its own: approve with <code>a</code>, deny with <code>d</code>.</figcaption>
+        <figcaption>Step 3, on the host. The TUI pops this modal on its own: approve with <kbd>a</kbd>, deny with <kbd>d</kbd>.</figcaption>
       </figure>
     </div>
   </div>

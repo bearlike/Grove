@@ -754,6 +754,11 @@ class WorkspaceListScreen(Screen[None]):
             self._flash(f"attach failed: {exc}")
             return
         argv = instr.terminal_argv()
+        if instr.read_only:
+            # The pane is the native worker's protocol log; the attach is a
+            # viewer, and this is the one moment to say so before the screen
+            # is somebody else's.
+            self._flash("native session: read-only event log (steer with m)")
         if isinstance(instr, ContainerAttach):
             # The container's own tmux owns this session, so there is no
             # host session to pre-size and no host client to re-point:

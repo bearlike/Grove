@@ -155,6 +155,7 @@ class ContainerShell:
             term_fallback=tmux.term_fallback,
             detached=detached,
             conf=self.container.tmux_conf,
+            size=self.cfg.tmux.detached_size,
         )
 
 

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
+from grove._skills import SkillLibrary
 from grove._truststore import CA_PATH_ENV
 from grove.client import TransportError
 from grove.mcp.server import GroveMcpServer, McpServerConfig, SharedSecretVerifier, main
@@ -19,10 +20,16 @@ EXPECTED_TOOLS = {
     "grove_list_projects",
     "grove_list_workspaces",
     "grove_get_workspace",
+    "grove_get_skill",
+    "grove_read_diagram",
+    "grove_read_diagram_preview",
     "grove_list_agents",
     "grove_list_sessions",
     "grove_create_workspace",
     "grove_update_workspace",
+    "grove_open_diagram",
+    "grove_update_diagram",
+    "grove_stop_diagram",
     "grove_peek_workspace",
     "grove_get_fleet_status",
     "grove_pause_workspace",
@@ -48,6 +55,9 @@ NON_MUTATING_TOOLS = {
     "grove_list_projects",
     "grove_list_workspaces",
     "grove_get_workspace",
+    "grove_get_skill",
+    "grove_read_diagram",
+    "grove_read_diagram_preview",
     "grove_list_agents",
     "grove_list_sessions",
     "grove_peek_workspace",
@@ -307,6 +317,37 @@ def test_stdio_needs_no_inbound_token(fake_client: FakeGroveClient) -> None:
 
 
 # ─── read-only tool registration ─────────────────────────────────────────────
+
+
+async def test_skill_resource_reads_exact_installed_bundle(
+    server: GroveMcpServer,
+) -> None:
+    templates = await server.fastmcp.list_resource_templates()
+    assert [template.uriTemplate for template in templates] == ["grove://skills/{name}"]
+
+    contents = list(await server.fastmcp.read_resource("grove://skills/collaborating-on-diagrams"))
+    assert contents[0].content == SkillLibrary.read("collaborating-on-diagrams")
+
+
+async def test_detailed_catalog_is_available_through_registered_mcp_tool(
+    server: GroveMcpServer,
+) -> None:
+    tools = await server.fastmcp.list_tools()
+    tool = next(tool for tool in tools if tool.name == "grove_get_skill")
+    assert tool.inputSchema["properties"]["details"]["default"] is False
+    _, structured = await server.fastmcp.call_tool("grove_get_skill", {"details": True})
+    assert structured is not None
+    rows = structured["result"]
+    assert [row["name"] for row in rows] == list(SkillLibrary.names())
+    assert all(row["description"] and row["cli"] and row["resource"] for row in rows)
+
+
+async def test_skill_resource_rejects_unadvertised_name(server: GroveMcpServer) -> None:
+    with pytest.raises(ValueError, match="unknown bundled skill"):
+        list(await server.fastmcp.read_resource("grove://skills/not-a-skill"))
+
+    with pytest.raises(ValueError, match="Unknown resource"):
+        list(await server.fastmcp.read_resource("grove://skills/../collaborating-on-diagrams"))
 
 
 async def test_read_only_registers_only_the_non_mutating_tools(

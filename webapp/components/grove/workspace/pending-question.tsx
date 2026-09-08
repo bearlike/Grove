@@ -1,68 +1,39 @@
 "use client";
 
-/**
- * Grove's live question form — a PORT of
- * `components/elements/elicitation-form.tsx`, kept diffable against it line for
- * line.
- *
- * WHY a port and not a composition: the vendored form renders choice, toggle
- * and text values as display-only spans. Its only callbacks are the form-level
- * Send and Decline actions, so no prop can collect or change a field value.
- *
- * THE RULE FOR EDITING THIS FILE: only the deltas below may diverge from the
- * vendored original. Everything else is upstream's anatomy, typography,
- * spacing, colour and surface treatment.
- *
- *   1. Fields are controls: choice spans become `button`s with `aria-pressed`,
- *      and text spans become controlled `input`s. Grove's local `Selection`
- *      state supplies their values and preserves multiselect toggling.
- *   2. Send follows Grove's wire grammar: the whole batch submits atomically;
- *      a lone single-select submits on its tap, a lone free-text question on
- *      Enter, and multi-question/multiselect batches use one Send button. There
- *      is no Decline control because the daemon accepts only complete answers.
- *      The mutation remains outside every state updater so React cannot
- *      double-POST it in development.
- *   3. The shell is full-width (`max-w-none`) like the composed historical form,
- *      and retains Grove's existing `pending-question`, `question-option` and
- *      `question-submit` test seams.
- *   4. An option carries its `description`. The vendored field models options as
- *      bare `string`s, so the description has nowhere to go upstream — but it is
- *      the whole reason two options are distinguishable, so a described option
- *      set stacks vertically and prints the sentence under the label. An
- *      undescribed set keeps upstream's wrapping pill row exactly.
- *   5. A single-select question also offers an answer the agent did not list
- *      (`acceptsCustomText`), because the picker's synthetic "Type something."
- *      option is real and reachable. Its text is validated against the daemon's
- *      own control-character rule, inline, so a paste never becomes a 422.
- *
- * `components/elements/elicitation-form.tsx` stays in place, unmodified: it is
- * the oracle this file is diffed against, and `registry:check` verifies it.
- */
-
 import { useState } from "react";
-import { PlugIcon } from "lucide-react";
 
-import { field, inkButton, mono, paper } from "@/components/elements/surfaces";
+import { field } from "@/components/elements/surfaces";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { PendingQuestionGroup } from "@/lib/grove/runtime";
 import type { AgentQuestionView, QuestionAnswerItem } from "@/lib/grove/api";
-import { QuestionView } from "./question-view";
 import {
-  acceptsCustomText,
-  buildAnswerPlan,
-  needsExplicitSubmit,
+  answerItem,
+  confirmedGroupPlan,
+  selectionOf,
   textError,
   toggleOption,
+  typeText,
   type Selection,
 } from "./answer-plan";
+import { PlanApproval } from "./plan-approval";
+import { QuestionCard, QuestionOptions, selectionSummary } from "./question-card";
 
 /**
- * The LIVE question batch — the one place in this surface the user answers the
- * agent rather than reading it.
+ * The live questions in the transcript footer.
  *
- * A `confirm` batch (an agent asking to proceed with its plan) has no options on
- * the wire and no answer shape the daemon accepts, so it degrades to the
- * read-only approval card: the human answers it in the terminal.
+ * A question is confirmed one at a time, matching the reader's mental model
+ * and the one-card history shape. The current write contract nevertheless
+ * accepts exactly one ordered answer list for the whole tool call, so confirming
+ * the last complete card dispatches that one group request. The UI never
+ * pretends each confirmation reached the agent independently.
+ *
+ * EVERY KIND IS ANSWERABLE FROM HERE. It used to be select-only, because the
+ * answer was typed into the provider's picker and that picker accepted free
+ * text on a single-select and nowhere else. The daemon now dismisses the picker
+ * and delivers the batch back as prose, so the widget's grammar constrains
+ * nothing: a `multi_select` genuinely posts, a `free_text` has a field, and a
+ * `confirm` — which carries no options at all — is answered in words.
  */
 export function PendingQuestion({
   group,
@@ -74,196 +45,216 @@ export function PendingQuestion({
   submitting: boolean;
 }) {
   const [selections, setSelections] = useState<Record<string, Selection>>({});
+  const [confirmed, setConfirmed] = useState<Record<string, true>>({});
 
-  if (group.presentation.kind === "approval" || submitting) {
-    return <QuestionView presentation={group.presentation} />;
-  }
-
-  const plan = buildAnswerPlan(group.questions, selections);
-  const explicit = needsExplicitSubmit(group.questions);
-
-  // The mutation fires OUTSIDE any state updater: React runs updaters twice in
-  // development, which would double-POST an answer.
   const choose = (question: AgentQuestionView, index: number): void => {
-    const next = {
-      ...selections,
-      [question.id]: toggleOption(selections[question.id], index, question.multiselect),
-    };
-    setSelections(next);
-    if (!explicit) {
-      const immediate = buildAnswerPlan(group.questions, next);
-      if (immediate) onSubmit(group.groupId, immediate);
-    }
+    setSelections((current) => ({
+      ...current,
+      [question.id]: toggleOption(current[question.id], index, question.multiselect),
+    }));
+    setConfirmed((current) => without(current, question.id));
   };
 
   const type = (question: AgentQuestionView, text: string): void => {
-    setSelections((current) => ({ ...current, [question.id]: { kind: "text", text } }));
+    setSelections((current) => ({ ...current, [question.id]: typeText(current[question.id], text) }));
+    setConfirmed((current) => without(current, question.id));
   };
 
-  // Enter sends only where a tap would have: a batch with a review step waits
-  // for Send, exactly as the terminal does.
-  const submitOnEnter = explicit ? undefined : () => plan && onSubmit(group.groupId, plan);
+  const confirm = (question: AgentQuestionView): void => {
+    if (!answerItem(selections[question.id])) return;
+    const nextConfirmed = { ...confirmed, [question.id]: true as const };
+    setConfirmed(nextConfirmed);
+
+    // The delivery API has no per-question address: a tool_use_id plus an
+    // ordered full group is the only expressible write. Confirmation remains
+    // local until every card has been explicitly confirmed.
+    const plan = confirmedGroupPlan(group.questions, selections, nextConfirmed);
+    if (plan) onSubmit(group.groupId, plan);
+  };
+
+  // Answering a plan picks a row in the agent's own dialog, so the click IS the
+  // answer: one option, submitted immediately, with no local Confirm step. A
+  // plan is never batched with other questions (`ExitPlanMode` is its own call),
+  // so this group is always the whole payload.
+  const choosePlan = (question: AgentQuestionView, index: number): void => {
+    if (submitting) return;
+    onSubmit(group.groupId, [{ selected_indexes: [index] }]);
+  };
 
   return (
-    <div
-      data-slot="elicitation-form"
-      data-testid="pending-question"
-      className={cn(paper, "flex w-full max-w-none flex-col gap-3.5 rounded-[20px] p-4")}
-    >
-      <div className="flex items-center gap-2.5">
-        <span className="bg-foreground/[0.05] text-foreground/45 flex size-7 shrink-0 items-center justify-center rounded-lg">
-          <PlugIcon className="size-3.5" />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">
-          {group.presentation.server}
-        </span>
-        <span className={cn(mono, "text-foreground/30 shrink-0")}>needs input</span>
-      </div>
+    <div className="flex w-full flex-col gap-3" data-testid="pending-question">
+      {group.questions.map((question) => {
+        const selection = selections[question.id];
+        const isConfirmed = confirmed[question.id] === true;
+        const state = submitting ? "submitting" : isConfirmed ? "confirmed" : "pending";
 
-      <p className="text-foreground/55 text-xs leading-relaxed">{group.presentation.message}</p>
-
-      <div className="flex flex-col gap-2.5">
-        {group.questions.map((question) => {
-          const labelId = `question-label-${question.id}`;
-          const selection = selections[question.id];
-          const described = question.options.some((option) => option.description);
+        if (question.kind === "plan_approval") {
           return (
-            <div key={question.id} className="flex flex-col gap-1">
-              <span id={labelId} className={cn(mono, "text-foreground/35")}>
-                {question.header ?? question.prompt}
-              </span>
-              {question.options.length > 0 ? (
-                <>
-                  <div
-                    role="group"
-                    aria-labelledby={labelId}
-                    className={cn("flex gap-1.5", described ? "flex-col" : "flex-wrap")}
-                  >
-                    {question.options.map((option, index) => {
-                      const chosen = isChosen(selection, index);
-                      return (
-                        <button
-                          type="button"
-                          key={option.label}
-                          aria-pressed={chosen}
-                          onClick={() => choose(question, index)}
-                          data-testid="question-option"
-                          className={cn(
-                            "text-xs transition-colors",
-                            described
-                              ? "flex flex-col items-start gap-0.5 rounded-xl px-2.5 py-1.5 text-left"
-                              : "rounded-full px-2.5 py-1",
-                            chosen
-                              ? "bg-foreground text-background"
-                              : cn(field, "text-foreground/55"),
-                          )}
-                        >
-                          <span>{option.label}</span>
-                          {option.description && (
-                            <span
-                              data-testid="question-option-description"
-                              className={cn(
-                                "leading-relaxed",
-                                chosen ? "text-background/70" : "text-foreground/40",
-                              )}
-                            >
-                              {option.description}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {acceptsCustomText(question) && (
-                    <TextAnswer
-                      question={question}
-                      selection={selection}
-                      // The agent's own options are the answer it expects, so
-                      // this reads as the alternative it is rather than a
-                      // second, equal field.
-                      placeholder="Or type your own answer"
-                      testid="question-custom"
-                      onType={type}
-                      {...(submitOnEnter ? { onEnter: submitOnEnter } : {})}
-                    />
-                  )}
-                </>
-              ) : (
-                <TextAnswer
-                  question={question}
-                  selection={selection}
-                  placeholder={question.prompt}
-                  testid="question-text"
-                  labelledBy={labelId}
-                  onType={type}
-                  {...(submitOnEnter ? { onEnter: submitOnEnter } : {})}
-                />
-              )}
-            </div>
+            <PlanApproval
+              key={question.id}
+              question={question}
+              disabled={submitting}
+              onChoose={(index) => choosePlan(question, index)}
+            />
           );
-        })}
-      </div>
+        }
 
-      <div className="flex h-8 items-center justify-end gap-2">
-        {explicit && (
-          <button
-            type="button"
-            disabled={plan === null}
-            onClick={() => plan && onSubmit(group.groupId, plan)}
-            data-testid="question-submit"
-            className={cn(inkButton, "flex h-8 items-center rounded-full px-3.5 text-xs font-medium")}
-          >
-            Send
-          </button>
-        )}
+        return (
+          <QuestionCard key={question.id} question={question} state={state}>
+            {isConfirmed ? (
+              <ConfirmedAnswer
+                question={question}
+                selection={selection}
+                onChange={() => setConfirmed((current) => without(current, question.id))}
+              />
+            ) : (
+              <QuestionEditor
+                question={question}
+                selection={selection}
+                disabled={submitting}
+                onChoose={(index) => choose(question, index)}
+                onType={(text) => type(question, text)}
+                onConfirm={() => confirm(question)}
+              />
+            )}
+          </QuestionCard>
+        );
+      })}
+    </div>
+  );
+}
+
+function QuestionEditor({
+  question,
+  selection,
+  disabled,
+  onChoose,
+  onType,
+  onConfirm,
+}: {
+  question: AgentQuestionView;
+  selection: Selection | undefined;
+  disabled: boolean;
+  onChoose: (index: number) => void;
+  onType: (text: string) => void;
+  onConfirm: () => void;
+}) {
+  const { text } = selectionOf(selection);
+  const error = textError(text);
+  const complete = answerItem(selection) !== null;
+
+  return (
+    <>
+      <QuestionOptions question={question} selection={selection} onChoose={onChoose} disabled={disabled} />
+      {question.kind === "confirm" && <QuestionStance onPick={onType} disabled={disabled} />}
+      <QuestionTextAnswer
+        question={question}
+        value={text}
+        error={error}
+        onChange={onType}
+        disabled={disabled}
+      />
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          disabled={disabled || !complete}
+          onClick={onConfirm}
+          data-testid="question-confirm"
+        >
+          Confirm answer
+        </Button>
       </div>
+    </>
+  );
+}
+
+/**
+ * Approve / reject for a `confirm`, whose answer the wire carries as TEXT.
+ *
+ * An `ExitPlanMode` confirm offers no options, so there is no index to send and
+ * a choice control here would be a claim about a payload that does not exist.
+ * These are TEMPLATES for the field below: clicking one writes the sentence the
+ * daemon will actually deliver, and the field stays editable — so "approve, but
+ * do the migration last" is one click plus typing, rather than a second control
+ * that can disagree with the text beside it. Picking a stance replaces whatever
+ * is in the field, because the field IS the answer and two of them cannot both
+ * be it.
+ */
+const STANCES = [
+  { label: "Approve", text: "Yes, go ahead with this plan." },
+  { label: "Reject", text: "No, do not go ahead with this plan." },
+] as const;
+
+function QuestionStance({
+  onPick,
+  disabled,
+}: {
+  onPick: (text: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {STANCES.map((stance) => (
+        <Button
+          key={stance.label}
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={() => onPick(stance.text)}
+          data-testid="question-stance"
+        >
+          {stance.label}
+        </Button>
+      ))}
     </div>
   );
 }
 
 /**
- * One typed answer, with the daemon's own refusal stated beside it.
+ * The free-text answer, offered on every question kind.
  *
- * Shared by the optionless field and delta 5's custom answer so the two cannot
- * validate differently — the whole point of checking client-side is that the
- * message is the same one the 422 would have carried.
+ * A TEXTAREA rather than an input, and that is a wire fact rather than a taste:
+ * the daemon now accepts newlines and tabs, and an `<input>` strips a line
+ * break out of a paste before any handler sees it — so a single-line control
+ * would make the widened contract unreachable. It reproduces the vendored
+ * elicitation form's own field treatment (this file is registered as that
+ * component's port), differing only in being editable.
  */
-function TextAnswer({
+function QuestionTextAnswer({
   question,
-  selection,
-  placeholder,
-  testid,
-  labelledBy,
-  onType,
-  onEnter,
+  value,
+  error,
+  onChange,
+  disabled,
 }: {
   question: AgentQuestionView;
-  selection: Selection | undefined;
-  placeholder: string;
-  testid: string;
-  labelledBy?: string;
-  onType: (question: AgentQuestionView, text: string) => void;
-  onEnter?: () => void;
+  value: string;
+  error: string | null;
+  onChange: (value: string) => void;
+  disabled: boolean;
 }) {
-  const value = textOf(selection);
-  const error = textError(value);
   const errorId = `question-error-${question.id}`;
+  // A question with options gets a secondary box: the options are the answer
+  // and this qualifies them. One with none gets the primary field.
+  const custom = question.options.length > 0;
   return (
     <>
-      <input
+      <textarea
         value={value}
-        placeholder={placeholder}
+        rows={custom ? 2 : 3}
+        placeholder={placeholderFor(question)}
+        disabled={disabled}
+        aria-label={question.header ?? question.prompt}
         aria-invalid={error !== null}
-        {...(labelledBy ? { "aria-labelledby": labelledBy } : { "aria-label": placeholder })}
         {...(error ? { "aria-describedby": errorId } : {})}
-        onChange={(event) => onType(question, event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" || !onEnter) return;
-          event.preventDefault();
-          onEnter();
-        }}
-        data-testid={testid}
-        className={cn(field, "text-foreground/80 rounded-lg px-2.5 py-1.5 text-xs")}
+        onChange={(event) => onChange(event.target.value)}
+        data-testid={custom ? "question-custom" : "question-text"}
+        className={cn(
+          field,
+          "text-foreground/80 placeholder:text-foreground/35 focus-visible:ring-foreground/20 w-full resize-y rounded-lg px-2.5 py-1.5 text-xs outline-none focus-visible:ring-1 disabled:opacity-50",
+        )}
       />
       {error && (
         <span id={errorId} role="alert" data-testid="question-error" className="text-destructive text-xs">
@@ -274,10 +265,35 @@ function TextAnswer({
   );
 }
 
-function isChosen(selection: Selection | undefined, index: number): boolean {
-  return selection?.kind === "indexes" && selection.indexes.includes(index);
+function placeholderFor(question: AgentQuestionView): string {
+  if (question.options.length > 0) return "Add anything the options don't cover";
+  if (question.kind === "confirm") return "Approve, reject, or say what to change";
+  return "Type your answer";
 }
 
-function textOf(selection: Selection | undefined): string {
-  return selection?.kind === "text" ? selection.text : "";
+function ConfirmedAnswer({
+  question,
+  selection,
+  onChange,
+}: {
+  question: AgentQuestionView;
+  selection: Selection | undefined;
+  onChange: () => void;
+}) {
+  if (!selection) return null;
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span data-testid="question-confirmed-answer" className="min-w-0 text-sm text-content-secondary">
+        {selectionSummary(question, selection)}
+      </span>
+      <Button type="button" variant="outline" size="sm" onClick={onChange} data-testid="question-change">
+        Change
+      </Button>
+    </div>
+  );
+}
+
+function without<T extends Record<string, unknown>>(value: T, key: string): T {
+  const { [key]: _discarded, ...rest } = value;
+  return rest as T;
 }

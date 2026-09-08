@@ -1,4 +1,4 @@
-import { BrandMark } from "@/components/grove/brand-mark";
+import { AppLogo } from "@/components/grove/app-logo";
 import { ShellHeader } from "@/components/grove/shell/shell-header";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -21,7 +21,10 @@ export default function Loading() {
       >
         <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col justify-center gap-4 px-4">
           <div className="flex items-center justify-center gap-2 text-sm font-medium">
-            <BrandMark className="size-6" />
+            {/* The APP ICON, because the page this stands in for draws one:
+                a skeleton that swaps logo when the real surface arrives is a
+                visible flip on every navigation to the landing route. */}
+            <AppLogo className="size-6" />
             <span>Grove</span>
           </div>
           <h1 className="text-content-primary text-center text-2xl font-semibold">

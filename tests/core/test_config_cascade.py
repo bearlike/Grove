@@ -172,7 +172,13 @@ def test_project_agents_refine_builtins_instead_of_replacing(
         encoding="utf-8",
     )
     cfg = load_config(tmp_repo, env={})
-    assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
+    assert {a.name for a in cfg.agents} == {
+        "claude",
+        "claude-terminal",
+        "codex",
+        "codex-terminal",
+        "shell",
+    }
     claude = cfg.find_agent("claude")
     assert claude is not None
     assert claude.command == "my-claude"  # the override wins field-by-field
@@ -194,7 +200,13 @@ def test_user_agent_override_inherits_builtin_kind(tmp_state_dir: Path, tmp_repo
         encoding="utf-8",
     )
     cfg = load_config(tmp_repo, env={})
-    assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
+    assert {a.name for a in cfg.agents} == {
+        "claude",
+        "claude-terminal",
+        "codex",
+        "codex-terminal",
+        "shell",
+    }
     claude = cfg.find_agent("claude")
     assert claude is not None
     assert claude.command == "my-claude"  # the override wins field-by-field
@@ -211,7 +223,13 @@ def test_load_defaults_when_no_layers(
     monkeypatch.delenv("GROVE_WORKTREE__BRANCH_PREFIX", raising=False)
     cfg = load_config(tmp_repo, env={})
     assert cfg.worktree.branch_prefix == "grove/"
-    assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
+    assert {a.name for a in cfg.agents} == {
+        "claude",
+        "claude-terminal",
+        "codex",
+        "codex-terminal",
+        "shell",
+    }
 
 
 def test_tls_ca_path_resolves_through_the_full_cascade(tmp_state_dir: Path, tmp_repo: Path) -> None:

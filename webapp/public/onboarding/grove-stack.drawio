@@ -1,0 +1,412 @@
+<mxfile host="embed.diagrams.net">
+  <diagram id="grove-stack" name="Grove architecture">
+    <mxGraphModel dx="1900" dy="798" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1340" background="#f5f6f8" math="0" shadow="0">
+      <root>
+        <mxCell id="0" value="" />
+        <mxCell id="1" parent="0" value="" />
+        <mxCell id="canvas" parent="1" style="rounded=0;absoluteArcSize=1;arcSize=0;fillColor=#f5f6f8;strokeColor=none;" value="" vertex="1">
+          <mxGeometry height="1340" width="1900" as="geometry" />
+        </mxCell>
+        <mxCell id="t-kicker" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#a34c27;fontStyle=1;" value="GROVE / ARCHITECTURE / 2026-09-14" vertex="1">
+          <mxGeometry height="20" width="1200" x="40" y="26" as="geometry" />
+        </mxCell>
+        <mxCell id="t-title" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=30;fontColor=#18202b;fontStyle=1;" value="Four client surfaces, one engine, side effects at the edges" vertex="1">
+          <mxGeometry height="42" width="1400" x="40" y="52" as="geometry" />
+        </mxCell>
+        <mxCell id="t-sub" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#526170;" value="The load-bearing split is how each client reaches the engine. The TUI and the CLI import WorkspaceManager in-process; the MCP server and the webapp go over the daemon&#39;s loopback HTTP. Dependencies flow inward and every store is named at the tier that owns it." vertex="1">
+          <mxGeometry height="40" width="1180" x="40" y="98" as="geometry" />
+        </mxCell>
+        <mxCell id="lane1" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=8;fillColor=#ffffff;strokeColor=#dfe5ec;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="200" width="1320" x="40" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane1-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#8a97a6;fontStyle=1;" value="1  CLIENT SURFACES" vertex="1">
+          <mxGeometry height="18" width="400" x="60" y="174" as="geometry" />
+        </mxCell>
+        <mxCell id="c-tui" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eaf1fb;strokeColor=#bcd2ee;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="132" width="300" x="60" y="204" as="geometry" />
+        </mxCell>
+        <mxCell id="c-tui-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=15;fontColor=#18202b;fontStyle=1;" value="Terminal UI" vertex="1">
+          <mxGeometry height="20" width="270" x="76" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="c-tui-p" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#7a8794;" value="src/grove/tui/ · Textual" vertex="1">
+          <mxGeometry height="16" width="270" x="76" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="c-tui-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="Fleet dashboard, workspace drill-in, transcript and pane view. Single UI thread, so nothing blocking runs on it." vertex="1">
+          <mxGeometry height="56" width="270" x="76" y="258" as="geometry" />
+        </mxCell>
+        <mxCell id="c-tui-x" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#2f6f4f;fontStyle=1;" value="IN-PROCESS ENGINE" vertex="1">
+          <mxGeometry height="16" width="270" x="76" y="314" as="geometry" />
+        </mxCell>
+        <mxCell id="c-cli" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eaf1fb;strokeColor=#bcd2ee;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="132" width="300" x="380" y="204" as="geometry" />
+        </mxCell>
+        <mxCell id="c-cli-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=15;fontColor=#18202b;fontStyle=1;" value="CLI" vertex="1">
+          <mxGeometry height="20" width="270" x="396" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="c-cli-p" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#7a8794;" value="src/grove/tui/cli*.py · Typer" vertex="1">
+          <mxGeometry height="16" width="270" x="396" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="c-cli-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="grove create / pause / kill / phase / tickets / usage / quota / doctor / diagram. Thin shells over one manager method each." vertex="1">
+          <mxGeometry height="56" width="270" x="396" y="258" as="geometry" />
+        </mxCell>
+        <mxCell id="c-cli-x" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#2f6f4f;fontStyle=1;" value="IN-PROCESS ENGINE" vertex="1">
+          <mxGeometry height="16" width="270" x="396" y="314" as="geometry" />
+        </mxCell>
+        <mxCell id="c-web" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#fdf0e8;strokeColor=#f0cdb6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="132" width="300" x="700" y="204" as="geometry" />
+        </mxCell>
+        <mxCell id="c-web-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=15;fontColor=#18202b;fontStyle=1;" value="Web UI" vertex="1">
+          <mxGeometry height="20" width="270" x="716" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="c-web-p" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#7a8794;" value="webapp/ · Next.js · assistant-ui" vertex="1">
+          <mxGeometry height="16" width="270" x="716" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="c-web-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="Composer, fleet, transcript + work panel, usage, session catalog. Server-side BFF holds the bearer; it never reaches the browser." vertex="1">
+          <mxGeometry height="56" width="270" x="716" y="258" as="geometry" />
+        </mxCell>
+        <mxCell id="c-web-x" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="HTTP → DAEMON" vertex="1">
+          <mxGeometry height="16" width="270" x="716" y="314" as="geometry" />
+        </mxCell>
+        <mxCell id="c-mcp" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#fdf0e8;strokeColor=#f0cdb6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="132" width="300" x="1020" y="204" as="geometry" />
+        </mxCell>
+        <mxCell id="c-mcp-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=15;fontColor=#18202b;fontStyle=1;" value="MCP server" vertex="1">
+          <mxGeometry height="20" width="270" x="1036" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="c-mcp-p" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#7a8794;" value="src/grove/mcp/ · stdio or streamable-http" vertex="1">
+          <mxGeometry height="16" width="270" x="1036" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="c-mcp-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="Workspace, fleet, diagram, skill and mailbox tools for any MCP client. Never imports engine internals — the rule is enforced by import-linter." vertex="1">
+          <mxGeometry height="64" width="270" x="1036" y="258" as="geometry" />
+        </mxCell>
+        <mxCell id="c-mcp-x" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="HTTP → DAEMON" vertex="1">
+          <mxGeometry height="16" width="270" x="1036" y="314" as="geometry" />
+        </mxCell>
+        <mxCell id="e-web-d" edge="1" parent="1" source="c-web" style="endArrow=block;endFill=1;endSize=6;html=1;rounded=0;strokeColor=#a34c27;strokeWidth=1.5;exitX=0.5;exitY=1;entryX=0.35;entryY=0;" target="lane2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-mcp-d" edge="1" parent="1" source="c-mcp" style="endArrow=block;endFill=1;endSize=6;html=1;rounded=0;strokeColor=#a34c27;strokeWidth=1.5;exitX=0.5;exitY=1;entryX=0.62;entryY=0;" target="lane2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-web-lbl" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=center;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=10;fontColor=#a34c27;fontStyle=1;" value="REST + SSE" vertex="1">
+          <mxGeometry height="14" width="90" x="805" y="352" as="geometry" />
+        </mxCell>
+        <mxCell id="e-mcp-lbl" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=center;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=10;fontColor=#a34c27;fontStyle=1;" value="client SDK" vertex="1">
+          <mxGeometry height="14" width="90" x="1125" y="352" as="geometry" />
+        </mxCell>
+        <mxCell id="lane2" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=8;fillColor=#ffffff;strokeColor=#dfe5ec;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="150" width="1320" x="40" y="386" as="geometry" />
+        </mxCell>
+        <mxCell id="lane2-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#8a97a6;fontStyle=1;" value="2  TRANSPORT" vertex="1">
+          <mxGeometry height="18" width="400" x="60" y="400" as="geometry" />
+        </mxCell>
+        <mxCell id="c-client" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="90" width="300" x="60" y="428" as="geometry" />
+        </mxCell>
+        <mxCell id="c-client-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="Client SDK  ·  src/grove/client/" vertex="1">
+          <mxGeometry height="18" width="270" x="76" y="436" as="geometry" />
+        </mxCell>
+        <mxCell id="c-client-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="Transport-agnostic attach. Three transports on one Protocol: Local (spawns a daemon), Ssh (tunnels), Url (attaches to a running one). Once attached, tmux owns the UI." vertex="1">
+          <mxGeometry height="64" width="280" x="71" y="452" as="geometry" />
+        </mxCell>
+        <mxCell id="c-daemon" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#fbeee6;strokeColor=#eec9ae;strokeWidth=1.5;" value="" vertex="1">
+          <mxGeometry height="86" width="620" x="380" y="428" as="geometry" />
+        </mxCell>
+        <mxCell id="c-daemon-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="Daemon  ·  src/grove/daemon/  ·  FastAPI, loopback 127.0.0.1:7421" vertex="1">
+          <mxGeometry height="18" width="590" x="396" y="440" as="geometry" />
+        </mxCell>
+        <mxCell id="c-daemon-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="One process serves every repo through RepoRegistry; responses are contract Views, never engine dataclasses. Loopback-only bind is load-bearing — it is why endpoint auth defers to the user&#39;s own SSH credentials. Runs blocking work off the loop." vertex="1">
+          <mxGeometry height="52" width="600" x="396" y="460" as="geometry" />
+        </mxCell>
+        <mxCell id="c-routes" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="86" width="320" x="1020" y="428" as="geometry" />
+        </mxCell>
+        <mxCell id="c-routes-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="Route namespaces" vertex="1">
+          <mxGeometry height="18" width="290" x="1036" y="435" as="geometry" />
+        </mxCell>
+        <mxCell id="c-routes-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="/workspaces — bearer on every route&#xa;/events — SSE fan-out, never public&#xa;/hooks/agent-events — hook-token ingest&#xa;/public/{token} — share links, no bearer" vertex="1">
+          <mxGeometry height="64" width="300" x="1036" y="451" as="geometry" />
+        </mxCell>
+        <mxCell id="e-d-core" edge="1" parent="1" source="c-daemon" style="endArrow=block;endFill=1;endSize=6;html=1;rounded=0;strokeColor=#6b7a89;strokeWidth=1.5;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="lane3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-tui-core" edge="1" parent="1" source="lane1" style="endArrow=block;endFill=1;endSize=6;html=1;rounded=0;strokeColor=#2f6f4f;strokeWidth=1.5;dashed=1;exitX=0.4;exitY=1;entryX=0.1;entryY=0;" target="lane3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="200" y="372" />
+              <mxPoint x="172" y="372" />
+              <mxPoint x="172" y="560" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-tui-lbl" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=10;fontColor=#2f6f4f;fontStyle=1;" value="direct import — no HTTP" vertex="1">
+          <mxGeometry height="14" width="150" x="178" y="536" as="geometry" />
+        </mxCell>
+        <mxCell id="lane3" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=8;fillColor=#ffffff;strokeColor=#dfe5ec;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="452" width="1320" x="40" y="562" as="geometry" />
+        </mxCell>
+        <mxCell id="lane3-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#8a97a6;fontStyle=1;" value="3  CORE ENGINE  ·  src/grove/core/" vertex="1">
+          <mxGeometry height="18" width="500" x="60" y="576" as="geometry" />
+        </mxCell>
+        <mxCell id="m-mgr" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#e6f2ea;strokeColor=#bcdcc8;strokeWidth=1.5;" value="" vertex="1">
+          <mxGeometry height="96" width="620" x="60" y="604" as="geometry" />
+        </mxCell>
+        <mxCell id="m-mgr-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="manager.py — lifecycle orchestration" vertex="1">
+          <mxGeometry height="18" width="590" x="76" y="616" as="geometry" />
+        </mxCell>
+        <mxCell id="m-mgr-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="create / pause / resume / respawn / kill, plus peek, steer, attach-ticket and share. Sequences worktree, branch, tmux and container side effects; kill is the only verb that deletes a branch. Placement (worktree or repo root) gates every worktree side effect." vertex="1">
+          <mxGeometry height="56" width="590" x="76" y="636" as="geometry" />
+        </mxCell>
+        <mxCell id="m-cfg" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#e6f2ea;strokeColor=#bcdcc8;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="104" width="320" x="700" y="604" as="geometry" />
+        </mxCell>
+        <mxCell id="m-cfg-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="config.py — the cascade" vertex="1">
+          <mxGeometry height="18" width="290" x="716" y="616" as="geometry" />
+        </mxCell>
+        <mxCell id="m-cfg-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="Lowest first: built-in agent seed → user → committed project → project-local → declared env var → GROVE_*__* env → CLI. Frozen Pydantic. The `defaults` section alone inverts, user-first, field by field." vertex="1">
+          <mxGeometry height="78" width="290" x="716" y="636" as="geometry" />
+        </mxCell>
+        <mxCell id="m-reg" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#e6f2ea;strokeColor=#bcdcc8;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="96" width="300" x="1040" y="604" as="geometry" />
+        </mxCell>
+        <mxCell id="m-reg-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="registry · status · activity" vertex="1">
+          <mxGeometry height="18" width="270" x="1056" y="616" as="geometry" />
+        </mxCell>
+        <mxCell id="m-reg-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="RepoRegistry spans every repo on the host. Status reconciliation is the single site promoting persisted RUNNING / PAUSED / ERROR to the computed ACTIVE / IDLE / OFFLINE / ORPHANED." vertex="1">
+          <mxGeometry height="78" width="270" x="1056" y="636" as="geometry" />
+        </mxCell>
+        <mxCell id="sub-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#8a97a6;fontStyle=1;" value="SUBSYSTEMS — each answers one question" vertex="1">
+          <mxGeometry height="16" width="500" x="60" y="714" as="geometry" />
+        </mxCell>
+        <mxCell id="s1" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f4f8f5;strokeColor=#cfe2d6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="88" width="244" x="60" y="736" as="geometry" />
+        </mxCell>
+        <mxCell id="s1-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=13;fontColor=#18202b;fontStyle=1;" value="contracts/" vertex="1">
+          <mxGeometry height="18" width="216" x="74" y="746" as="geometry" />
+        </mxCell>
+        <mxCell id="s1-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Wire-level Pydantic shapes crossing every client. Also the shared status / phase / agent vocabulary a drift test holds." vertex="1">
+          <mxGeometry height="58" width="216" x="74" y="766" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f4f8f5;strokeColor=#cfe2d6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="88" width="244" x="319" y="736" as="geometry" />
+        </mxCell>
+        <mxCell id="s2-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=13;fontColor=#18202b;fontStyle=1;" value="agents/" vertex="1">
+          <mxGeometry height="18" width="216" x="333" y="746" as="geometry" />
+        </mxCell>
+        <mxCell id="s2-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Adapters per tool: claude_code, codex, mewbo, shell, generic. Normalizes SHAPE, never semantics." vertex="1">
+          <mxGeometry height="52" width="216" x="333" y="766" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f4f8f5;strokeColor=#cfe2d6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="88" width="244" x="578" y="736" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=13;fontColor=#18202b;fontStyle=1;" value="tickets/  +  issueops/" vertex="1">
+          <mxGeometry height="18" width="216" x="592" y="746" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Gitea / GitHub / Linear providers, and issue-comment events routed into workspace actions." vertex="1">
+          <mxGeometry height="52" width="216" x="592" y="766" as="geometry" />
+        </mxCell>
+        <mxCell id="s4" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f4f8f5;strokeColor=#cfe2d6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="88" width="244" x="837" y="736" as="geometry" />
+        </mxCell>
+        <mxCell id="s4-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=13;fontColor=#18202b;fontStyle=1;" value="telemetry/  +  notifications/" vertex="1">
+          <mxGeometry height="18" width="216" x="851" y="746" as="geometry" />
+        </mxCell>
+        <mxCell id="s4-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="OTLP ingest and one trace vocabulary; push on workspace edges via Gotify or webhook." vertex="1">
+          <mxGeometry height="52" width="216" x="851" y="766" as="geometry" />
+        </mxCell>
+        <mxCell id="s5" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f4f8f5;strokeColor=#cfe2d6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="88" width="244" x="1096" y="736" as="geometry" />
+        </mxCell>
+        <mxCell id="s5-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=13;fontColor=#18202b;fontStyle=1;" value="usage/  +  usage/quota/" vertex="1">
+          <mxGeometry height="18" width="216" x="1110" y="746" as="geometry" />
+        </mxCell>
+        <mxCell id="s5-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Historical audit — tokens, time, cost, quota. The past-tense sibling of activity.py." vertex="1">
+          <mxGeometry height="52" width="216" x="1110" y="766" as="geometry" />
+        </mxCell>
+        <mxCell id="side-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#8a97a6;fontStyle=1;" value="SIDE-EFFECT MODULES — all I/O funnels through these, everything else stays pure" vertex="1">
+          <mxGeometry height="16" width="700" x="60" y="840" as="geometry" />
+        </mxCell>
+        <mxCell id="se1" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="64" width="200" x="60" y="862" as="geometry" />
+        </mxCell>
+        <mxCell id="se1-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#18202b;fontStyle=1;" value="git.py" vertex="1">
+          <mxGeometry height="16" width="170" x="74" y="872" as="geometry" />
+        </mxCell>
+        <mxCell id="se1-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Worktrees, branches, diffs. Never commits or pushes." vertex="1">
+          <mxGeometry height="36" width="170" x="74" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="se2" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="64" width="200" x="276" y="862" as="geometry" />
+        </mxCell>
+        <mxCell id="se2-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#18202b;fontStyle=1;" value="tmux.py  +  launch.py" vertex="1">
+          <mxGeometry height="16" width="170" x="290" y="872" as="geometry" />
+        </mxCell>
+        <mxCell id="se2-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Sessions, panes, steering. Three launch backends." vertex="1">
+          <mxGeometry height="36" width="170" x="290" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="se3" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="64" width="200" x="492" y="862" as="geometry" />
+        </mxCell>
+        <mxCell id="se3-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#18202b;fontStyle=1;" value="devcontainer + container_*" vertex="1">
+          <mxGeometry height="16" width="170" x="506" y="872" as="geometry" />
+        </mxCell>
+        <mxCell id="se3-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Provisioning, mounts, egress firewall, teardown." vertex="1">
+          <mxGeometry height="36" width="170" x="506" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="se4" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="64" width="200" x="708" y="862" as="geometry" />
+        </mxCell>
+        <mxCell id="se4-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#18202b;fontStyle=1;" value="store.py  +  paths.py" vertex="1">
+          <mxGeometry height="16" width="170" x="722" y="872" as="geometry" />
+        </mxCell>
+        <mxCell id="se4-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Atomic writes under a sidecar lock; the whole state layout." vertex="1">
+          <mxGeometry height="44" width="170" x="722" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="se5" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="64" width="200" x="924" y="862" as="geometry" />
+        </mxCell>
+        <mxCell id="se5-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#18202b;fontStyle=1;" value="diagrams.py" vertex="1">
+          <mxGeometry height="16" width="170" x="938" y="872" as="geometry" />
+        </mxCell>
+        <mxCell id="se5-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Managed .drawio writes, revision compare-and-swap." vertex="1">
+          <mxGeometry height="36" width="170" x="938" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="se6" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="64" width="200" x="1140" y="862" as="geometry" />
+        </mxCell>
+        <mxCell id="se6-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#18202b;fontStyle=1;" value="mewbo.py  +  process.py" vertex="1">
+          <mxGeometry height="16" width="170" x="1154" y="872" as="geometry" />
+        </mxCell>
+        <mxCell id="se6-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="Remote session HTTP; detached local spawns." vertex="1">
+          <mxGeometry height="36" width="170" x="1154" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="note-flow" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f9f4e8;strokeColor=#e6d6ac;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="64" width="1280" x="60" y="944" as="geometry" />
+        </mxCell>
+        <mxCell id="note-flow-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#5c4a1f;" value="Dependencies flow inward: orchestration imports utilities, never the reverse, and the MCP server may not import engine internals at all — which is what lets it run on a different host. The consequence of the in-process clients is that the daemon is NOT the only writer: a CLI verb and the TUI mutate state.json concurrently with it, and that is why every store holds a sidecar lock across its whole read-modify-write rather than relying on atomic publication alone." vertex="1">
+          <mxGeometry height="48" width="1250" x="76" y="954" as="geometry" />
+        </mxCell>
+        <mxCell id="lane4" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=8;fillColor=#ffffff;strokeColor=#dfe5ec;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="238" width="1320" x="40" y="1040" as="geometry" />
+        </mxCell>
+        <mxCell id="lane4-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#8a97a6;fontStyle=1;" value="4  RUNTIME — where an agent actually runs" vertex="1">
+          <mxGeometry height="18" width="500" x="60" y="1054" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="180" width="630" x="60" y="1082" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="Host runtime" vertex="1">
+          <mxGeometry height="18" width="600" x="76" y="1094" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="One workspace = one git worktree + one tmux session. The agent binary runs in a pane inside it." vertex="1">
+          <mxGeometry height="36" width="600" x="76" y="1114" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-1" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#ffffff;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="100" width="190" x="76" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-1t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="git worktree&#xa;&#xa;${repo}/.worktrees/&lt;slug&gt;-&lt;ts&gt;, or the repo root itself for a ROOT-placement workspace." vertex="1">
+          <mxGeometry height="86" width="162" x="90" y="1162" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-2" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#ffffff;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="100" width="190" x="280" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-2t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="tmux session&#xa;&#xa;One pane per window. Its #{window_activity} is the ACTIVE-vs-IDLE source of truth." vertex="1">
+          <mxGeometry height="80" width="162" x="294" y="1162" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-3" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#ffffff;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="100" width="206" x="484" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="r-host-3t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="agent process&#xa;&#xa;Claude Code, Codex, Mewbo or a plain shell. Hooks post back to the daemon." vertex="1">
+          <mxGeometry height="80" width="178" x="498" y="1162" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#eef1f4;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="188" width="630" x="710" y="1082" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-h" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=14;fontColor=#18202b;fontStyle=1;" value="Container runtime  ·  the differentiator" vertex="1">
+          <mxGeometry height="18" width="600" x="726" y="1094" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-b" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#3d4a58;" value="Provisioned through @devcontainers/cli from the repo&#39;s committed .devcontainer/. tmux runs INSIDE the container." vertex="1">
+          <mxGeometry height="36" width="600" x="726" y="1114" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-1" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#ffffff;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="110" width="190" x="726" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-1t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="mounts&#xa;&#xa;The worktree, plus the git common dir at the SAME absolute path. Control files cross as individual :ro binds, never their directory." vertex="1">
+          <mxGeometry height="110" width="167" x="736" y="1154" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-2" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#ffffff;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="100" width="190" x="930" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-2t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="egress firewall&#xa;&#xa;An allowlist in DOCKER-USER, not just OUTPUT, so a nested docker run cannot route around it." vertex="1">
+          <mxGeometry height="90" width="162" x="944" y="1160" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-3" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#ffffff;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="100" width="206" x="1134" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="r-ctr-3t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="agent config dir&#xa;&#xa;Per-workspace, host-side, so a container&#39;s transcripts outlive its worktree." vertex="1">
+          <mxGeometry height="90" width="178" x="1148" y="1160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane5" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=8;fillColor=#ffffff;strokeColor=#dfe5ec;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="1160" width="480" x="1380" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane5-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=12;fontColor=#8a97a6;fontStyle=1;" value="5  DATA STORES — who owns what" vertex="1">
+          <mxGeometry height="18" width="400" x="1400" y="174" as="geometry" />
+        </mxCell>
+        <mxCell id="d-grp1" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="MACHINE STATE — ~/.local/state/grove/" vertex="1">
+          <mxGeometry height="16" width="440" x="1400" y="204" as="geometry" />
+        </mxCell>
+        <mxCell id="d1" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="196" width="440" x="1400" y="226" as="geometry" />
+        </mxCell>
+        <mxCell id="d1-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="state.json — THE workspace registry. Every record for every repo on the host. Daemon, CLI and TUI all write it concurrently, so the whole read-modify-write is held under a lock on a SIDECAR file and published by rename.&#xa;&#xa;share-policies.json — per-project share TTL + passcode hashes.&#xa;handovers.json — issue-ops handover log, never evicted.&#xa;session-turns.json — turn counts keyed by transcript fingerprint.&#xa;quota-state.json — cross-process quota ledger. Merged, not replaced, so a narrow CLI run cannot delete the daemon&#39;s rows.&#xa;agent-sidecars/ — per-session hook push status.&#xa;logs/, agent-config/, container-*/ — per-workspace artifacts." vertex="1">
+          <mxGeometry height="184" width="412" x="1414" y="238" as="geometry" />
+        </mxCell>
+        <mxCell id="d-grp2" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="SQLITE — one rebuildable, one NOT" vertex="1">
+          <mxGeometry height="16" width="440" x="1400" y="434" as="geometry" />
+        </mxCell>
+        <mxCell id="d2" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="126" width="440" x="1400" y="456" as="geometry" />
+        </mxCell>
+        <mxCell id="d2-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="usage-v&lt;N&gt;.sqlite3 — tokens, time, cost, quota, projected from the transcripts below. The schema version is IN THE FILENAME, so a bump orphans the old file rather than migrating it. Wholly derived; safe to delete.&#xa;&#xa;telemetry-exports.sqlite3 — which traces were already exported. NOT a cache: deleting it re-sends history.&#xa;usage-pricing.json — fetched model rates." vertex="1">
+          <mxGeometry height="106" width="412" x="1414" y="468" as="geometry" />
+        </mxCell>
+        <mxCell id="d-grp3" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="AGENT-OWNED — read, never written by Grove" vertex="1">
+          <mxGeometry height="16" width="440" x="1400" y="594" as="geometry" />
+        </mxCell>
+        <mxCell id="d3" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="146" width="440" x="1400" y="616" as="geometry" />
+        </mxCell>
+        <mxCell id="d3-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="~/.claude/projects/&lt;cwd&gt;/&lt;uuid&gt;.jsonl and $CODEX_HOME/sessions/&lt;date&gt;/rollout-*.jsonl — the agents&#39; own transcripts, plus Codex&#39;s queue sqlite opened READ-ONLY. The source for status, todo, model and usage.&#xa;&#xa;The transcript cache is IN-PROCESS, not on disk. Every read goes through one seam, transcript_scope, because a pinned config dir moves where they land." vertex="1">
+          <mxGeometry height="126" width="412" x="1414" y="628" as="geometry" />
+        </mxCell>
+        <mxCell id="d-grp4" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="IN-REPO — ${repo}/.grove/" vertex="1">
+          <mxGeometry height="16" width="440" x="1400" y="774" as="geometry" />
+        </mxCell>
+        <mxCell id="d4" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="200" width="440" x="1400" y="796" as="geometry" />
+        </mxCell>
+        <mxCell id="d4-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="config.json — committed project layer. A worktree sees only COMMITTED files, so shared config must be committed to be inherited.&#xa;config.local.json — gitignored machine overrides.&#xa;&#xa;phase/&lt;key&gt;.json — the task-phase report, WRITTEN BY THE AGENT at the path Grove publishes in GROVE_PHASE_FILE. Keyed per agent, because several can share one worktree.&#xa;&#xa;attachments/&lt;id&gt;/&lt;name&gt; — the one directory a host process and a containerized agent both see.&#xa;&#xa;The todo list is NOT stored here: it is read live from the agent&#39;s own task board." vertex="1">
+          <mxGeometry height="182" width="412" x="1414" y="808" as="geometry" />
+        </mxCell>
+        <mxCell id="d-grp5" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="CONFIG + CREDENTIALS — ~/.config/grove/ (0600)" vertex="1">
+          <mxGeometry height="16" width="440" x="1400" y="1006" as="geometry" />
+        </mxCell>
+        <mxCell id="d5" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="128" width="440" x="1400" y="1026" as="geometry" />
+        </mxCell>
+        <mxCell id="d5-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="config.json — the user cascade layer.&#xa;auth.json — pairing challenges and daemon sessions.&#xa;webapp-sessions.json — LIVE plaintext daemon bearers, written by the Next.js BFF, never read by the daemon.&#xa;hook-ingest.token, channel.token — same-host secrets.&#xa;claude-*-settings.json, *-mcp.json — the control files an agent is launched with.&#xa;*.env — operator credentials; config stores only the NAME." vertex="1">
+          <mxGeometry height="110" width="412" x="1414" y="1036" as="geometry" />
+        </mxCell>
+        <mxCell id="d-grp6" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=middle;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#a34c27;fontStyle=1;" value="EXTERNAL — already the source of truth" vertex="1">
+          <mxGeometry height="16" width="440" x="1400" y="1164" as="geometry" />
+        </mxCell>
+        <mxCell id="d6" parent="1" style="rounded=1;absoluteArcSize=1;arcSize=6;fillColor=#f2f5f9;strokeColor=#d3dce6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="114" width="440" x="1400" y="1184" as="geometry" />
+        </mxCell>
+        <mxCell id="d6-t" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;spacing=0;fontFamily=Arial;fontSize=11;fontColor=#3d4a58;" value="git — branches and worktrees are the durable state; state.json only points at them.&#xa;tmux — queried live for session and pane liveness, never snapshot-cached.&#xa;docker — container lifecycle, TTL-memoized at the reader.&#xa;Gitea / GitHub / Linear — the plans. This tree holds the design knowledge." vertex="1">
+          <mxGeometry height="98" width="412" x="1414" y="1194" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

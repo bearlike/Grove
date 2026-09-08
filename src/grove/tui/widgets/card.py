@@ -298,6 +298,28 @@ def _append_phase_segment(
         text.append(f" {BLOCKED_GLYPH}", style=f"bold {blocked_color(dark=dark)}")
 
 
+def _append_quiet_tags(text: Text, state: WorkspaceState, *, muted_hex: str) -> None:
+    """Append the muted, lowercase qualifiers a workspace's fixed shape earns.
+
+    ``root`` marks a workspace that runs in the repo root (no dedicated
+    worktree); ``native`` marks a session Grove owns over the provider's own
+    protocol. Both are properties decided at create, never live signals, so
+    both take the quietest tier — the lifecycle status stays the line's loudest
+    token. Absence is the default in both: a worktree workspace and a terminal
+    session render nothing here, which keeps every pre-existing row
+    byte-identical.
+    """
+    for tag in (
+        "root" if state.placement is Placement.ROOT else None,
+        "native" if state.native else None,
+    ):
+        if tag is None:
+            continue
+        text.append("  ")
+        text.append("· ", style=muted_hex)
+        text.append(tag, style=muted_hex)
+
+
 def _append_runtime_warning_segments(
     text: Text, state: WorkspaceState, *, muted_hex: str, dark: bool
 ) -> None:
@@ -578,15 +600,7 @@ def _render_card(
         if waited is not None:
             text.append(f" {waited}", style=f"bold {s_color}")
     _append_ticket_segments(text, state.ticket_refs, muted_hex=muted_hex, dark=dark)
-    # Root tag: a muted "root" marks a workspace that runs in the repo root
-    # (no dedicated worktree). Muted + lowercase keeps it as a quiet
-    # qualifier — the lifecycle status stays the line's loudest token, the
-    # tag just tells the user this one has no isolated worktree. Worktree
-    # workspaces render nothing here, so the absence is the default.
-    if state.placement is Placement.ROOT:
-        text.append("  ")
-        text.append("· ", style=muted_hex)
-        text.append("root", style=muted_hex)
+    _append_quiet_tags(text, state, muted_hex=muted_hex)
     if state.init_status == InitStatus.FAILED:
         text.append("  ")
         text.append("· ", style=muted_hex)

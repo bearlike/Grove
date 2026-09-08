@@ -140,6 +140,7 @@ _GATED_ROUTES = [
     ("POST", "/workspaces/some-id/resume"),
     ("POST", "/workspaces/some-id/respawn"),
     ("POST", "/workspaces/some-id/kill"),
+    ("POST", "/workspaces/some-id/keys"),
     ("PATCH", "/workspaces/some-id"),
     ("GET", "/workspaces/some-id/attach"),
     ("GET", "/workspaces/some-id/peek"),

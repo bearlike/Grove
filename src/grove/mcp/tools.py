@@ -1,9 +1,10 @@
-"""Tool handlers — one method per MCP tool, all speaking through GroveClient.
+"""Tool handlers — one method per MCP tool.
 
 ``GroveTools`` is the seam tests pin: handlers in, contract Views out,
-with the injected ``GroveClient`` as the only authority consulted. The
-daemon owns every decision (placement gates, provenance defaults, status
-reconciliation); this layer only shapes requests and bounds responses.
+with the injected ``GroveClient`` as the authority for workspace operations.
+The one local exception reads this server's bundled skill package data; the
+daemon owns every workspace decision (placement gates, provenance defaults,
+status reconciliation). This layer only shapes requests and bounds responses.
 
 Method docstrings double as the MCP tool descriptions an agent reads
 when deciding what to call — keep them action-first and explicit about
@@ -12,15 +13,23 @@ side effects.
 
 from __future__ import annotations
 
+import base64
+import json
 import shlex
 from pathlib import Path
 
-from grove.client import GroveClient, ProtocolError
+from grove._skills import SkillLibrary, SkillSummary
+from grove.client import GroveClient, GroveClientError, ProtocolError
 from grove.core.contracts import (
     AgentSummaryView,
     AutoBranch,
     BranchPlan,
     CreateWorkspaceRequest,
+    DiagramDocumentView,
+    DiagramOpenRequest,
+    DiagramPreviewView,
+    DiagramStopRequest,
+    DiagramUpdateRequest,
     HostAttachView,
     ProjectView,
     SessionQueryView,
@@ -30,6 +39,12 @@ from grove.core.contracts import (
     WorkspaceStateView,
 )
 from grove.core.contracts.activity import DashboardSnapshotView
+from grove.core.contracts.mailboxes import (
+    MailboxPeerPage,
+    MailboxReceipt,
+    MailboxReplyRequest,
+    MailboxSendRequest,
+)
 from grove.core.contracts.phase import PhaseView
 from grove.core.contracts.sessions import TodoListView
 from grove.core.phase import TaskPhase
@@ -52,8 +67,18 @@ class GroveTools:
     package's ~4 KB bounded-text rule (trailing ellipsis is the trim signal),
     so one busy pane can never flood an MCP client's context window."""
 
-    def __init__(self, client: GroveClient) -> None:
+    def __init__(self, client: GroveClient, *, mailbox_client: GroveClient | None = None) -> None:
         self._client = client
+        # Mailbox sends must use the separately bound credential, never the
+        # owner-capable general-purpose client. The server always provides one;
+        # keeping it optional lets an operator-only embedding expose discovery
+        # without silently promoting its token into send/reply authority.
+        self._mailbox_client = mailbox_client
+
+    def _require_mailbox_client(self) -> GroveClient:
+        if self._mailbox_client is None:
+            raise GroveClientError("mailbox sends require a separately bound mailbox client")
+        return self._mailbox_client
 
     # ─── read tools ──────────────────────────────────────────────────────────
 
@@ -84,6 +109,65 @@ class GroveTools:
     async def get_workspace(self, workspace_id: str) -> WorkspaceStateView:
         """Get the full state of one workspace by its id."""
         return await self._client.get_workspace(workspace_id)
+
+    async def get_skill(
+        self, name: str | None = None, details: bool = False
+    ) -> tuple[str, ...] | tuple[SkillSummary, ...] | str:
+        """Read an installed skill, or discover workflows with details=True.
+
+        Omit name for the legacy names-only catalog; details=True adds purpose,
+        triggers and CLI/resource learning links. Named reads always return the
+        complete source, without daemon access or mailbox credentials.
+
+        Use ``collaborating-on-diagrams`` for managed draw.io collaboration and
+        ``using-grove`` for workspace attachment and fleet orchestration. This
+        server's own installed bundle is authoritative, so the call works without
+        reaching the daemon and returns text matching its advertised tools.
+        """
+        if name is None:
+            return SkillLibrary.catalog() if details else SkillLibrary.names()
+        return SkillLibrary.read(name)
+
+    async def read_diagram(self, workspace_id: str) -> DiagramDocumentView:
+        """Read a workspace's managed diagram and acknowledged revision.
+
+        The returned XML is saved state, not a browser's pending draft. Use its
+        ``diagram.session_id`` and ``revision`` unchanged for an update or stop.
+        Follow the ``collaborating-on-diagrams`` skill for XML and conflict
+        recovery rules.
+        """
+        return await self._client.read_diagram(workspace_id)
+
+    async def read_diagram_preview(self, workspace_id: str) -> list[object]:
+        """Read the current revision's rendered first-page diagram image.
+
+        Returns native image content plus revision, page, and attachment-path
+        metadata. It is only page 1 and never an automated correctness verdict.
+        If unavailable, open the Diagram tab, wait for its saved render, then
+        retry. Follow ``grove_get_skill(name='collaborating-on-diagrams')`` for
+        the inspect-correct-repeat workflow.
+        """
+        preview = await self._client.read_diagram_preview(workspace_id)
+        return self._preview_content(preview)
+
+    @staticmethod
+    def _preview_content(preview: DiagramPreviewView) -> list[object]:
+        """Preserve the image as MCP image content rather than text base64."""
+        from mcp.server.fastmcp import Image  # noqa: PLC0415
+
+        return [
+            Image(data=base64.b64decode(preview.content_base64), format="png"),
+            json.dumps(
+                {
+                    "session_id": preview.session_id,
+                    "revision": preview.revision,
+                    "page_index": preview.page_index,
+                    "mime_type": preview.mime_type,
+                    "attachment": preview.attachment.model_dump(mode="json"),
+                },
+                separators=(",", ":"),
+            ),
+        ]
 
     async def list_projects(self) -> list[ProjectView]:
         """List every project Grove is configured to work in. Start here when
@@ -180,11 +264,56 @@ class GroveTools:
         todo tool has been called yet, not an error. Read-only."""
         return await self._client.get_todo(workspace_id)
 
+    async def list_mailbox_peers(
+        self,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> MailboxPeerPage:
+        """List mailbox peers the bound caller may discover.
+
+        Each peer describes only public address and capability data. Pass its
+        ``generation`` unchanged to a later send; it fences a recipient that
+        has restarted or been replaced since this directory read. Read-only.
+        """
+        if self._mailbox_client is None:
+            # A general operator client deliberately has no bound mailbox
+            # credential. Discovery remains useful there, but it cannot become
+            # an implicit authority escalation for send/reply.
+            return await self._client.list_mailbox_peers(
+                workspace_id=workspace_id, limit=limit, cursor=cursor
+            )
+        return await self._mailbox_client.list_mailbox_peers(
+            workspace_id=workspace_id, limit=limit, cursor=cursor
+        )
+
+    async def send_mailbox_message(
+        self, request: MailboxSendRequest | MailboxReplyRequest
+    ) -> MailboxReceipt:
+        """Send a bound mailbox request or reply once.
+
+        A ``kind="send"`` request names the recipient and its expected
+        generation. A ``kind="reply"`` request names only the original
+        message; the coordinator resolves its sender. Transport failures leave
+        delivery unknown and raise rather than returning an invented receipt.
+        """
+        return await self._require_mailbox_client().send_mailbox_message(request)
+
+    async def get_mailbox_message_status(self, message_id: str) -> MailboxReceipt:
+        """Get the coordinator's latest delivery observation for a mailbox message.
+
+        Read this after an uncertain send before considering another attempt.
+        A transport observation is not proof of recipient consent or compliance.
+        """
+        return await self._require_mailbox_client().get_mailbox_message_status(message_id)
+
     async def attach_instruction(self, workspace_id: str) -> AttachInstructionResult:
         """Get the command a human runs to attach to a workspace's agent
         session — for handing live control of an agent over to a person.
         Containerized workspaces return the command that enters the
-        container's own tmux, and no host session name."""
+        container's own tmux, and no host session name. A native workspace's
+        command is read-only (``read_only``): its pane is the protocol event
+        log, not a terminal to type into."""
         instr = await self._client.get_attach(workspace_id)
         host = instr if isinstance(instr, HostAttachView) else None
         return AttachInstructionResult(
@@ -192,6 +321,7 @@ class GroveTools:
             tmux_session=host.tmux_session if host is not None else None,
             command=shlex.join(instr.attach_argv()),
             inside_outer_tmux=host is not None and host.inside_outer_tmux,
+            read_only=instr.read_only,
         )
 
     # ─── lifecycle tools ─────────────────────────────────────────────────────
@@ -209,6 +339,7 @@ class GroveTools:
         model: str | None = None,
         runtime: str | None = None,
         brief: bool | None = None,
+        native: bool | None = None,
         project_cwd: str | None = None,
     ) -> WorkspaceStateView:
         """Create a Grove workspace: a git worktree plus a tmux session
@@ -238,7 +369,12 @@ class GroveTools:
         ``grove_respawn_workspace``. ``brief`` hands the new agent Grove's
         first-turn brief, a short note pointing it at the ``working-in-grove``
         skill so it reports its task phase and keeps its attached tickets
-        current; omit it to use the configured default (on). ``project_cwd``
+        current; omit it to use the configured default (on). ``native`` runs
+        the agent as a Grove-owned native session (headless: Claude Code
+        stream-json / Codex app-server, so interrupt, model switch and answers
+        go to its own protocol) when ``true``, or in its interactive terminal
+        when ``false``; omit it to use the roster entry's own default, and it
+        is ignored for a kind with no native protocol. ``project_cwd``
         starts the agent in a SUBDIRECTORY instead of the worktree root — give
         it relative to the repo root (e.g. ``"webapp"``); an absolute path is
         taken as-is and anything outside the repo is refused before any side
@@ -258,10 +394,63 @@ class GroveTools:
             model=model,
             runtime=runtime,
             brief=brief,
+            native=native,
             repo_root=Path(repo_root),
             project_cwd=Path(project_cwd) if project_cwd is not None else None,
         )
         return await self._client.create_workspace(req)
+
+    async def open_diagram(self, workspace_id: str, path: str) -> DiagramDocumentView:
+        """Open an existing workspace-relative ``.drawio`` file for managed editing.
+
+        This starts or returns the current active collaboration only for the
+        requested path; an active collaboration on another path must be stopped
+        first. The document response contains the persisted session id and
+        current revision needed to save safely. Follow the
+        ``collaborating-on-diagrams`` skill for the managed XML workflow.
+        """
+        return await self._client.open_diagram(workspace_id, DiagramOpenRequest(path=path))
+
+    async def update_diagram(
+        self,
+        workspace_id: str,
+        session_id: str,
+        expected_revision: str,
+        xml: str,
+    ) -> DiagramDocumentView:
+        """Conditionally save XML to the active managed diagram.
+
+        ``expected_revision`` and ``session_id`` must come from the last
+        acknowledged read/open/update response. A conflict means the saved
+        document or collaboration generation changed; read again and preserve
+        any local draft rather than blindly retrying. Follow the
+        ``collaborating-on-diagrams`` skill for conflict recovery.
+        """
+        return await self._client.update_diagram(
+            workspace_id,
+            DiagramUpdateRequest(
+                session_id=session_id, expected_revision=expected_revision, xml=xml
+            ),
+        )
+
+    async def stop_diagram(
+        self,
+        workspace_id: str,
+        session_id: str,
+        expected_revision: str,
+    ) -> DiagramDocumentView:
+        """Stop the active collaboration generation and retain the document read-only.
+
+        A stop is conditional on both the session identity and current revision,
+        so a late save from an older collaboration cannot stop or overwrite a
+        newer one. The response is the persisted read-only document, not a
+        pending browser draft. Follow the ``collaborating-on-diagrams`` skill
+        before discarding an unacknowledged local draft.
+        """
+        return await self._client.stop_diagram(
+            workspace_id,
+            DiagramStopRequest(session_id=session_id, expected_revision=expected_revision),
+        )
 
     async def remap_workspace_session(
         self, workspace_id: str, session_ref: str

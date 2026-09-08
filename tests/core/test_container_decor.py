@@ -246,6 +246,25 @@ def test_resources_prints_nothing_when_no_cgroup_is_readable(tmp_path: Path) -> 
     assert out.strip() == ""
 
 
+def _backdate_sample(tmp_path: Path, *, seconds: int) -> None:
+    """Rewrite the previous sample's timestamp so the CPU window is EXACT.
+
+    The script divides consumed CPU by real elapsed wall clock (`date +%s`), so
+    a test that sleeps is asserting on how long its own sleep actually took. On
+    a loaded CI runner a 2 s sleep lands at 3 s and an exact percentage
+    assertion fails — measured as `cpu 66%` against an expected `cpu 100%`,
+    which reads as an arithmetic bug in the script rather than as the host being
+    busy. The state file is `<usage> <unix-seconds>`, so backdating its stamp
+    pins the denominator and removes the clock from the test entirely.
+
+    This is the repo's own rule applied to a sleep: replace an arbitrary timeout
+    with the condition you actually mean.
+    """
+    state = tmp_path / f"grove-resources.{os.getuid()}"
+    usage, _stamp = state.read_text(encoding="utf-8").split()
+    state.write_text(f"{usage} {int(time.time()) - seconds}\n", encoding="utf-8")
+
+
 def test_resources_reads_a_capped_cgroup_v2_and_needs_two_samples_for_cpu(tmp_path: Path) -> None:
     """The first call has no previous sample, so it reports memory only."""
     cgroup = _cgroup_v2(
@@ -265,7 +284,7 @@ def test_resources_reads_a_capped_cgroup_v2_and_needs_two_samples_for_cpu(tmp_pa
 
     # Two seconds of wall clock against three seconds of consumed CPU on a
     # 1.5-vCPU cap is exactly 100%.
-    time.sleep(2)
+    _backdate_sample(tmp_path, seconds=2)
     (cgroup / "cpu.stat").write_text("usage_usec 4000000\nuser_usec 0\n", encoding="utf-8")
     code, second = _run(script, env=env)
     assert code == 0
@@ -292,7 +311,7 @@ def test_resources_reads_a_cgroup_v1_tree(tmp_path: Path) -> None:
     assert code == 0
     assert first.strip() == "mem 512M"  # no total: the limit is the uncapped sentinel
 
-    time.sleep(2)
+    _backdate_sample(tmp_path, seconds=2)
     (cgroup / "cpuacct" / "cpuacct.usage").write_text("2000000000\n", encoding="utf-8")
     code, second = _run(script, env=env)
     assert code == 0
@@ -311,7 +330,7 @@ def test_an_uncapped_cgroup_reports_against_the_cpus_it_may_actually_use(tmp_pat
     assert code == 0
     assert first.strip() == "mem 100M"  # uncapped memory prints no total either
 
-    time.sleep(2)
+    _backdate_sample(tmp_path, seconds=2)
     (cgroup / "cpu.stat").write_text("usage_usec 2000000\nuser_usec 0\n", encoding="utf-8")
     code, second = _run(script, env=env)
     assert code == 0
@@ -332,7 +351,7 @@ def test_an_uncapped_cgroup_with_no_nproc_omits_the_cpu_segment_entirely(tmp_pat
 
     code, _ = _run(script, env=env)
     assert code == 0
-    time.sleep(2)
+    _backdate_sample(tmp_path, seconds=2)
     (cgroup / "cpu.stat").write_text("usage_usec 2000000\nuser_usec 0\n", encoding="utf-8")
     code, second = _run(script, env=env)
     assert code == 0

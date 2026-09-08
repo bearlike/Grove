@@ -17,14 +17,11 @@ from typing import Any
 import humanize
 import typer
 
-from grove.core import GroveError, SessionExplorer, SessionListing, build
+from grove.core import GroveError, SessionExplorer, SessionListing
 from grove.core.agents import SessionTurn
-from grove.core.config import load_config
-from grove.core.registry import RepoRegistry
 from grove.core.sessions import CatalogEntry, SessionCatalog, SessionQuery
-from grove.core.store import JsonWorkspaceStore
 from grove.tui.cli_complete import Complete
-from grove.tui.cli_workspace import clean_exit, resolve_workspace
+from grove.tui.cli_workspace import clean_exit, host_registry, resolve_workspace
 
 sessions_app = typer.Typer(
     name="sessions",
@@ -54,15 +51,8 @@ def _explorer() -> SessionExplorer:
 
 
 def _catalog() -> SessionCatalog:
-    """A host-wide catalog, independent of the current cwd's project.
-
-    Mirrors the daemon's own host-wide construction (``_asgi.py``):
-    ``load_config(repo_root=None)`` (user + built-in layers only, no project
-    overlay — there is no single project here) plus the shared global store.
-    """
-    cfg = load_config(repo_root=None)
-    registry = RepoRegistry(cfg=cfg, store=JsonWorkspaceStore(), config_loader=load_config)
-    return SessionCatalog(registry)
+    """A host-wide catalog, independent of the current cwd's project."""
+    return SessionCatalog(host_registry())
 
 
 def _parse_since(text: str) -> datetime:
@@ -372,7 +362,7 @@ def recollect_session(
         if session is None:
             from grove.tui.cli_workspace import resolve_or_infer_workspace  # noqa: PLC0415
 
-            state = resolve_or_infer_workspace(build(), None)
+            _, state = resolve_or_infer_workspace(None)
             listing = explorer.primary_for_workspace(state.id)
         else:
             listing = explorer.resolve(session)
@@ -486,8 +476,7 @@ def remap_session(
     # GroveError → one-line-red + exit-1 contract every workspace verb uses —
     # instead of a hand-rolled try/except duplicating its body.
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         updated = manager.remap_session(state.id, session)
         typer.secho(
             f"remapped {updated.id} ({updated.title}) → session {updated.agent_session_id}",

@@ -1,31 +1,46 @@
 """FastAPI factory + lifespan + route handlers for the Grove daemon.
 
 All routes are 1:1 with ``WorkspaceManager`` methods. Multi-repo dispatch
-goes through ``RepoRegistry``. No WebSocket — clients poll. No auth —
-the daemon listens on loopback only; remote access is via SSH tunnel.
+goes through ``RepoRegistry``. Clients poll for state; the one exception is
+the panel proxy, which bridges a WebSocket because noVNC upgrades. Routes
+require a bearer session (``grove.daemon.auth``) with the same exception:
+``/panel/{token}/…`` authenticates on the token in its own path, because an
+iframe and a WebSocket handshake can carry a credential nowhere else.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import getpass
+import hashlib
+import hmac
 import os
 import platform
+import secrets
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
+from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+import httpx
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
+from websockets.asyncio.client import connect as websocket_connect
+from websockets.exceptions import WebSocketException
 
 from grove import __version__ as _GROVE_VERSION
 from grove.core import paths as core_paths
 from grove.core.activity import ActivityService
+from grove.core.activity_runtime import ActivityRuntime
+from grove.core.activity_sources import ActivitySources
+from grove.core.admission import Admission
 from grove.core.agents import get_adapter, resolve_models
 from grove.core.agents.hook import HOOK_INGEST_ROUTE, ClaudeHook
 from grove.core.auth import SessionStore
@@ -44,9 +59,27 @@ from grove.core.contracts.activity import (
     SubagentActivityView,
     SubagentFleetView,
 )
-from grove.core.contracts.agents import AgentSummaryView
+from grove.core.contracts.agents import AgentSummaryView, ModelOptionView
+from grove.core.contracts.assignment_events import AssignmentTicketEvent
+from grove.core.contracts.attachments import AttachmentUploadRequest, AttachmentView
 from grove.core.contracts.branch_info import BranchInfo
+from grove.core.contracts.diagrams import (
+    DiagramDocumentView,
+    DiagramOpenRequest,
+    DiagramPreviewUploadRequest,
+    DiagramPreviewView,
+    DiagramStopRequest,
+    DiagramUpdateRequest,
+)
+from grove.core.contracts.gallery import (
+    GalleryDocumentView,
+    GalleryItemView,
+    GalleryPreviewUploadRequest,
+    GalleryPreviewView,
+)
+from grove.core.contracts.history import WorkspaceHistoryView
 from grove.core.contracts.issueops import IssueOpsEvent, IssueOpsOutcome
+from grove.core.contracts.keys import SendKeysRequest
 from grove.core.contracts.phase import PhaseView, SetPhaseRequest
 from grove.core.contracts.public import PublicWorkspaceView
 from grove.core.contracts.questions import QuestionAnswerRequest
@@ -78,6 +111,7 @@ from grove.core.contracts.views import (
     WorkspaceDefaultsSaveView,
     WorkspaceDefaultsView,
     WorkspaceDiffView,
+    WorkspacePanelView,
     WorkspacePaneView,
     WorkspacePeekView,
     WorkspaceStateView,
@@ -91,6 +125,8 @@ from grove.core.errors import (
     BranchNotFound,
     CapabilityUnavailable,
     ConfigError,
+    DiagramConflict,
+    DiagramUnavailable,
     GroveError,
     PaneNotFound,
     QuestionAnswerInvalid,
@@ -103,27 +139,51 @@ from grove.core.errors import (
     TicketProviderError,
     TicketProviderNotConfigured,
     TicketPullRequestsUnsupported,
+    WorkCapacityExceeded,
     WorkspaceNotFound,
     WorkspaceStateError,
 )
+from grove.core.gallery import DiagramGallery, GalleryItem
 from grove.core.issueops import AssigneePoller, IssueOpsEngine, TicketStatusPublisher
+from grove.core.mailboxes import MailboxCoordinator
 from grove.core.manager import WorkspaceManager
+from grove.core.model_catalog import model_options
 from grove.core.notifications import NotificationBroker
+from grove.core.pane_events import (
+    PaneEventHub,
+    PaneEventsUnavailable,
+    PaneKey,
+    PaneSnapshot,
+    TmuxControlPaneSource,
+)
+from grove.core.panels import PanelResolver, PanelTarget
 from grove.core.release import ReleaseChecker, ReleaseStatus
 from grove.core.sessions import SessionCatalog, SessionExplorer, SessionListing
 from grove.core.share_policy import SharePolicy, SharePolicyStore
 from grove.core.store import JsonWorkspaceStore
+from grove.core.telemetry.project import LangfuseProject
 from grove.core.trace_forwarder import TraceForwarder
+from grove.core.workspace import WorkspaceState
+from grove.core.workspace_history import WorkspaceHistoryStore
 from grove.daemon._audience import _PollAudience
-from grove.daemon._catalog import _CatalogMemo
+from grove.daemon._catalog import _CatalogMemo, _GalleryMemo
+from grove.daemon._catalog_sources import _CatalogSources
 from grove.daemon._lifecycle import _LifecycleRunner
 from grove.daemon._pane_stream import _PaneStreamer
-from grove.daemon._poll_coalescer import _PollCoalescer
 from grove.daemon._public import PublicWorkspaceReader, ShareNotFound
 from grove.daemon._public_tickets import _PublicTicketMemo
+from grove.daemon._runtime_sources import RuntimeSources
+from grove.daemon._scoped_events import ScopedWorkspaceEvents
 from grove.daemon._sse import _SseHub
 from grove.daemon._turns import turn_window
-from grove.daemon.auth import build_auth_router, make_require_hook_token, make_require_session
+from grove.daemon.auth import (
+    build_auth_router,
+    make_require_hook_token,
+    make_require_mailbox_session,
+    make_require_session,
+)
+from grove.daemon.mailbox_socket import MailboxSocket
+from grove.daemon.mailboxes import CoordinatorSteerClient, MailboxRouter
 from grove.daemon.repos import RepoRegistry
 from grove.daemon.usage import _default_usage_service, build_usage_router
 
@@ -141,6 +201,17 @@ if TYPE_CHECKING:
 # couple seconds matches the dashboard's slow-tick feel without hammering git/tmux.
 _POLL_INTERVAL_SECONDS = 2.0
 
+# How long a minted panel URL stays usable. Long enough that a dashboard left
+# open all day keeps its browser tile alive without a refetch, short enough that
+# a URL copied out of devtools is not a durable key to the workspace's sidecar.
+_PANEL_TOKEN_TTL = timedelta(hours=12)
+
+# Signing key for panel tokens, minted once per process and never persisted.
+# Module scope rather than per-app so a test building two apps still validates
+# its own tokens; process scope rather than a file so a daemon restart revokes
+# every outstanding panel URL (the webapp refetches on mount, so nothing breaks).
+_panel_token_key = secrets.token_bytes(32)
+
 
 def _close_best_effort(name: str, close: Callable[[], None]) -> None:
     """Run one shutdown hook without preventing independent owners from closing."""
@@ -148,6 +219,29 @@ def _close_best_effort(name: str, close: Callable[[], None]) -> None:
         close()
     except Exception as exc:
         logger.warning("{} shutdown failed: {}", name, type(exc).__name__)
+
+
+async def _source_startup(*sources: ActivitySources | _CatalogSources) -> None:
+    """Arm the file-event observers off the readiness path, loudly on failure.
+
+    Moving work off startup must not move its failures into silence: a bare
+    `create_task` reports an exception only at GC time, by which point the
+    daemon has been running without watchers and nothing says so. Each group is
+    started independently so one unarmable set does not cost the other — the
+    same degraded-observer rule the groups apply to their own roots.
+    """
+    for source in sources:
+        try:
+            await source.start()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "file event sources failed to arm ({}): {} — the daemon serves "
+                "without them and reads fall back to explicit reconciliation",
+                type(source).__name__,
+                type(exc).__name__,
+            )
 
 
 async def _aclose_best_effort(name: str, aclose: Callable[[], Awaitable[None]]) -> None:
@@ -164,7 +258,11 @@ async def _aclose_best_effort(name: str, aclose: Callable[[], Awaitable[None]]) 
 
 
 def _build_whoami(
-    started_at: datetime, release: ReleaseStatus, *, langfuse_host: str | None = None
+    started_at: datetime,
+    release: ReleaseStatus,
+    *,
+    langfuse_host: str | None = None,
+    langfuse_project_id: str | None = None,
 ) -> WhoamiView:
     """Snapshot the daemon's identity + uptime + release skew.
 
@@ -189,7 +287,37 @@ def _build_whoami(
         latest_version=release.latest,
         update_available=release.update_available,
         langfuse_host=langfuse_host,
+        langfuse_project_id=langfuse_project_id,
     )
+
+
+def _resolve_langfuse_project(cfg: GroveConfig, projects: LangfuseProject) -> str | None:
+    """The Langfuse project these credentials belong to, or ``None``.
+
+    Gated on exactly the same resolution as the host below — a project id
+    without a usable host builds no link — and then asked of Langfuse itself,
+    because a key pair names its project and the config never does. Cached in
+    ``projects`` (one instance per daemon), so a whoami costs an HTTP call at
+    most once per TTL and never on a failure path.
+    """
+    telemetry = cfg.telemetry
+    if not telemetry.enabled:
+        return None
+    derived = telemetry.derive_env(os.environ)
+    if telemetry.unresolved(derived):
+        return None
+    host = derived.get("LANGFUSE_HOST")
+    headers = derived.get("OTEL_EXPORTER_OTLP_HEADERS", "")
+    # The composed exporter header, reused rather than re-deriving the Basic
+    # token from the key pair: one composition site, and this module never
+    # touches the secret itself.
+    auth = next(
+        (part.removeprefix("Authorization=") for part in headers.split(",") if "=" in part),
+        "",
+    )
+    if not host or not auth.startswith("Basic "):
+        return None
+    return projects.resolve(host, auth)
 
 
 def _resolve_langfuse_host(cfg: GroveConfig) -> str | None:
@@ -243,9 +371,17 @@ class _SendMessageBody(BaseModel):
     at validation (422) keeps the engine's typed-error surface for real
     state problems. Module-scope for the same forward-ref reason as
     ``_PauseBody`` above.
+
+    ``attachments`` names files already stored through
+    ``POST /workspaces/{id}/attachments``. Ids, never paths: a path chosen by
+    the caller is the caller choosing which file the agent is told to open,
+    and the engine resolves an id against one directory it owns. An id that no
+    longer resolves is skipped rather than refused — see
+    ``WorkspaceManager.send_message``.
     """
 
     text: str = Field(min_length=1)
+    attachments: list[str] = []
 
 
 class _InvokeControlBody(BaseModel):
@@ -356,43 +492,12 @@ def _parse_last_event_id(raw: str | None) -> int | None:
         return None
 
 
-async def _poll_loop(
-    coalescer: _PollCoalescer,
-    interval: float,
-    stop_event: asyncio.Event,
-    audience: _PollAudience,
-) -> None:
-    """Drive ``ActivityService.poll_once`` on a slow interval until shutdown.
-
-    Runs through the same ``_PollCoalescer`` the hook-ingest route triggers —
-    a hook event arriving mid-tick joins THIS run rather than
-    scheduling a second one, so the timer and the hook trigger can never pile
-    up concurrent executor calls. Failures are logged and swallowed — one bad
-    tick must not kill the stream (best-effort, like peek). The wait races the
-    ``stop_event`` so shutdown is prompt rather than blocking out the interval.
-
-    The ``audience`` await is the empty-room gate: with no consumer this parks
-    on an ``asyncio.Event`` (zero wakeups) rather than re-checking a flag every
-    two seconds, and the first consumer to arrive releases it into a tick
-    immediately. Gating BEFORE the tick rather than after the interval is what
-    makes that arrival prompt. Cancellation still ends the task while parked,
-    which is how the lifespan stops it.
-    """
-    while not stop_event.is_set():
-        await audience.wait()
-        try:
-            await coalescer.run()
-        except Exception as exc:  # a bad tick must never tear down the lifespan task
-            logger.warning("activity poll_once failed: {}", exc)
-        with suppress(TimeoutError):
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
-
-
 def build_app(  # noqa: PLR0915
     *,
     cfg: GroveConfig,
     store: JsonWorkspaceStore,
     auth_store: SessionStore | None = None,
+    history_store: WorkspaceHistoryStore | None = None,
     share_policy_store: SharePolicyStore | None = None,
     notification_broker: NotificationBroker | None = None,
     release_checker: ReleaseChecker | None = None,
@@ -404,8 +509,9 @@ def build_app(  # noqa: PLR0915
 
     Tests call this directly; the CLI's ``serve`` calls it via uvicorn.
     ``auth_store`` is constructed from ``cfg.auth`` if not supplied — tests
-    inject one with a fake clock when they need to control TTLs. ``share_policy_store``
-    is likewise injectable so tests do not write user state.
+    inject one with a fake clock when they need to control TTLs. ``history_store``
+    is likewise injectable so route tests can seed an isolated durable timeline.
+    ``share_policy_store`` is likewise injectable so tests do not write user state.
     ``notification_broker`` is built from ``cfg.notifications`` if not supplied —
     tests inject one with a capturing channel to assert the edge-trigger wiring.
     ``status_publisher`` is built from ``cfg.issueops`` if not supplied (``None``
@@ -428,18 +534,31 @@ def build_app(  # noqa: PLR0915
     # that wires this: it is the one with a long-lived event loop for the build
     # to run on, and the hook is best-effort — it can never block or fail
     # registration (see `ProjectInfra.registration_hook`).
+    # The coordinator is built BEFORE the registry so every manager the daemon
+    # mints can steer a native workspace's owner in-process (see
+    # `CoordinatorSteerClient`); the loop it needs is bound at lifespan start.
+    mailbox_coordinator = MailboxCoordinator()
+    native_steer = CoordinatorSteerClient(mailbox_coordinator)
     registry = RepoRegistry(
         cfg=cfg,
         store=store,
         config_loader=load_config,
         on_project_registered=ProjectInfra.registration_hook(cfg),
+        native_steer=native_steer,
     )
+    # A resolver has no cache: a panel destination is a live compose membership
+    # fact, so carrying an old IP past a container restart would be a security
+    # claim the daemon can no longer prove.
+    panel_resolver = PanelResolver()
     activity_service = ActivityService(registry=registry)
     usage_service = _default_usage_service(cfg=cfg, registry=registry)
     # Host-wide session catalog, request-scoped behind a short TTL — never
     # polled, never per-row (see `_catalog.py`). Shared by the host-scoped
     # listing and its drill-in so the pair costs one scan.
     catalog = _CatalogMemo(SessionCatalog(registry))
+    # The diagram gallery joins on the catalog's rows, so it shares the memo
+    # rather than scanning sessions a second time.
+    gallery = _GalleryMemo(DiagramGallery(registry), catalog)
     # Ticket enrichment for the PUBLIC share view, memoized per process.
     #
     # It has to live here rather than at module scope for the reason every other
@@ -453,10 +572,15 @@ def build_app(  # noqa: PLR0915
     # be N x refs upstream requests — an amplification vector pointed at a third
     # party, driven by callers Grove never authenticated.
     public_ticket_memo = _PublicTicketMemo()
-    # Shared by the lifespan timer and the hook-ingest route below — the
-    # single choke point that keeps their two independent triggers from ever
-    # running `poll_once` concurrently.
-    poll_coalescer = _PollCoalescer(activity_service.poll_once)
+    activity_runtime = ActivityRuntime(activity_service, limits=cfg.activity_admission)
+    activity_sources = ActivitySources(activity_runtime, store)
+    runtime_sources = RuntimeSources(
+        registry=registry,
+        store=store,
+        activity_runtime=activity_runtime,
+        docker_bin=cfg.container.docker_bin,
+    )
+    pane_events = PaneEventHub()
     # The outbound face: the live sticky status comment. Built from
     # `cfg.issueops` (None when disabled), bound to the activity bus in the
     # lifespan like `notification_broker`, and injected into the engine below so
@@ -502,16 +626,27 @@ def build_app(  # noqa: PLR0915
     # one seam instead of reaching for a raw executor handle: it owns the
     # dedicated bounded pool AND the per-workspace serialization the event loop
     # used to provide for free (see `_lifecycle.py` for both rationales).
-    lifecycle = _LifecycleRunner()
+    lifecycle = _LifecycleRunner(max_pending=cfg.lifecycle_max_pending)
     # Who wants activity deltas. The 2s poll waits on it, so an idle daemon that
     # nobody and nothing is listening to does no per-workspace git/transcript
     # work at all (see `_audience.py`).
     audience = _PollAudience()
     sse_hub = _SseHub(activity_service, audience=audience)
+    catalog_sources = _CatalogSources(
+        catalog,
+        gallery,
+        registry,
+        lambda: sse_hub.publish(
+            DashboardEvent(kind="catalog_changed", seq=activity_service.next_seq())
+        ),
+    )
     if notification_broker is None:
         notification_broker = NotificationBroker.from_config(cfg.notifications)
     if release_checker is None:
         release_checker = ReleaseChecker()
+    # One per daemon, like the release checker: the cache is what keeps a
+    # whoami off Langfuse's API on every call.
+    langfuse_projects = LangfuseProject()
     if auth_store is None:
         auth_store = SessionStore(
             session_ttl=timedelta(seconds=cfg.auth.session_ttl_seconds),
@@ -519,10 +654,33 @@ def build_app(  # noqa: PLR0915
             pair_init_per_minute=cfg.auth.pair_init_per_minute,
             pair_poll_per_minute=cfg.auth.pair_poll_per_minute,
         )
+    if history_store is None:
+        # The workspace store's own, not a second instance: it is the WRITER
+        # (names on save, the tombstone on delete) and this route is a reader of
+        # the same file, so sharing one connection keeps "what was just written"
+        # and "what is served" the same object rather than two views that agree
+        # only because they resolved the same default path.
+        history_store = store.history
     if share_policy_store is None:
         share_policy_store = SharePolicyStore()
     require_session = make_require_session(auth_store=auth_store, enabled=cfg.auth.enabled)
+    require_mailbox_session = make_require_mailbox_session(
+        auth_store=auth_store, enabled=cfg.auth.enabled
+    )
     auth_dep = [Depends(require_session)]
+    mailbox_router = MailboxRouter(
+        coordinator=mailbox_coordinator,
+        registry=registry,
+        store=store,
+        auth_store=auth_store,
+        require_mailbox_session=require_mailbox_session,
+        lifecycle=lifecycle,
+    )
+    mailbox_socket = (
+        MailboxSocket(Path(path), mailbox_router.router())
+        if (path := os.environ.get("GROVE_MAILBOX_SOCKET"))
+        else None
+    )
     # Same config flag, a DIFFERENT mechanism: the hook-ingest route
     # can't ask a human to approve a pairing challenge (see `make_require_hook_token`).
     require_hook_token = make_require_hook_token(enabled=cfg.auth.enabled)
@@ -545,7 +703,7 @@ def build_app(  # noqa: PLR0915
         )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0915
         # Statement count grows linearly with subscriber/owner count (bind on
         # entry, close in `finally`) — the same justification `build_app`
         # itself already carries the identical suppression for.
@@ -554,7 +712,13 @@ def build_app(  # noqa: PLR0915
         app.state.share_policy_store = share_policy_store
         app.state.activity = activity_service
         app.state.usage = usage_service
+        app.state.workspace_history = history_store
         app.state.sse_hub = sse_hub
+        app.state.mailbox_coordinator = mailbox_coordinator
+        app.state.mailbox_router = mailbox_router
+        if mailbox_socket is not None:
+            await mailbox_socket.start()
+            app.state.mailbox_socket = mailbox_socket
         if otlp_ingest is not None:
             app.state.otlp_ingest = otlp_ingest
         # Captured once at lifespan-entry — every ``/whoami`` request
@@ -566,6 +730,7 @@ def build_app(  # noqa: PLR0915
         # poll. The hub must bind the *running* loop so its cross-thread
         # ``call_soon_threadsafe`` targets the right one.
         sse_hub.start(asyncio.get_running_loop())
+        native_steer.bind(asyncio.get_running_loop())
         # Subscribe the notification broker to the SAME activity bus the SSE hub
         # rides — a debounced edge-trigger, no new status computation. Its
         # dispatch worker keeps channel HTTP off the activity poll thread.
@@ -614,19 +779,39 @@ def build_app(  # noqa: PLR0915
         # timer against the trackers. Joining would make it hold the fleet's
         # git/tmux scan open for work it never reads.
         if assignee_poller is not None:
-            assignee_poller.bind()
+            assignee_poller.bind(registry.subscribe_managers)
             app.state.assignee_poller = assignee_poller
-        stop_event = asyncio.Event()
-        poll_task = asyncio.create_task(
-            _poll_loop(poll_coalescer, _POLL_INTERVAL_SECONDS, stop_event, audience)
-        )
+        # THE PROJECTION IS AWAITED; THE WATCHERS ARE NOT. `activity_runtime`
+        # bootstraps the state every read answers from, so serving before it is
+        # ready would answer an empty fleet — the one thing a maintained
+        # projection must never do. The two file-event groups are pure
+        # OBSERVERS: nothing serving a request needs them armed, and arming
+        # them is filesystem discovery across every repo on the host plus a
+        # watcher-readiness wait (measured 9.1s and 6.2s here), all of it in
+        # front of `/healthz`. Blocking readiness on them made daemon startup
+        # O(host), so the SDK's spawn budget became a bet on fleet size.
+        #
+        # They still start exactly once, and a failure is still surfaced —
+        # `_source_startup` logs it rather than letting the task die silently,
+        # which is the cost of moving work off the readiness path.
+        watchers: asyncio.Task[None] | None = None
         try:
+            await activity_runtime.start()
+            await runtime_sources.start()
+            watchers = asyncio.create_task(
+                _source_startup(activity_sources, catalog_sources), name="grove-source-startup"
+            )
+            app.state.activity_runtime = activity_runtime
             yield
         finally:
-            stop_event.set()
-            poll_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await poll_task
+            if watchers is not None:
+                watchers.cancel()
+                await asyncio.gather(watchers, return_exceptions=True)
+            await _aclose_best_effort("catalog sources", catalog_sources.close)
+            await _aclose_best_effort("pane events", pane_events.aclose)
+            await _aclose_best_effort("activity sources", activity_sources.close)
+            await _aclose_best_effort("runtime sources", runtime_sources.close)
+            await _aclose_best_effort("activity runtime", activity_runtime.close)
             if notification_broker is not None:
                 _close_best_effort("notification broker", notification_broker.close)
             if status_publisher is not None:
@@ -637,9 +822,13 @@ def build_app(  # noqa: PLR0915
                 _close_best_effort("assignee poller", assignee_poller.close)
             if otlp_ingest is not None:
                 await _aclose_best_effort("otlp ingest", otlp_ingest.aclose)
+            await _aclose_best_effort("mailbox router", mailbox_router.aclose)
+            if mailbox_socket is not None:
+                await _aclose_best_effort("mailbox socket", mailbox_socket.close)
             _close_best_effort("session catalog", catalog.close)
             _close_best_effort("SSE hub", sse_hub.stop)
             _close_best_effort("activity service", activity_service.close)
+            _close_best_effort("workspace history", history_store.close)
             try:
                 await asyncio.to_thread(usage_service.close)
             except Exception as exc:
@@ -675,6 +864,7 @@ def build_app(  # noqa: PLR0915
     # Pairing + sessions router. Mounts before the gated routes so its own
     # per-route auth decisions stay local to ``build_auth_router``.
     app.include_router(build_auth_router(auth_store=auth_store, require_session=require_session))
+    app.include_router(mailbox_router.router())
 
     # The historical usage-audit router — bounded reads over the SQLite cache,
     # the past-tense sibling of `/activity` + `/events` above. Auth is applied
@@ -696,6 +886,9 @@ def build_app(  # noqa: PLR0915
         # ``isinstance`` scan, so the first matching key wins. ``BranchError``
         # is the catch-all for any future subclass we forgot to enumerate.
         code_map: dict[type[GroveError], tuple[int, str]] = {
+            WorkCapacityExceeded: (503, "work_capacity_exceeded"),
+            DiagramConflict: (409, "diagram_conflict"),
+            DiagramUnavailable: (404, "diagram_unavailable"),
             BranchConflict: (409, "branch_conflict"),
             BranchAlreadyCheckedOut: (409, "branch_already_checked_out"),
             BranchNotFound: (404, "branch_not_found"),
@@ -857,6 +1050,200 @@ def build_app(  # noqa: PLR0915
             ) from exc
         return registry.get(Path(state.repo_root))
 
+    def _mint_panel_token(ws_id: str, name: str) -> str:
+        """A short-lived opaque credential naming exactly one workspace panel.
+
+        The credential rides in the PATH rather than a header because of what
+        has to carry it. A panel is rendered in an ``<iframe>`` and then
+        upgraded to a WebSocket by noVNC, and neither of those can set an
+        ``Authorization`` header — the browser builds both requests itself. The
+        webapp's bearer token is also deliberately unreachable from page
+        scripts (it lives server-side behind the BFF, keyed by an opaque
+        cookie), so there is nothing for a script to attach even if it could.
+
+        Stateless and HMAC-signed against a key minted once per process. That
+        buys three things over a stored token: no persistence to grow or prune,
+        no lookup on the hot path of every VNC frame's HTTP sibling, and
+        automatic invalidation of every outstanding panel URL when the daemon
+        restarts. The last is a feature — the webapp refetches ``/panels`` when
+        a workspace page mounts, so the cost of a restart is one extra request
+        and the benefit is that a leaked URL cannot outlive the process.
+
+        The payload binds BOTH the workspace and the panel name, so a token
+        minted for one panel cannot be replayed against another, and carries its
+        own expiry so the signature alone settles freshness.
+        """
+        expires = int((datetime.now(UTC) + _PANEL_TOKEN_TTL).timestamp())
+        payload = f"{ws_id}\x00{name}\x00{expires}".encode()
+        body = base64.urlsafe_b64encode(payload).rstrip(b"=")
+        digest = hmac.new(_panel_token_key, body, hashlib.sha256).digest()
+        signature = base64.urlsafe_b64encode(digest).rstrip(b"=")
+        return f"{body.decode()}.{signature.decode()}"
+
+    def _read_panel_token(token: str) -> tuple[str, str]:
+        """Recover ``(ws_id, panel_name)`` from a token, or refuse.
+
+        Every rejection raises the SAME 404 the resolver raises for a panel that
+        does not exist. A distinct 401/403 here would turn this endpoint into an
+        oracle: unauthenticated callers could probe which workspace ids are real
+        by watching the status code change. Signature is compared before the
+        payload is trusted, and with ``compare_digest`` so the comparison does
+        not leak its progress through timing.
+        """
+        try:
+            body, _, signature = token.partition(".")
+            if not body or not signature:
+                raise ValueError("malformed token")
+            expected = hmac.new(_panel_token_key, body.encode(), hashlib.sha256).digest()
+            given = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
+            if not hmac.compare_digest(expected, given):
+                raise ValueError("bad signature")
+            payload = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+            ws_id, name, expires = payload.decode().split("\x00")
+            if datetime.now(UTC).timestamp() > int(expires):
+                raise ValueError("expired")
+        except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "panel_not_found", "message": "no such panel"},
+            ) from exc
+        return ws_id, name
+
+    def _panel_url(ws_id: str, name: str, path: str) -> str:
+        """Build the browser-facing URL without exposing the internal target.
+
+        Relative on purpose, and NOT under the webapp's ``/api/grove`` BFF. The
+        BFF is a Next route handler, which can only take a Request and return a
+        Response — it has no upgrade path, so a panel proxied through it would
+        serve noVNC's first page and then never open its socket. ``/panel/…``
+        is served by this daemon directly and reaches the browser on the
+        webapp's own origin through the reverse proxy, which keeps the iframe
+        same-origin and free of mixed content.
+
+        The service, port and container IP never cross this boundary: the
+        browser receives only a signed token, and the daemon resolves the
+        constrained Docker destination again on every request.
+        """
+        return f"/panel/{quote(_mint_panel_token(ws_id, name), safe='.')}{path}"
+
+    async def _resolve_panel(ws_id: str, name: str) -> tuple[PanelTarget, str]:
+        """Read and resolve one declared panel, with unavailable as a clean 404.
+
+        Both manager reconciliation and Docker inspection block, so this keeps
+        their work together in an executor.  A panel can disappear between a
+        detail read and its iframe request as a compose service exits; resolving
+        again is the honest answer, never a cached address pointed at a recycled
+        container IP.
+        """
+        manager = _manager_for(ws_id)
+
+        def _read() -> tuple[PanelTarget | None, str | None]:
+            state = manager.get(ws_id)
+            panel = next((item for item in manager.config.panels if item.name == name), None)
+            if panel is None:
+                return None, None
+            return panel_resolver.resolve(state, panel), panel.path
+
+        try:
+            target, path = await asyncio.to_thread(_read)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        if path is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "panel_not_found", "message": f"no panel named {name!r}"},
+            )
+        if target is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "panel_unavailable",
+                    "message": f"panel {name!r} is not available in this workspace",
+                },
+            )
+        return target, path
+
+    async def _resolved_panel_views(ws_id: str) -> list[WorkspacePanelView]:
+        """List only panels whose declared compose service resolves right now.
+
+        Omission rather than a nullable target keeps the client contract useful:
+        every row it receives is immediately iframeable.  The direct proxy route
+        still distinguishes an undeclared panel from one that was declared but
+        became unavailable after the detail response.
+        """
+        manager = _manager_for(ws_id)
+
+        def _read() -> list[WorkspacePanelView]:
+            state = manager.get(ws_id)
+            return [
+                WorkspacePanelView(
+                    name=panel.name,
+                    title=panel.title,
+                    url=_panel_url(ws_id, panel.name, panel.path),
+                )
+                for panel in manager.config.panels
+                if panel_resolver.resolve(state, panel) is not None
+            ]
+
+        try:
+            return await asyncio.to_thread(_read)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    def _panel_target_url(
+        target: PanelTarget, rest: str, query: str, *, websocket: bool = False
+    ) -> str:
+        """Build a service URL from a resolved address and the caller's suffix."""
+        scheme = "ws" if websocket else "http"
+        suffix = quote(rest, safe="/%")
+        url = f"{scheme}://{target.host}:{target.port}/{suffix}"
+        return f"{url}?{query}" if query else url
+
+    def _panel_headers(headers: Any, *, websocket: bool = False) -> list[tuple[str, str]]:
+        """Keep end-to-end headers while withholding hop and daemon-auth headers.
+
+        A panel is an application in the workspace, not another daemon client:
+        forwarding the browser's bearer would disclose host-wide Grove authority
+        to code selected by the repository.  Hop-by-hop headers belong to each
+        individual connection, especially ``Upgrade`` which the WebSocket client
+        builds itself from its negotiated upstream connection.
+        """
+        omitted = {
+            "authorization",
+            "connection",
+            "host",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+        }
+        if websocket:
+            # The upstream client performs its OWN handshake and mints its own
+            # key, version and extension offer. Forwarding the browser's copies
+            # would put two of each on the wire, which the upstream library
+            # rejects outright — the symptom is a bare 403 on the browser's
+            # upgrade, with no handler ever reached to explain it. The
+            # subprotocol is renegotiated explicitly by the caller instead.
+            omitted |= {
+                "sec-websocket-key",
+                "sec-websocket-version",
+                "sec-websocket-extensions",
+                "sec-websocket-protocol",
+                "sec-websocket-accept",
+            }
+        # Starlette's `Headers` is not a `QueryParams`: it exposes `raw` (the
+        # decoded byte pairs, repeats preserved) but no `multi_items()`. Reading
+        # `raw` also keeps repeated headers like `Cookie` intact, which
+        # `dict(headers)` would silently collapse to the last value.
+        return [
+            (key.decode("latin-1"), value.decode("latin-1"))
+            for key, value in headers.raw
+            if key.decode("latin-1").lower() not in omitted
+        ]
+
     @app.get("/healthz", response_model=HealthView)
     async def healthz() -> HealthView:
         """Public liveness probe — minimal, no host identity, no auth.
@@ -983,6 +1370,27 @@ def build_app(  # noqa: PLR0915
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
 
+    @app.get("/public/{token}/events")
+    async def public_events(
+        token: str,
+        x_grove_share_passcode: Annotated[str | None, Header()] = None,
+    ) -> StreamingResponse:
+        """Workspace-scoped invalidations with no private fleet payload."""
+        try:
+            reader = await asyncio.to_thread(_share_reader, token, x_grove_share_passcode)
+        except ShareNotFound as exc:
+            raise _share_404(exc) from exc
+
+        def authorize() -> WorkspaceState:
+            return _share_reader(token, x_grove_share_passcode).state
+
+        source = ScopedWorkspaceEvents(activity_service, reader.state, authorize)
+        return StreamingResponse(
+            source.events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/public/{token}/turns", response_model=SessionDetailView | None)
     async def public_turns(
         token: str,
@@ -1054,7 +1462,15 @@ def build_app(  # noqa: PLR0915
         """
         release = await asyncio.to_thread(release_checker.check)
         langfuse_host = await asyncio.to_thread(_resolve_langfuse_host, cfg)
-        return _build_whoami(app.state.started_at, release, langfuse_host=langfuse_host)
+        langfuse_project = await asyncio.to_thread(
+            _resolve_langfuse_project, cfg, langfuse_projects
+        )
+        return _build_whoami(
+            app.state.started_at,
+            release,
+            langfuse_host=langfuse_host,
+            langfuse_project_id=langfuse_project,
+        )
 
     @app.get("/activity", response_model=DashboardSnapshotView, dependencies=auth_dep)
     async def activity() -> DashboardSnapshotView:
@@ -1063,7 +1479,7 @@ def build_app(  # noqa: PLR0915
         ``snapshot()`` does blocking git/tmux I/O, so it runs in the executor to
         keep the loop responsive under concurrent requests.
         """
-        snap = await asyncio.to_thread(activity_service.snapshot)
+        snap = activity_service.snapshot()
         return DashboardSnapshotView.from_snapshot(snap)
 
     @app.post(
@@ -1072,29 +1488,10 @@ def build_app(  # noqa: PLR0915
         dependencies=[Depends(require_hook_token)],
     )
     async def ingest_agent_hook(body: _HookIngestBody) -> None:
-        """Native Claude Code http-hook push — the live half of the command-hook sidecar.
-
-        Claude Code dispatches the ``command`` and ``http`` handlers registered
-        on the SAME event independently (`ClaudeHook.settings`), so by the time
-        this request lands the command handler has already written the
-        sidecar — this route's only job is collapsing the ~2s poll-tick lag
-        into an immediate recompute, never a second sidecar write (this
-        payload carries no ``$TMUX_PANE``, so writing here would race the
-        command handler's more complete record). ``poll_once`` already diffs
-        per-workspace by fingerprint and emits a delta only for what changed,
-        so the wire cost is scoped by construction — the *computation* still
-        walks every workspace, which is why this goes through the shared
-        ``poll_coalescer`` rather than dispatching its own executor call:
-        Claude fires this on every tracked event with no debounce, so
-        without coalescing, a burst of hook events during active fleet coding
-        ran that many full-fleet scans at once.
-
-        Gated by the same-host hook-ingest token (`make_require_hook_token`),
-        not the `SessionStore` pairing bearer every other route uses — see its
-        docstring for why.
-        """
-        del body  # session_id only justifies the call; poll_once() rescans everyone
-        await poll_coalescer.run()
+        """Admit a session invalidation without waiting for projection work."""
+        result = activity_runtime.hook(body.session_id)
+        if result not in (Admission.ACCEPTED, Admission.COALESCED):
+            raise HTTPException(status_code=503, detail={"error": "activity_intake_unavailable"})
 
     @app.get(
         "/events",
@@ -1148,10 +1545,8 @@ def build_app(  # noqa: PLR0915
                         last_seq = missed.seq
                         yield _sse_frame(missed)
                 else:
-                    snap = await asyncio.to_thread(activity_service.snapshot)
-                    snapshot_event = DashboardEvent.snapshot_event(
-                        snap, seq=activity_service.next_seq()
-                    )
+                    snap, cursor = activity_service.snapshot_with_cursor()
+                    snapshot_event = DashboardEvent.snapshot_event(snap, seq=cursor)
                     last_seq = snapshot_event.seq
                     yield _sse_frame(snapshot_event)
                 while True:
@@ -1161,6 +1556,8 @@ def build_app(  # noqa: PLR0915
                         )
                     except TimeoutError:
                         yield _sse_frame(DashboardEvent.heartbeat(seq=last_seq))
+                        continue
+                    if event.seq <= last_seq:
                         continue
                     last_seq = event.seq
                     yield _sse_frame(event)
@@ -1286,6 +1683,16 @@ def build_app(  # noqa: PLR0915
         """
         return await asyncio.to_thread(issue_ops_engine.handle, event)
 
+    @app.post("/issue-ops/assignments", status_code=202, dependencies=auth_dep)
+    async def ingest_assignment_event(event: AssignmentTicketEvent) -> dict[str, bool]:
+        """Admit an authenticated normalized tracker assignment edge."""
+        if assignee_poller is None:
+            raise HTTPException(status_code=409, detail={"error": "assignment_disabled"})
+        accepted = assignee_poller.handle_ticket_event(event)
+        if not accepted:
+            raise HTTPException(status_code=409, detail={"error": "assignment_not_admitted"})
+        return {"accepted": True}
+
     @app.get("/workspaces/{ws_id}", response_model=WorkspaceStateView, dependencies=auth_dep)
     async def get_workspace(ws_id: str) -> WorkspaceStateView:
         """One workspace's reconciled state — in the executor, since `get`
@@ -1295,7 +1702,150 @@ def build_app(  # noqa: PLR0915
             state = await asyncio.to_thread(mgr.get, ws_id)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
-        return WorkspaceStateView.from_state(state)
+        view = WorkspaceStateView.from_state(state)
+        return view.model_copy(update={"panels": await _resolved_panel_views(ws_id)})
+
+    @app.get(
+        "/workspaces/{ws_id}/panels",
+        response_model=list[WorkspacePanelView],
+        dependencies=auth_dep,
+    )
+    async def list_workspace_panels(ws_id: str) -> list[WorkspacePanelView]:
+        """The currently iframeable subset of this workspace's panel declarations.
+
+        This is deliberately a separate list route as well as the ``panels``
+        field on workspace detail: a panel service can start after the detail
+        query, and refreshing this small list avoids making the client treat a
+        full workspace state read as a liveness probe.
+        """
+        return await _resolved_panel_views(ws_id)
+
+    @app.api_route(
+        "/panel/{token}/{rest:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+        response_class=Response,
+        # Kept out of the schema: this is a byte passthrough, not an API. Every
+        # method shares one handler, so FastAPI would mint colliding operation
+        # ids and the webapp's generated client would grow seven meaningless
+        # methods whose request and response shapes belong to whatever service
+        # the panel points at, not to Grove.
+        include_in_schema=False,
+    )
+    async def proxy_workspace_panel(token: str, rest: str, request: Request) -> Response:
+        """Proxy one HTTP request to a resolved service in this workspace's stack.
+
+        Carries no ``auth_dep``: the signed token in the path IS the credential,
+        because a browser cannot put a header on an ``<iframe>`` request. The
+        token names the workspace and panel, so this handler still cannot be
+        pointed anywhere the minting route would not have allowed.
+
+        Target lookup happens before every request rather than trusting a URL
+        previously returned in workspace detail.  That repetition is the
+        containment check: Docker membership is live, while a composed service
+        can be restarted and receive a different IP at any time.  ``httpx`` is
+        used as a transparent HTTP transport only; it has no proxy configuration
+        or redirect following, so the repository cannot turn a local panel into
+        a route to a second origin.
+        """
+        ws_id, name = _read_panel_token(token)
+        target, _path = await _resolve_panel(ws_id, name)
+        content = await request.body()
+        try:
+            async with httpx.AsyncClient(follow_redirects=False, timeout=None) as client:
+                upstream = await client.request(
+                    request.method,
+                    _panel_target_url(target, rest, request.url.query),
+                    content=content,
+                    headers=_panel_headers(request.headers),
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "panel_unreachable",
+                    "message": f"panel {name!r} could not be reached: {exc}",
+                },
+            ) from exc
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers={
+                key: value
+                for key, value in upstream.headers.items()
+                if key.lower()
+                not in {
+                    "connection",
+                    "keep-alive",
+                    "proxy-authenticate",
+                    "proxy-authorization",
+                    "te",
+                    "trailer",
+                    "transfer-encoding",
+                    "upgrade",
+                }
+            },
+        )
+
+    @app.websocket("/panel/{token}/{rest:path}")
+    async def proxy_workspace_panel_websocket(websocket: WebSocket, token: str, rest: str) -> None:
+        """Bridge a panel's WebSocket upgrade through the same resolved target.
+
+        noVNC upgrades its initial HTTP page into a WebSocket, so an HTTP-only
+        proxy would render a convincing blank screen.  This is the reason the
+        credential lives in the path at all: the browser constructs this
+        handshake itself and cannot be made to attach a bearer header to it, so
+        a header-authenticated route could never be reached from an iframe.
+        The same signed token is verified here, and the live destination is
+        resolved again rather than trusted from the HTTP leg.  Frames are copied
+        in both directions without interpretation; the WebSocket protocol owns
+        ping/pong and close framing, while a concurrent task group prevents one
+        quiet side from blocking the other forever.
+        """
+        try:
+            ws_id, name = _read_panel_token(token)
+            target, _path = await _resolve_panel(ws_id, name)
+        except HTTPException:
+            await websocket.close(code=1011)
+            return
+        # The client's subprotocol offer has to be renegotiated rather than
+        # forwarded: noVNC asks for ``binary``, and a bridge that accepted the
+        # browser's offer without agreeing the same one upstream would hand each
+        # side a different framing contract.
+        offered = websocket.scope.get("subprotocols") or []
+        try:
+            async with websocket_connect(
+                _panel_target_url(target, rest, websocket.url.query, websocket=True),
+                additional_headers=_panel_headers(websocket.headers, websocket=True),
+                subprotocols=list(offered) or None,
+                max_size=None,
+            ) as upstream:
+                await websocket.accept(subprotocol=upstream.subprotocol)
+
+                async def client_to_upstream() -> None:
+                    while True:
+                        message = await websocket.receive()
+                        if message["type"] == "websocket.disconnect":
+                            await upstream.close()
+                            return
+                        if message.get("bytes") is not None:
+                            await upstream.send(message["bytes"])
+                        elif message.get("text") is not None:
+                            await upstream.send(message["text"])
+
+                async def upstream_to_client() -> None:
+                    async for message in upstream:
+                        if isinstance(message, bytes):
+                            await websocket.send_bytes(message)
+                        else:
+                            await websocket.send_text(message)
+
+                async with asyncio.TaskGroup() as tasks:
+                    tasks.create_task(client_to_upstream())
+                    tasks.create_task(upstream_to_client())
+        except (OSError, WebSocketException) as exc:
+            logger.debug("panel websocket {} for {} failed: {}", name, ws_id, exc)
+            with suppress(RuntimeError):
+                await websocket.close(code=1011)
 
     @app.post(
         "/workspaces/{ws_id}/pause",
@@ -1374,20 +1924,67 @@ def build_app(  # noqa: PLR0915
         """
         mgr = _manager_for(ws_id)
         try:
-            await asyncio.to_thread(mgr.send_message, ws_id, body.text)
+            await asyncio.to_thread(
+                mgr.send_message, ws_id, body.text, attachments=body.attachments
+            )
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post(
+        "/workspaces/{ws_id}/attachments",
+        response_model=AttachmentView,
+        dependencies=auth_dep,
+    )
+    async def add_workspace_attachment(ws_id: str, body: AttachmentUploadRequest) -> AttachmentView:
+        """Store one file for the workspace and return the id a message names.
+
+        The response's ``path`` is where the AGENT will find the file, already
+        translated into its own namespace — shown to the human so the request
+        is legible, never sent back by the client, which names the ``id``.
+
+        Base64 rather than multipart, so the browser's JSON-only BFF proxy and
+        this route need no second content type between them; the reasoning and
+        its cost are on ``AttachmentUploadRequest``. Malformed base64 is 422
+        ``invalid_attachment`` — a client bug, not a workspace state problem.
+        The decode and the disk write are both off-loaded like every other
+        blocking manager call.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            data = base64.b64decode(body.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_attachment", "message": f"content is not base64: {exc}"},
+            ) from exc
+        try:
+            return await asyncio.to_thread(mgr.add_attachment, ws_id, body.name, data)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post("/workspaces/{ws_id}/keys", status_code=204, dependencies=auth_dep)
+    async def send_workspace_keys(ws_id: str, body: SendKeysRequest) -> None:
+        """Deliver one named key to the workspace's own live terminal.
+
+        Acknowledgement means delivered, not cancelled or accepted by the app.
+        The engine chooses the pane and tmux server; clients cannot name either.
+        Remote or paneless agents refuse with 501 steering_unsupported.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            await asyncio.to_thread(mgr.send_keys, ws_id, body.key)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
 
     @app.post("/workspaces/{ws_id}/interrupt", status_code=204, dependencies=auth_dep)
     async def interrupt_workspace(ws_id: str) -> None:
-        """Interrupt the workspace's agent, where its adapter supports it.
+        """Interrupt the workspace's agent where its provider supports it.
 
-        Today every kind refuses (501 ``steering_unsupported``) — there is
-        no safe generic interrupt for a tmux-hosted CLI. The route exists now
-        so clients code against the final surface, ready for a kind whose API
-        supports a real interrupt. Off-loaded to the executor like its
-        ``/message`` sibling — a future arm that does shell blocking I/O
-        (tmux, a remote HTTP call) must not stall the loop.
+        Claude Code receives Escape in its agent pane, which drives its REPL
+        abort controller; a pending permission prompt instead takes Escape's
+        ``onAbort()`` path. Other tmux-hosted kinds retain the typed 501
+        ``steering_unsupported`` refusal. The blocking pane write is off-loaded
+        like ``/message`` so it cannot stall the daemon loop.
         """
         mgr = _manager_for(ws_id)
         try:
@@ -1397,17 +1994,18 @@ def build_app(  # noqa: PLR0915
 
     @app.post("/workspaces/{ws_id}/question-answer", status_code=204, dependencies=auth_dep)
     async def answer_question(ws_id: str, body: QuestionAnswerRequest) -> None:
-        """Answer a pending AskUserQuestion by driving the agent's TUI.
+        """Answer a pending question by dismissing it and restating the batch as text.
 
-        Dispatch semantics — 204 the instant the keystrokes are sent; the
-        resolution arrives later on the activity stream (the sidecar clears and
-        the transcript flushes). Refusals ride the typed-error envelope: 404
-        ``workspace_not_found``, 409 ``question_not_pending`` (stale/absent
-        ``tool_use_id``) / ``pane_not_found``, 422 ``question_answer_invalid``
-        (plan doesn't fit the captured questions). The wire model rejects a
-        structurally-malformed body (422) before the handler runs.
-        ``answer_question`` drives multiple blocking tmux keystroke writes —
-        off-loaded to the executor like the other steer routes.
+        A 204 means the on-screen prompt was cancelled and the rendered answers
+        were delivered — the same dispatch semantics ``/message`` has, since the
+        agent's actual response lands later on the transcript. Refusals ride the
+        typed-error envelope: 404 ``workspace_not_found``, 409
+        ``question_not_pending`` (stale/absent ``tool_use_id``) /
+        ``workspace_state_error`` / ``pane_not_found``, 422
+        ``question_answer_invalid`` (the plan doesn't fit the captured
+        questions). The wire model rejects a structurally-malformed body (422)
+        before the handler runs. This drives blocking tmux operations, so it is
+        off-loaded like the other steer routes.
         """
         mgr = _manager_for(ws_id)
         try:
@@ -1547,6 +2145,151 @@ def build_app(  # noqa: PLR0915
         return WorkspaceStateView.from_state(state)
 
     @app.get(
+        "/workspaces/{ws_id}/diagram",
+        response_model=DiagramDocumentView,
+        dependencies=auth_dep,
+    )
+    async def read_workspace_diagram(
+        ws_id: str, repo: Annotated[Path | None, Query()] = None
+    ) -> DiagramDocumentView:
+        """Read this workspace's acknowledged diagram document and revision.
+
+        The workspace id identifies its configured manager. ``repo`` is an
+        optional consistency selector for callers that already hold one; no
+        editor draft crosses this boundary—only accepted bytes are returned.
+        """
+        mgr = _manager_for(ws_id)
+        if repo is not None and mgr.repo_root != _known_root(repo):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace {ws_id!r} in {repo}",
+                },
+            )
+        try:
+            return await asyncio.to_thread(mgr.read_diagram, ws_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post(
+        "/workspaces/{ws_id}/diagram",
+        response_model=DiagramDocumentView,
+        dependencies=auth_dep,
+    )
+    async def open_workspace_diagram(
+        ws_id: str, body: DiagramOpenRequest, repo: Annotated[Path | None, Query()] = None
+    ) -> DiagramDocumentView:
+        """Open one existing workspace-relative diagram for managed editing."""
+        mgr = _manager_for(ws_id)
+        if repo is not None and mgr.repo_root != _known_root(repo):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace {ws_id!r} in {repo}",
+                },
+            )
+        try:
+            return await lifecycle.run(ws_id, mgr.open_diagram, ws_id, body)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.put(
+        "/workspaces/{ws_id}/diagram",
+        response_model=DiagramDocumentView,
+        dependencies=auth_dep,
+    )
+    async def update_workspace_diagram(
+        ws_id: str, body: DiagramUpdateRequest, repo: Annotated[Path | None, Query()] = None
+    ) -> DiagramDocumentView:
+        """Conditionally save a diagram using its active session and revision."""
+        mgr = _manager_for(ws_id)
+        if repo is not None and mgr.repo_root != _known_root(repo):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace {ws_id!r} in {repo}",
+                },
+            )
+        try:
+            return await lifecycle.run(ws_id, mgr.update_diagram, ws_id, body)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/workspaces/{ws_id}/diagram/preview",
+        response_model=DiagramPreviewView,
+        dependencies=auth_dep,
+    )
+    async def read_workspace_diagram_preview(
+        ws_id: str, repo: Annotated[Path | None, Query()] = None
+    ) -> DiagramPreviewView:
+        """Fetch the browser-rendered first-page PNG for the current revision only."""
+        mgr = _manager_for(ws_id)
+        if repo is not None and mgr.repo_root != _known_root(repo):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace {ws_id!r} in {repo}",
+                },
+            )
+        try:
+            return await asyncio.to_thread(mgr.read_diagram_preview, ws_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post(
+        "/workspaces/{ws_id}/diagram/preview",
+        response_model=DiagramPreviewView,
+        dependencies=auth_dep,
+    )
+    async def save_workspace_diagram_preview(
+        ws_id: str,
+        body: DiagramPreviewUploadRequest,
+        repo: Annotated[Path | None, Query()] = None,
+    ) -> DiagramPreviewView:
+        """Store a browser-rendered first-page PNG fenced to its saved revision."""
+        mgr = _manager_for(ws_id)
+        if repo is not None and mgr.repo_root != _known_root(repo):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace {ws_id!r} in {repo}",
+                },
+            )
+        try:
+            return await lifecycle.run(ws_id, mgr.save_diagram_preview, ws_id, body)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post(
+        "/workspaces/{ws_id}/diagram/stop",
+        response_model=DiagramDocumentView,
+        dependencies=auth_dep,
+    )
+    async def stop_workspace_diagram(
+        ws_id: str, body: DiagramStopRequest, repo: Annotated[Path | None, Query()] = None
+    ) -> DiagramDocumentView:
+        """Fence a collaboration generation and retain its document read-only."""
+        mgr = _manager_for(ws_id)
+        if repo is not None and mgr.repo_root != _known_root(repo):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace {ws_id!r} in {repo}",
+                },
+            )
+        try:
+            return await lifecycle.run(ws_id, mgr.stop_diagram, ws_id, body)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get(
         "/workspaces/{ws_id}/attach",
         response_model=AttachInstructionView,
         dependencies=auth_dep,
@@ -1619,18 +2362,30 @@ def build_app(  # noqa: PLR0915
         """
         mgr = _manager_for(ws_id)
 
-        async def _capture() -> tuple[str | None, datetime | None]:
-            def _read() -> tuple[str | None, datetime | None]:
-                try:
-                    return mgr.peek_pane(ws_id)
-                except GroveError:
-                    # Killed/vanished mid-stream — empty pane, never raise.
-                    return None, None
+        state = await asyncio.to_thread(mgr.get, ws_id)
+        pane = await asyncio.to_thread(mgr.pane_for, state)
+        if pane is None:
+            raise HTTPException(status_code=409, detail={"error": "pane_not_found"})
 
-            return await asyncio.to_thread(_read)
+        async def _capture() -> PaneSnapshot:
+            try:
+                ansi, taken_at = await asyncio.to_thread(mgr.peek_pane, ws_id)
+                return PaneSnapshot(ansi, taken_at)
+            except GroveError:
+                return PaneSnapshot(None, None)
 
+        try:
+            subscription = pane_events.subscribe(
+                PaneKey(ws_id, pane.display),
+                capture=_capture,
+                source=lambda: TmuxControlPaneSource(target=pane.target, command=pane.command),
+            )
+        except PaneEventsUnavailable as exc:
+            raise HTTPException(
+                status_code=501, detail={"error": "pane_events_unavailable"}
+            ) from exc
         streamer = _PaneStreamer(
-            workspace_id=ws_id, capture=_capture, next_seq=activity_service.next_seq
+            workspace_id=ws_id, subscription=subscription, next_seq=activity_service.next_seq
         )
 
         async def stream() -> AsyncIterator[str]:
@@ -1963,6 +2718,38 @@ def build_app(  # noqa: PLR0915
             raise _grove_error_to_http(exc) from exc
         return ProvisionProgressView.from_progress(progress)
 
+    @app.get(
+        "/workspaces/{ws_id}/history",
+        response_model=WorkspaceHistoryView,
+        dependencies=auth_dep,
+    )
+    async def workspace_history(ws_id: str) -> WorkspaceHistoryView:
+        """The workspace's durable name, progress and ticket timeline.
+
+        Fetch-on-demand rather than on the activity stream: no frame there
+        carries these rows, and the claim being reported right now is already
+        live on the workspace's own activity. The SQLite read runs in the
+        executor so it never blocks the loop.
+
+        **This route deliberately does NOT gate on the workspace still
+        existing, and that is the one thing separating it from every sibling
+        per-workspace read.** `kill` deletes the record, which is the normal end
+        of a task — and the entire purpose of this store is to answer for a
+        workspace whose record is gone. A `_manager_for` gate here (the obvious
+        copy from `/todo` and `/queue`) made a killed workspace's history
+        unreachable through the only route that serves it: verified 404 against
+        a real tombstoned record before this was removed.
+
+        So the refusal is the STORE's: an id with nothing recorded returns an
+        empty view, exactly as it does for a live workspace that predates the
+        store. Both are the same honest "nothing was recorded", and there is no
+        404 to distinguish them because an unknown id is not a different fact
+        here — a reader holding an id off a usage row has no way to know, or
+        need to know, whether the workspace behind it still exists.
+        """
+        history = await asyncio.to_thread(history_store.history_for, ws_id)
+        return WorkspaceHistoryView.from_history(history)
+
     @app.post(
         "/workspaces/{ws_id}/phase",
         response_model=PhaseView,
@@ -2065,6 +2852,115 @@ def build_app(  # noqa: PLR0915
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
         return [SessionSummaryView.from_listing(ls) for ls in listings]
+
+    # ─── /gallery — every .drawio on the host ────────────────────────────────
+
+    @app.get("/gallery", response_model=list[GalleryItemView], dependencies=auth_dep)
+    async def list_gallery() -> list[GalleryItemView]:
+        """Every ``.drawio`` in a known repo's worktrees, newest-first.
+
+        Host-wide by construction — a gallery is a browse surface like the
+        session catalog, and it JOINS on that catalog for attribution, so it
+        rides the same request-scoped memo and never the activity poll. Each
+        row says whether a preview for its content digest is already cached;
+        a client renders the missing ones itself and posts them back.
+        """
+        items = await asyncio.to_thread(gallery.items)
+        return [
+            GalleryItemView.from_item(
+                item, preview_ready=DiagramGallery.preview_path(item.digest).is_file()
+            )
+            for item in items
+        ]
+
+    def _gallery_item(item_id: str) -> GalleryItem:
+        item = gallery.find(item_id)
+        if item is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "diagram_not_found", "message": f"no diagram {item_id!r}"},
+            )
+        return item
+
+    @app.get("/gallery/{item_id}", response_model=GalleryDocumentView, dependencies=auth_dep)
+    async def read_gallery_document(item_id: str) -> GalleryDocumentView:
+        """One diagram's source XML — what the read-only viewer loads and the
+        download saves. Read through the scan's own record, never a path the
+        client supplied."""
+        item = await asyncio.to_thread(_gallery_item, item_id)
+        try:
+            source = await asyncio.to_thread(DiagramGallery.read_source, item)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return GalleryDocumentView(
+            id=item.id,
+            name=item.path.name,
+            digest=hashlib.sha256(source).hexdigest(),
+            xml=source.decode("utf-8", errors="replace"),
+        )
+
+    @app.get(
+        "/gallery/{item_id}/preview",
+        response_model=GalleryPreviewView,
+        dependencies=auth_dep,
+    )
+    async def read_gallery_preview(item_id: str) -> GalleryPreviewView:
+        """The cached first-page PNG for the item's CURRENT content, 404 until
+        a browser has rendered that revision."""
+        item = await asyncio.to_thread(_gallery_item, item_id)
+        try:
+            png = await asyncio.to_thread(DiagramGallery.read_preview, item.digest)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        if png is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "diagram_unavailable",
+                    "message": "no preview has been rendered for this revision yet",
+                },
+            )
+        return GalleryPreviewView(
+            digest=item.digest, content_base64=base64.b64encode(png).decode("ascii")
+        )
+
+    @app.post(
+        "/gallery/{item_id}/preview",
+        response_model=GalleryPreviewView,
+        dependencies=auth_dep,
+    )
+    async def save_gallery_preview(
+        item_id: str, body: GalleryPreviewUploadRequest
+    ) -> GalleryPreviewView:
+        """Store a browser-rendered PNG for the item's current digest.
+
+        The digest is echoed by the client and checked against the scan's,
+        so a render of a file that changed underneath is refused rather than
+        filed against bytes it does not depict.
+        """
+        item = await asyncio.to_thread(_gallery_item, item_id)
+        if body.digest != item.digest:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "diagram_conflict",
+                    "message": "diagram changed since this preview was rendered; reload",
+                },
+            )
+        try:
+            png = base64.b64decode(body.content_base64, validate=True)
+        except binascii.Error as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_preview", "message": "preview must be base64 PNG"},
+            ) from exc
+        try:
+            await asyncio.to_thread(DiagramGallery.write_preview, item.digest, png)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return GalleryPreviewView(
+            digest=item.digest, content_base64=base64.b64encode(png).decode("ascii")
+        )
 
     @app.get(
         "/sessions/{session_id}/turns",
@@ -2224,6 +3120,41 @@ def build_app(  # noqa: PLR0915
             ]
 
         return await asyncio.to_thread(_build)
+
+    @app.get("/models", response_model=list[ModelOptionView], dependencies=auth_dep)
+    async def list_models(
+        repo: Annotated[Path, Query()],
+        agent: Annotated[str | None, Query()] = None,
+    ) -> list[ModelOptionView]:
+        """One agent's model catalog, enriched with the name and window a picker draws.
+
+        The read beside ``/agents`` rather than a widening of it: that route's
+        ``models`` tuple is a published contract with several consumers, and a
+        picker wanting a second line per row is not a reason to change what the
+        catalog IS. Same ``repo`` dispatch and the same ``_known_root`` gate,
+        because this runs the same configured discovery command.
+
+        ``agent`` omitted means the repo's first configured agent, which is what
+        an untouched create form has selected. An unknown name is an empty list
+        rather than a 404: the catalog is a display hint, and a client asking
+        about an agent this repo's cascade does not define has no picker to draw
+        either way.
+
+        Authenticated like every other listing, so the enrichment — which names
+        the models an operator runs and the windows their gateway publishes —
+        reaches nobody who is not already trusted with the roster itself.
+        Off-loaded for ``/agents``' reason: Codex discovery shells out.
+        """
+        mgr = registry.get(_known_root(repo))
+        cfg_for_repo = mgr.config
+        spec = (
+            cfg_for_repo.find_agent(agent)
+            if agent is not None
+            else next(iter(cfg_for_repo.agents), None)
+        )
+        if spec is None:
+            return []
+        return list(await asyncio.to_thread(model_options, spec, cfg=cfg_for_repo))
 
     @app.get("/defaults", response_model=WorkspaceDefaultsView, dependencies=auth_dep)
     async def get_workspace_defaults(

@@ -4,7 +4,8 @@ import type { DashboardSnapshotView } from "@/lib/grove/api";
 import type { AgentState, FleetRow, WorkspaceActivity } from "./types";
 
 /**
- * How the fleet is narrowed. Every criterion is additive.
+ * The fleet's query/filter state. Criteria are additive; `groupBy` arranges
+ * surviving rows without admitting or hiding any.
  *
  * The two set-valued criteria are HIDE sets, mirroring `webapp/`'s
  * `DashboardFilterState`: an empty filter shows everything, AND a state or a
@@ -19,6 +20,8 @@ export interface FleetFilter {
   readonly hiddenStates: readonly AgentState[];
   /** `repo_root`s to hide. */
   readonly hiddenProjects: readonly string[];
+  /** How the surviving rows are arranged. */
+  readonly groupBy: "none" | "project";
 }
 
 export const NO_FILTER: FleetFilter = {
@@ -26,6 +29,7 @@ export const NO_FILTER: FleetFilter = {
   attentionOnly: false,
   hiddenStates: [],
   hiddenProjects: [],
+  groupBy: "none",
 };
 
 /**
@@ -102,9 +106,16 @@ const RANK_BUCKET_MS = 60_000;
  * order arrived. Without the tiebreaker the rail is only as steady as an
  * ordering nobody promised.
  */
+/** Lifecycle, not agent silence: an idle session may still be a live workspace. */
+export function isInactive(workspace: WorkspaceActivity): boolean {
+  return ["offline", "orphaned", "paused"].includes(workspace.state.status);
+}
+
 export function sortedFleetRows(snapshot: DashboardSnapshotView | undefined): FleetRow[] {
   const rank = (row: FleetRow) => Math.floor(lastActivityAt(row.workspace) / RANK_BUCKET_MS);
   return fleetRows(snapshot).sort((a, b) => {
+    const inactive = Number(isInactive(a.workspace)) - Number(isInactive(b.workspace));
+    if (inactive !== 0) return inactive;
     const recency = rank(b) - rank(a);
     if (recency !== 0) return recency;
     return a.workspace.state.id < b.workspace.state.id
@@ -144,6 +155,38 @@ export function admits(row: FleetRow, filter: FleetFilter): boolean {
 
 export function filterRows(rows: readonly FleetRow[], filter: FleetFilter): FleetRow[] {
   return rows.filter((row) => admits(row, filter));
+}
+
+export interface FleetGroup {
+  readonly key: string;
+  readonly repoName: string | null;
+  readonly rows: FleetRow[];
+}
+
+/**
+ * Arrange already-filtered fleet rows without changing their recency order.
+ *
+ * Projects can arrive as several nested groups with one `repo_root`; grouping
+ * by that root keeps them together while a project-name collision remains two
+ * distinct groups.
+ */
+export function fleetGroups(
+  rows: readonly FleetRow[],
+  groupBy: FleetFilter["groupBy"],
+): FleetGroup[] {
+  if (rows.length === 0) return [];
+  if (groupBy === "none") return [{ key: "all", repoName: null, rows: [...rows] }];
+
+  const groups = new Map<string, { key: string; repoName: string; rows: FleetRow[] }>();
+  for (const row of rows) {
+    const group = groups.get(row.repoRoot);
+    if (group) group.rows.push(row);
+    else groups.set(row.repoRoot, { key: row.repoRoot, repoName: row.repoName, rows: [row] });
+  }
+
+  return [...groups.values()].sort(
+    (a, b) => a.repoName.localeCompare(b.repoName) || a.key.localeCompare(b.key),
+  );
 }
 
 /** How many criteria are doing work — the number the filter button badges. */

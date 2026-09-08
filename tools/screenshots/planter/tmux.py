@@ -26,16 +26,28 @@ class DemoTmux:
         config knob in the engine.
         """
 
-        def _quiet_create_session(name: str, cwd: Path, *, history_limit: int = 50_000) -> None:
+        # MIRROR THE ENGINE'S SIGNATURE, INCLUDING `size`. The manager passes
+        # `cfg.tmux.detached_size` on every create, so a double that omits the
+        # keyword fails the first seeded workspace with a TypeError dressed as
+        # "failed to set up tmux session" — which is what took the whole
+        # pipeline down when the engine gained the argument. The geometry is
+        # honoured too, since the peek rail reads a detached pane and 80x24
+        # would wrap the stub agent's output differently from a real run.
+        def _quiet_create_session(
+            name: str, cwd: Path, *, history_limit: int = 50_000, size: str = ""
+        ) -> None:
             server = tmux_mod._server()
             if tmux_mod.has_session(name):
                 raise TmuxError(f"tmux session already exists: {name}")
+            geometry = tmux_mod.parse_size(size)
             try:
                 session = server.new_session(
                     session_name=name,
                     start_directory=str(cwd),
                     attach=False,
                     window_command="bash --noprofile --norc",
+                    x=geometry[0] if geometry else None,
+                    y=geometry[1] if geometry else None,
                 )
             except Exception as exc:
                 raise TmuxError(f"failed to create tmux session {name}: {exc}") from exc

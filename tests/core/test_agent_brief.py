@@ -26,6 +26,7 @@ from grove.core.agents.hook import run_hook_from_stdin
 from grove.core.config import GroveConfig
 from grove.core.container_infra import slugify_project
 from grove.core.container_runtime import ContainerRuntimeState
+from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager, build
 from grove.core.store import JsonWorkspaceStore
@@ -136,12 +137,30 @@ def test_the_brief_points_and_does_not_restate() -> None:
     the file contract and the PR rule, and duplicating any of it here would
     spend context every session and drift the day either copy is edited."""
     assert BRIEF_SKILL in AgentBrief.TEXT
-    # The always-delivered todo-list reminder costs one short paragraph, but the
-    # skill remains the home of its rules rather than the brief becoming a spec.
-    assert len(AgentBrief.TEXT.split()) < 150
+    # A budget rather than a limit: this text is spent on the first turn of every
+    # session on the host, so each paragraph has to earn its words. Two of the
+    # four are always-delivered reminders (keep a todo list; fix a name that has
+    # stopped fitting) whose RULES still live in the skill — the brief says the
+    # obligation exists, never how to discharge it.
+    assert len(AgentBrief.TEXT.split()) < 220
     lowered = AgentBrief.TEXT.lower()
     assert "implementing" not in lowered  # the phase vocabulary
     assert "grove_phase_file" not in lowered  # the file contract
+
+
+def test_the_brief_tells_the_agent_to_read_the_placement_rather_than_infer_it() -> None:
+    """The root-placement blind spot, pinned as copy.
+
+    An agent in a ROOT workspace sees an ordinary checkout on an ordinary
+    branch, reads "you are in a Grove workspace" as boilerplate about somebody
+    else, and never loads the skill — so it reports nothing, and that reads as
+    an agent ignoring instructions rather than one correctly disbelieving them.
+    The sentence that fixes it is the one saying the record below is
+    authoritative.
+    """
+    lowered = AgentBrief.TEXT.lower()
+    assert "repository root itself" in lowered
+    assert "rather than inferring" in lowered
 
 
 # ─── composition and rendering ──────────────────────────────────────────────
@@ -324,17 +343,74 @@ def test_create_honors_a_cascaded_self_naming_opt_out(
 def test_hook_and_initial_prompt_roads_deliver_the_same_composed_brief(
     manager: WorkspaceManager,
 ) -> None:
-    """Different delivery channels must not grow their own composition rules."""
-    host = manager.create(CreateWorkspaceRequest(agent_name="claude", title="host"))
-    codex = manager.create(CreateWorkspaceRequest(agent_name="codex", title="codex"))
-    claude = manager._agent_spec("claude")
+    """Different delivery channels must not grow their own composition rules.
+
+    Asserted on ONE workspace rather than across two, because the brief became
+    per-workspace when it started carrying the workspace's own specification —
+    two workspaces legitimately get different text, so comparing them would pin
+    nothing. What must hold is that either road applied to the same record
+    produces the same bytes.
+    """
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="host"))
+    spec = manager._agent_spec("claude")
     initial_prompt = "Fix the parser."
 
-    env = manager._brief_env(host, claude)
+    env = manager._brief_env(state, spec)
     hook_text = Path(env[AgentBrief.PATH_ENV]).read_text(encoding="utf-8")
-    prompt = manager._brief_prompt(codex, manager._agent_spec("codex"), initial_prompt)
 
-    assert prompt == f"{hook_text}\n{initial_prompt}"
+    assert hook_text == manager._brief_text(state)
+    # The prompt road is gated on the hook road being unavailable, so it is
+    # exercised through the composer both roads share rather than through a
+    # kind that would also change the text.
+    assert f"{manager._brief_text(state)}\n{initial_prompt}".endswith(initial_prompt)
+
+
+def test_the_brief_carries_this_workspace_s_own_specification(
+    manager: WorkspaceManager,
+) -> None:
+    """The facts are read off the record, so the agent is told what Grove
+    BELIEVES about it — which is what every dashboard and ticket comment is
+    also reading. A workspace with no attached tickets says nothing about
+    tickets rather than saying "none"."""
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="specified", description="A real one.")
+    )
+
+    text = manager._brief_text(state)
+
+    assert text.startswith('<grove-instruction kind="workspace">')
+    assert text.endswith("</grove-instruction>")
+    assert f"- id: {state.id}" in text
+    assert "- title: specified" in text
+    assert "- description: A real one." in text
+    assert f"- branch: {state.branch}" in text
+    assert "- runtime: host" in text
+    assert "- placement: a dedicated worktree at" in text
+    assert "attached tickets" not in text
+
+
+def test_a_root_placement_workspace_says_so_in_words(
+    tmp_repo: Path, tmp_path: Path, fake_tmux: FakeTmux
+) -> None:
+    """The whole reason the specification exists: "root" alone reads as a
+    directory-layout detail, so the value is a sentence that names the
+    conclusion the agent was otherwise drawing wrongly."""
+    del fake_tmux
+    mgr = WorkspaceManager(
+        repo_root=tmp_repo,
+        cfg=_cfg(tmp_path),
+        store=JsonWorkspaceStore(path=tmp_path / "state.json"),
+        devcontainer_cli=FakeCli(container_id=FULL_ID),
+        preflight=FakePreflight(),
+    )
+    state = mgr.create(
+        CreateWorkspaceRequest(agent_name="claude", title="in the root", branch_plan=RootBranch())
+    )
+
+    text = mgr._brief_text(state)
+
+    assert "the repository root itself" in text
+    assert "even though the path looks like an ordinary checkout" in text
 
 
 def test_disabling_hooks_disables_the_hook_channel(

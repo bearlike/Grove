@@ -42,7 +42,7 @@ export const FIXTURE_ACTIVITY: DashboardSnapshotView = {
               "base_branch": "HEAD",
               "worktree_path": "/home/demo/acme/widget",
               "tmux_session": "grove-frontend-ui-migration-20260810-063036",
-              "agent_name": "Claude Code (via KK Gateway)",
+              "agent_name": "Claude Code (via configured gateway)",
               "status": "active",
               "created_at": "2026-08-10T06:30:36.499611Z",
               "updated_at": "2026-08-10T06:30:36.802387Z",
@@ -61,7 +61,10 @@ export const FIXTURE_ACTIVITY: DashboardSnapshotView = {
               "provision_started_at": null,
               "container": null,
               "runtime_default_config": false,
-              "runtime_no_tmux": false
+              "runtime_no_tmux": false,
+              "native": false,
+              "telemetry_session_id": "",
+              "panels": []
             },
             "sessions": [
               {
@@ -190,7 +193,7 @@ export const FIXTURE_WORKSPACES: WorkspaceStateView[] = [
       "base_branch": "HEAD",
       "worktree_path": "/home/demo/acme/widget",
       "tmux_session": "grove-frontend-ui-migration-20260810-063036",
-      "agent_name": "Claude Code (via KK Gateway)",
+      "agent_name": "Claude Code (via configured gateway)",
       "status": "active",
       "created_at": "2026-08-10T06:30:36.499611Z",
       "updated_at": "2026-08-10T06:30:36.802387Z",
@@ -209,7 +212,10 @@ export const FIXTURE_WORKSPACES: WorkspaceStateView[] = [
       "provision_started_at": null,
       "container": null,
       "runtime_default_config": false,
-      "runtime_no_tmux": false
+      "runtime_no_tmux": false,
+      "native": false,
+      "telemetry_session_id": "",
+      "panels": []
     }
   ];
 
@@ -1380,7 +1386,7 @@ export const FIXTURE_PEEK: WorkspacePeekView = {
       "base_branch": "HEAD",
       "worktree_path": "/home/demo/acme/widget",
       "tmux_session": "grove-frontend-ui-migration-20260810-063036",
-      "agent_name": "Claude Code (via KK Gateway)",
+      "agent_name": "Claude Code (via configured gateway)",
       "status": "active",
       "created_at": "2026-08-10T06:30:36.499611Z",
       "updated_at": "2026-08-10T06:30:36.802387Z",
@@ -1399,7 +1405,10 @@ export const FIXTURE_PEEK: WorkspacePeekView = {
       "provision_started_at": null,
       "container": null,
       "runtime_default_config": false,
-      "runtime_no_tmux": false
+      "runtime_no_tmux": false,
+      "native": false,
+      "telemetry_session_id": "",
+      "panels": []
     },
     "base_ahead": 0,
     "base_behind": 0,
@@ -1495,11 +1504,25 @@ export const FIXTURE_PROVISION: ProvisionProgressView = {
 
 /** `GET /agents` and `GET /branches` are ARRAYS, not envelopes. */
 export const FIXTURE_AGENTS: AgentSummaryView[] = [
-  { name: "shell", kind: "generic", description: "Plain shell — a workspace with no LLM", models: [] },
+  {
+    name: "shell",
+    kind: "generic",
+    description: "Plain shell — a workspace with no LLM",
+    native: false,
+    models: [],
+  },
   {
     name: "Claude Code (default)",
     kind: "claude_code",
     description: "Claude Code, default config dir, skip-permissions",
+    native: true,
+    models: ["fable", "opus", "sonnet", "haiku"],
+  },
+  {
+    name: "claude-terminal",
+    kind: "claude_code",
+    description: "Anthropic Claude Code (interactive terminal)",
+    native: false,
     models: ["fable", "opus", "sonnet", "haiku"],
   },
 ];

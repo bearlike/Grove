@@ -19,6 +19,8 @@ or explicit::
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
@@ -28,9 +30,24 @@ import httpx
 from grove.client.backend import BackendConfig
 from grove.client.errors import NeedsPairingError, ProtocolError, TransportError
 from grove.client.transport import LocalTransport, Transport, UrlTransport
-from grove.core.contracts.activity import DashboardSnapshotView
+from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 from grove.core.contracts.agents import AgentSummaryView
 from grove.core.contracts.branch_info import BranchInfo
+from grove.core.contracts.diagrams import (
+    DiagramDocumentView,
+    DiagramOpenRequest,
+    DiagramPreviewUploadRequest,
+    DiagramPreviewView,
+    DiagramStopRequest,
+    DiagramUpdateRequest,
+)
+from grove.core.contracts.keys import SendKey, SendKeysRequest
+from grove.core.contracts.mailboxes import (
+    MailboxPeerPage,
+    MailboxReceipt,
+    MailboxReplyRequest,
+    MailboxSendRequest,
+)
 from grove.core.contracts.phase import PhaseView
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.sessions import (
@@ -98,9 +115,11 @@ class GroveClient:
 
     @staticmethod
     def _make_transport(config: BackendConfig) -> Transport:
-        if config.daemon_url is not None:
+        if config.daemon_url is not None or config.daemon_socket is not None:
             if config.ssh_target is not None:
-                raise ValueError("BackendConfig.daemon_url and ssh_target are mutually exclusive")
+                raise ValueError(
+                    "BackendConfig.daemon_url/daemon_socket and ssh_target are mutually exclusive"
+                )
             return UrlTransport(config)
         if config.ssh_target is None:
             return LocalTransport(config)
@@ -132,10 +151,16 @@ class GroveClient:
         headers: dict[str, str] = {}
         if token is not None:
             headers["authorization"] = f"Bearer {token}"
+        transport = (
+            httpx.AsyncHTTPTransport(uds=str(self._config.daemon_socket))
+            if self._config.daemon_socket is not None
+            else None
+        )
         self._http = httpx.AsyncClient(
             base_url=self._transport.http_url,
             timeout=self._DEFAULT_TIMEOUT_S,
             headers=headers,
+            transport=transport,
         )
 
     def _resolve_token(self) -> str | None:
@@ -158,6 +183,8 @@ class GroveClient:
         """
         if self._config.daemon_token is not None:
             return self._config.daemon_token
+        if self._config.daemon_socket is not None:
+            raise NeedsPairingError("private mailbox socket requires an explicit bound token")
         if self._config.ssh_target is None:
             from grove.core.auth import SessionStore  # noqa: PLC0415
 
@@ -231,6 +258,91 @@ class GroveClient:
         body = await self._get(f"/workspaces/{ws_id}")
         return WorkspaceStateView.model_validate(body)
 
+    async def open_diagram(
+        self,
+        workspace_id: str,
+        request: DiagramOpenRequest,
+        repo_root: Path | None = None,
+    ) -> DiagramDocumentView:
+        """Open one existing workspace-relative diagram for managed editing.
+
+        ``workspace_id`` selects its manager directly; ``repo_root`` is an
+        optional consistency selector for callers that already hold one.
+        """
+        body = await self._post(
+            f"/workspaces/{workspace_id}/diagram",
+            params={"repo": str(repo_root)} if repo_root is not None else None,
+            json_payload=request.model_dump(mode="json"),
+        )
+        return DiagramDocumentView.model_validate(body)
+
+    async def read_diagram(
+        self, workspace_id: str, repo_root: Path | None = None
+    ) -> DiagramDocumentView:
+        """Read the acknowledged document and its current revision.
+
+        The result describes saved state, never an editor draft that has not
+        completed its conditional update. ``repo_root`` is optional because the
+        workspace id already identifies its configured manager.
+        """
+        body = await self._get(
+            f"/workspaces/{workspace_id}/diagram",
+            params={"repo": str(repo_root)} if repo_root is not None else None,
+        )
+        return DiagramDocumentView.model_validate(body)
+
+    async def update_diagram(
+        self,
+        workspace_id: str,
+        request: DiagramUpdateRequest,
+        repo_root: Path | None = None,
+    ) -> DiagramDocumentView:
+        """Conditionally replace an active diagram using its read revision and session id."""
+        body = await self._put(
+            f"/workspaces/{workspace_id}/diagram",
+            params={"repo": str(repo_root)} if repo_root is not None else None,
+            json_payload=request.model_dump(mode="json"),
+        )
+        return DiagramDocumentView.model_validate(body)
+
+    async def stop_diagram(
+        self,
+        workspace_id: str,
+        request: DiagramStopRequest,
+        repo_root: Path | None = None,
+    ) -> DiagramDocumentView:
+        """Fence an active collaboration and leave its document available read-only."""
+        body = await self._post(
+            f"/workspaces/{workspace_id}/diagram/stop",
+            params={"repo": str(repo_root)} if repo_root is not None else None,
+            json_payload=request.model_dump(mode="json"),
+        )
+        return DiagramDocumentView.model_validate(body)
+
+    async def save_diagram_preview(
+        self,
+        workspace_id: str,
+        request: DiagramPreviewUploadRequest,
+        repo_root: Path | None = None,
+    ) -> DiagramPreviewView:
+        """Save one browser-rendered first-page PNG fenced to a saved revision."""
+        body = await self._post(
+            f"/workspaces/{workspace_id}/diagram/preview",
+            params={"repo": str(repo_root)} if repo_root is not None else None,
+            json_payload=request.model_dump(mode="json"),
+        )
+        return DiagramPreviewView.model_validate(body)
+
+    async def read_diagram_preview(
+        self, workspace_id: str, repo_root: Path | None = None
+    ) -> DiagramPreviewView:
+        """Fetch the current revision's first-page browser PNG, never an old preview."""
+        body = await self._get(
+            f"/workspaces/{workspace_id}/diagram/preview",
+            params={"repo": str(repo_root)} if repo_root is not None else None,
+        )
+        return DiagramPreviewView.model_validate(body)
+
     async def pause(self, ws_id: str, *, force: bool = False) -> WorkspaceStateView:
         body = await self._post(f"/workspaces/{ws_id}/pause", json_payload={"force": force})
         return WorkspaceStateView.model_validate(body)
@@ -250,6 +362,14 @@ class GroveClient:
             timeout=self._LIFECYCLE_TIMEOUT_S,
         )
         return WorkspaceStateView.model_validate(body)
+
+    async def send_keys(self, ws_id: str, key: SendKey) -> None:
+        """Deliver one named key; the daemon alone resolves its terminal target."""
+        await self._post(
+            f"/workspaces/{ws_id}/keys",
+            json_payload=SendKeysRequest(key=key).model_dump(mode="json"),
+            expect_204=True,
+        )
 
     async def interrupt(self, ws_id: str) -> None:
         """Interrupt the workspace's agent, where its adapter supports it.
@@ -311,6 +431,39 @@ class GroveClient:
         if not resp.is_success:
             self._raise_for_status(resp)
 
+    async def list_mailbox_peers(
+        self,
+        *,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> MailboxPeerPage:
+        """List mailbox peers visible to this bound caller."""
+        params: dict[str, str] = {"limit": str(limit)}
+        if workspace_id is not None:
+            params["workspace_id"] = workspace_id
+        if cursor is not None:
+            params["cursor"] = cursor
+        body = await self._get("/mailboxes/peers", params=params)
+        return MailboxPeerPage.model_validate(body)
+
+    async def send_mailbox_message(
+        self, request: MailboxSendRequest | MailboxReplyRequest
+    ) -> MailboxReceipt:
+        """Submit a mailbox send or reply exactly once.
+
+        A transport failure leaves the server-side outcome unknown, so it stays
+        an exception from ``_request`` rather than becoming a receipt-like
+        result a caller could mistake for a definitive rejection.
+        """
+        body = await self._post("/mailboxes/messages", json_payload=request.model_dump(mode="json"))
+        return MailboxReceipt.model_validate(body)
+
+    async def get_mailbox_message_status(self, message_id: str) -> MailboxReceipt:
+        """Read the coordinator's latest delivery observation for one message."""
+        body = await self._get(f"/mailboxes/messages/{message_id}")
+        return MailboxReceipt.model_validate(body)
+
     async def get_attach(self, ws_id: str) -> AttachInstructionView:
         body = await self._get(f"/workspaces/{ws_id}/attach")
         return ATTACH_INSTRUCTION_ADAPTER.validate_python(body)
@@ -339,6 +492,51 @@ class GroveClient:
         """
         body = await self._get("/activity")
         return DashboardSnapshotView.model_validate(body)
+
+    async def activity_events(
+        self, *, last_event_id: int | None = None
+    ) -> AsyncIterator[DashboardEvent]:
+        """Yield authenticated dashboard events from the daemon's shared projection."""
+        async for event in self._events("/events", last_event_id=last_event_id):
+            yield event
+
+    async def pane_events(self, workspace_id: str) -> AsyncIterator[DashboardEvent]:
+        """Yield daemon-owned snapshots for one focused workspace pane."""
+        async for event in self._events(f"/workspaces/{workspace_id}/pane/stream"):
+            yield event
+
+    async def _events(
+        self, path: str, *, last_event_id: int | None = None
+    ) -> AsyncIterator[DashboardEvent]:
+        """Parse one authenticated SSE stream into the shared event contract."""
+        client = self._ensure_http()
+        headers = {"Last-Event-ID": str(last_event_id)} if last_event_id is not None else {}
+        try:
+            async with client.stream("GET", path, headers=headers, timeout=None) as response:
+                if not response.is_success:
+                    self._raise_for_status(response)
+                event_name: str | None = None
+                data: list[str] = []
+                async for line in response.aiter_lines():
+                    if not line:
+                        if event_name is not None and data:
+                            try:
+                                yield DashboardEvent.model_validate(json.loads("\n".join(data)))
+                            except (ValueError, TypeError) as exc:
+                                raise TransportError(
+                                    f"GET {path} returned an invalid dashboard event"
+                                ) from exc
+                        event_name = None
+                        data.clear()
+                    elif line.startswith("event:"):
+                        event_name = line.removeprefix("event:").strip()
+                    elif line.startswith("data:"):
+                        data.append(line.removeprefix("data:").lstrip())
+        except httpx.HTTPError as exc:
+            detail = str(exc) or type(exc).__name__
+            raise TransportError(
+                f"GET {path} to daemon {client.base_url} failed: {type(exc).__name__}: {detail}"
+            ) from exc
 
     async def list_branches(
         self, *, repo: Path, scope: Literal["local", "remote"]
@@ -636,11 +834,14 @@ class GroveClient:
         self,
         path: str,
         *,
+        params: dict[str, str] | None = None,
         json_payload: dict[str, object],
         expect_204: bool = False,
         timeout: float | None = None,
     ) -> Any:
-        resp = await self._request("POST", path, json_payload=json_payload, timeout=timeout)
+        resp = await self._request(
+            "POST", path, params=params, json_payload=json_payload, timeout=timeout
+        )
         if expect_204:
             if resp.status_code != 204:
                 self._raise_for_status(resp)
@@ -649,6 +850,17 @@ class GroveClient:
 
     async def _patch(self, path: str, *, json_payload: dict[str, object]) -> Any:
         return self._unwrap(await self._request("PATCH", path, json_payload=json_payload))
+
+    async def _put(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_payload: dict[str, object],
+    ) -> Any:
+        return self._unwrap(
+            await self._request("PUT", path, params=params, json_payload=json_payload)
+        )
 
     async def _delete(self, path: str, *, params: dict[str, str] | None = None) -> Any:
         return self._unwrap(await self._request("DELETE", path, params=params))

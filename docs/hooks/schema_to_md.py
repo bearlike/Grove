@@ -73,14 +73,16 @@ def _render(schema_path: Path) -> str:
         "# Configuration reference\n",
         "## Every field and its default\n",
         (
-            "This page is generated from Grove's Pydantic model.  Edit "
-            "`src/grove/core/config.py` and run `make docs` (or push to "
-            "the default branch, which regenerates in CI) to refresh.\n"
+            "Every section of `.grove/config.json`, one table each, with a "
+            "nested block's fields listed under the field that holds it. "
+            "Generated from Grove's own config model.\n"
         ),
     ]
 
     lines.extend(_env_var_section(props, defs))
 
+    scalars: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    sections: list[str] = []
     for name, ref in props.items():
         if name.startswith("$"):  # `$schema` alias is internal; skip
             continue
@@ -88,30 +90,76 @@ def _render(schema_path: Path) -> str:
         is_array_of_models = section.get("type") == "array" and "$ref" in (section.get("items") or {})
         if is_array_of_models:
             inner = _resolve(section["items"], defs)
-            heading = f"## `{name}` (list of `{inner.get('title', 'item')}`)"
+            heading = f"## `{name}` (a list, one entry each)"
         else:
             heading = f"## `{name}`"
             inner = section
-        lines.append(f"\n{heading}\n")
-        if inner.get("description"):
-            lines.append(f"{inner['description']}\n")
-        section_props = inner.get("properties") or {}
-        if not section_props:
+        if not inner.get("properties"):
+            # A scalar or plain list at the top level is one row, not a section.
+            scalars.append((name, ref, section))
             continue
+        sections.append(f"\n{heading}\n")
+        if inner.get("description"):
+            sections.append(f"{_lead(inner['description'])}\n")
+        sections.extend(_table(inner, defs, prefix=""))
+
+    if scalars:
+        lines.append("\n## Top-level fields\n")
         lines.append("\n| Field | Type | Default | Description |")
         lines.append("|---|---|---|---|")
-        for field, info in section_props.items():
-            field_info = _resolve(info, defs)
-            type_str = _type_str(field_info, defs)
-            default = _default_str(field_info, inner, field)
-            desc = (field_info.get("description") or "").replace("\n", " ").strip()
-            lines.append(f"| `{field}` | `{type_str}` | `{default}` | {desc} |")
+        for name, ref, section in scalars:
+            desc = _lead(ref.get("description") or section.get("description") or "")
+            default = _default_str(ref if "default" in ref else section, schema, name)
+            lines.append(f"| `{name}` | `{_type_str(section, defs)}` | {default} | {desc} |")
+    lines.extend(sections)
 
     lines.append("")
     return "\n".join(lines)
 
 
 _ENV_VAR_KEY = "x-env-var"
+
+
+def _lead(description: str) -> str:
+    """The first paragraph only.
+
+    A docstring's later paragraphs are the maintainer's WHY, written for the
+    engineer editing the model. The published page carries the WHAT, one
+    sentence or two, so a reader can scan a table rather than read an essay in
+    a cell.
+    """
+    return " ".join(description.strip().split("\n\n", 1)[0].split())
+
+
+def _table(model: dict[str, Any], defs: dict[str, Any], *, prefix: str) -> list[str]:
+    """One table for a model, then one for each nested model beneath it.
+
+    A field holding a nested model used to render as `object` with nothing
+    under it, so `container.egress.mode` and forty other fields were invisible
+    on the page. Each nested model now gets its own table headed by the dotted
+    path, directly after the table that names it.
+    """
+    props = model.get("properties") or {}
+    if not props:
+        return []
+    lines = ["\n| Field | Type | Default | Description |", "|---|---|---|---|"]
+    nested: list[tuple[str, dict[str, Any]]] = []
+    for field, info in props.items():
+        field_info = _resolve(info, defs)
+        type_str = _type_str(field_info, defs)
+        default = _default_str(field_info, model, field)
+        desc = _lead(field_info.get("description") or "")
+        if isinstance(field_info.get("properties"), dict):
+            # The nested table below carries the description, so the row only
+            # points at it.
+            nested.append((f"{prefix}{field}", field_info))
+            lines.append(f"| `{field}` | see below | | {desc} |")
+            continue
+        lines.append(f"| `{field}` | `{type_str}` | {default} | {desc} |")
+    for path, sub in nested:
+        lines.append(f"\n### `{path}`\n")
+        lines.extend(_table(sub, defs, prefix=f"{path}."))
+    return lines
 
 
 def _env_var_section(props: dict[str, Any], defs: dict[str, Any]) -> list[str]:
@@ -128,12 +176,11 @@ def _env_var_section(props: dict[str, Any], defs: dict[str, Any]) -> list[str]:
     lines = [
         "\n## Environment variable overrides\n",
         (
-            "These fields read from a fixed environment variable when it is set "
-            "and non-empty, so a deployment can supply the value without editing "
-            "a config file. An unset or empty variable simply does not override. "
-            "`GROVE_<SECTION>__<FIELD>` still wins over the name below, and any "
-            "string value can also reference a variable you choose yourself with "
-            "`${YOUR_VAR}` — see [the cascade](features-cascade.md).\n"
+            "These fields also read a fixed environment variable, so a deployment "
+            "can set them without a config file. An unset variable does not "
+            "override, `GROVE_<SECTION>__<FIELD>` still wins, and any string value "
+            "can reference a variable of your own with `${YOUR_VAR}`. See "
+            "[the cascade](features-cascade.md).\n"
         ),
         "\n| Field | Variable |",
         "|---|---|",
@@ -193,7 +240,10 @@ def _type_str(info: dict[str, Any], defs: dict[str, Any]) -> str:
 
 def _default_str(info: dict[str, Any], parent: dict[str, Any], field: str) -> str:
     if "default" in info:
-        return f"`{info['default']!r}`"
+        value = info["default"]
+        if value in (None, "", [], {}):
+            return "unset"
+        return f"`{json.dumps(value)}`"
     if field in (parent.get("required") or []):
         return "**required**"
-    return "(none)"
+    return "unset"

@@ -619,7 +619,10 @@ def test_read_messages_maps_roles_and_drops_metadata(
     _install(codex_home, BASIC_SID, BASIC)
     messages = adapter.read_messages(BASIC_CWD, BASIC_SID)
 
-    assert [m.role for m in messages] == ["user", "assistant", "assistant", "assistant", "tool"]
+    # Codex response fragments (opaque reasoning, prose, and the tool call) are
+    # one normalized assistant response. Treating each record as a generation
+    # would make bookkeeping fragments look like separate unmeasured requests.
+    assert [m.role for m in messages] == ["user", "assistant", "tool"]
 
     # The one token_count in this slice carries `info: null`, so no turn usage
     # was reported at all — usage stays absent rather than zeroed. Codex has no
@@ -634,13 +637,13 @@ def test_read_messages_maps_roles_and_drops_metadata(
     assert reasoning.text is None
 
     # The function_call is a tool_use block carrying the correlating call_id.
-    tool_use = messages[3].content[0]
+    tool_use = messages[1].content[2]
     assert tool_use.type == "tool_use"
     assert tool_use.tool_name == "exec_command"
     assert tool_use.tool_use_id == "call_gdMNxpyvIKl8Fo6w2xOE65LH"
 
     # Its output is a tool_result carrier resolving the same call_id.
-    output = messages[4]
+    output = messages[2]
     assert output.role == "tool"
     assert output.content[0].type == "tool_result"
     assert output.content[0].tool_use_id == "call_gdMNxpyvIKl8Fo6w2xOE65LH"
@@ -817,8 +820,8 @@ def test_unreported_usage_fields_are_omitted_never_zeroed(
 ) -> None:
     """A field absent from ``last_token_usage`` stays ``None``: a fabricated zero
     reads downstream as a measured zero (and prices a class that was never
-    charged). With no ``cached_input_tokens`` there is nothing to net out, so
-    ``input`` passes through verbatim."""
+    charged). Fresh input needs BOTH the inclusive input and its measured cached
+    subset; without the latter, the inclusive count cannot be priced as fresh."""
     sid = "88888888-8888-7888-8888-888888888888"
     cwd = "/home/dev/work/sparse"
     _install_text(
@@ -835,7 +838,30 @@ def test_unreported_usage_fields_are_omitted_never_zeroed(
             '{"input_tokens":40,"output_tokens":7}}}}\n',
         ),
     )
-    assert adapter.read_messages(Path(cwd), sid)[0].usage == TokenUsage(input=40, output=7)
+    assert adapter.read_messages(Path(cwd), sid)[0].usage == TokenUsage(output=7)
+
+
+def test_usage_rejects_an_invalid_cached_subset(adapter: CodexAdapter, codex_home: Path) -> None:
+    """An inclusive input count smaller than its claimed cache subset cannot
+    establish fresh input. The independently measured cache and output survive;
+    no negative fresh count is invented."""
+    sid = "89898989-8989-7989-8989-898989898989"
+    cwd = "/home/dev/work/invalid-cache"
+    _install_text(
+        codex_home,
+        sid,
+        _usage_rollout(
+            sid,
+            cwd,
+            '{"timestamp":"2026-04-28T20:00:01.000Z","type":"response_item",'
+            '"payload":{"type":"message","role":"assistant",'
+            '"content":[{"type":"output_text","text":"hi"}]}}\n'
+            '{"timestamp":"2026-04-28T20:00:02.000Z","type":"event_msg",'
+            '"payload":{"type":"token_count","info":{"last_token_usage":'
+            '{"input_tokens":4,"cached_input_tokens":5,"output_tokens":7}}}}\n',
+        ),
+    )
+    assert adapter.read_messages(Path(cwd), sid)[0].usage == TokenUsage(output=7, cache_read=5)
 
 
 def test_usage_lands_on_the_tool_call_a_request_produced(
@@ -866,10 +892,147 @@ def test_usage_lands_on_the_tool_call_a_request_produced(
     )
     messages = adapter.read_messages(Path(cwd), sid)
 
-    assert messages[0].usage is None
-    assert messages[1].content[0].tool_name == "exec"
-    assert messages[1].usage is not None
-    assert messages[1].usage.output == 109
+    assert [message.role for message in messages] == ["assistant", "tool"]
+    response = messages[0]
+    assert [block.type for block in response.content] == ["text", "tool_use"]
+    assert response.content[1].tool_name == "exec"
+    assert response.usage is not None
+    assert response.usage.output == 109
+
+
+def test_usage_groups_response_fragments_into_one_generation(tmp_path: Path) -> None:
+    """One `last_token_usage` closes the entire response, not merely the last
+    assistant-shaped rollout record. Reasoning/prose/tool-use fragments retain
+    their transcript order and one request-level usage claim."""
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:00.000Z",
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-terra"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:01.000Z",
+                        "type": "response_item",
+                        "payload": {"type": "reasoning", "summary": []},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:02.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "I'll inspect it."}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:03.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "arguments": "{}",
+                            "call_id": "c1",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:04.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "c1",
+                            "output": "ok",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:05.000Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {"last_token_usage": {"output_tokens": 9}},
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    messages = _RolloutParser(CodexAdapter._read([path])).messages()
+
+    assert [message.role for message in messages] == ["assistant", "tool"]
+    response = messages[0]
+    assert response.model == "gpt-5.6-terra"
+    assert [block.type for block in response.content] == ["thinking", "text", "tool_use"]
+    assert response.usage == TokenUsage(output=9)
+    assert messages[1].content[0].type == "tool_result"
+
+
+def test_unreported_responses_stay_separate_and_unknown(tmp_path: Path) -> None:
+    """Without Codex's explicit usage boundary, a later user turn ends the
+    preceding response but cannot prove usage for it. The next response remains
+    a second unknown request rather than being folded or zeroed."""
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:01.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "first"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:02.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "next"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:03.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "second"}],
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    messages = _RolloutParser(CodexAdapter._read([path])).messages()
+
+    assert [message.role for message in messages] == ["assistant", "user", "assistant"]
+    assert [message.usage for message in messages if message.role == "assistant"] == [None, None]
 
 
 # ─── typed final-result extraction ──────────────────────────────────────────
@@ -1044,6 +1207,53 @@ def test_assistant_messages_carry_the_model_that_served_them(tmp_path: Path) -> 
     parser = _RolloutParser(CodexAdapter._read([path]))
     replies = [m for m in parser.messages() if m.role == "assistant"]
     assert [m.model for m in replies] == ["gpt-5.6-sol", "gpt-5.6-terra"]
+
+
+def test_later_turn_context_never_backfills_an_earlier_message_model(tmp_path: Path) -> None:
+    """A transcript that first names its model after an assistant reply cannot
+    prove the earlier generation's model. It stays unpriced rather than being
+    attributed to the later model's rate."""
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:01.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "first"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:02.000Z",
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-terra"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-09T10:00:03.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "second"}],
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    messages = _RolloutParser(CodexAdapter._read([path])).messages()
+    replies = [message for message in messages if message.role == "assistant"]
+    assert [m.model for m in replies] == [None, "gpt-5.6-terra"]
 
 
 # ─── tool-call detail on turn entries ────────────────────────────────────────
@@ -1364,3 +1574,82 @@ def test_exec_command_end_malformed_shape_degrades_instead_of_raising(
     # exit_code still applies (it was well-formed); duration falls back to the
     # message-timestamp derivation rather than being fabricated from garbage.
     assert (entry.tool.duration_ms, entry.tool.exit_code) == (1000, 0)
+
+
+def test_context_window_rides_the_same_token_count_record_and_the_latest_wins(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """``model_context_window`` + ``last_token_usage.input_tokens`` → the meter.
+
+    **Verbatim shape from a real codex-cli 0.154.0 rollout (2026-09-14)**, the
+    record the cumulative-usage test above already reads. Two facts pinned:
+    the window is the LATEST report's (a mid-session model switch moves it —
+    the first report says 200000, the second 258400, and the first must not
+    stick), and ``used`` is the inclusive ``input_tokens`` (cached tokens fill
+    the window whether or not they are billed), not the netted figure the
+    cost path derives.
+    """
+    sid = "77777777-7777-7777-8777-777777777777"
+    rollout = (
+        '{"timestamp":"2026-09-14T05:42:40.000Z","type":"session_meta",'
+        '"payload":{"id":"' + sid + '","cwd":"/home/dev/work/ctx","model_provider":"openai"}}\n'
+        '{"timestamp":"2026-09-14T05:42:45.000Z","type":"event_msg",'
+        '"payload":{"type":"token_count","info":{"total_token_usage":'
+        '{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":10},'
+        '"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":10},'
+        '"model_context_window":200000}}}\n'
+        '{"timestamp":"2026-09-14T05:42:49.518Z","type":"event_msg",'
+        '"payload":{"type":"token_count","info":{"total_token_usage":'
+        '{"input_tokens":19928,"cached_input_tokens":10880,"cache_write_input_tokens":0,'
+        '"output_tokens":8,"reasoning_output_tokens":0,"total_tokens":19936},'
+        '"last_token_usage":{"input_tokens":19928,"cached_input_tokens":10880,'
+        '"cache_write_input_tokens":0,"output_tokens":8,"reasoning_output_tokens":0,'
+        '"total_tokens":19936},"model_context_window":258400}}}\n'
+    )
+    _install_text(codex_home, sid, rollout)
+    act = adapter.parse_activity(Path("/home/dev/work/ctx"), sid)
+    assert act.context is not None
+    assert act.context.size == 258400
+    assert act.context.used == 19928
+    assert round(act.context.used_fraction, 4) == round(19928 / 258400, 4)
+
+
+def test_context_window_is_absent_not_zero_when_the_record_does_not_carry_it(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Either half missing means NO window — never a fabricated reading.
+
+    Two fixtures, one per half, because each guard must be provable alone: a
+    pre-0.98 rollout carries no ``model_context_window`` (size absent), and an
+    early ``token_count`` carries the window beside a ``last_token_usage`` with
+    no ``input_tokens`` (spend absent). A size with no spend would otherwise
+    render 0 % on a session one turn from compaction, which is the reading this
+    exists to prevent. Tokens still parse either way.
+    """
+    sid = "78787878-7878-7878-8787-787878787878"
+    no_size = (
+        '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+        '"payload":{"id":"' + sid + '","cwd":"/home/dev/work/old","model_provider":"openai"}}\n'
+        '{"timestamp":"2026-04-28T20:00:01.000Z","type":"event_msg",'
+        '"payload":{"type":"token_count","info":{"total_token_usage":'
+        '{"input_tokens":500,"output_tokens":60},'
+        '"last_token_usage":{"input_tokens":500,"output_tokens":60}}}}\n'
+    )
+    _install_text(codex_home, sid, no_size)
+    act = adapter.parse_activity(Path("/home/dev/work/old"), sid)
+    assert act.context is None
+    assert act.tokens_in == 500
+
+    sid2 = "79797979-7979-7979-8797-797979797979"
+    no_spend = (
+        '{"timestamp":"2026-04-28T20:00:00.000Z","type":"session_meta",'
+        '"payload":{"id":"' + sid2 + '","cwd":"/home/dev/work/old2","model_provider":"openai"}}\n'
+        '{"timestamp":"2026-04-28T20:00:01.000Z","type":"event_msg",'
+        '"payload":{"type":"token_count","info":{"total_token_usage":'
+        '{"input_tokens":500,"output_tokens":60},'
+        '"last_token_usage":{"output_tokens":60},"model_context_window":258400}}}\n'
+    )
+    _install_text(codex_home, sid2, no_spend)
+    act2 = adapter.parse_activity(Path("/home/dev/work/old2"), sid2)
+    assert act2.context is None
+    assert act2.tokens_in == 500

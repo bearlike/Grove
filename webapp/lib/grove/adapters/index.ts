@@ -26,9 +26,77 @@ export {
 } from "./activity";
 export type { StreamAction } from "./activity";
 
+export {
+  ANNOTATION_CODEC,
+  annotatedExtension,
+  annotatedName,
+  annotatedSize,
+  ATTACHMENT_ACCEPT,
+  attachmentCountError,
+  attachmentError,
+  attachmentKind,
+  dataUrlMimeType,
+  fileFromStaged,
+  filePartSize,
+  MAX_ANNOTATED_EDGE,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  messageAttachments,
+  mimeFromName,
+  splitAttachments,
+} from "./attachments";
+export type {
+  MessageAttachment,
+  StagedAttachment,
+  UserMessageBody,
+} from "./attachments";
+
 export { baseBranchOf } from "./branch";
 
-export { branchPlanFor, buildCreateRequest, customModelError, deriveTitle } from "./launch";
+export {
+  configureMessage,
+  DEFAULT_DRAWIO_URL,
+  draftFilename,
+  drawioEmbedUrl,
+  drawioOrigin,
+  firstPageId,
+  fitMessage,
+  flushMessages,
+  flushToken,
+  loadMessage,
+  parseDrawioEvent,
+  pngBase64,
+  previewMessage,
+  previewToken,
+  sanitizeDrawioBase,
+  savedStatusMessage,
+  unsavedStatusMessage,
+} from "./drawio";
+export type { DrawioEvent } from "./drawio";
+
+export {
+  NO_GALLERY_FILTER,
+  filterGallery,
+  galleryCardCaption,
+  galleryCardTitle,
+  galleryCountLabel,
+  galleryExportFilename,
+  galleryExportMessage,
+  galleryExportToken,
+  galleryOpenTarget,
+  galleryPageDocument,
+  galleryPages,
+  galleryProjects,
+  galleryViewerUrl,
+} from "./gallery";
+export type { GalleryFilter, GallerySort } from "./gallery";
+
+export {
+  branchPlanFor,
+  buildCreateRequest,
+  customModelError,
+  deriveTitle,
+} from "./launch";
 
 export { mergeTurns, turnCursor } from "./turns";
 export type { HeldWindow, TurnMerge, TurnWindow } from "./turns";
@@ -40,7 +108,22 @@ export type {
   QuestionPresentation,
 } from "./question";
 
-export { agentStatusProps, connectionStateProps, formatElapsed } from "./status";
+export {
+  activeIndex,
+  inPhaseProgress,
+  phaseEnteredAt,
+  reportIsStale,
+  STALE_REPORT_MS,
+  stepIsLive,
+  stepState,
+} from "./phase-progress";
+export type { InPhaseProgress, StepState } from "./phase-progress";
+
+export {
+  agentStatusProps,
+  connectionStateProps,
+  formatElapsed,
+} from "./status";
 export type {
   AgentActivityState,
   AgentStatusProps,
@@ -79,7 +162,11 @@ export {
 } from "./tool-call";
 export type { ToolCallField, ToolCallView } from "./tool-call";
 
-export { GROVE_DATA_NAME, GROVE_DATA_PART, messagesFromTurns } from "./transcript";
+export {
+  GROVE_DATA_NAME,
+  GROVE_DATA_PART,
+  messagesFromTurns,
+} from "./transcript";
 export type {
   CompactionPartData,
   ContinuationPartData,

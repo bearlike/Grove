@@ -4,16 +4,24 @@ import { useMemo } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 
 import { ErrorState } from "@/components/elements/error-state";
-import { useActivityStream, useSessionTurns, useWorkspaceQueue } from "@/lib/grove/hooks";
+import { findWorkspaceActivity } from "@/lib/grove/adapters";
+import {
+  useActivityStream,
+  useSessionTurns,
+  useWorkspaceQueue,
+} from "@/lib/grove/hooks";
 import type { WorkspaceQueueView } from "@/lib/grove/api";
 import type { GroveThreadState } from "@/lib/grove/runtime";
 import { GroveDataParts } from "./data-parts";
 import { PendingQuestion } from "./pending-question";
 import { QueuePanel } from "./queue-panel";
 import { SessionPicker } from "./session-picker";
+import { WorkspaceComposerSurface } from "./composer";
 import { Thread, type ThreadComponents } from "./thread";
-import { THREAD_WIDTH } from "./thread-width";
+import { THREAD_INSET, THREAD_WIDTH } from "./thread-width";
 import { TodoPanel } from "./todo-panel";
+import { agentExited } from "./selectors";
+import { WorkingLoader } from "@/components/grove/working-loader";
 import { GROVE_THREAD_COMPONENTS } from "./tool-call-part";
 import { TranscriptSkeleton } from "./transcript-skeleton";
 
@@ -75,12 +83,15 @@ export function Transcript({
   sessionId,
   thread,
   narrow,
+  native,
 }: {
   workspaceId: string;
   sessionId: string | null;
   thread: GroveThreadState;
   /** True in split view, where the pane is a half-width column. */
   narrow: boolean;
+  /** A send can revive only a native workspace. */
+  native: boolean;
 }) {
   // Called unconditionally, ahead of the early returns below, per the rules of
   // hooks — disabled (via `null`) rather than skipped while there is no
@@ -93,6 +104,7 @@ export function Transcript({
   // duplicate read on this pane already follows.
   const turns = useSessionTurns(workspaceId, sessionId).query;
   const activity = useActivityStream();
+  const exitReason = native ? agentExited(findWorkspaceActivity(activity.snapshot, workspaceId)) : null;
 
   // No resolvable session means there is no transcript to render at all — the
   // only useful thing this pane can do is offer the remap that fixes it. But
@@ -103,7 +115,9 @@ export function Transcript({
   // prevent — same defect as the welcome screen below, one layer up.
   if (sessionId === null) {
     if (activity.isPending) return <TranscriptSkeleton />;
-    return <SessionPicker workspaceId={workspaceId} resolvedSessionId={sessionId} />;
+    return (
+      <SessionPicker workspaceId={workspaceId} resolvedSessionId={sessionId} />
+    );
   }
 
   if (turns.isPending) return <TranscriptSkeleton />;
@@ -122,8 +136,17 @@ export function Transcript({
   return (
     <AssistantRuntimeProvider runtime={thread.runtime}>
       <GroveDataParts />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="transcript">
-        <ThreadPane thread={thread} narrow={narrow} queue={queue.data ?? null} />
+      <div
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        data-testid="transcript"
+      >
+        <ThreadPane
+          workspaceId={workspaceId}
+          thread={thread}
+          narrow={narrow}
+          queue={queue.data ?? null}
+          exitReason={exitReason}
+        />
       </div>
     </AssistantRuntimeProvider>
   );
@@ -153,28 +176,51 @@ const NO_PENDING: GroveThreadState["pending"] = [];
  * parent's render was never what delivered a new message.
  */
 function ThreadPane({
+  workspaceId,
   thread,
   narrow,
   queue,
+  exitReason,
 }: {
+  workspaceId: string;
   thread: GroveThreadState;
   narrow: boolean;
   /** The workspace's steer queue, or null while it has not loaded yet. */
   queue: WorkspaceQueueView | null;
+  /** The primary native owner ended; sending revives it. */
+  exitReason: string | null;
 }) {
-  const { todo, answering, answer, notice, isEmpty, hasEarlier, loadEarlier, loadingEarlier, sending } =
-    thread;
+  const {
+    todo,
+    answering,
+    answer,
+    notice,
+    isEmpty,
+    hasEarlier,
+    loadEarlier,
+    loadingEarlier,
+    sending,
+    working,
+  } = thread;
   const pending = thread.pending.length === 0 ? NO_PENDING : thread.pending;
-  const maxWidth = narrow ? THREAD_WIDTH.split : THREAD_WIDTH.full;
+  // One mode picks both halves of the transcript's geometry — see
+  // `thread-width.ts`, where the measure and the margin are one decision.
+  const mode = narrow ? "split" : "full";
+  const maxWidth = THREAD_WIDTH[mode];
+  const inset = THREAD_INSET[mode];
 
   return useMemo(
     () => (
       <Thread
-        components={isEmpty ? GROVE_THREAD_COMPONENTS : SUPPRESSED_WELCOME_COMPONENTS}
+        components={
+          isEmpty ? GROVE_THREAD_COMPONENTS : SUPPRESSED_WELCOME_COMPONENTS
+        }
         maxWidth={maxWidth}
+        inset={inset}
         hasEarlier={hasEarlier}
         loadingEarlier={loadingEarlier}
         onLoadEarlier={loadEarlier}
+        composer={<WorkspaceComposerSurface workspaceId={workspaceId} exitReason={exitReason} />}
         footer={
           <>
             {/* FIRST in the footer, because it is the newest thing that
@@ -182,6 +228,13 @@ function ThreadPane({
                 It clears the instant the transcript or the queue shows the
                 same text for real, so it never doubles either of them. */}
             {sending && <SendingEcho text={sending} />}
+            {/* Directly under the echo, for the same reason it is first: this
+                is where the next message will appear, and the whole point is to
+                say that one is coming. It is the ONLY thing in this footer that
+                reports the agent rather than the conversation, which is why it
+                needs no condition beyond the agent working — a pending question
+                means `waiting`, so the two can never claim the floor at once. */}
+            {working && <WorkingLoader />}
             {todo && <TodoPanel todo={todo} />}
             {queue && <QueuePanel queue={queue} />}
             {pending.map((group) => (
@@ -202,7 +255,10 @@ function ThreadPane({
       />
     ),
     [
+      workspaceId,
+      exitReason,
       maxWidth,
+      inset,
       narrow,
       todo,
       queue,
@@ -215,6 +271,7 @@ function ThreadPane({
       loadEarlier,
       loadingEarlier,
       sending,
+      working,
     ],
   );
 }

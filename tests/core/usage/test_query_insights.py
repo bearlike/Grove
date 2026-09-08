@@ -93,6 +93,18 @@ def _query(tmp_path: Path) -> tuple[UsageStore, UsageQuery]:
     return store, UsageQuery(store=store, prices=PriceBook(cfg.usage.pricing), cfg=cfg)
 
 
+def test_model_breakdown_sums_money_as_decimals(tmp_path: Path) -> None:
+    store, query = _query(tmp_path)
+    for index, tokens in enumerate((100000, 200000)):
+        _insert_session(
+            store, session_id=f"decimal-{index}", at=_epoch(8), fresh_input=tokens, output=0
+        )
+    query.refresh_cost_cache()
+    row = query.breakdown(UsageFilters(), dimension="model").rows[0]
+    assert row.cost is not None and row.cost.amount == "0.300000"
+    store.close()
+
+
 def test_summary_and_session_cost_never_turn_unmeasured_tokens_into_zero(tmp_path: Path) -> None:
     store, query = _query(tmp_path)
     _insert_session(store, session_id="unknown", at=_epoch(8))
@@ -604,4 +616,178 @@ def test_insight_thresholds_and_filters_come_from_config(tmp_path: Path) -> None
         for finding in InsightEngine(store=store, cfg=quieter).findings(UsageFilters()).findings
     }
     assert "recurring_tool_failure" not in quiet_kinds
+    store.close()
+
+
+def _insert_switched_session(
+    store: UsageStore,
+    *,
+    session_id: str,
+    at: int,
+    evidence: list[tuple[str | None, int | None, int | None]],
+) -> None:
+    """Seed per-generation model evidence without a session-level model guess."""
+    _insert_session(store, session_id=session_id, at=at, fresh_input=None, output=None)
+    with store.write() as conn:
+        conn.execute(
+            "UPDATE sessions SET models=? WHERE session_id=?",
+            (
+                json.dumps(list(dict.fromkeys(model for model, _, _ in evidence if model))),
+                session_id,
+            ),
+        )
+        conn.execute("DELETE FROM usage_events WHERE session_id=?", (session_id,))
+        conn.executemany(
+            "INSERT INTO usage_events("
+            "session_id, source_id, seq, ts, kind, model, fresh_input, output"
+            ") VALUES(?, 'source', ?, ?, 'generation', ?, ?, ?)",
+            [
+                (session_id, sequence, at + sequence, model, fresh_input, output)
+                for sequence, (model, fresh_input, output) in enumerate(evidence, 1)
+            ],
+        )
+
+
+def test_cost_breakdown_counts_only_complete_priceable_sessions(tmp_path: Path) -> None:
+    store, query = _query(tmp_path)
+    _insert_session(
+        store, session_id="complete", at=_epoch(8), fresh_input=1_000_000, output=1_000_000
+    )
+    _insert_session(store, session_id="unknown", at=_epoch(8))
+
+    summary = query.summary(UsageFilters())
+
+    assert summary.cost is None
+    assert summary.coverage.cost_available is False
+    assert summary.cost_breakdown is not None
+    assert summary.cost_breakdown.known_cost is not None
+    assert summary.cost_breakdown.known_cost.amount == "3.000000"
+    assert summary.cost_breakdown.priced_sessions == 1
+    assert summary.cost_breakdown.total_sessions == 2
+    store.close()
+
+
+def test_switched_model_cost_uses_each_generation_rate_once(tmp_path: Path) -> None:
+    store, query = _query(tmp_path)
+    _insert_switched_session(
+        store,
+        session_id="switched",
+        at=_epoch(8),
+        evidence=[("model-a", 1_000_000, 0), ("model-b", 0, 1_000_000)],
+    )
+    # Make the second model intentionally more expensive, proving we did not
+    # price the aggregate under the first model.
+    query.prices = PriceBook(
+        GroveConfig.model_validate(
+            {
+                "usage": {
+                    "pricing": {
+                        "models": {
+                            "model-a": {"input": 1, "output": 2},
+                            "model-b": {"input": 1, "output": 5},
+                        }
+                    }
+                }
+            }
+        ).usage.pricing
+    )
+
+    summary = query.summary(UsageFilters())
+
+    assert summary.cost is not None
+    assert summary.cost.amount == "6.000000"
+    assert summary.cost_breakdown is not None
+    assert summary.cost_breakdown.priced_sessions == 1
+    page = query.sessions(UsageFilters(), cursor=None, limit=10, sort="cost")
+    assert page.rows[0].cost is not None
+    assert page.rows[0].cost.amount == "6.000000"
+    store.close()
+
+
+def test_missing_switched_generation_evidence_never_charges_a_partial_session(
+    tmp_path: Path,
+) -> None:
+    store, query = _query(tmp_path)
+    _insert_switched_session(
+        store,
+        session_id="partial",
+        at=_epoch(8),
+        evidence=[("model-a", 1_000_000, 0), ("model-b", None, None)],
+    )
+
+    summary = query.summary(UsageFilters())
+
+    assert summary.cost is None
+    assert summary.cost_breakdown is not None
+    assert summary.cost_breakdown.known_cost is None
+    assert summary.cost_breakdown.priced_sessions == 0
+    assert summary.cost_breakdown.total_sessions == 1
+    page = query.sessions(UsageFilters(), cursor=None, limit=10, sort="recent")
+    assert page.rows[0].cost is None
+    store.close()
+
+
+def test_single_model_generation_evidence_beats_partial_session_total(tmp_path: Path) -> None:
+    store, query = _query(tmp_path)
+    _insert_session(
+        store,
+        session_id="partial-single",
+        at=_epoch(8),
+        fresh_input=1_000_000,
+        output=1_000_000,
+    )
+    with store.write() as conn:
+        conn.execute("DELETE FROM usage_events WHERE session_id='partial-single'")
+        conn.executemany(
+            "INSERT INTO usage_events("
+            "session_id, source_id, seq, ts, kind, model, fresh_input, output"
+            ") VALUES('partial-single', 'source', ?, ?, 'generation', 'model-a', ?, ?)",
+            [(1, _epoch(8), 1_000_000, 0), (2, _epoch(8) + 1, None, None)],
+        )
+
+    summary = query.summary(UsageFilters())
+    page = query.sessions(UsageFilters(), cursor=None, limit=10, sort="recent")
+
+    assert summary.cost is None
+    assert summary.cost_breakdown is not None
+    assert summary.cost_breakdown.priced_sessions == 0
+    assert page.rows[0].cost is None
+    store.close()
+
+
+def test_temporal_cost_accounts_for_the_same_events_as_the_session_row(tmp_path: Path) -> None:
+    store, query = _query(tmp_path)
+    _insert_switched_session(
+        store,
+        session_id="spanning",
+        at=_epoch(8),
+        evidence=[("model-a", 1_000_000, 0), ("model-b", 0, 1_000_000)],
+    )
+    query.prices = PriceBook(
+        GroveConfig.model_validate(
+            {
+                "usage": {
+                    "pricing": {
+                        "models": {
+                            "model-a": {"input": 1, "output": 2},
+                            "model-b": {"input": 1, "output": 5},
+                        }
+                    }
+                }
+            }
+        ).usage.pricing
+    )
+    filters = UsageFilters(
+        since=datetime.fromtimestamp(_epoch(8), UTC),
+        until=datetime.fromtimestamp(_epoch(8) + 3, UTC),
+    )
+
+    summary = query.summary(filters)
+    row = query.sessions(filters, cursor=None, limit=10, sort="recent").rows[0]
+
+    assert summary.cost is not None
+    assert summary.cost.amount == "6.000000"
+    assert summary.cost_breakdown is not None
+    assert summary.cost_breakdown.known_cost == summary.cost
+    assert row.cost == summary.cost
     store.close()

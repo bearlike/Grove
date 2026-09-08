@@ -46,6 +46,26 @@ export const POLL_MS = {
   turns: 30_000,
   /** UNGATED. The host-wide session catalog — a browse surface, off the tick. */
   catalog: 30_000,
-  /** UNGATED. The working-tree patch, and the largest payload here by far. */
+  /**
+   * The working-tree patch, and the largest payload here by far.
+   *
+   * GATED since `workspace_source_changed`: `dirty_files` moves only when the
+   * SET changes, so editing an already-dirty file carried no delta and this
+   * interval was the only freshness there was. That event fires per filesystem
+   * invalidation regardless of whether a counter moved, so the edge now covers
+   * the case, and this is the stream-drop backstop.
+   */
   diff: 30_000,
+  /**
+   * UNGATED, and mounted only by a VISIBLE, EDITABLE diagram.
+   *
+   * No frame on `/events` carries file bytes, so an interval is the only way to
+   * notice that an agent or a shell wrote the `.drawio` under an open editor —
+   * and noticing is the whole point, since it is what turns a silent overwrite
+   * into a visible conflict. Deliberately not gated on window focus: a second
+   * monitor showing the diagram while an agent edits it is exactly the case
+   * this serves. It IS gated on the tab being on screen and the collaboration
+   * being active, so a stopped or unread diagram costs nothing.
+   */
+  diagram: 5_000,
 } as const;

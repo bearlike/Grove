@@ -137,6 +137,34 @@ class HistoryPlanter:
             ),
         )
 
+    def burst(self, transcript: Transcript, *, seed: str) -> Transcript:
+        """Prepend each turn's declared ``burst`` of synthetic calls, if any.
+
+        A LIVE session's transcript is authored by hand so the transcript pane
+        reads well, and a hand can write six calls a turn where a real session
+        makes thirty. The Activity card, the sessions table and the token
+        classes all count calls, so the fixture names a burst per turn and the
+        planter fills it from the same corpus the backfill draws from. Seeded by
+        the session so the counts are stable across runs; the authored steps
+        stay last so an open tail is still the authored one.
+        """
+        if not any(turn.burst for turn in transcript.turns):
+            return transcript
+        rng = random.Random(f"burst:{seed}")
+        files = tuple(rng.sample(self._corpus.files, k=rng.randint(*self._corpus.working_set)))
+        turns = tuple(
+            turn.model_copy(
+                update={
+                    "tools": tuple(
+                        self._tool_step(rng, "claude_code", files) for _ in range(turn.burst)
+                    )
+                    + turn.tools
+                }
+            )
+            for turn in transcript.turns
+        )
+        return transcript.model_copy(update={"turns": turns})
+
     def _tool_step(
         self, rng: random.Random, provider: HistoryProvider, files: tuple[str, ...]
     ) -> ToolStep:

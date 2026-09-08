@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { modelLabel } from "@/components/grove/launch/controls/model-pill";
 import { customModelError } from "@/lib/grove/adapters/launch";
+import { modelLabel } from "@/lib/grove/adapters/model";
 
 describe("customModelError", () => {
   it("accepts real provider-id separators and surrounding whitespace", () => {

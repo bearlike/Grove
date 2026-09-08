@@ -42,11 +42,32 @@ def test_agents_lists_configured_agents(daemon: TestClient, tmp_repo: Path) -> N
 
 def test_agents_omits_command_and_env(daemon: TestClient, tmp_repo: Path) -> None:
     # command / env can carry host-private paths + secrets — they must not cross
-    # the wire. The summary view is name / kind / description / models only.
+    # the wire. The summary view is name / kind / description / models / native.
     resp = daemon.get(f"/agents?repo={tmp_repo}")
     assert resp.status_code == 200, resp.text
     for item in resp.json():
-        assert set(item) == {"name", "kind", "description", "models"}
+        assert set(item) == {"name", "kind", "description", "models", "native"}
+
+
+@pytest.mark.usefixtures("native_roster")
+def test_agents_ship_native_and_terminal_entries_per_provider(
+    daemon: TestClient, tmp_repo: Path
+) -> None:
+    """The picker always offers the owned session AND the interactive terminal
+    for each provider, with no config edit — and says which is which."""
+    resp = daemon.get(f"/agents?repo={tmp_repo}")
+    assert resp.status_code == 200, resp.text
+    by_name = {item["name"]: item for item in resp.json()}
+    assert by_name["claude"]["native"] is True
+    assert by_name["claude-terminal"] == {**by_name["claude"], "native": False} | {
+        "name": "claude-terminal",
+        "description": by_name["claude-terminal"]["description"],
+    }
+    assert by_name["codex"]["native"] is True
+    assert by_name["codex-terminal"]["native"] is False
+    assert by_name["codex-terminal"]["kind"] == "codex"
+    # A kind with no native protocol never claims one, whatever the spec says.
+    assert by_name["shell"]["native"] is False
 
 
 def test_agents_requires_repo(daemon: TestClient) -> None:

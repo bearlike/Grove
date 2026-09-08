@@ -1,26 +1,31 @@
 "use client";
 
 import { Activity, useCallback, useEffect, useRef, useState } from "react";
-import { GlobeIcon, SquareIcon } from "lucide-react";
+import {
+  Columns2Icon,
+  GlobeIcon,
+  MessageSquareTextIcon,
+  PanelRightIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
 
-import { AgentStatus } from "@/components/elements/agent-status";
 import { ErrorState } from "@/components/elements/error-state";
+import { useCloseAnnotationOnUnmount } from "@/components/grove/annotation";
 import { ShellHeader } from "@/components/grove/shell/shell-header";
+import { useSidebarUi } from "@/components/grove/shell/sidebar-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SplitHandle } from "@/components/grove/split-handle";
+import { ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { Tabs } from "@/components/ui/tabs";
+import { AdaptiveTabsList, AdaptiveTabsTrigger } from "./adaptive-tabs";
 import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  agentStatusProps,
   findWorkspaceActivity,
   primarySessionId,
 } from "@/lib/grove/adapters";
+import { diagramOf } from "@/lib/grove/api";
 import {
   useActivityStream,
   useRemapSession,
@@ -36,9 +41,9 @@ import { Transcript } from "./transcript";
 import { TranscriptSkeleton } from "./transcript-skeleton";
 import { WorkPanel } from "./work-panel";
 import {
+  canInterruptNative,
   panesShown,
   storedView,
-  storedWorkTab,
   visiblePane,
   resolvedWorkspaceSelection,
   type PanelTab,
@@ -46,8 +51,12 @@ import {
   type WorkspaceSelection,
 } from "./selectors";
 import { useMinWidth } from "./use-min-width";
+import { useWorkspaceOnboardingDemands } from "@/components/grove/onboarding";
 
 const SPLIT_MIN_WIDTH = 1024;
+
+/** The tour's asks this page owns; the composer takes `workspace-prompt` itself. */
+const TOUR_KINDS = ["pane", "work-tab"] as const;
 
 /** The split's persisted layout key, and the panel ids that layout is keyed by
  * — the ids must match the panels mounted at that moment or the restore lands
@@ -71,16 +80,17 @@ const SPLIT_STORAGE: LayoutStorage = {
 };
 
 /**
- * Which pane and work tab a workspace was last left on, keyed PER WORKSPACE
- * ID — a bare "last pane" key would apply one workspace's choice to a
- * different one, which is worse than always resetting to the default. Two
- * independent keys, not one JSON blob: `view` and `workTab` change on
- * different events (the switcher vs. the work-panel tab strip), and writing
- * only the one that changed avoids a stale read of the other clobbering it
- * back on the next write.
+ * Which pane a workspace was last left on, keyed PER WORKSPACE ID — a bare
+ * "last pane" key would apply one workspace's choice to a different one, which
+ * is worse than always resetting to the default.
+ *
+ * The work TAB is deliberately absent from this. It used to be persisted
+ * alongside the pane, which meant arriving at a workspace put you back on
+ * whatever its terminal was doing days ago; every visit now lands on Info (see
+ * `resolvedWorkspaceSelection`), and a tab clicked during a visit lives in
+ * component state for that visit only.
  */
 const viewStorageKey = (id: string) => `grove-workspace-view:${id}`;
-const workTabStorageKey = (id: string) => `grove-workspace-work-tab:${id}`;
 
 /** Defensive `localStorage` read: missing key, no `window` (SSR/edge), and a
  * disabled or throwing store (private browsing in some browsers) all read as
@@ -129,6 +139,9 @@ export function Workspace({ id }: { id: string }) {
   const sessionId = primarySessionId(snapshot, id);
 
   const sessions = useWorkspaceSessions(id);
+  // A staged file belongs to this id's composer; an annotation pane open over
+  // it has nowhere to save once the route leaves the id or unmounts.
+  useCloseAnnotationOnUnmount(id);
   const { mutate: remapMutate } = useRemapSession(id);
   const switchSession = useCallback(
     (next: string) => remapMutate(next),
@@ -208,28 +221,68 @@ export function Workspace({ id }: { id: string }) {
   // functional update also makes a click that happens before this effect
   // authoritative.
   useEffect(() => {
-    const stored = {
-      view: storedView(readPaneStorage(viewStorageKey(id))),
-      workTab: storedWorkTab(readPaneStorage(workTabStorageKey(id))),
-    };
+    const stored = storedView(readPaneStorage(viewStorageKey(id)));
     setSelection((current) => {
       if (selectionWorkspaceId.current !== id) return current;
-      return {
-        view: current.view ?? stored.view,
-        workTab: current.workTab ?? stored.workTab,
-      };
+      return { ...current, view: current.view ?? stored };
     });
   }, [id]);
 
-  const persistWorkTab = (tab: PanelTab) => {
+  // Visit-scoped, never written to storage: see `viewStorageKey`.
+  const selectWorkTab = useCallback((tab: PanelTab) => {
     setSelection((current) => ({ ...current, workTab: tab }));
-    writePaneStorage(workTabStorageKey(id), tab);
-  };
+  }, []);
+
+  // A diagram opening is the ONE event that takes the work tab without being
+  // clicked, and it does so exactly once per collaboration identity.
+  //
+  // `undefined` is "not observed yet" and is deliberately distinct from `null`:
+  // the FIRST value this page sees is recorded and never acted on, because on a
+  // fresh load a descriptor that was already there says nothing about now. Only
+  // a change observed live (none → open, or a reopen minting a new id) is the
+  // agent actually opening a diagram, and a reader who moves to Terminal
+  // afterwards is never dragged back.
+  //
+  // THE FIRST VALUE IS THE ONE THE PEEK ANSWERED WITH, never the gap before it.
+  // `peek` is a query, so an unresolved read looks exactly like "no diagram" —
+  // which turned every fresh load of a workspace that already had one into an
+  // apparent `null` → id open, and landed the reader on Diagram. The whole
+  // guard was defeated by a loading state. Measured on the built app: a
+  // workspace with an open diagram selected Diagram on every reload.
+  const diagramSessionId = peek.data
+    ? (diagramOf(peek.data.state)?.session_id ?? null)
+    : undefined;
+  const announcedDiagram = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (diagramSessionId === undefined) return;
+    const seen = announcedDiagram.current;
+    announcedDiagram.current = diagramSessionId;
+    if (seen === undefined || seen === diagramSessionId || diagramSessionId === null) return;
+    selectWorkTab("diagram");
+  }, [diagramSessionId, selectWorkTab]);
 
   const changeView = (next: PaneView) => {
     setSelection((current) => ({ ...current, view: next }));
     writePaneStorage(viewStorageKey(id), next);
   };
+
+  // The onboarding tour selects a pane and a work tab the way a click would.
+  // A `split` ask on a narrow window falls through `visiblePane` like any
+  // stored split does; the tab it names is still selected underneath.
+  useWorkspaceOnboardingDemands(
+    TOUR_KINDS,
+    useCallback(
+      (demand) => {
+        if (demand.kind === "pane") {
+          setSelection((current) => ({ ...current, view: demand.view }));
+          return;
+        }
+        selectWorkTab(demand.tab);
+        setSelection((current) => ({ ...current, view: current.view ?? "split" }));
+      },
+      [selectWorkTab],
+    ),
+  );
 
   // The library's own persistence, not a hand-rolled localStorage read: it
   // already knows to restore before first paint and to ignore layout changes
@@ -290,6 +343,7 @@ export function Workspace({ id }: { id: string }) {
       sessionId={sessionId}
       thread={thread}
       narrow={showSplit}
+      native={peek.data.state.native}
     />
   );
   const workPanel = (
@@ -298,9 +352,19 @@ export function Workspace({ id }: { id: string }) {
       activity={activity}
       commits={commits.data}
       repoRoot={peek.data.state.repo_root}
-      privileged={{ peek: peek.data, onKilled: () => router.push("/") }}
+      privileged={{
+        peek: peek.data,
+        onKilled: () => router.push("/"),
+        canInterrupt: peek.data.state.native ? canInterruptNative(peek.data.state) : thread.working,
+        onExpandDiagram: () => {
+          selectWorkTab("diagram");
+          changeView("work");
+          useSidebarUi.getState().setCollapsed(true);
+          useSidebarUi.getState().setMobileOpen(false);
+        },
+      }}
       tab={workTab}
-      onTabChange={persistWorkTab}
+      onTabChange={selectWorkTab}
     />
   );
 
@@ -313,9 +377,6 @@ export function Workspace({ id }: { id: string }) {
             view={paneView}
             onChange={changeView}
             splitOffered={wideEnoughToSplit}
-            status={activity}
-            canInterrupt={thread.canInterrupt}
-            onInterrupt={thread.interrupt}
             isPublic={peek.data.state.share_token !== null}
           />
         }
@@ -349,25 +410,7 @@ export function Workspace({ id }: { id: string }) {
                 {transcript}
               </div>
             </ResizablePanel>
-            {/* NO `withHandle`. That prop draws a 12x16 bordered block with a
-                grip icon parked in the middle of the divider, which is the
-                "fat and unappealing" complaint: a hairline is what the divider
-                should LOOK like, and a grip is a 90s affordance for a control
-                that already tells you what it does by sitting between two
-                panes.
-
-                Thin to look at, easy to grab: the vendored `w-px` line stays,
-                and `after:w-3` widens the INVISIBLE hit area from 4px to 12px.
-                The `::after` belongs to the separator for hit-testing, which is
-                also why plain `hover:`/`active:` fire from anywhere in that
-                12px band rather than only on the 1px line.
-
-                `hover`/`active`/`focus-visible` and not a library state
-                attribute: react-resizable-panels documents exactly
-                `data-separator`, `data-disabled`, `role` and ARIA on this
-                element — there is no drag-state hook to bind to, and CSS
-                `:active` already holds for the whole pointer drag. */}
-            <ResizableHandle className="transition-colors after:w-3 hover:bg-ring focus-visible:bg-ring active:bg-ring" />
+            <SplitHandle />
             <ResizablePanel id={SPLIT_PANELS[1]} defaultSize="45" minSize="25">
               <div className="bg-background flex h-full min-h-0 min-w-0 flex-col">
                 {workPanel}
@@ -430,80 +473,63 @@ function Surface({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Everything that used to be its own strip: what the agent is doing, the
- * interrupt, and which pane is showing.
+ * WHICH PANE IS SHOWING. Nothing else.
  *
- * Interrupt lives here rather than in the composer because Grove steers a
- * WORKING agent: the composer must stay sendable while the agent runs, so the
- * stop control cannot be the composer's own send-button swap.
+ * IT NAVIGATES; it does not act, and it no longer reports. Send keys used to
+ * sit here, which made this strip one verb wide and put a control that talks to
+ * a terminal beside the control that chooses a pane; it is a card on Controls
+ * now. The agent's status pill followed it out, for the neighbouring reason:
+ * a scrolling sentence of the agent's own prose, sitting one gap from the pane
+ * tabs, was the widest and most restless thing in a 32px band whose whole job
+ * is to stay still and let you aim at it. The claim itself is not lost — the
+ * same `PhaseView` note renders on the Task card, where a reader who came to
+ * read a status can read it without it moving.
  */
 function HeaderActions({
   view,
   onChange,
   splitOffered,
-  status,
-  canInterrupt,
-  onInterrupt,
   isPublic,
 }: {
   view: PaneView;
   onChange: (view: PaneView) => void;
   splitOffered: boolean;
-  status: ReturnType<typeof findWorkspaceActivity>;
-  canInterrupt: boolean;
-  onInterrupt: () => void;
   isPublic: boolean;
 }) {
-  const live = status?.sessions[0]?.activity;
   const options: readonly PaneView[] = splitOffered
     ? ["transcript", "work", "split"]
     : ["transcript", "work"];
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="workspace-pane-actions flex min-w-0 flex-1 items-center gap-2 self-stretch">
       {isPublic && (
-        <Badge variant="secondary">
+        <Badge variant="secondary" className="shrink-0">
           <GlobeIcon aria-hidden />
           Public
         </Badge>
       )}
-      {live && (
-        <div className="hidden min-w-0 sm:block">
-          <AgentStatus
-            {...agentStatusProps(live, status?.phase ?? null, new Date())}
-          />
-        </div>
-      )}
-      {canInterrupt && (
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={onInterrupt}
-          data-testid="chat-interrupt"
-        >
-          <SquareIcon aria-hidden />
-          Interrupt
-        </Button>
-      )}
-      <Tabs value={view} onValueChange={(value) => onChange(value as PaneView)}>
-        <TabsList variant="line" aria-label="Workspace panes">
-          {options.map((option) => (
-            <TabsTrigger
-              key={option}
-              value={option}
-              data-testid={`pane-${option}`}
-            >
-              {LABELS[option]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+      <Tabs className="min-w-0 flex-1 self-stretch" value={view} onValueChange={(value) => onChange(value as PaneView)}>
+        <AdaptiveTabsList className="h-full" aria-label="Workspace panes">
+          {options.map((option) => {
+            const { label, Icon } = PANE_CHROME[option];
+            return (
+              <AdaptiveTabsTrigger
+                key={option}
+                value={option}
+                label={label}
+                icon={Icon}
+                data-testid={`pane-${option}`}
+              />
+            );
+          })}
+        </AdaptiveTabsList>
       </Tabs>
     </div>
   );
 }
 
-const LABELS: Record<PaneView, string> = {
-  transcript: "Transcript",
-  work: "Work",
-  split: "Split",
+const PANE_CHROME: Record<PaneView, { label: string; Icon: LucideIcon }> = {
+  transcript: { label: "Transcript", Icon: MessageSquareTextIcon },
+  work: { label: "Work", Icon: PanelRightIcon },
+  split: { label: "Split", Icon: Columns2Icon },
 };

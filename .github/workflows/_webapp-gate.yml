@@ -1,0 +1,95 @@
+name: Webapp gate (reusable)
+
+# The non-browser half of `npm run gate`, each gate reporting its own verdict.
+#
+# FIRST CI COVERAGE FOR webapp/: before this, .github/workflows/ ran zero npm
+# steps, so every webapp gate existed only as a local script and ran on the
+# developer's host against the user's own work.
+#
+# ONE JOB, N STEPS for the same reason as _py-quality.yml: act_runner's shared
+# `act-toolcache` volume is not concurrency-safe, and a matrix fanning six legs
+# through setup-node at once corrupts it — the measured symptom on the Python
+# side was exactly one leg per run dying in the setup action with an empty
+# error, moving between legs run to run. Sequential steps also mean ONE `npm ci`
+# instead of six, which on a capacity-1 runner is strictly less work than legs
+# that were serializing anyway.
+#
+# `if: ${{ !cancelled() }}` keeps every gate reporting even after one fails,
+# which is the whole point of naming them separately.
+
+on:
+  workflow_call:
+    inputs:
+      gates:
+        description: "all | subset of: typecheck,vitest,styling,codegen,registry,ignored (no spaces)"
+        type: string
+        required: false
+        default: "all"
+      ref:
+        description: "Ref to check out; empty uses the triggering ref"
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  gate:
+    name: typecheck · vitest · styling · codegen · registry · ignored
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+      - name: Install
+        working-directory: webapp
+        run: npm ci
+
+      # `codegen:check` is the one gate here that is NOT purely a Node gate:
+      # scripts/codegen.ts spawns `uv run python -c "...build_app(...).openapi()"`
+      # to generate the daemon's OpenAPI from the real app rather than fetching
+      # it from a running daemon, so the types it diffs against always describe
+      # THIS checkout. Without a Python toolchain it fails with
+      # `✗ codegen — could not build the daemon's OpenAPI`, which reads as type
+      # drift and is really a missing interpreter. Installed unconditionally:
+      # the cost is seconds and gating it on the `gates` input would leave a
+      # subset run that happens to include codegen silently broken.
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install Python deps (for codegen:check)
+        run: uv sync --frozen --group dev
+
+      - name: tsc --noEmit
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',typecheck,')) }}
+        working-directory: webapp
+        run: npm run typecheck
+
+      - name: vitest
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',vitest,')) }}
+        working-directory: webapp
+        run: npm run test
+
+      - name: lint:styling
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',styling,')) }}
+        working-directory: webapp
+        run: npm run lint:styling
+
+      - name: codegen:check
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',codegen,')) }}
+        working-directory: webapp
+        run: npm run codegen:check
+
+      - name: registry:check
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',registry,')) }}
+        working-directory: webapp
+        run: npm run registry:check
+
+      - name: check:ignored
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',ignored,')) }}
+        working-directory: webapp
+        run: npm run check:ignored

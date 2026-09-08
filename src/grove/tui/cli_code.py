@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import typer
 
-from grove.core import GroveError, build
+from grove.core import GroveError
 from grove.core.workspace import WorkspaceState
 from grove.tui.cli_complete import Complete
 from grove.tui.cli_workspace import clean_exit, resolve_workspace
@@ -66,8 +66,7 @@ def code_workspace(workspace: str = _WORKSPACE_ARG) -> None:
     from grove.client.vscode import VsCodeAttach  # noqa: PLC0415
 
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        _, state = resolve_workspace(workspace)
         target = _container_target(state)
         attach = VsCodeAttach(target)
         asyncio.run(attach.start())

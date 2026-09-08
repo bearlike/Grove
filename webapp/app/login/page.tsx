@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CircleAlertIcon } from "lucide-react";
 
-import { BrandMark } from "@/components/grove/brand-mark";
+import { AppLogo } from "@/components/grove/app-logo";
 import { GitHubIcon } from "@/components/icons/github";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -87,16 +87,18 @@ function LoginForm(): React.ReactNode {
       className="flex min-h-dvh flex-col items-center justify-center gap-6 p-6"
       data-testid="login-page"
     >
-      {/* The mark stands ALONE here, so it takes a `label` — the one place in
-          the app that does. Everywhere else it sits beside the word "Grove"
-          and a screen reader would say the name twice.
+      {/* The mark stands ALONE here, so it takes a `label`. Everywhere it sits
+          beside the word "Grove" a screen reader would say the name twice.
 
           Above the card rather than inside its header: this is the product
           identifying itself before the card asks for anything, which is what
           makes the screen read as a front door instead of a form on a blank
-          page. `size-12` because it is the only thing above the fold competing
-          with the pairing code, and it must not win. */}
-      <BrandMark label="Grove" className="size-12" />
+          page. The APP ICON rather than the bare mark, for the same reason as
+          the landing page: with no wordmark and no chrome around it, the logo
+          has to carry its own ground. `size-14` because it is the only thing
+          above the fold competing with the pairing code and it must not win —
+          the tile insets the wheel, so it reads smaller than its box. */}
+      <AppLogo label="Grove" className="size-14" />
 
       <Card className="w-full max-w-md">
         <CardHeader>

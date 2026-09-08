@@ -50,16 +50,16 @@ import sys
 import urllib.request
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeGuard
 
 from loguru import logger
 
 from grove.core import paths
 from grove.core.agents.brief import AgentBrief
-from grove.core.agents.model import AgentActivityState, AgentQuestion
+from grove.core.agents.model import AgentActivityState, AgentQuestion, ContextWindow, NativeFacts
 
 if TYPE_CHECKING:
     # Annotation-only (postponed annotations): the adoption seam composes
@@ -78,8 +78,21 @@ _STATE_BY_EVENT: Final[dict[str, AgentActivityState]] = {
     "UserPromptSubmit": AgentActivityState.WORKING,
     "PreToolUse": AgentActivityState.WORKING,
     "PostToolUse": AgentActivityState.WORKING,
+    # A failed tool still proves the main turn is executing; its result's
+    # semantics are provider-owned, so Grove does not infer ERROR from it.
+    "PostToolUseFailure": AgentActivityState.WORKING,
+    # Native prompt events are direct evidence that a human response is needed.
+    "PermissionRequest": AgentActivityState.BLOCKED,
+    "Elicitation": AgentActivityState.BLOCKED,
     "Notification": AgentActivityState.BLOCKED,
+    # The corresponding resolved events resume normal execution, while a failed
+    # stop means the harness did not settle the turn.
+    "PermissionDenied": AgentActivityState.WORKING,
+    "ElicitationResult": AgentActivityState.WORKING,
+    "PreCompact": AgentActivityState.WORKING,
+    "PostCompact": AgentActivityState.WORKING,
     "Stop": AgentActivityState.WAITING,
+    "StopFailure": AgentActivityState.WORKING,
     "SessionEnd": AgentActivityState.IDLE,
 }
 
@@ -177,6 +190,14 @@ _INGEST_TOKEN_FILENAME: Final = "hook-ingest.token"
 # session in the fleet.
 _DAEMON_URL_FLAG: Final = "--daemon-url"
 
+# The statusLine arm of the same entry point. Claude Code invokes the configured
+# ``statusLine`` command after every turn with a JSON payload on stdin that
+# carries ``context_window`` — the one place the harness states how full the
+# model's window is. Grove reads that arm to fold the number into the sidecar
+# and prints NOTHING, so it never competes with a user's own statusline for a
+# terminal row (the container decor script is the one that draws).
+_STATUSLINE_FLAG: Final = "--statusline"
+
 # The push is an optimization over a sidecar that is already on disk, so it
 # must never hold an agent's turn open waiting for a daemon that is busy or
 # gone. Short enough to be invisible, long enough for a loopback round trip.
@@ -254,6 +275,19 @@ class HookRecord:
     # the pushed state so the one file the ActivityService already reads carries
     # both the live status AND the live question.
     question: PendingQuestion | None = None
+    # Context-window pressure as the harness last stated it on the statusLine
+    # channel. Carried FORWARD by every hook event (the events never carry it,
+    # and a write that dropped it would blank the meter on the next tool call),
+    # replaced only by the next statusLine payload. ``None`` until the first
+    # payload with a measured ``current_usage`` — the harness sends ``null``
+    # there until the first request completes, and a fabricated 0 % would read
+    # as an empty window rather than an unknown one.
+    context: ContextWindow | None = None
+    # What the owned stream said about a NATIVE session (cost, TTFT, the last
+    # shell exit code); ``None`` for every hook-driven terminal session. Written
+    # by the owner through the spool (`record_native_facts`) and carried
+    # forward by every other write like ``context``.
+    native: NativeFacts | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -265,6 +299,25 @@ class HookRecord:
             "tmux_pane": self.tmux_pane,
             "ts": self.ts.isoformat(),
             "question": self.question.to_json() if self.question is not None else None,
+            "context": (
+                {"size": self.context.size, "used": self.context.used}
+                if self.context is not None
+                else None
+            ),
+            "native": (
+                {
+                    "cost_usd": self.native.cost_usd,
+                    "ttft_ms": self.native.ttft_ms,
+                    "turn_duration_ms": self.native.turn_duration_ms,
+                    "last_exit_code": self.native.last_exit_code,
+                    "permission_denials": self.native.permission_denials,
+                    "subagents_spawned": self.native.subagents_spawned,
+                    "subagents_completed": self.native.subagents_completed,
+                    "subagents_failed": self.native.subagents_failed,
+                }
+                if self.native is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -289,6 +342,8 @@ class HookRecord:
                 # A malformed question is dropped without failing the whole
                 # record — the status half of the sidecar still stands.
                 question=PendingQuestion.from_json(data.get("question")),
+                context=_context_from_json(data.get("context")),
+                native=_native_from_json(data.get("native")),
             )
         except (KeyError, ValueError, TypeError):
             return None
@@ -430,8 +485,37 @@ class ClaudeHook:
     #: concurrent drain cannot pick up a half-written or already-owned payload.
     SPOOL_SUFFIX: ClassVar[str] = ".json"
 
+    #: A spooled statusLine payload, kept apart from spooled hook events so the
+    #: drain knows which arm to fold it through without sniffing the payload.
+    STATUSLINE_SPOOL_SUFFIX: ClassVar[str] = ".statusline.json"
+    #: A native owner's standing ask (or its clearing), see `record_native_question`.
+    ASK_SPOOL_SUFFIX: ClassVar[str] = ".ask.json"
+    #: A native owner's stream facts (cost, TTFT, exit code), see `record_native_facts`.
+    FACTS_SPOOL_SUFFIX: ClassVar[str] = ".facts.json"
+
+    #: What a drain renames an entry to while it owns it. Named rather than
+    #: inlined because `drain` both WRITES it (to claim) and READS it (to
+    #: recover an orphan a crashed drainer left behind), and those two spellings
+    #: drifting is exactly how the orphan became undiscoverable.
+    CLAIMED_SUFFIX: ClassVar[str] = ".claimed"
+
     @classmethod
-    def spool_script(cls, spool_dir: Path) -> str:
+    def _unclaimed_name(cls, path: Path) -> str:
+        """The spool name with any prior claim stripped, for re-claiming an orphan.
+
+        The arm dispatch keys off the ORIGINAL suffix (`.ask.json`, `.facts.json`,
+        …), so a reclaim must restore that name rather than append a second claim
+        to one that already ends in `.claimed` — otherwise a recovered ask folds
+        through the ordinary event arm and the standing question is lost.
+        """
+        name = path.name
+        if not name.endswith(cls.CLAIMED_SUFFIX):
+            return name
+        # `<origin>.<hex>.claimed` — drop the two trailing components.
+        return name[: -len(cls.CLAIMED_SUFFIX)].rpartition(".")[0] or name
+
+    @classmethod
+    def spool_script(cls, spool_dir: Path, *, suffix: str | None = None) -> str:
         """Shell that drops one hook payload into *spool_dir*, verbatim.
 
         **The whole point is that it carries no policy.** A containerized agent
@@ -458,9 +542,10 @@ class ClaudeHook:
         the event's own clock rather than the drain's.
         """
         target = shlex.quote(str(spool_dir))
+        ext = cls.SPOOL_SUFFIX if suffix is None else suffix
         return (
             f'{{ __grove_f="{target}/$$-$(date +%s)"; '
-            f'cat > "$__grove_f.tmp" && mv "$__grove_f.tmp" "$__grove_f{cls.SPOOL_SUFFIX}"; }}'
+            f'cat > "$__grove_f.tmp" && mv "$__grove_f.tmp" "$__grove_f{ext}"; }}'
         )
 
     @classmethod
@@ -542,7 +627,13 @@ class ClaudeHook:
             logger.debug("could not push hook event to {}: {}", daemon_url, exc)
 
     @classmethod
-    def drain(cls, *, sidecar_dir: Path, spool_dir: Path | None = None) -> int:
+    def drain(
+        cls,
+        *,
+        sidecar_dir: Path,
+        spool_dir: Path | None = None,
+        entries: Sequence[Path] | None = None,
+    ) -> int:
         """Fold every spooled payload into a sidecar; return how many were folded.
 
         The host half of :meth:`spool_script`, and it runs through
@@ -569,32 +660,67 @@ class ClaudeHook:
         """
         spool = paths.agent_hook_spool_dir(sidecar_dir) if spool_dir is None else spool_dir
         try:
-            entries = sorted(
-                ((path.stat().st_mtime, path) for path in spool.glob(f"*{cls.SPOOL_SUFFIX}")),
+            # A CLAIM IS NOT A DELIVERY, so an orphaned claim is re-discovered.
+            # A drainer that died between the rename below and its fold left the
+            # payload named `*.claimed`, which the `*.json` glob would never look
+            # at again — the event was lost permanently and silently, which is
+            # the one outcome the spool exists to prevent. Reclaiming is safe in
+            # the direction that matters: the rename already proved exclusive
+            # ownership, and a re-folded event carries its own mtime, so at worst
+            # one event replays. Losing a Stop forever is strictly worse.
+            candidates = (
+                entries
+                if entries is not None
+                else (*spool.glob(f"*{cls.SPOOL_SUFFIX}"), *spool.glob(f"*{cls.CLAIMED_SUFFIX}"))
+            )
+            ordered = sorted(
+                ((path.stat().st_mtime, path) for path in candidates if path.exists()),
                 key=lambda item: (item[0], item[1].name),
             )
         except OSError:
             return 0
         folded = 0
-        for mtime, path in entries:
-            claimed = path.with_name(f"{path.name}.{uuid.uuid4().hex}.claimed")
+        for mtime, path in ordered:
+            # The ORIGINAL name is what the arm dispatch below reads (the suffix
+            # names the arm), so a reclaim strips the previous claim rather than
+            # stacking a second one onto a name that already ends in `.claimed`.
+            origin = cls._unclaimed_name(path)
+            claimed = path.with_name(f"{origin}.{uuid.uuid4().hex}{cls.CLAIMED_SUFFIX}")
             try:
                 path.rename(claimed)
             except OSError:
                 continue  # another drainer got there first
             try:
                 payload = json.loads(claimed.read_text(encoding="utf-8"))
+                tmux_pane: str | None = None
+                if isinstance(payload, dict) and payload.get("grove_hook_envelope") == 1:
+                    pane = payload.get("tmux_pane")
+                    tmux_pane = pane if isinstance(pane, str) else None
+                    payload = payload.get("payload")
                 if isinstance(payload, dict):
-                    cls.record_event(
+                    # The suffix names the arm; the payload never says which it
+                    # is (a statusLine payload has no `hook_event_name`). Read
+                    # the UNCLAIMED name, so a recovered orphan still folds
+                    # through its own arm rather than the ordinary event one.
+                    if origin.endswith(cls.ASK_SPOOL_SUFFIX):
+                        cls._fold_native_ask(payload, sidecar_dir=sidecar_dir)
+                        folded += 1
+                        continue
+                    if origin.endswith(cls.FACTS_SPOOL_SUFFIX):
+                        cls._fold_native_facts(payload, sidecar_dir=sidecar_dir)
+                        folded += 1
+                        continue
+                    fold = (
+                        cls.record_statusline
+                        if origin.endswith(cls.STATUSLINE_SPOOL_SUFFIX)
+                        else cls.record_event
+                    )
+                    fold(
                         payload,
                         sidecar_dir=sidecar_dir,
-                        # A spooled payload carries no `$TMUX_PANE`: the pane it
-                        # would name is the CONTAINER's own tmux, which no host
-                        # reader can resolve, and `live_here_at` treats a `None`
-                        # pane as "no live-here evidence" — so adoption falls
-                        # back to transcript birth rather than matching against
-                        # a pane from a foreign namespace.
-                        tmux_pane=None,
+                        # Legacy container spools carry no host pane evidence.
+                        # The host producer envelope preserves that identity explicitly.
+                        tmux_pane=tmux_pane,
                         now=datetime.fromtimestamp(mtime, tz=UTC),
                     )
                     folded += 1
@@ -661,6 +787,9 @@ class ClaudeHook:
         state = cls.state_for(event, payload)
         if state is None:
             return None
+        # `_read`, never `read`: inside the fold the public read would drain
+        # the spool that this very call may be folding.
+        prior = cls._read(session_id, sidecar_dir=sidecar_dir)
         record = HookRecord(
             session_id=session_id,
             state=state,
@@ -672,7 +801,172 @@ class ClaudeHook:
             question=cls._pending_question(
                 payload, event, session_id=session_id, sidecar_dir=sidecar_dir, now=now
             ),
+            # No hook event carries the window; only the statusLine arm does.
+            # Dropping it here would blank the meter on every tool call.
+            context=prior.context if prior is not None else None,
+            native=prior.native if prior is not None else None,
         )
+        cls.write(record, sidecar_dir=sidecar_dir)
+        return record
+
+    @classmethod
+    def _fold_native_facts(cls, payload: dict[str, Any], *, sidecar_dir: Path) -> None:
+        """One spooled ``*.facts.json`` → `record_native_facts`.
+
+        The drop carries the CONTEXT WINDOW in the same body, because the
+        statusLine channel that publishes it for a terminal session is silent
+        under ``-p`` (measured 2.1.270) and the owner's ``result`` frame is the
+        only place a native session states it. It folds into the record's own
+        ``context`` field rather than into `NativeFacts`, so every existing
+        meter reads it with no change: one drop, two fields.
+        """
+        session_id = payload.get("session_id")
+        body = payload.get("facts")
+        facts = _native_from_json(body)
+        if not isinstance(session_id, str) or not session_id or facts is None:
+            return
+        cls.record_native_facts(
+            session_id,
+            facts,
+            context=_context_from_facts(body),
+            sidecar_dir=sidecar_dir,
+        )
+
+    @classmethod
+    def record_native_facts(
+        cls,
+        session_id: str,
+        facts: NativeFacts,
+        *,
+        context: ContextWindow | None = None,
+        sidecar_dir: Path,
+    ) -> HookRecord:
+        """Merge stream facts into a native session's sidecar, field by field.
+
+        Each frame states some of the facts (a ``result`` frame the cost and
+        TTFT, an ``item/completed`` the exit code), so a write replaces only
+        the fields the new frame carries and keeps the rest — the same
+        carry-forward rule the window follows, one level down. State and the
+        standing question are untouched: a fact is not evidence about what the
+        agent is doing now.
+        """
+        prior = cls._read(session_id, sidecar_dir=sidecar_dir)
+        merged = _merge_native(prior.native if prior is not None else None, facts)
+        # A drop that stated no window keeps the standing one: the same
+        # carry-forward the statusline arm applies, so a frame reporting only an
+        # exit code cannot blank the meter.
+        window = context if context is not None else (prior.context if prior is not None else None)
+        if prior is not None:
+            record = replace(prior, native=merged, context=window)
+        else:
+            record = HookRecord(
+                session_id=session_id,
+                state=AgentActivityState.WORKING,
+                event="native_facts",
+                cwd=None,
+                transcript_path=None,
+                tmux_pane=None,
+                ts=datetime.now(UTC),
+                context=window,
+                native=merged,
+            )
+        cls.write(record, sidecar_dir=sidecar_dir)
+        return record
+
+    @classmethod
+    def _fold_native_ask(cls, payload: dict[str, Any], *, sidecar_dir: Path) -> None:
+        """One spooled ``*.ask.json`` → `record_native_question`."""
+        session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        raw = payload.get("question")
+        question = PendingQuestion.from_json(raw) if isinstance(raw, dict) else None
+        cls.record_native_question(session_id, question, sidecar_dir=sidecar_dir)
+
+    @classmethod
+    def record_native_question(
+        cls,
+        session_id: str,
+        question: PendingQuestion | None,
+        *,
+        sidecar_dir: Path,
+    ) -> HookRecord:
+        """Set (or clear) the standing ask for a session Grove OWNS natively.
+
+        A headless Claude session's ``AskUserQuestion`` never fires the
+        ``PreToolUse`` hook that captures a question in the interactive case —
+        it reaches the owning client as a ``can_use_tool`` control request —
+        and Codex has no hooks at all. The owner worker is the only witness, so
+        it writes the same ``question`` field the hook path writes, keeping one
+        reader for every question surface. A standing ask is BLOCKED on the
+        state axis (the agent cannot proceed until a human answers, exactly what
+        the hook's permission ``Notification`` means); clearing it after the
+        answer returns the session to WORKING, since the turn continues. The
+        window carries forward like every other read-modify-write here.
+        """
+        prior = cls._read(session_id, sidecar_dir=sidecar_dir)
+        state = AgentActivityState.BLOCKED if question is not None else AgentActivityState.WORKING
+        if prior is not None:
+            record = replace(
+                prior, state=state, event="native_ask", question=question, ts=datetime.now(UTC)
+            )
+        else:
+            record = HookRecord(
+                session_id=session_id,
+                state=state,
+                event="native_ask",
+                cwd=None,
+                transcript_path=None,
+                tmux_pane=None,
+                ts=datetime.now(UTC),
+                question=question,
+            )
+        cls.write(record, sidecar_dir=sidecar_dir)
+        return record
+
+    @classmethod
+    def record_statusline(
+        cls,
+        payload: dict[str, Any],
+        *,
+        sidecar_dir: Path,
+        tmux_pane: str | None,
+        now: datetime,
+    ) -> HookRecord | None:
+        """Fold one statusLine payload's ``context_window`` into the sidecar.
+
+        The statusLine arm never moves the STATE — it fires after a turn, when
+        the hook events have already said what the agent is doing — so it is a
+        read-modify-write of the standing record that replaces ``context`` and
+        nothing else. With no standing record (a session whose hooks have not
+        fired yet, or a profile with hooks off) it writes one at WAITING with
+        an empty event, which is what "the turn just ended" honestly is, and
+        the next real hook event overwrites everything but the window.
+
+        ``None`` when the payload carries no measured usage: the harness sends
+        ``current_usage: null`` until the first request completes, and the
+        prior window (if any) stands rather than being blanked.
+        """
+        session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        context = _context_from_statusline(payload)
+        if context is None:
+            return None
+        prior = cls._read(session_id, sidecar_dir=sidecar_dir)
+        if prior is not None:
+            record = replace(prior, context=context)
+        else:
+            record = HookRecord(
+                session_id=session_id,
+                state=AgentActivityState.WAITING,
+                event="",
+                cwd=_opt_str(payload.get("cwd")),
+                transcript_path=_opt_str(payload.get("transcript_path")),
+                tmux_pane=tmux_pane,
+                ts=now,
+                context=context,
+            )
         cls.write(record, sidecar_dir=sidecar_dir)
         return record
 
@@ -1018,11 +1312,28 @@ class ClaudeHook:
         return token
 
     @classmethod
+    def statusline_command(cls, spool_dir: Path) -> str:
+        """The ``statusLine`` command that feeds the sidecar and draws nothing.
+
+        Same capability probe as :meth:`hook_command` — the entry point where it
+        exists, the spool where it does not — with one flag telling the entry
+        point which arm it is on, because the statusLine payload has no
+        ``hook_event_name`` and must not be mistaken for an ignored event. A
+        spooled statusLine payload folds through the same flag, carried in the
+        spool filename by :meth:`spool_script`'s suffix convention.
+        """
+        return (
+            f"command -v {cls.COMMAND} >/dev/null 2>&1 && exec {cls.COMMAND} {_STATUSLINE_FLAG} "
+            f"|| {cls.spool_script(spool_dir, suffix=cls.STATUSLINE_SPOOL_SUFFIX)}"
+        )
+
+    @classmethod
     def settings(
         cls,
         command: str | None = None,
         *,
         daemon_url: str | None = DEFAULT_DAEMON_LOOPBACK_URL,
+        statusline: bool = False,
     ) -> dict[str, Any]:
         """The Claude Code settings dict that installs the Grove hook on every event.
 
@@ -1065,7 +1376,17 @@ class ClaudeHook:
         hooks["Notification"] = [
             {"matcher": matcher, "hooks": handlers} for matcher in _NOTIFICATION_MATCHERS
         ]
-        return {"hooks": hooks}
+        settings: dict[str, Any] = {"hooks": hooks}
+        if statusline:
+            # ``statusLine`` is single-valued in Claude Code, so registering one
+            # REPLACES whatever the user configured — which is why this is opt-in
+            # at the call site and why the container variant, which already
+            # replaces it with the decor script, never asks for it.
+            settings["statusLine"] = {
+                "type": "command",
+                "command": cls.statusline_command(paths.agent_hook_spool_dir()),
+            }
+        return settings
 
 
 def run_hook_from_stdin(argv: Sequence[str] | None = None) -> int:
@@ -1094,6 +1415,17 @@ def run_hook_from_stdin(argv: Sequence[str] | None = None) -> int:
     except json.JSONDecodeError:
         return 0
     if not isinstance(payload, dict):
+        return 0
+    if _STATUSLINE_FLAG in args:
+        # The statusLine arm: fold the window, print nothing (an empty line is
+        # what keeps the terminal row free), never push — the next hook event
+        # or poll tick carries it, and this fires once per turn per session.
+        ClaudeHook.record_statusline(
+            payload,
+            sidecar_dir=paths.agent_sidecar_dir(),
+            tmux_pane=_opt_str(os.environ.get("TMUX_PANE")),
+            now=datetime.now(tz=UTC),
+        )
         return 0
     ClaudeHook.record_event(
         payload,
@@ -1148,6 +1480,130 @@ def _emit_brief(payload: dict[str, Any]) -> None:
 
 def _opt_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _measured_int(value: Any) -> TypeGuard[int]:
+    """A reported non-negative integer — ``bool`` is an ``int`` and is NOT one."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _context_from_json(data: Any) -> ContextWindow | None:
+    """The sidecar's own ``context`` shape back into a value; ``None`` if malformed."""
+    if not isinstance(data, dict):
+        return None
+    size, used = data.get("size"), data.get("used")
+    if not _measured_int(size) or not _measured_int(used) or size <= 0:
+        return None
+    return ContextWindow(size=size, used=used)
+
+
+def _native_from_json(data: object) -> NativeFacts | None:
+    """Parse stream facts off a sidecar or a spooled drop; ``None`` if absent."""
+    if not isinstance(data, dict):
+        return None
+
+    def _int(value: object) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    cost = data.get("cost_usd")
+    return NativeFacts(
+        cost_usd=float(cost)
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool)
+        else None,
+        ttft_ms=_int(data.get("ttft_ms")),
+        turn_duration_ms=_int(data.get("turn_duration_ms")),
+        last_exit_code=_int(data.get("last_exit_code")),
+        permission_denials=_int(data.get("permission_denials")) or 0,
+        subagents_spawned=_int(data.get("subagents_spawned")),
+        subagents_completed=_int(data.get("subagents_completed")),
+        subagents_failed=_int(data.get("subagents_failed")),
+    )
+
+
+def _context_from_facts(data: object) -> ContextWindow | None:
+    """The window a ``*.facts.json`` drop stated, or ``None`` if it stated none.
+
+    The owner sends ``context_size`` only when the harness named one, and
+    ``context_used`` only alongside it, so a partial pair is structurally
+    impossible here — the guard is defence for a hand-written drop, not for the
+    producer. `_context_from_statusline`'s sibling: same absent-is-not-zero
+    rule, a different channel.
+    """
+    if not isinstance(data, dict):
+        return None
+    size = data.get("context_size")
+    used = data.get("context_used")
+    if not _measured_int(size) or size <= 0 or not _measured_int(used):
+        return None
+    return ContextWindow(size=size, used=used)
+
+
+def _merge_native(prior: NativeFacts | None, update: NativeFacts) -> NativeFacts:
+    """``update``'s stated fields over ``prior``'s; an unstated field keeps the old value."""
+    if prior is None:
+        return update
+    return NativeFacts(
+        cost_usd=update.cost_usd if update.cost_usd is not None else prior.cost_usd,
+        ttft_ms=update.ttft_ms if update.ttft_ms is not None else prior.ttft_ms,
+        turn_duration_ms=(
+            update.turn_duration_ms
+            if update.turn_duration_ms is not None
+            else prior.turn_duration_ms
+        ),
+        last_exit_code=(
+            update.last_exit_code if update.last_exit_code is not None else prior.last_exit_code
+        ),
+        permission_denials=update.permission_denials or prior.permission_denials,
+        subagents_spawned=(
+            update.subagents_spawned
+            if update.subagents_spawned is not None
+            else prior.subagents_spawned
+        ),
+        subagents_completed=(
+            update.subagents_completed
+            if update.subagents_completed is not None
+            else prior.subagents_completed
+        ),
+        subagents_failed=(
+            update.subagents_failed
+            if update.subagents_failed is not None
+            else prior.subagents_failed
+        ),
+    )
+
+
+def _context_from_statusline(payload: dict[str, Any]) -> ContextWindow | None:
+    """``context_window`` off a statusLine payload, or ``None`` until it is measured.
+
+    Measured 2026-09-14 on Claude Code 2.1.270: ``context_window_size`` is
+    present from the first invocation (before any request), while
+    ``current_usage`` is ``null`` and ``used_percentage`` ``null`` until the
+    first request completes — then ``current_usage`` carries the LAST request's
+    four token classes, all of which occupy the window. So the window is the
+    sum of the four, and absence of ``current_usage`` is "not measured yet",
+    never zero. ``used_percentage`` is deliberately not read: it is derived from
+    the same numbers and rounding it here would be a second copy of one rule.
+    """
+    window = payload.get("context_window")
+    if not isinstance(window, dict):
+        return None
+    size = window.get("context_window_size")
+    usage = window.get("current_usage")
+    if not _measured_int(size) or size <= 0 or not isinstance(usage, dict):
+        return None
+    parts = [
+        usage.get(key)
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        )
+    ]
+    counted = [part for part in parts if _measured_int(part)]
+    if not counted:
+        return None
+    return ContextWindow(size=size, used=sum(counted))
 
 
 def _truncate_message(text: str, cap: int = _LAST_MESSAGE_CAP) -> str:

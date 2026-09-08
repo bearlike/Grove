@@ -13,9 +13,12 @@
 //
 // Shot set: webapp-pair-device, webapp-pair-code, webapp-home (the fleet, at
 // `/fleet`), webapp-composer (the launch surface, at `/`), webapp-sessions,
-// webapp-workspace, webapp-usage, webapp-usage-detail (the last is the usage
-// page scrolled to `By model` / `Recent sessions`, never shown in the first
-// shot).
+// webapp-workspace, webapp-annotate, webapp-diagram-split, webapp-diagram,
+// webapp-diagram-palette, webapp-usage,
+// webapp-usage-detail (the last is the usage page scrolled to `By model` /
+// `Recent sessions`, never shown in the first shot). The two diagram shots
+// need the hosted draw.io embed to load, so they are the only ones that
+// depend on the network; an offline run skips them and says so.
 //
 // `webapp-home` is the ONLY shot that keeps the rail expanded; it exists partly
 // to show it. Everything after it runs collapsed, and the order below is
@@ -25,7 +28,7 @@
 // them onto its own 16:9 canvas without letterboxing.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -73,6 +76,26 @@ const sandboxEnv = {
  * justify tightening.
  */
 const DATA_WAIT_MS = 90_000;
+
+/**
+ * How long the hosted draw.io embed may take to load and acknowledge the
+ * document. It is a third-party page over the network, so the bound is a
+ * network budget rather than an engine one: measured cold loads on this
+ * pipeline's host sit under 10s, and 45s leaves room for a slow link without
+ * turning an offline run into a minute-long stall per shot.
+ */
+const DIAGRAM_WAIT_MS = 45_000;
+
+/**
+ * The image the annotation shot stages: the onboarding tour's own sample, a
+ * stock crosswalk photo with every pedestrian boxed and labelled. One asset
+ * for both because they answer the same question — what an annotated file
+ * looks like in the pane — and a real annotated file rather than a fixture
+ * drawn on the fly, because the point of the shot is a pane with work in it.
+ * Its name is the file card's caption, so it is staged under a short one.
+ */
+const ANNOTATE_ASSET = path.join(WORKTREE, "webapp", "public", "onboarding", "tour-sample-annotated-photo.webp");
+const ANNOTATE_NAME = "crosswalk.webp";
 
 const shot = (target, label, opts = {}) =>
   target.screenshot({ path: path.join(OUT, `${label}.png`), ...opts });
@@ -142,6 +165,11 @@ async function forceDark(ctx) {
   await ctx.addInitScript(() => {
     try {
       localStorage.setItem("theme", "dark");
+      // The onboarding tour opens itself for a browser that has never seen
+      // it, which a fresh headless context always is — so without this every
+      // landing capture carries "1 of 20" over the composer. Same seam as the
+      // theme: a persisted flag the app reads before first paint.
+      localStorage.setItem("grove.onboarding.seen", "true");
     } catch {
       /* storage may be unavailable pre-navigation; colorScheme still applies */
     }
@@ -233,12 +261,48 @@ async function main() {
   // Wait on the INPUT, not on `launch-page` — the page shell renders before the
   // composer's controls resolve their cascade defaults, and a shot taken on the
   // shell catches the row mid-populate.
-  await d.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
-  await d.getByTestId("launch-composer").waitFor({ timeout: 20_000 });
-  await d.getByTestId("launch-input").waitFor({ timeout: 20_000 });
-  await d.getByTestId("launch-controls").waitFor({ timeout: 20_000 });
-  await settle(d, 1200);
-  await shot(d, "webapp-composer");
+  //
+  // SHOT IN ITS OWN CONTEXT, AT A SMALLER VIEWPORT. The composer is one control
+  // centred in a page that is otherwise empty, so at 1600x900 it reads as a
+  // small box in a dark field. 800x450 is the same 16:9 at half the width,
+  // which the framer scales onto the same canvas — the control fills the
+  // frame instead of a quarter of it. `deviceScaleFactor` doubles to 4 so the
+  // capture stays 3200x1800 and the framer still DOWNsamples. The rail's
+  // collapsed state rides localStorage, so the init script pins it here the
+  // way `forceDark` pins the theme; a fresh context inherits neither.
+  const composerCtx = await browser.newContext({
+    storageState: STORAGE,
+    viewport: { width: 800, height: 450 },
+    deviceScaleFactor: 4,
+    colorScheme: "dark",
+  });
+  await forceDark(composerCtx);
+  await composerCtx.addInitScript(() => {
+    try {
+      localStorage.setItem("grove.sidebar.collapsed", "true");
+    } catch {
+      /* same fallback as forceDark */
+    }
+  });
+  const c = await composerCtx.newPage();
+  reportPageFaults(c, "composer");
+  await c.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await c.getByTestId("launch-composer").waitFor({ timeout: 20_000 });
+  await c.getByTestId("launch-input").waitFor({ timeout: 20_000 });
+  await c.getByTestId("launch-controls").waitFor({ timeout: 20_000 });
+  // The controls row mounts with each pill's NOUN as its label and swaps in
+  // the resolved default when the cascade answers — so a shot on the row's
+  // testid alone caught "Agent" and "Runtime" as literal placeholders. Wait on
+  // the two that resolve last, by their accessible name and resolved text.
+  await c.locator('[data-pill="agent"]').filter({ hasText: /claude|codex/ }).waitFor({
+    timeout: 20_000,
+  });
+  await c.locator('[data-pill="runtime"]').filter({ hasText: /Host|Container/ }).waitFor({
+    timeout: 20_000,
+  });
+  await settle(c, 1200);
+  await shot(c, "webapp-composer");
+  await composerCtx.close();
 
   // The host-wide session catalog. Wait on a ROW: `sessions-page` is the shell
   // and renders immediately, so it would shoot the skeleton.
@@ -273,10 +337,202 @@ async function main() {
     // deterministic if the driver states it. The docs caption describes the
     // Info tab, and a terminal pane duplicates what webapp-home already shows.
     await d.getByTestId("work-panel-tab-info").click();
+    // WAIT ON CONTENT, NOT ON THE TAB. The transcript renders a skeleton until
+    // the activity snapshot has named a primary session AND `/turns` has
+    // answered, and the Info tab's Activity card reads the same snapshot —
+    // so a shot taken on the tab click alone captured grey bars on the left
+    // and "No live session to measure" on the right, twice, in two published
+    // runs. The first message and the metrics grid are the two facts the
+    // caption describes; wait for both.
+    await d.getByTestId("user-message-collapse").first().waitFor({ timeout: DATA_WAIT_MS });
+    await d.locator('[data-testid="metrics"] [data-testid="metric-turns"]').waitFor({
+      timeout: DATA_WAIT_MS,
+    });
     await settle(d, 800);
     await shot(d, "webapp-workspace");
+
+    // Annotating a staged image, on the same workspace: the transcript alone
+    // on the left, the marker.js editor in the shell's split pane on the
+    // right. The image is a committed asset that already carries markers, so
+    // the shot shows the editor with content rather than a blank canvas
+    // waiting for a first stroke — and the editor reopens a picked file as
+    // pixels, so nothing here depends on marker state surviving a reload.
+    //
+    // THE PANE IS DRAGGED TO THE WIDER HALF. The host opens it at 45% so the
+    // page keeps its draft in view; the docs shot is about the editor, so the
+    // handle is dragged to 40% of the window and the pane takes the rest.
+    // Dragging rather than seeding a layout: the group persists nothing, and
+    // a drag is what a reader does. The click on `pane-transcript` collapses
+    // the work panel first so the page half is the transcript and its
+    // composer, which is where the staged file card sits.
+    await d.getByTestId("pane-transcript").click();
+    await d.getByTestId("work-panel").waitFor({ state: "hidden", timeout: 10_000 });
+    const chooser = d.waitForEvent("filechooser");
+    await d.getByRole("button", { name: /add attachment/i }).click();
+    await (await chooser).setFiles({
+      name: ANNOTATE_NAME,
+      mimeType: "image/webp",
+      buffer: readFileSync(ANNOTATE_ASSET),
+    });
+    await d.getByRole("button", { name: `Annotate ${ANNOTATE_NAME}` }).click();
+    const pane = d.getByTestId("annotation-pane");
+    await pane.waitFor({ timeout: 10_000 });
+    // The editor is a custom element that builds itself after a dynamic
+    // import; its toolbar's OK button is the first thing that proves it did.
+    await d
+      .locator("mjsui-annotation-editor")
+      .getByRole("button", { name: "OK", exact: true })
+      .waitFor({ timeout: 30_000 });
+    const handle = d.locator('[data-testid="annotation-split"] > [data-slot="resizable-handle"]');
+    const grip = await handle.boundingBox();
+    const { width: viewportWidth } = d.viewportSize();
+    await d.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await d.mouse.down();
+    await d.mouse.move(viewportWidth * 0.4, grip.y + grip.height / 2, { steps: 12 });
+    await d.mouse.up();
+    // Assert the drag landed rather than trusting it: the pane must hold at
+    // least half the window, which is what the docs caption promises.
+    const paneBox = await pane.boundingBox();
+    if (paneBox.width < viewportWidth / 2) {
+      throw new Error(`annotation pane is ${paneBox.width}px of ${viewportWidth}px, under half`);
+    }
+    // The editor opens at 100%, which for a 2048px portrait is one corner of
+    // the picture and no sense of the whole. Its toolbar has no Zoom to Fit
+    // (only the read-only viewer does), so press Zoom Out, in the editor's
+    // own 0.1 steps, until the picture fits the MARKER AREA's box. Not the
+    // editor's: that includes the toolbars above and below the canvas, and a
+    // fit computed against it stops one step too large, with the picture
+    // clipped at the bottom and no scroller to blame (measured 953x763 for
+    // the area against the pane's 1200x1050).
+    const editor = d.locator("mjsui-annotation-editor");
+    const zoomOut = editor.getByRole("button", { name: "Zoom Out", exact: true });
+    const fit = await editor.evaluate((element) => {
+      const image = element.targetImage;
+      const area = element.markerArea.getBoundingClientRect();
+      return Math.min(area.width / image.naturalWidth, area.height / image.naturalHeight);
+    });
+    // Bounded: the editor floors its zoom at 0.2 and a pane narrower than
+    // that would otherwise loop forever on a click that changes nothing.
+    for (let step = 0; step < 8; step += 1) {
+      if ((await editor.evaluate((element) => element.markerArea.zoomLevel)) <= fit) break;
+      await zoomOut.click();
+    }
+    await settle(d, 1200);
+    await shot(d, "webapp-annotate");
   } else {
     console.error("no workspace found for the detail capture");
+  }
+
+  // The diagram workspace: the fixture's `arch-diagram` entry carries a
+  // `.drawio` the planter opened through the engine, so the work panel offers
+  // a Diagram tab whose editor is the REAL hosted draw.io embed. Two shots:
+  // the split (transcript beside the rendered diagram) and the diagram alone
+  // in the work pane. Both wait on the "Saved" badge rather than on the
+  // iframe, because the frame mounts long before the editor has loaded the
+  // document and the first paint is draw.io's own spinner.
+  //
+  // THE EDITOR IS A THIRD-PARTY PAGE FETCHED OVER THE NETWORK. An offline
+  // host, or a run where the embed host is slow, times out here; it is
+  // reported and the other shots are still written, so a regeneration on a
+  // disconnected machine degrades to the shot set that existed before the
+  // diagram pair rather than failing wholesale.
+  const diagramTarget = rows.find((w) => w.title === "arch-diagram");
+  if (diagramTarget) {
+    await d.goto(`${BASE}/w/${diagramTarget.id}`, { waitUntil: "domcontentloaded" });
+    await d.getByTestId("workspace-page").waitFor({ timeout: 20_000 });
+    await settle(d, 1000);
+    await d.getByTestId("pane-split").click();
+    await d.getByTestId("work-panel").waitFor({ timeout: 10_000 });
+    await d.getByTestId("work-panel-tab-diagram").click();
+    try {
+      await d
+        .getByTestId("diagram-save-state")
+        .filter({ hasText: "Saved" })
+        .waitFor({ timeout: DIAGRAM_WAIT_MS });
+      // The tab fits the drawing to the frame 250ms after the last resize; the
+      // split just opened, so give the fit and the editor's own render a beat.
+      await settle(d, 2500);
+      await shot(d, "webapp-diagram-split");
+
+      await d.getByTestId("pane-work").click();
+      await settle(d, 2500);
+      // The tab's own fit lands the drawing with its lower third clipped in
+      // the full-width pane: the fit is computed for the split's frame, and
+      // the format panel draw.io opens past its own width threshold then
+      // takes canvas after the fit ran. Press the editor's own Fit Window
+      // shortcut on the settled canvas, the keystroke a person would use
+      // rather than a message the tab sends.
+      // The click gives the editor keyboard focus and selects whatever cell
+      // sat under it, and Fit Window fits the SELECTION when there is one —
+      // measured as one text cell at 765%. Select None (Ctrl+Shift+A) first;
+      // Escape does not clear a selection in draw.io, it only cancels an edit.
+      const editor = d.frameLocator('[data-testid="diagram-frame"]');
+      await editor.locator("body").click({ position: { x: 600, y: 700 } });
+      await d.keyboard.press("Control+Shift+A");
+      await settle(d, 300);
+      await d.keyboard.press("Control+Shift+H");
+      await settle(d, 1500);
+      await shot(d, "webapp-diagram");
+    } catch (error) {
+      console.error(`diagram shots skipped: ${error instanceof Error ? error.message : error}`);
+      await describePage(d);
+    }
+  } else {
+    console.error("no arch-diagram workspace found for the diagram captures");
+  }
+
+  // A second diagram workspace, work pane only: a colour palette board, the
+  // quick-mockup shape of the feature rather than the architecture-spec one.
+  // Same wait, same fit, no split — the docs page that shows it is about the
+  // picture the agent drew, not the transcript beside it.
+  const paletteTarget = rows.find((w) => w.title === "palette-diagram");
+  if (paletteTarget) {
+    await d.goto(`${BASE}/w/${paletteTarget.id}`, { waitUntil: "domcontentloaded" });
+    await d.getByTestId("workspace-page").waitFor({ timeout: 20_000 });
+    await settle(d, 1000);
+    // ASSERT the pane after the click, never assume it: the view restores from
+    // localStorage per workspace, and one shot came back split with the
+    // editor still on draw.io's "Loading..." page because neither the pane
+    // nor the paint had been waited on.
+    // The page restores the visit's pane from localStorage in an effect that
+    // runs AFTER first paint, and a click that lands before it is folded in —
+    // so a click on the first frame is authoritative, but the previous
+    // workspace's `split` can still win when the transcript arrives later and
+    // the view resolves from `hasTranscript`. Click AFTER the transcript has
+    // rendered, then assert the pane, so the sequence is fixed rather than
+    // raced: one shot came back split with draw.io still on its loading page.
+    await d.getByTestId("user-message-collapse").first().waitFor({ timeout: DATA_WAIT_MS });
+    await d.getByTestId("pane-work").click();
+    await d
+      .locator('[data-testid="pane-work"][data-state="active"]')
+      .waitFor({ timeout: 10_000 });
+    await d.getByTestId("work-panel").waitFor({ timeout: 10_000 });
+    await d.getByTestId("work-panel-tab-diagram").click();
+    try {
+      await d
+        .getByTestId("diagram-save-state")
+        .filter({ hasText: "Saved" })
+        .waitFor({ timeout: DIAGRAM_WAIT_MS });
+      const editor = d.frameLocator('[data-testid="diagram-frame"]');
+      // The badge says the DOCUMENT is acknowledged; the canvas class says the
+      // editor has painted. Wait on the second, then let the fit settle.
+      await editor.locator(".geDiagramContainer").first().waitFor({ timeout: DIAGRAM_WAIT_MS });
+      await settle(d, 2500);
+      await editor.locator("body").click({ position: { x: 600, y: 700 } });
+      await d.keyboard.press("Control+Shift+A");
+      await settle(d, 300);
+      await d.keyboard.press("Control+Shift+H");
+      await settle(d, 1500);
+      await d
+        .locator('[data-testid="pane-work"][data-state="active"]')
+        .waitFor({ timeout: 5_000 });
+      await shot(d, "webapp-diagram-palette");
+    } catch (error) {
+      console.error(`palette shot skipped: ${error instanceof Error ? error.message : error}`);
+      await describePage(d);
+    }
+  } else {
+    console.error("no palette-diagram workspace found for the palette capture");
   }
 
   // The usage audit: what the fleet spent, derived from the same synthetic

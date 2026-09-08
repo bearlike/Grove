@@ -132,9 +132,8 @@ export function UsageCoverage({
         .filter((source) => source.health !== "ok")
         .map((source) => (
           <p key={source.source_id} className="text-xs text-content-secondary">
-            {source.label} is {source.health}
-            {source.detail ? `: ${source.detail}` : ""}. Totals below understate
-            it.
+            Coverage is incomplete for {source.label} ({source.health})
+            {source.detail ? `: ${source.detail}` : ""}.
           </p>
         ))}
 

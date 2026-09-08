@@ -11,6 +11,7 @@ layers (manager.py) compose these into the lifecycle.
 from __future__ import annotations
 
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -29,20 +30,23 @@ from loguru import logger
 from grove.core import paths
 from grove.core.config import GroveConfig, InitScriptConfig
 from grove.core.errors import TmuxError
+from grove.core.process import ProcessTree
 
 
 class SendKey(StrEnum):
-    """The closed vocabulary of named keys :func:`send_keys` can emit.
+    """Engine-owned key names; the terminal application decides their effect.
 
-    Values are tmux key names, passed to ``send-keys`` WITHOUT ``-l`` so tmux
-    interprets them as keypresses — a literal ``-l`` "Enter" would type five
-    characters, not submit. Deliberately tiny: Tab / Enter / Escape are all an
-    interactive selector (Claude Code's ``AskUserQuestion`` dialog) needs to
-    navigate, submit, and cancel. Widening it is a conscious act, not a typo.
+    Values are tmux key names, never flags, targets, literal text or commands.
+    Widening this vocabulary is a conscious act at the engine boundary.
     """
 
-    TAB = "Tab"
+    CTRL_C = "C-c"
+    UP = "Up"
+    DOWN = "Down"
+    LEFT = "Left"
+    RIGHT = "Right"
     ENTER = "Enter"
+    TAB = "Tab"
     ESCAPE = "Escape"
 
 
@@ -64,6 +68,15 @@ class HostAttach:
 
     tmux_session: str
     inside_outer_tmux: bool
+    read_only: bool = False
+    """Attach as a viewer (``attach -r``): keystrokes never reach the pane.
+
+    A NATIVE workspace's pane runs Grove's own worker printing the session's
+    protocol frames, not the agent's UI, so there is nothing there for a
+    person to type into and one thing they must not: a reflexive Ctrl-C at a
+    scrolling log kills the worker, and with it the only process holding the
+    session's control channel. Steering goes through Grove's own verbs.
+    """
 
     def terminal_argv(self) -> list[str]:
         """The command that hands a terminal the caller OWNS to this session.
@@ -73,9 +86,15 @@ class HostAttach:
         else a plain ``attach``. A caller with a FRESH pty (the daemon's
         xterm.js bridge) is never inside an outer client and must not read this
         flag; it composes its own argv off the wire mirror.
+
+        ``read_only`` rides only the ``attach`` arm: ``switch-client -r``
+        TOGGLES the client's read-only flag rather than setting it, so a
+        client that was already read-only would be flipped writable. The
+        switch arm therefore stays as it is, and the CLI says so.
         """
-        action = ["switch-client", "-t"] if self.inside_outer_tmux else ["attach", "-t"]
-        return ["tmux", *action, self.tmux_session]
+        if self.inside_outer_tmux:
+            return ["tmux", "switch-client", "-t", self.tmux_session]
+        return ["tmux", "attach", *(("-r",) if self.read_only else ()), "-t", self.tmux_session]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +113,8 @@ class ContainerAttach:
     """
 
     argv: tuple[str, ...]
+    read_only: bool = False
+    """The argv already attaches as a viewer; see :attr:`HostAttach.read_only`."""
 
     def terminal_argv(self) -> list[str]:
         """The command that hands a terminal the caller owns to the container.
@@ -295,11 +316,29 @@ class TmuxPane:
     def capture(self, *, history_lines: int = 500) -> str:
         return capture_pane_snapshot(self.target, history_lines=history_lines, command=self.command)
 
-    def send_text(self, text: str, *, settle_ms: int = 200) -> None:
-        send_text(self.target, text, settle_ms=settle_ms, command=self.command)
+    def send_text(self, text: str, *, settle_ms: int = 200, settle_before: bool = False) -> None:
+        send_text(
+            self.target,
+            text,
+            settle_ms=settle_ms,
+            settle_before=settle_before,
+            command=self.command,
+        )
 
-    def send_keys(self, ops: Sequence[SendOp], *, settle_ms: int = 200) -> None:
-        send_keys(self.target, ops, settle_ms=settle_ms, command=self.command)
+    def send_keys(
+        self, ops: Sequence[SendOp], *, settle_ms: int = 200, settle_before: bool = False
+    ) -> None:
+        send_keys(
+            self.target,
+            ops,
+            settle_ms=settle_ms,
+            settle_before=settle_before,
+            command=self.command,
+        )
+
+    def press_escape(self) -> None:
+        """Ask the pane's interactive UI to cancel its current operation."""
+        press_escape(self.target, command=self.command)
 
 
 def _server() -> Server:
@@ -318,16 +357,42 @@ def has_session(name: str) -> bool:
     return bool(sessions)
 
 
-def create_session(name: str, cwd: Path, *, history_limit: int = 50_000) -> None:
-    """Create a detached tmux session rooted at `cwd`. Idempotent if it already exists."""
+def parse_size(size: str) -> tuple[int, int] | None:
+    """``"<cols>x<rows>"`` → the pair, or ``None`` for an empty or unusable value.
+
+    One parser, because both session-creation sites — the host's libtmux call
+    and the container's raw ``new-session`` argv — need the same two numbers
+    from the same config string, and a second copy is how the host and the
+    container come to start at different sizes.
+    """
+    columns, _, rows = size.strip().partition("x")
+    if not columns.isdigit() or not rows.isdigit():
+        return None
+    parsed = (int(columns), int(rows))
+    return parsed if all(parsed) else None
+
+
+def create_session(name: str, cwd: Path, *, history_limit: int = 50_000, size: str = "") -> None:
+    """Create a detached tmux session rooted at `cwd`. Idempotent if it already exists.
+
+    ``size`` is the starting geometry (see ``TmuxConfig.detached_size``). It is
+    a *starting* size and not a pin: ``window-size latest`` below still hands
+    the window to whichever terminal attaches. What it fixes is everything that
+    reads the session before anyone does — the agent's first screen, and every
+    `capture-pane` consumer, which never attaches a client at all and would
+    otherwise read 80x24 forever.
+    """
     server = _server()
     if has_session(name):
         raise TmuxError(f"tmux session already exists: {name}")
+    geometry = parse_size(size)
     try:
         session = server.new_session(
             session_name=name,
             start_directory=str(cwd),
             attach=False,
+            x=geometry[0] if geometry else None,
+            y=geometry[1] if geometry else None,
         )
     except Exception as exc:
         raise TmuxError(f"failed to create tmux session {name}: {exc}") from exc
@@ -346,12 +411,21 @@ def create_session(name: str, cwd: Path, *, history_limit: int = 50_000) -> None
         logger.warning("could not set tmux options on {}: {}", name, exc)
 
 
-def kill_session(name: str) -> None:
-    """Kill the session if it exists; no-op otherwise."""
+def kill_session(name: str, *, wait_for_exit: bool = False) -> None:
+    """Kill a session; optionally verify its old processes cannot overlap a relaunch."""
     if not has_session(name):
         return
     try:
-        _server().kill_session(target_session=name)
+        server = _server()
+        if wait_for_exit:
+            panes = server.cmd("list-panes", "-s", "-t", name, "-F", "#{pane_pid}")
+            if panes.stderr or not panes.stdout:
+                raise TmuxError("could not identify native session processes")
+            tree = ProcessTree.capture(tuple(int(pid) for pid in panes.stdout), include_roots=False)
+            tree.terminate_and_wait()
+        # Keep the recording shells and pane handles until every captured
+        # descendant is gone: a stop timeout must remain retryable.
+        server.kill_session(target_session=name)
     except Exception as exc:
         raise TmuxError(f"failed to kill tmux session {name}: {exc}") from exc
 
@@ -618,21 +692,30 @@ def send_text(
     text: str,
     *,
     settle_ms: int = DEFAULT_STEER_SETTLE_MS,
+    settle_before: bool = False,
     command: Sequence[str] = DEFAULT_TMUX_COMMAND,
 ) -> None:
     """Type `text` into the pane at `target`, then press Enter to submit it.
 
-    Two deliberate ``send-keys`` calls, never one:
+    `settle_before` waits one `settle_ms` before typing anything, for a caller
+    that has just changed the screen itself — dismissing a question widget, say.
+    The composer that receives the text does not exist until the widget above it
+    has finished tearing down, and text typed into that gap is dropped exactly
+    the way an unsettled keystroke is. Mirrors :func:`send_keys`' flag of the
+    same name.
 
-    * The payload call passes ``-l`` so tmux treats the text as a literal
-      byte string — without it tmux interprets key *names*, so a message
-      containing "Enter", "C-c", or "Escape" would be executed as
-      keystrokes instead of typed as text. ``--`` ends option parsing so
-      a payload starting with ``-`` can't be misread as a flag.
-    * The submitting Enter is its own, non-``-l`` call: under ``-l`` the
-      word "Enter" would just be five typed characters.
+    Two deliberate steps, never one:
 
-    A `settle_ms` delay sits between the two calls: the TUI's
+    * The payload arrives as a bracketed PASTE (:func:`_paste`), not as typed
+      keys. That is what makes it survive a composer with vim keybindings,
+      which reads typed bytes as editor commands whenever it is not in insert
+      mode — measured, and the reason the previous ``send-keys -l`` road was
+      replaced. It also keeps the older property that made ``-l`` necessary:
+      a message containing "Enter", "C-c" or "Escape" is text, never keys.
+    * The submitting Enter is its own ``send-keys`` call, because only a lone
+      keypress submits.
+
+    A `settle_ms` delay sits between the two steps: the TUI's
     bracketed paste buffers everything landing inside its accumulation
     window as literal text, so an Enter sent immediately after a paste can
     be coalesced into that same window and read as a literal newline rather
@@ -657,10 +740,46 @@ def send_text(
     """
     if shutil.which(command[0]) is None:
         raise TmuxError(f"{command[0]} not found on PATH — on Windows, run Grove inside WSL2")
-    _run_send_keys(target, ["-l", "--", text], command=command)
+    if settle_before:
+        _settle(settle_ms)
+    _paste(target, text, command=command)
     _settle(settle_ms)
     _run_send_keys(target, ["Enter"], command=command)
     _retry_enter_if_residual(target, text, settle_ms=settle_ms, command=command)
+
+
+def _paste(target: str, text: str, *, command: Sequence[str] = DEFAULT_TMUX_COMMAND) -> None:
+    """Put `text` into the pane's composer as a PASTE, not as typed keys.
+
+    `send-keys -l` writes the bytes as if a human typed them, and that is the
+    bug: a composer with vim keybindings is modal, so the same bytes are
+    *inserted* in insert mode and *interpreted as motions and commands* in
+    normal mode. Grove cannot see which mode a composer is in, and it cannot
+    see whether the user turned vim mode on at all — but it does something that
+    reliably leaves a modal composer in normal mode, which is press Escape
+    immediately beforehand to dismiss a question. Measured on Claude Code
+    2.1.263 with vim keybindings on: `send-keys -l` after an Escape put the
+    pane into VISUAL mode and executed the answer text as editor commands.
+
+    A bracketed paste is the terminal-level way to say "this is literal text",
+    and a modal composer honours it in either mode — verified on the same pane,
+    same Escape, text inserted verbatim and a following Enter still submitting.
+    tmux emits the paste brackets only when the application asked for them, so
+    a plain shell is unaffected and this is strictly safer than typing.
+
+    `set-buffer` then `paste-buffer`, argv-only: `load-buffer -` would read the
+    payload from stdin, which does not survive the `docker exec` prefix a
+    container workspace's tmux is reached through. The buffer name is unique
+    per call and `-d` drops it after pasting, so two concurrent steers cannot
+    read each other's payload and none is left in the user's paste history.
+    """
+    buffer_name = f"grove-steer-{secrets.token_hex(4)}"
+    _run_tmux(["set-buffer", "-b", buffer_name, "--", text], command=command)
+    _run_tmux(
+        ["paste-buffer", "-p", "-d", "-b", buffer_name, "-t", target],
+        command=command,
+        label=f"paste to {target}",
+    )
 
 
 def send_keys(
@@ -668,45 +787,31 @@ def send_keys(
     ops: Sequence[SendOp],
     *,
     settle_ms: int = DEFAULT_STEER_SETTLE_MS,
+    settle_before: bool = False,
     command: Sequence[str] = DEFAULT_TMUX_COMMAND,
 ) -> None:
-    """Drive an interactive TUI at `target` with an ordered op sequence.
+    """Send ordered terminal input; only enum members are interpreted as keys.
 
-    The narrow sibling of :func:`send_text` for tools whose UI is a keystroke
-    protocol rather than a text box (Claude Code's ``AskUserQuestion`` selector).
-    Each op is dispatched as its own ``send-keys`` call, in order:
+    Named keys go through ``send-keys`` without ``-l``. Internal literal runs
+    retain ``-l --`` compatibility, but prose belongs in :func:`send_text`:
+    typed bytes can execute editor commands in a modal composer.
 
-    * a :class:`SendKey` (Tab/Enter/Escape) is sent by NAME — no ``-l`` — so tmux
-      injects the keypress;
-    * anything else is a literal text run, sent with ``-l --`` so tmux types it
-      verbatim (a digit that selects an option, the characters of a free-text
-      answer). ``--`` ends option parsing so a run starting with ``-`` can't be
-      read as a flag.
-
-    A terminal :attr:`SendKey.ENTER` — the last op in the sequence — gets the
-    same two hardening measures `send_text` gives its Enter: a
-    `settle_ms` delay before it (so it lands after any bracketed-paste window
-    a preceding literal run opened, never glued to it) and one
-    verify-and-retry pass afterward against the most recent literal run sent
-    (the tail a swallowed Enter would leave behind). A non-terminal Enter
-    (nothing in today's grammar emits one, but the type permits it) is
-    neither delayed nor verified — it hasn't submitted anything yet.
-
-    Mechanism only — this module knows nothing of questions or grammars; the
-    Claude adapter builds the op list, the manager resolves which pane. Like
-    :func:`send_text`, failures raise ``TmuxError`` (a steer that silently
-    vanished is worse than one that failed loudly). Best-effort ordering is NOT
-    attempted otherwise: ops are sent as fast as subprocess spawns allow, so a
-    TUI still painting can drop a keystroke — that residual race is the
-    caller's to own.
+    Subsequent ops settle between writes. A final Enter following literal text
+    gets the legacy residual-text retry; named-key-only input has no residual
+    and is never retried. The public Send Keys operation sends exactly one enum
+    member, without guessing application state or claiming an action succeeded.
+    The manager owns pane resolution; ``command`` chooses the tmux server.
+    Failures raise ``TmuxError`` rather than silently dropping input.
     """
     if shutil.which(command[0]) is None:
         raise TmuxError(f"{command[0]} not found on PATH — on Windows, run Grove inside WSL2")
     last_literal = ""
     final_index = len(ops) - 1
+    if settle_before and ops:
+        _settle(settle_ms)
     for index, op in enumerate(ops):
         is_terminal_enter = index == final_index and op is SendKey.ENTER
-        if is_terminal_enter and index > 0:
+        if index > 0:
             _settle(settle_ms)
         if isinstance(op, SendKey):
             _run_send_keys(target, [op.value], command=command)
@@ -717,6 +822,17 @@ def send_keys(
             _retry_enter_if_residual(target, last_literal, settle_ms=settle_ms, command=command)
 
 
+def press_escape(target: str, *, command: Sequence[str] = DEFAULT_TMUX_COMMAND) -> None:
+    """Send Escape to a pane without treating it as a process signal.
+
+    Claude Code's interactive REPL routes Escape through its abort controller;
+    SIGINT has no equivalent interactive handler and can kill the session.
+    """
+    if shutil.which(command[0]) is None:
+        raise TmuxError(f"{command[0]} not found on PATH — on Windows, run Grove inside WSL2")
+    _run_send_keys(target, [SendKey.ESCAPE.value], command=command)
+
+
 def _run_send_keys(
     target: str, key_args: list[str], *, command: Sequence[str] = DEFAULT_TMUX_COMMAND
 ) -> None:
@@ -725,7 +841,27 @@ def _run_send_keys(
     The single subprocess invocation both `send_text` and `send_keys` dispatch
     per op, so the argv shape and error handling can't drift between them.
     """
-    argv = [*command, "send-keys", "-t", target, *key_args]
+    _run_tmux(
+        ["send-keys", "-t", target, *key_args], command=command, label=f"send-keys to {target}"
+    )
+
+
+def _run_tmux(
+    args: list[str],
+    *,
+    command: Sequence[str] = DEFAULT_TMUX_COMMAND,
+    label: str = "",
+) -> None:
+    """Run one bounded tmux write command; raises `TmuxError` on any failure.
+
+    The steering writes' single subprocess seam. It takes the WHOLE argv after
+    the command prefix rather than assuming `send-keys`, because the paste road
+    needs `set-buffer`/`paste-buffer` and a second copy of the timeout, the
+    error wrapping and the `shell=False` discipline is how two write paths come
+    to fail differently.
+    """
+    argv = [*command, *args]
+    what = label or " ".join(args[:1])
     try:
         result = subprocess.run(
             argv,
@@ -736,11 +872,9 @@ def _run_send_keys(
             timeout=5,
         )
     except (subprocess.SubprocessError, OSError) as exc:
-        raise TmuxError(f"send-keys to {target} failed: {exc}") from exc
+        raise TmuxError(f"{what} failed: {exc}") from exc
     if result.returncode != 0:
-        raise TmuxError(
-            f"send-keys to {target} exited {result.returncode}: {result.stderr.strip()}"
-        )
+        raise TmuxError(f"{what} exited {result.returncode}: {result.stderr.strip()}")
 
 
 def _settle(settle_ms: int) -> None:
@@ -761,7 +895,17 @@ def _retry_enter_if_residual(
     After a bounded wait, snapshots the pane and checks whether its last
     non-blank line still ends with the sent text's tail — the visible sign
     the first Enter landed inside the bracketed-paste accumulation window and
-    was absorbed as a literal newline instead of submitting. Exactly
+    was absorbed as a literal newline instead of submitting.
+
+    **It goes inert for a LARGE payload, and that is a known, accepted limit.**
+    A composer may collapse a big paste into its own placeholder — measured on
+    Claude Code 2.1.263, a six-line block renders as ``[Pasted text #1 +5
+    lines]`` — so the tail this compares against is simply not on screen and
+    no residual is ever detected. It fails in the safe direction (a missed
+    retry, never a duplicate send), and the check keeps working for the short
+    messages that are the common steer. Recognising a provider's placeholder
+    would be reading that provider's UI, which is the line this module does not
+    cross. Exactly
     one retry, never a loop: a genuinely stuck pane is a different problem,
     not something to spin on. Never raises on the race itself — `text` empty
     or `capture_pane_snapshot` failing (it's best-effort, returns "") both
@@ -897,7 +1041,7 @@ def fit_window_to_client(session: str) -> None:
             logger.debug("fit_window_to_client({}) failed: {}", window_id, exc)
 
 
-def attach_instruction(session_name: str) -> HostAttach:
+def attach_instruction(session_name: str, *, read_only: bool = False) -> HostAttach:
     """Build the structured instruction for attaching to a HOST session.
 
     Detects whether we're already inside an outer tmux client by checking
@@ -908,6 +1052,7 @@ def attach_instruction(session_name: str) -> HostAttach:
     return HostAttach(
         tmux_session=session_name,
         inside_outer_tmux=bool(os.environ.get("TMUX")),
+        read_only=read_only,
     )
 
 

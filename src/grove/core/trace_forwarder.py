@@ -67,6 +67,7 @@ from typing import cast
 from loguru import logger
 
 from grove import __version__
+from grove.core import paths
 from grove.core.activity import DashboardDelta, SessionActivity, WorkspaceActivity
 from grove.core.agents import get_adapter
 from grove.core.config import AgentKind, TelemetryConfig, UsagePricingConfig
@@ -90,6 +91,7 @@ from grove.core.trace import (
     price_book_estimator,
 )
 from grove.core.usage._pricing import PriceBook
+from grove.core.usage.pricing_sources import PricingCatalog
 from grove.core.workspace import WorkspaceState
 
 _CONTEXT_SPAN_NAME = "grove:context"
@@ -168,9 +170,9 @@ class TraceForwarder:
         and two copies of the credentials warning for one logical exporter.
 
         ``pricing`` builds the one :class:`~grove.core.usage._pricing.PriceBook`
-        this forwarder uses for the whole daemon lifetime (construction is a
-        cheap in-memory sort over already-loaded config, never a file read, but
-        it must still happen once here rather than per replay or per span) and
+        this forwarder uses for the whole daemon lifetime. Construction reads
+        the normalized pricing snapshot locally, never fetching a gateway on
+        the activity path, and
         wires it into the instrumentor via :func:`~grove.core.trace.price_book_estimator`.
         ``None`` (the default) leaves ``cost_estimator`` unset, exactly today's
         behaviour — this section owns no pricing config itself, only the
@@ -180,7 +182,16 @@ class TraceForwarder:
         self._cfg = cfg
         self._registry = registry
         self._sink = sink
-        cost_estimator = price_book_estimator(PriceBook(pricing)) if pricing is not None else None
+        resolved_pricing = (
+            PricingCatalog(pricing, cache_path=paths.usage_pricing_path()).load()
+            if pricing is not None
+            else None
+        )
+        cost_estimator = (
+            price_book_estimator(PriceBook(resolved_pricing))
+            if resolved_pricing is not None
+            else None
+        )
         self._instrumentor = TraceInstrumentor(cfg, sink=sink, cost_estimator=cost_estimator)
         # Per-session last-emitted context attributes — the change gate. A quiet
         # fleet emits no deltas at all, so this only guards the case where a

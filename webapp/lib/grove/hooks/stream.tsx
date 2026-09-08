@@ -204,6 +204,7 @@ function useStreamTransport(): ActivityStream {
         case "apply":
           queryClient.setQueryData(groveKeys.activity, action.snapshot);
           refreshPeekFromStream(queryClient, action.workspace);
+          refreshWorkspaceQueries(queryClient, action.workspace.state.id);
           return;
         case "drop":
           queryClient.setQueryData(groveKeys.activity, action.snapshot);
@@ -217,6 +218,13 @@ function useStreamTransport(): ActivityStream {
           return;
         case "queue_changed":
           void queryClient.invalidateQueries({ queryKey: groveKeys.queue(action.workspaceId) });
+          return;
+        case "source_changed":
+          void queryClient.invalidateQueries({ queryKey: groveKeys.workspace(action.workspaceId) });
+          return;
+        case "catalog_changed":
+          void queryClient.invalidateQueries({ queryKey: groveKeys.catalog() });
+          void queryClient.invalidateQueries({ queryKey: groveKeys.gallery() });
           return;
         case "refetch":
           invalidateSoon();
@@ -301,6 +309,26 @@ async function resyncWorkspace(queryClient: QueryClient, workspaceId: string): P
   } catch {
     // A workspace killed between the frame and this read 404s; the `killed`
     // frame that follows is what removes the row.
+  }
+}
+
+/**
+ * Invalidate workspace reads whose source is covered by a streamed activity edge
+ * but whose full response does not fit in the delta.
+ *
+ * A `session_activity` row reports the changed working-tree counters, session
+ * state and lifecycle status. It cannot carry a raw patch, a provision log, a
+ * full session index or diagram XML, so their active observers re-read promptly
+ * while their own query keys preserve the scope. The diff intentionally keeps
+ * its interval too: editing an already-dirty file moves no streamed counter.
+ */
+function refreshWorkspaceQueries(queryClient: QueryClient, workspaceId: string): void {
+  for (const key of [
+    groveKeys.provision(workspaceId),
+    groveKeys.sessions(workspaceId),
+    groveKeys.diagram(workspaceId),
+  ]) {
+    void queryClient.invalidateQueries({ queryKey: key });
   }
 }
 

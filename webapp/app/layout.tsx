@@ -57,6 +57,12 @@ export default function RootLayout({
       className={`${GeistSans.variable} ${GeistMono.variable}`}
     >
       <body className="font-sans antialiased">
+        {/* THE TOAST HOST IS INSIDE `Providers`, NOT HERE. It needs that file's
+            theme context to follow an explicit theme choice rather than the
+            system preference, and a second mount here made every toast render
+            and announce twice — a duplicate that is invisible in review because
+            each mount is individually correct and sonner draws no host at all
+            until something is toasted. */}
         <Providers>{children}</Providers>
       </body>
     </html>

@@ -555,3 +555,26 @@ def test_the_pane_is_read_once_per_window_however_often_the_poll_runs(
         manager.agent_exit(manager.get(state.id))
 
     assert len(docker.pane_reads) == 1
+
+
+def test_a_native_container_workspace_attaches_as_a_viewer(
+    manager: WorkspaceManager, docker: FakeDocker
+) -> None:
+    """`new-session -A` has no read-only form, so the viewer arm is `attach-session -r`.
+
+    It also does not CREATE on a miss: a native pane that raced away must not
+    become a fresh empty shell a person could type into.
+    """
+    state = _create(manager, "c-native")
+    _containerize(manager, state)
+    stored = manager.store.get(state.id)
+    stored.native = True
+    manager.store.save(stored)
+
+    instruction = manager.attach(state.id)
+
+    assert isinstance(instruction, ContainerAttach)
+    assert instruction.read_only is True
+    line = " ".join(instruction.argv)
+    assert "attach-session -r -t agent" in line
+    assert "new-session" not in line

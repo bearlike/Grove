@@ -17,9 +17,7 @@ const BASH: ToolCallView = {
   tool_use_id: "toolu_01AAA",
   status: "ok",
   input: { command: "rg -n 'todo' src\ncd src && ls", description: "Search" },
-  input_truncated: false,
   result: "src/a.ts:12: todo\n",
-  result_truncated: false,
   duration_ms: 1450,
 };
 
@@ -203,8 +201,12 @@ describe("messagesFromTurns — the tool detail on the wire", () => {
     expect(part?.toolCallId).toBeTruthy();
   });
 
-  it("hands the invocation to a file-edit card too — the diff is the payload, not the call", () => {
-    const [message] = messagesFromTurns(
+  it("keeps a file edit's invocation AND its diff on one timeline part", () => {
+    // The edit is a tool call, so it rides the run; the diff rides the part.
+    // Both halves stay addressable — the invocation through `artifact`, the
+    // payload through `groveFileEdit` — which is what lets the step report a
+    // duration and expand into the native split diff.
+    const [part] = toolParts(
       turn([
         {
           role: "file_edit",
@@ -215,8 +217,37 @@ describe("messagesFromTurns — the tool detail on the wire", () => {
           file_edit: { path: "/w/a.py", display_path: "a.py", old_text: "", new_text: "x\n" },
         },
       ]),
-    ).filter((m) => Array.isArray(m.content) && m.content[0]?.type === "data-file-edit");
-    expect(message?.content[0]).toMatchObject({ data: { tool: { tool_use_id: "toolu_edit" } } });
+    );
+    expect(part).toMatchObject({
+      toolName: "Write",
+      toolCallId: "toolu_edit",
+      artifact: { tool_use_id: "toolu_edit" },
+      groveFileEdit: { path: "/w/a.py", displayPath: "a.py", newText: "x\n" },
+    });
+  });
+
+  it("degrades a payload-less edit to a note rather than an empty diff step", () => {
+    const parts = toolParts(
+      turn([
+        { role: "file_edit", text: "Write a.py", question: null, todo: null, file_edit: null },
+      ]),
+    );
+    expect(parts).toHaveLength(0);
+  });
+
+  it("keeps recorded plan-tool invocations without duplicating the task board", () => {
+    const [part] = toolParts(turn([{
+      role: "todo", text: "TodoWrite", question: null, file_edit: null, todo: null,
+      tool: { ...BASH, name: "TodoWrite" },
+    }]));
+    expect(part).toMatchObject({ toolName: "TodoWrite", artifact: { name: "TodoWrite" } });
+  });
+
+  it("keeps a structured tool call even when its digest is blank", () => {
+    const [part] = toolParts(turn([{
+      role: "tool", text: "", question: null, file_edit: null, todo: null, tool: BASH,
+    }]));
+    expect(part).toMatchObject({ toolName: "Bash", artifact: BASH });
   });
 
   it("is still pure", () => {

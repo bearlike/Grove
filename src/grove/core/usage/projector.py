@@ -20,12 +20,13 @@ from loguru import logger
 
 from grove.core.agents import AgentMessage, all_adapters, get_adapter
 from grove.core.agents.model import AgentActivity, SessionRef
+from grove.core.agents.shell import SHELL_TOOL_NAMES, ShellCall
 from grove.core.config import AgentSpec, GroveConfig
 from grove.core.contracts.usage import UsageProvider
 from grove.core.git import detect_root
 from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
-from grove.core.usage._command import SHELL_TOOL_NAMES, LeadingCommand
+from grove.core.usage._command import LeadingCommand
 from grove.core.usage._intervals import ActiveIntervals, WorkIntervals
 from grove.core.usage._pricing import PriceBook, TokenCounts
 from grove.core.usage._store import FileFingerprint, UsageStore, complete_bytes
@@ -87,12 +88,13 @@ class UsageProjector:
         store: UsageStore,
         clock: Callable[[], datetime] | None = None,
         adapters: Sequence[_UsageAdapter] | None = None,
+        prices: PriceBook | None = None,
     ) -> None:
         self._cfg = cfg
         self._registry = registry
         self._store = store
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._prices = PriceBook(cfg.usage.pricing)
+        self._prices = prices if prices is not None else PriceBook(cfg.usage.pricing)
         self._adapters = tuple(adapters) if adapters is not None else None
         # One parser for the whole refresh: it holds a compiled pattern and the
         # normalization map, and building one per session would recompile both
@@ -110,7 +112,12 @@ class UsageProjector:
             force = True
         refs, discovery_degraded = self._references(now)
         changed_sources = self._prune_vanished()
-        degraded_sources: set[str] = set(discovery_degraded)
+        degraded_sources = {
+            source_id: set(details) for source_id, details in discovery_degraded.items()
+        }
+        reachable_sources = {
+            self._source_id(item.ref.adapter_kind, item.profile_root) for item in refs
+        }
         # Built lazily, once, on the first ref that actually needs replacing —
         # not once per session. `manager.list()` reconciles live git/tmux
         # state per repo; profiled at 394 calls / 3.1s cumulative for 79
@@ -118,7 +125,7 @@ class UsageProjector:
         # session in one refresh answers the same "which workspace owns this
         # session id" question against the same fleet snapshot, so one index
         # built up front serves every lookup this refresh needs.
-        workspace_index: dict[tuple[str, str], str] | None = None
+        workspace_index: tuple[dict[str, str], dict[str, tuple[str, str]]] | None = None
         for item in refs:
             adapter, ref, profile_root = item.adapter, item.ref, item.profile_root
             path = ref.transcript_path
@@ -126,8 +133,9 @@ class UsageProjector:
                 continue
             source_id = self._source_id(ref.adapter_kind, profile_root)
             if ref.cwd is None:
-                degraded_sources.add(source_id)
-                self._mark_degraded(ref, profile_root, now, "transcript cwd was not measured")
+                detail = "transcript cwd was not measured"
+                degraded_sources.setdefault(source_id, set()).add(detail)
+                self._mark_degraded(ref, profile_root, now, detail)
                 continue
             try:
                 with WorkspaceManager.transcript_config_dir_scope(adapter.kind, str(profile_root)):
@@ -163,29 +171,54 @@ class UsageProjector:
                     # blessing an unread post-read fingerprint as complete.
                     fingerprints=before,
                     now=now,
-                    workspace_id=workspace_index.get((ref.session_id, ref.adapter_kind)),
+                    workspace_id=_workspace_id(ref, workspace_index),
                 )
             except Exception as exc:  # one transcript must not poison the index
-                degraded_sources.add(source_id)
+                detail = str(exc)
+                degraded_sources.setdefault(source_id, set()).add(detail)
                 logger.warning("usage projection degraded for {}: {}", path, type(exc).__name__)
-                self._mark_degraded(ref, profile_root, now, str(exc))
-        if degraded_sources:
-            with self._store.write() as conn:
-                conn.executemany(
-                    "UPDATE sources SET health='degraded' WHERE source_id=?",
-                    [(source_id,) for source_id in degraded_sources],
-                )
+                self._mark_degraded(ref, profile_root, now, detail)
+        self._finalize_source_health(
+            degraded=degraded_sources,
+            reachable=reachable_sources,
+            now=now,
+        )
         self._apply_retention(now)
         self._store.set_meta("retention_days", retention_policy)
         self._store.set_meta("last_refresh_at", str(now))
         return ProjectionResult(
-            indexed_sources=len(
-                {self._source_id(item.ref.adapter_kind, item.profile_root) for item in refs}
-                | discovery_degraded
-            ),
+            indexed_sources=len(reachable_sources | set(discovery_degraded)),
             changed_sources=len(changed_sources),
             degraded_sources=len(degraded_sources),
         )
+
+    def _finalize_source_health(
+        self,
+        *,
+        degraded: dict[str, set[str]],
+        reachable: set[str],
+        now: int,
+    ) -> None:
+        """Publish this pass's source verdict after successful replacements.
+
+        A source can contain several references.  `_replace` must keep its
+        atomic replacement self-contained, but its optimistic ``ok`` UPSERT
+        cannot be the final health answer when another reference failed in the
+        same pass.  Conversely, a later unchanged successful scan is the
+        evidence that an old failure has recovered.
+        """
+        with self._store.write() as conn:
+            for source_id, details in degraded.items():
+                detail = "; ".join(sorted(detail for detail in details if detail))[:300]
+                conn.execute(
+                    "UPDATE sources SET health='degraded', detail=?, last_indexed_at=? "
+                    "WHERE source_id=?",
+                    (detail or "projection failed", now, source_id),
+                )
+            conn.executemany(
+                "UPDATE sources SET health='ok', detail=NULL, last_indexed_at=? WHERE source_id=?",
+                [(now, source_id) for source_id in reachable - set(degraded)],
+            )
 
     def _prune_vanished(self) -> set[str]:
         """Drop derived sessions whose adapter-owned files no longer exist."""
@@ -213,9 +246,13 @@ class UsageProjector:
                 )
         return {source_id for source_id, _ in vanished}
 
-    def _references(self, now: int) -> tuple[list[_Reference], set[str]]:
+    def _references(self, now: int) -> tuple[list[_Reference], dict[str, set[str]]]:
         refs: list[_Reference] = []
-        degraded: set[str] = set()
+        degraded: dict[str, set[str]] = {}
+        # A configured profile only selects the discovery scope.  The adapter's
+        # cascade may also return an ambient/default profile, whose path is the
+        # evidence for its attribution; assigning it to the selected scope
+        # duplicates the same session once for every declared root.
         seen: set[tuple[str, str, str]] = set()
         adapters = self._adapters or tuple(
             cast(_UsageAdapter, adapter)
@@ -248,15 +285,16 @@ class UsageProjector:
                 logger.warning(
                     "usage discovery degraded for {}: {}", adapter.kind, type(exc).__name__
                 )
+                detail = str(exc)
                 source_id = self._mark_discovery_degraded(
-                    adapter.kind, configured_root, now, str(exc)
+                    adapter.kind, configured_root, now, detail
                 )
-                degraded.add(source_id)
+                degraded.setdefault(source_id, set()).add(detail)
                 continue
             for ref in discovered:
                 if ref.transcript_path is None:
                     continue
-                root = configured_root or _profile_root(adapter.kind, ref.transcript_path)
+                root = _profile_root(adapter.kind, ref.transcript_path)
                 key = (adapter.kind, str(root), ref.session_id)
                 if key not in seen:
                     seen.add(key)
@@ -457,28 +495,56 @@ class UsageProjector:
                 "s.session_id=usage_events.session_id AND s.source_id=usage_events.source_id)"
             )
 
-    def _workspace_index(self) -> dict[tuple[str, str], str]:
-        """``(agent_session_id, adapter_kind) -> owning workspace id``, whole fleet.
+    def _workspace_index(self) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
+        """Minted session and kind-gated cwd workspace maps, whole fleet.
 
-        Every ref in one refresh answers the same "which workspace owns this
-        session id" question against the same fleet snapshot, so this walks
-        `RepoRegistry.known_roots()` and each repo's `manager.list()` — the
-        expensive live git/tmux reconciliation — exactly once per refresh
-        rather than once per session. ``session_duration.py`` imports
-        `_derived_intervals` from this module and must keep working if this
-        moves; it does not touch this seam.
+        Every ref in one refresh answers the same ownership question against
+        the same fleet snapshot, so this walks `RepoRegistry.known_roots()` and
+        each repo's `manager.list()` — the expensive live git/tmux
+        reconciliation — exactly once per refresh rather than once per session.
+        ``session_duration.py`` imports `_derived_intervals` from this module
+        and must keep working if this moves; it does not touch this seam.
         """
-        index: dict[tuple[str, str], str] = {}
+        minted: dict[str, str] = {}
+        by_cwd: dict[str, tuple[str, str]] = {}
         for root in self._registry.known_roots():
             try:
                 manager = self._registry.get(root)
                 for state in manager.list():
-                    if state.agent_session_id is None:
-                        continue
-                    index[(state.agent_session_id, manager.effective_kind(state))] = state.id
+                    effective_kind = manager.effective_kind(state)
+                    if state.agent_session_id is not None:
+                        minted[state.agent_session_id] = state.id
+                    # The same three keys `SessionCatalog._workspace_maps`
+                    # indexes, deliberately duplicated rather than reused: that
+                    # method has no per-repo exception isolation, and this
+                    # refresh must survive one repo with an unreadable config
+                    # cascade (the `except Exception: continue` below). Keep the
+                    # two key sets in step — a session is attributed by whichever
+                    # cwd its transcript recorded.
+                    for cwd in (str(state.agent_cwd), state.worktree_path):
+                        by_cwd.setdefault(cwd, (state.id, effective_kind))
+                    if state.transcript_context is not None:
+                        by_cwd.setdefault(
+                            state.transcript_context.agent_cwd,
+                            (state.id, effective_kind),
+                        )
             except Exception:
                 continue
-        return index
+        return minted, by_cwd
+
+
+def _workspace_id(
+    ref: SessionRef, index: tuple[dict[str, str], dict[str, tuple[str, str]]]
+) -> str | None:
+    """Resolve one transcript's workspace from the refresh-local fleet maps."""
+    minted, by_cwd = index
+    workspace_id = minted.get(ref.session_id)
+    if workspace_id is not None or ref.cwd is None:
+        return workspace_id
+    candidate = by_cwd.get(ref.cwd)
+    if candidate is not None and ref.adapter_kind == candidate[1]:
+        return candidate[0]
+    return None
 
 
 def _provider(kind: str) -> UsageProvider:
@@ -575,8 +641,11 @@ def _session_row(
     subagent_output = _sum(u.output for u in subagent_usages)
     provider_total = None
     if adapter_kind == "codex" and (activity.tokens_in or activity.tokens_out):
-        fresh = None
-        output = activity.tokens_out
+        # Provider totals remain authoritative, but must not erase classes the
+        # adapter can now attribute to individual generations.
+        if not usages:
+            fresh = None
+            output = activity.tokens_out
         provider_total = activity.tokens_in + activity.tokens_out
     models = tuple(
         dict.fromkeys(
@@ -709,12 +778,13 @@ def _event_rows(
             # them. It carries the leading executable instead — the one column
             # that makes "which processes eat the agent's time" answerable.
             shell = tool_name in SHELL_TOOL_NAMES
+            shell_call = ShellCall.of(tool_name, block.tool_input) if shell else None
             target = (
-                leading.of(LeadingCommand.command_text(block.tool_input))
+                leading.of(shell_call.command if shell_call else None)
                 if shell
                 else _tool_target(block.tool_input)
             )
-            background = shell and LeadingCommand.in_background(block.tool_input)
+            background = bool(shell_call and shell_call.background)
             duration_ms = None
             duration_source = None
             if block.type == "tool_use":

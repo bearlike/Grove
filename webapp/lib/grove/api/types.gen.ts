@@ -128,6 +128,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mailboxes/peers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Peers */
+        get: operations["peers_mailboxes_peers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Message */
+        post: operations["send_message_mailboxes_messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/messages/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Message Status */
+        get: operations["message_status_mailboxes_messages__message_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connection */
+        get: operations["connection_mailboxes_connection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge */
+        post: operations["acknowledge_mailboxes_ack_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/usage/summary": {
         parameters: {
             query?: never;
@@ -415,6 +500,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/{token}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Events
+         * @description Workspace-scoped invalidations with no private fleet payload.
+         */
+        get: operations["public_events_public__token__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/{token}/turns": {
         parameters: {
             query?: never;
@@ -533,26 +638,7 @@ export interface paths {
         put?: never;
         /**
          * Ingest Agent Hook
-         * @description Native Claude Code http-hook push — the live half of the command-hook sidecar.
-         *
-         *     Claude Code dispatches the ``command`` and ``http`` handlers registered
-         *     on the SAME event independently (`ClaudeHook.settings`), so by the time
-         *     this request lands the command handler has already written the
-         *     sidecar — this route's only job is collapsing the ~2s poll-tick lag
-         *     into an immediate recompute, never a second sidecar write (this
-         *     payload carries no ``$TMUX_PANE``, so writing here would race the
-         *     command handler's more complete record). ``poll_once`` already diffs
-         *     per-workspace by fingerprint and emits a delta only for what changed,
-         *     so the wire cost is scoped by construction — the *computation* still
-         *     walks every workspace, which is why this goes through the shared
-         *     ``poll_coalescer`` rather than dispatching its own executor call:
-         *     Claude fires this on every tracked event with no debounce, so
-         *     without coalescing, a burst of hook events during active fleet coding
-         *     ran that many full-fleet scans at once.
-         *
-         *     Gated by the same-host hook-ingest token (`make_require_hook_token`),
-         *     not the `SessionStore` pairing bearer every other route uses — see its
-         *     docstring for why.
+         * @description Admit a session invalidation without waiting for projection work.
          */
         post: operations["ingest_agent_hook_hooks_agent_events_post"];
         delete?: never;
@@ -671,6 +757,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/issue-ops/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Assignment Event
+         * @description Admit an authenticated normalized tracker assignment edge.
+         */
+        post: operations["ingest_assignment_event_issue_ops_assignments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}": {
         parameters: {
             query?: never;
@@ -705,6 +811,31 @@ export interface paths {
          *     link, and there is no second endpoint that hands one out.
          */
         patch: operations["update_workspace_workspaces__ws_id__patch"];
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/panels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workspace Panels
+         * @description The currently iframeable subset of this workspace's panel declarations.
+         *
+         *     This is deliberately a separate list route as well as the ``panels``
+         *     field on workspace detail: a panel service can start after the detail
+         *     query, and refreshing this small list avoids making the client treat a
+         *     full workspace state read as a liveness probe.
+         */
+        get: operations["list_workspace_panels_workspaces__ws_id__panels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/workspaces/{ws_id}/pause": {
@@ -826,6 +957,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Workspace Attachment
+         * @description Store one file for the workspace and return the id a message names.
+         *
+         *     The response's ``path`` is where the AGENT will find the file, already
+         *     translated into its own namespace — shown to the human so the request
+         *     is legible, never sent back by the client, which names the ``id``.
+         *
+         *     Base64 rather than multipart, so the browser's JSON-only BFF proxy and
+         *     this route need no second content type between them; the reasoning and
+         *     its cost are on ``AttachmentUploadRequest``. Malformed base64 is 422
+         *     ``invalid_attachment`` — a client bug, not a workspace state problem.
+         *     The decode and the disk write are both off-loaded like every other
+         *     blocking manager call.
+         */
+        post: operations["add_workspace_attachment_workspaces__ws_id__attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Workspace Keys
+         * @description Deliver one named key to the workspace's own live terminal.
+         *
+         *     Acknowledgement means delivered, not cancelled or accepted by the app.
+         *     The engine chooses the pane and tmux server; clients cannot name either.
+         *     Remote or paneless agents refuse with 501 steering_unsupported.
+         */
+        post: operations["send_workspace_keys_workspaces__ws_id__keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/interrupt": {
         parameters: {
             query?: never;
@@ -837,14 +1023,13 @@ export interface paths {
         put?: never;
         /**
          * Interrupt Workspace
-         * @description Interrupt the workspace's agent, where its adapter supports it.
+         * @description Interrupt the workspace's agent where its provider supports it.
          *
-         *     Today every kind refuses (501 ``steering_unsupported``) — there is
-         *     no safe generic interrupt for a tmux-hosted CLI. The route exists now
-         *     so clients code against the final surface, ready for a kind whose API
-         *     supports a real interrupt. Off-loaded to the executor like its
-         *     ``/message`` sibling — a future arm that does shell blocking I/O
-         *     (tmux, a remote HTTP call) must not stall the loop.
+         *     Claude Code receives Escape in its agent pane, which drives its REPL
+         *     abort controller; a pending permission prompt instead takes Escape's
+         *     ``onAbort()`` path. Other tmux-hosted kinds retain the typed 501
+         *     ``steering_unsupported`` refusal. The blocking pane write is off-loaded
+         *     like ``/message`` so it cannot stall the daemon loop.
          */
         post: operations["interrupt_workspace_workspaces__ws_id__interrupt_post"];
         delete?: never;
@@ -864,17 +1049,18 @@ export interface paths {
         put?: never;
         /**
          * Answer Question
-         * @description Answer a pending AskUserQuestion by driving the agent's TUI.
+         * @description Answer a pending question by dismissing it and restating the batch as text.
          *
-         *     Dispatch semantics — 204 the instant the keystrokes are sent; the
-         *     resolution arrives later on the activity stream (the sidecar clears and
-         *     the transcript flushes). Refusals ride the typed-error envelope: 404
-         *     ``workspace_not_found``, 409 ``question_not_pending`` (stale/absent
-         *     ``tool_use_id``) / ``pane_not_found``, 422 ``question_answer_invalid``
-         *     (plan doesn't fit the captured questions). The wire model rejects a
-         *     structurally-malformed body (422) before the handler runs.
-         *     ``answer_question`` drives multiple blocking tmux keystroke writes —
-         *     off-loaded to the executor like the other steer routes.
+         *     A 204 means the on-screen prompt was cancelled and the rendered answers
+         *     were delivered — the same dispatch semantics ``/message`` has, since the
+         *     agent's actual response lands later on the transcript. Refusals ride the
+         *     typed-error envelope: 404 ``workspace_not_found``, 409
+         *     ``question_not_pending`` (stale/absent ``tool_use_id``) /
+         *     ``workspace_state_error`` / ``pane_not_found``, 422
+         *     ``question_answer_invalid`` (the plan doesn't fit the captured
+         *     questions). The wire model rejects a structurally-malformed body (422)
+         *     before the handler runs. This drives blocking tmux operations, so it is
+         *     off-loaded like the other steer routes.
          */
         post: operations["answer_question_workspaces__ws_id__question_answer_post"];
         delete?: never;
@@ -991,6 +1177,82 @@ export interface paths {
          *     409 ``workspace_state_error`` (ORPHANED).
          */
         post: operations["remap_workspace_session_workspaces__ws_id__session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/diagram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Workspace Diagram
+         * @description Read this workspace's acknowledged diagram document and revision.
+         *
+         *     The workspace id identifies its configured manager. ``repo`` is an
+         *     optional consistency selector for callers that already hold one; no
+         *     editor draft crosses this boundary—only accepted bytes are returned.
+         */
+        get: operations["read_workspace_diagram_workspaces__ws_id__diagram_get"];
+        /**
+         * Update Workspace Diagram
+         * @description Conditionally save a diagram using its active session and revision.
+         */
+        put: operations["update_workspace_diagram_workspaces__ws_id__diagram_put"];
+        /**
+         * Open Workspace Diagram
+         * @description Open one existing workspace-relative diagram for managed editing.
+         */
+        post: operations["open_workspace_diagram_workspaces__ws_id__diagram_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/diagram/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Workspace Diagram Preview
+         * @description Fetch the browser-rendered first-page PNG for the current revision only.
+         */
+        get: operations["read_workspace_diagram_preview_workspaces__ws_id__diagram_preview_get"];
+        put?: never;
+        /**
+         * Save Workspace Diagram Preview
+         * @description Store a browser-rendered first-page PNG fenced to its saved revision.
+         */
+        post: operations["save_workspace_diagram_preview_workspaces__ws_id__diagram_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/diagram/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Workspace Diagram
+         * @description Fence a collaboration generation and retain its document read-only.
+         */
+        post: operations["stop_workspace_diagram_workspaces__ws_id__diagram_stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1363,6 +1625,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace History
+         * @description The workspace's durable name, progress and ticket timeline.
+         *
+         *     Fetch-on-demand rather than on the activity stream: no frame there
+         *     carries these rows, and the claim being reported right now is already
+         *     live on the workspace's own activity. The SQLite read runs in the
+         *     executor so it never blocks the loop.
+         *
+         *     **This route deliberately does NOT gate on the workspace still
+         *     existing, and that is the one thing separating it from every sibling
+         *     per-workspace read.** `kill` deletes the record, which is the normal end
+         *     of a task — and the entire purpose of this store is to answer for a
+         *     workspace whose record is gone. A `_manager_for` gate here (the obvious
+         *     copy from `/todo` and `/queue`) made a killed workspace's history
+         *     unreachable through the only route that serves it: verified 404 against
+         *     a real tombstoned record before this was removed.
+         *
+         *     So the refusal is the STORE's: an id with nothing recorded returns an
+         *     empty view, exactly as it does for a live workspace that predates the
+         *     store. Both are the same honest "nothing was recorded", and there is no
+         *     404 to distinguish them because an unknown id is not a different fact
+         *     here — a reader holding an id off a usage row has no way to know, or
+         *     need to know, whether the workspace behind it still exists.
+         */
+        get: operations["workspace_history_workspaces__ws_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/phase": {
         parameters: {
             query?: never;
@@ -1444,6 +1747,83 @@ export interface paths {
         get: operations["list_sessions_sessions_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gallery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Gallery
+         * @description Every ``.drawio`` in a known repo's worktrees, newest-first.
+         *
+         *     Host-wide by construction — a gallery is a browse surface like the
+         *     session catalog, and it JOINS on that catalog for attribution, so it
+         *     rides the same request-scoped memo and never the activity poll. Each
+         *     row says whether a preview for its content digest is already cached;
+         *     a client renders the missing ones itself and posts them back.
+         */
+        get: operations["list_gallery_gallery_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gallery/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Gallery Document
+         * @description One diagram's source XML — what the read-only viewer loads and the
+         *     download saves. Read through the scan's own record, never a path the
+         *     client supplied.
+         */
+        get: operations["read_gallery_document_gallery__item_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gallery/{item_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Gallery Preview
+         * @description The cached first-page PNG for the item's CURRENT content, 404 until
+         *     a browser has rendered that revision.
+         */
+        get: operations["read_gallery_preview_gallery__item_id__preview_get"];
+        put?: never;
+        /**
+         * Save Gallery Preview
+         * @description Store a browser-rendered PNG for the item's current digest.
+         *
+         *     The digest is echoed by the client and checked against the scan's,
+         *     so a render of a file that changed underneath is refused rather than
+         *     filed against bytes it does not depict.
+         */
+        post: operations["save_gallery_preview_gallery__item_id__preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1577,6 +1957,43 @@ export interface paths {
          *     loop.
          */
         get: operations["list_agents_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Models
+         * @description One agent's model catalog, enriched with the name and window a picker draws.
+         *
+         *     The read beside ``/agents`` rather than a widening of it: that route's
+         *     ``models`` tuple is a published contract with several consumers, and a
+         *     picker wanting a second line per row is not a reason to change what the
+         *     catalog IS. Same ``repo`` dispatch and the same ``_known_root`` gate,
+         *     because this runs the same configured discovery command.
+         *
+         *     ``agent`` omitted means the repo's first configured agent, which is what
+         *     an untouched create form has selected. An unknown name is an empty list
+         *     rather than a 404: the catalog is a display hint, and a client asking
+         *     about an agent this repo's cascade does not define has no picker to draw
+         *     either way.
+         *
+         *     Authenticated like every other listing, so the enrichment — which names
+         *     the models an operator runs and the windows their gateway publishes —
+         *     reaches nobody who is not already trusted with the roster itself.
+         *     Off-loaded for ``/agents``' reason: Codex discovery shells out.
+         */
+        get: operations["list_models_models_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1822,6 +2239,8 @@ export interface components {
             tokens_in: number;
             /** Tokens Out */
             tokens_out: number;
+            context?: components["schemas"]["ContextWindowView"] | null;
+            native?: components["schemas"]["NativeFactsView"] | null;
             /** Last Event At */
             last_event_at: string | null;
             /** Needs Attention */
@@ -1880,7 +2299,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "single_select" | "multi_select" | "free_text" | "confirm";
+            kind: "single_select" | "multi_select" | "free_text" | "confirm" | "plan_approval";
             /** Prompt */
             prompt: string;
             /** Header */
@@ -1946,12 +2365,86 @@ export interface components {
              */
             description: string;
             /**
+             * Native
+             * @default false
+             */
+            native: boolean;
+            /**
              * Models
              * @default []
              */
             models: string[];
         };
+        /**
+         * AssignmentTicketEvent
+         * @description A normalized, authenticated Gitea or GitHub assignee delivery.
+         *
+         *     The daemon accepts this exact body only after authenticating its forwarding
+         *     peer. ``delivery_id`` is unique within one provider and must be retained for
+         *     replay protection; ``generation`` is the forwarder's monotonically
+         *     increasing target revision, so a late older delivery cannot replace a newer
+         *     pending one.
+         */
+        AssignmentTicketEvent: {
+            target: components["schemas"]["AssignmentTicketIdentity"];
+            /**
+             * Change
+             * @enum {string}
+             */
+            change: "assigned" | "unassigned";
+            /** Delivery Id */
+            delivery_id: string;
+            /** Generation */
+            generation: number;
+        };
+        /**
+         * AssignmentTicketIdentity
+         * @description One forge ticket, identified without a host-private repository path.
+         */
+        AssignmentTicketIdentity: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "gitea" | "github";
+            /** Owner */
+            owner: string;
+            /** Repo */
+            repo: string;
+            /** Ticket Id */
+            ticket_id: string;
+        };
         AttachInstructionView: components["schemas"]["HostAttachView"] | components["schemas"]["ContainerAttachView"];
+        /**
+         * AttachmentUploadRequest
+         * @description POST body for storing one file in a workspace's attachment directory.
+         *
+         *     ``name`` is the human's own filename and is sanitized engine-side — it
+         *     reaches a filesystem path, so it is never trusted as a path segment here.
+         */
+        AttachmentUploadRequest: {
+            /** Name */
+            name: string;
+            /** Content Base64 */
+            content_base64: string;
+        };
+        /**
+         * AttachmentView
+         * @description One stored attachment, as the client and the agent each need it.
+         *
+         *     ``id`` is what a later message names; ``path`` is where the AGENT will find
+         *     the file, already translated into its own namespace (a container path for a
+         *     containerized workspace). The client never composes that path — it is shown,
+         *     not used — because only the engine knows which namespace the agent is in.
+         */
+        AttachmentView: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        };
         /**
          * AutoBranch
          * @description Grove generates ``{branch_prefix}{slug(title)}-{ts}`` off ``base_ref``.
@@ -2118,11 +2611,9 @@ export interface components {
          *     session-running total Claude Code's transcript actually stores.
          *
          *     ``summary`` is ``""`` (never null) when the harness carries no readable
-         *     replacement text — Codex encrypts it — and is capped at the shared
-         *     ``_ENTRY_TEXT_CAP`` rather than given a diff-sized ceiling of its own: a real
-         *     summary measured 13.9-55.3 KB on-host, and this rides the same per-turn
-         *     payload as every other entry, so an uncapped one would ship tens of KB per
-         *     boundary for text a reader skims.
+         *     replacement text — Codex encrypts it. It crosses whole (13.9-55.3 KB on-host,
+         *     measured): a compaction summary is the ONLY surviving record of the turns the
+         *     harness discarded, so a reader who scrolls back to it has nowhere else to go.
          */
         CompactionView: {
             /** Trigger */
@@ -2149,6 +2640,11 @@ export interface components {
             kind: "container";
             /** Argv */
             argv: string[];
+            /**
+             * Read Only
+             * @default false
+             */
+            read_only: boolean;
         };
         /**
          * ContainerRuntimeState
@@ -2235,6 +2731,24 @@ export interface components {
             owned_volumes?: string[];
         };
         /**
+         * ContextWindowView
+         * @description Wire mirror of ``grove.core.agents.ContextWindow``.
+         *
+         *     A block, absent as a whole when the harness reported nothing (``None`` on
+         *     ``AgentActivityView.context``): a client draws a meter or nothing, never a
+         *     meter at zero for a session that simply has not said. ``used_fraction`` is
+         *     carried rather than left to the client so every surface rounds the same
+         *     way; ``size``/``used`` stay beside it for the tooltip.
+         */
+        ContextWindowView: {
+            /** Size */
+            size: number;
+            /** Used */
+            used: number;
+            /** Used Fraction */
+            used_fraction: number;
+        };
+        /**
          * CreateWorkspaceRequest
          * @description Payload for ``WorkspaceManager.create()``.
          *
@@ -2255,14 +2769,15 @@ export interface components {
             runtime?: components["schemas"]["Runtime"] | null;
             /** Brief */
             brief?: boolean | null;
-            /**
-             * Skip Init
-             * @default false
-             */
-            skip_init: boolean;
+            /** Native */
+            native?: boolean | null;
+            /** Skip Init */
+            skip_init?: boolean | null;
             ticket?: components["schemas"]["TicketSelector"] | null;
             /** Initial Prompt */
             initial_prompt?: string | null;
+            /** Attachments */
+            attachments?: components["schemas"]["AttachmentUploadRequest"][];
             /** Resume Session Id */
             resume_session_id?: string | null;
             /** Repo Root */
@@ -2289,7 +2804,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "snapshot" | "workspace_changed" | "session_activity" | "pane_snapshot" | "heartbeat";
+            kind: "snapshot" | "workspace_changed" | "session_activity" | "pane_snapshot" | "heartbeat" | "catalog_changed" | "workspace_source_changed";
             /** Seq */
             seq: number;
             /** Workspace Id */
@@ -2331,8 +2846,101 @@ export interface components {
          */
         DefaultsScope: "user" | "project" | "project-local";
         /**
+         * DiagramDocumentView
+         * @description The latest persisted bytes, not an unacknowledged browser draft.
+         */
+        DiagramDocumentView: {
+            diagram: components["schemas"]["DiagramSessionView"];
+            /** Revision */
+            revision: string;
+            /** Xml */
+            xml: string;
+        };
+        /**
+         * DiagramOpenRequest
+         * @description Open an existing diagram under the workspace root, never a host path.
+         */
+        DiagramOpenRequest: {
+            /** Path */
+            path: string;
+        };
+        /**
+         * DiagramPreviewUploadRequest
+         * @description One browser-rendered first-page PNG fenced to an acknowledged revision.
+         */
+        DiagramPreviewUploadRequest: {
+            /** Session Id */
+            session_id: string;
+            /** Expected Revision */
+            expected_revision: string;
+            /** Content Base64 */
+            content_base64: string;
+        };
+        /**
+         * DiagramPreviewView
+         * @description Fetch-on-demand first-page PNG for the current acknowledged revision.
+         */
+        DiagramPreviewView: {
+            /** Session Id */
+            session_id: string;
+            /** Revision */
+            revision: string;
+            /**
+             * Page Index
+             * @default 0
+             * @constant
+             */
+            page_index: 0;
+            attachment: components["schemas"]["AttachmentView"];
+            /**
+             * Mime Type
+             * @default image/png
+             * @constant
+             */
+            mime_type: "image/png";
+            /** Content Base64 */
+            content_base64: string;
+        };
+        /**
+         * DiagramSessionView
+         * @description Small persisted descriptor; document bytes never ride workspace events.
+         */
+        DiagramSessionView: {
+            /** Path */
+            path: string;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "active" | "read_only";
+        };
+        /**
+         * DiagramStopRequest
+         * @description Fence a stop against both newer content and a reopened collaboration.
+         */
+        DiagramStopRequest: {
+            /** Session Id */
+            session_id: string;
+            /** Expected Revision */
+            expected_revision: string;
+        };
+        /**
+         * DiagramUpdateRequest
+         * @description Replace a diagram only if the version read is still current.
+         */
+        DiagramUpdateRequest: {
+            /** Session Id */
+            session_id: string;
+            /** Expected Revision */
+            expected_revision: string;
+            /** Xml */
+            xml: string;
+        };
+        /**
          * DigestEntryView
-         * @description Wire mirror of ``grove.core.agents.DigestEntry`` (text capped).
+         * @description Wire mirror of ``grove.core.agents.DigestEntry``.
          *
          *     ``question``/``file_edit``/``todo``/``compaction`` are set only for their
          *     matching role (``"question"``/``"file_edit"``/``"todo"``/``"compaction"``) —
@@ -2361,6 +2969,7 @@ export interface components {
             todo?: components["schemas"]["TodoListView"] | null;
             tool?: components["schemas"]["ToolCallView"] | null;
             compaction?: components["schemas"]["CompactionView"] | null;
+            mailbox?: components["schemas"]["MailboxMessageView"] | null;
         };
         /**
          * DurationView
@@ -2473,6 +3082,104 @@ export interface components {
             total: number;
         };
         /**
+         * GalleryDocumentView
+         * @description One diagram's source, fetched on demand for the viewer and the download.
+         */
+        GalleryDocumentView: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Digest */
+            digest: string;
+            /** Xml */
+            xml: string;
+        };
+        /**
+         * GalleryItemView
+         * @description One ``.drawio`` on the host, as far as the engine could attribute it.
+         *
+         *     ``id`` is a stable opaque token for the file (a hash of its path — a
+         *     client never sees or sends a path); ``digest`` is the SHA-256 of its
+         *     bytes and the key a preview is cached under, so a client that rendered
+         *     one revision knows the picture is stale when this changes. The
+         *     ``workspace_*`` trio is ``None`` for a file in a worktree Grove does not
+         *     manage, and the ``session_*`` fields are ``None`` when no transcript was
+         *     recorded at that worktree. ``workspace_live`` and ``session_live`` are
+         *     what decide whether *open workspace* or *open session* is the right verb.
+         */
+        GalleryItemView: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Repo Root */
+            repo_root: string;
+            /** Repo Name */
+            repo_name: string;
+            /** Worktree Path */
+            worktree_path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Modified At
+             * Format: date-time
+             */
+            modified_at: string;
+            /** Digest */
+            digest: string;
+            /** Pages */
+            pages: number | null;
+            /** Workspace Id */
+            workspace_id: string | null;
+            /** Workspace Title */
+            workspace_title: string | null;
+            /** Workspace Branch */
+            workspace_branch: string | null;
+            /** Workspace Live */
+            workspace_live: boolean;
+            /** Session Id */
+            session_id: string | null;
+            /** Session Kind */
+            session_kind: string | null;
+            /** Session Cwd */
+            session_cwd: string | null;
+            /** Session Title */
+            session_title: string | null;
+            /** Session Live */
+            session_live: boolean;
+            /** Preview Ready */
+            preview_ready: boolean;
+        };
+        /**
+         * GalleryPreviewUploadRequest
+         * @description A first-page PNG the browser rendered for one content digest.
+         */
+        GalleryPreviewUploadRequest: {
+            /** Digest */
+            digest: string;
+            /** Content Base64 */
+            content_base64: string;
+        };
+        /**
+         * GalleryPreviewView
+         * @description The cached first-page PNG for one content digest.
+         */
+        GalleryPreviewView: {
+            /** Digest */
+            digest: string;
+            /**
+             * Mime Type
+             * @default image/png
+             * @constant
+             */
+            mime_type: "image/png";
+            /** Content Base64 */
+            content_base64: string;
+        };
+        /**
          * GenerationLatencyView
          * @description The model's own average response wait, and how many calls it rests on.
          *
@@ -2541,6 +3248,11 @@ export interface components {
             tmux_session: string;
             /** Inside Outer Tmux */
             inside_outer_tmux: boolean;
+            /**
+             * Read Only
+             * @default false
+             */
+            read_only: boolean;
         };
         /**
          * InitStatus
@@ -2651,6 +3363,221 @@ export interface components {
             generating_since: string;
         };
         /**
+         * MailboxAccess
+         * @description Grove egress is separate from whether a native inbox accepts input.
+         */
+        MailboxAccess: {
+            /**
+             * Can Discover
+             * @default false
+             */
+            can_discover: boolean;
+            /**
+             * Can Send
+             * @default false
+             */
+            can_send: boolean;
+            /**
+             * Can Reply
+             * @default false
+             */
+            can_reply: boolean;
+            /**
+             * Cli
+             * @default false
+             */
+            cli: boolean;
+            /**
+             * Mcp
+             * @default false
+             */
+            mcp: boolean;
+        };
+        /**
+         * MailboxAddress
+         * @description A managed agent slot, never a PID, display name or transcript path.
+         */
+        MailboxAddress: {
+            /** Workspace Id */
+            workspace_id: string;
+            /**
+             * Agent
+             * @default
+             */
+            agent: string;
+        };
+        /**
+         * MailboxIdentity
+         * @description An address fenced to one authenticated runtime incarnation.
+         */
+        MailboxIdentity: {
+            address: components["schemas"]["MailboxAddress"];
+            /** Generation */
+            generation: string;
+        };
+        /**
+         * MailboxMessageView
+         * @description An agent mailbox envelope; absent identities were not recorded.
+         *
+         *     ``kind`` is what lets a client tell a real agent-to-agent handoff (``peer``
+         *     — Grove's own mailbox, two named workspaces) from a harness notice that
+         *     merely normalizes to the same four fields. It defaults to ``notice`` so an
+         *     older daemon's payload decodes as the conservative case rather than
+         *     claiming a handoff it never observed.
+         */
+        MailboxMessageView: {
+            /** Sender */
+            sender: string | null;
+            /** Recipient */
+            recipient: string | null;
+            /** Subject */
+            subject: string | null;
+            /** Body */
+            body: string;
+            /**
+             * Kind
+             * @default notice
+             * @enum {string}
+             */
+            kind: "peer" | "notice";
+        };
+        /**
+         * MailboxPeer
+         * @description Public capabilities contain no private transport handle or credentials.
+         */
+        MailboxPeer: {
+            address: components["schemas"]["MailboxAddress"];
+            /** Generation */
+            generation?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Runtime
+             * @enum {string}
+             */
+            runtime: "host" | "container";
+            /** Can Receive */
+            can_receive?: boolean | null;
+            access?: components["schemas"]["MailboxAccess"];
+            /** Reason */
+            reason?: ("unsupported" | "not_registered" | "stale_recipient" | "sender_not_bound" | "scope_denied" | "recipient_refused" | "recipient_blocked" | "reply_unavailable" | "too_large" | "busy_conflict" | "backpressure" | "transport_unknown") | null;
+        };
+        /**
+         * MailboxPeerPage
+         * @description Caller identity survives filtering and pagination of the peer directory.
+         */
+        MailboxPeerPage: {
+            /**
+             * Protocol Version
+             * @default 1
+             * @constant
+             */
+            protocol_version: 1;
+            caller?: components["schemas"]["MailboxIdentity"] | null;
+            access?: components["schemas"]["MailboxAccess"];
+            /** Body Limit Bytes */
+            body_limit_bytes: number;
+            /** Receipt Ttl Seconds */
+            receipt_ttl_seconds: number;
+            /** Peers */
+            peers?: components["schemas"]["MailboxPeer"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * MailboxReceipt
+         * @description A transport observation is neither model compliance nor human consent.
+         */
+        MailboxReceipt: {
+            /** Message Id */
+            message_id?: string | null;
+            /** Reply To */
+            reply_to?: string | null;
+            sender?: components["schemas"]["MailboxIdentity"] | null;
+            recipient?: components["schemas"]["MailboxIdentity"] | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "accepted" | "queued" | "delivered" | "unknown" | "rejected";
+            /** Reason */
+            reason?: ("unsupported" | "not_registered" | "stale_recipient" | "sender_not_bound" | "scope_denied" | "recipient_refused" | "recipient_blocked" | "reply_unavailable" | "too_large" | "busy_conflict" | "backpressure" | "transport_unknown") | null;
+            /** Native Evidence */
+            native_evidence?: string | null;
+            /** Disposition */
+            disposition?: ("held" | "refused" | "expired" | "dropped") | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at?: string | null;
+        };
+        /**
+         * MailboxReplyRequest
+         * @description Resolve the original sender server-side, without trusting quoted metadata.
+         */
+        MailboxReplyRequest: {
+            /** Body */
+            body: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reply";
+            /** Reply To */
+            reply_to: string;
+        };
+        /**
+         * MailboxSendRequest
+         * @description Only a fresh send chooses a target; sender identity comes from auth.
+         */
+        MailboxSendRequest: {
+            /** Body */
+            body: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "send";
+            recipient: components["schemas"]["MailboxAddress"];
+            /** Expected Generation */
+            expected_generation: string;
+            /**
+             * Intent
+             * @default information
+             * @enum {string}
+             */
+            intent: "request" | "information";
+        };
+        /**
+         * ModelOptionView
+         * @description One model as a picker DRAWS it: the id, what to call it, how much it holds.
+         *
+         *     ``AgentSummaryView.models`` is a tuple of bare ids and stays that way — it
+         *     is a published contract with several consumers, and a picker wanting a
+         *     second line about a model is not a reason to change what "the catalog" is.
+         *     This is the enriched read beside it.
+         *
+         *     ``id`` is the only field that is ever sent back to a provider. The other two
+         *     are display, resolved from sources that may not answer: both are ``None``
+         *     when nothing published them, never a placeholder and never a guess. A client
+         *     renders an absent name as the id itself and an absent window as nothing at
+         *     all — a context window reading zero on a model that holds a million tokens
+         *     is the one claim this shape exists to make impossible.
+         */
+        ModelOptionView: {
+            /** Id */
+            id: string;
+            /** Name */
+            name?: string | null;
+            /** Context Window */
+            context_window?: number | null;
+        };
+        /**
          * MoneyView
          * @description A money figure that says where it came from and is not a float.
          *
@@ -2673,6 +3600,50 @@ export interface components {
              * @enum {string}
              */
             provenance: "actual" | "provider_reported" | "estimated" | "unknown";
+        };
+        /**
+         * NameChangeView
+         * @description One title and description a workspace held at a recorded instant.
+         */
+        NameChangeView: {
+            /** Title */
+            title: string;
+            /** Description */
+            description: string | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+        };
+        /**
+         * NativeFactsView
+         * @description Wire mirror of ``grove.core.agents.NativeFacts``.
+         *
+         *     Present only on a native session (``None`` on ``AgentActivityView.native``
+         *     for every terminal one), and each field ``None`` until the owned stream has
+         *     stated it — a cost of ``0`` and "no cost reported yet" are different facts.
+         */
+        NativeFactsView: {
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Ttft Ms */
+            ttft_ms?: number | null;
+            /** Turn Duration Ms */
+            turn_duration_ms?: number | null;
+            /** Last Exit Code */
+            last_exit_code?: number | null;
+            /**
+             * Permission Denials
+             * @default 0
+             */
+            permission_denials: number;
+            /** Subagents Spawned */
+            subagents_spawned?: number | null;
+            /** Subagents Completed */
+            subagents_completed?: number | null;
+            /** Subagents Failed */
+            subagents_failed?: number | null;
         };
         /**
          * NewNamedBranch
@@ -2800,6 +3771,29 @@ export interface components {
          * @enum {string}
          */
         Placement: "worktree" | "root";
+        /**
+         * ProgressEntryView
+         * @description One durable workspace or ticket progress claim.
+         *
+         *     ``phase`` stays an open string rather than ``TaskPhase``: this is a
+         *     historical record, and an older row carrying a phase a newer binary no
+         *     longer recognises must not make the entire history unreadable.
+         */
+        ProgressEntryView: {
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Phase */
+            phase: string | null;
+            /** Blocked */
+            blocked: boolean;
+            /** Note */
+            note: string | null;
+            /** Ticket Key */
+            ticket_key: string | null;
+        };
         /**
          * ProjectGroupView
          * @description Wire mirror of ``grove.core.activity.ProjectGroup``.
@@ -3077,22 +4071,33 @@ export interface components {
         };
         /**
          * QuestionAnswerItem
-         * @description One question's answer: chosen option indexes XOR free text — exactly one.
+         * @description One question's answer: chosen option indexes, free text, or both.
          *
          *     ``selected_indexes`` picks predefined options (0-based, in option order);
-         *     ``text`` is a free-text ("Type something.") answer. No ``kind`` discriminator:
-         *     a client sends exactly one key, so a ``model_validator`` enforces the XOR
-         *     rather than a tagged union (a tag the webapp form does not carry). The
-         *     single-vs-multi and free-text-only-on-single-select rules can't be checked
-         *     here (they need the question) — the manager checks them against the captured
-         *     payload.
+         *     ``text`` is anything the human wanted to say that the options did not
+         *     cover. **Either may be present and they compose** — "option B, and here is
+         *     why" is a real answer, and a wire that could only carry one of the two made
+         *     a human choose between answering the question and qualifying the answer.
          *
-         *     ``text`` is rejected outright if it carries any control byte (ord < 0x20 or
-         *     0x7f, including tab/newline/ESC). The Claude adapter types ``text``
-         *     verbatim into the pane via ``send-keys -l``; the whole design rests on a
-         *     closed key vocabulary (digits, Tab, Enter) driving the picker deterministically,
-         *     and a raw control byte reopens that surface (ESC cancels the question outright,
-         *     CR/LF act as an early Enter mid-sequence and desync the positional driver).
+         *     That composition is what the delivery redesign bought. While an answer was
+         *     typed into the provider's own picker widget, the shape of the answer was
+         *     dictated by the shape of that widget: free text existed only as the
+         *     single-select picker's synthetic "Type something." row, so it was
+         *     single-select-only and mutually exclusive with a choice. Grove now dismisses
+         *     the picker and restates the whole batch as prose, so the widget's grammar
+         *     constrains nothing and neither rule survives.
+         *
+         *     An item carrying neither is still refused — an answer that says nothing is a
+         *     question the human has not answered, and the caller should send no item at
+         *     all rather than an empty one. The remaining per-question rules (one item per
+         *     captured question, indexes that name real options) need the question itself,
+         *     so the manager checks them against the captured payload.
+         *
+         *     ``text`` may contain newlines and tabs; every other C0 byte and DEL are
+         *     refused. The distinction is between prose and terminal control: an ESC in a
+         *     payload typed into a pane cancels whatever is on screen, and the rest of C0
+         *     is escape-sequence material, while a line break is just how people write
+         *     more than one sentence.
          */
         QuestionAnswerItem: {
             /** Selected Indexes */
@@ -3107,8 +4112,9 @@ export interface components {
          *     ``tool_use_id`` is the group answer-back address captured at ask-time; the
          *     daemon requires it to still match the standing capture (409 on a stale id).
          *     ``answers`` is one item per question, in the captured order; the manager
-         *     validates length + per-question kind rules against the captured payload
-         *     (422), then the Claude adapter maps them to deterministic keystrokes.
+         *     validates the length and the option indexes against the captured payload
+         *     (422), dismisses the on-screen prompt, and delivers the whole batch back as
+         *     one Grove-fenced message.
          */
         QuestionAnswerRequest: {
             /** Session Id */
@@ -3163,6 +4169,56 @@ export interface components {
              * @default 0
              */
             position: number;
+        };
+        /**
+         * RecordedNameView
+         * @description The most recently recorded name for a workspace, including its tombstone.
+         */
+        RecordedNameView: {
+            /** Workspace Id */
+            workspace_id: string;
+            /** Title */
+            title: string;
+            /** Description */
+            description: string | null;
+            /** Repo Root */
+            repo_root: string | null;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Deleted At */
+            deleted_at: string | null;
+        };
+        /**
+         * RecordedTicketView
+         * @description One ticket a workspace was attached to, with its observed window.
+         */
+        RecordedTicketView: {
+            /** Ticket Key */
+            ticket_key: string;
+            /** Provider */
+            provider: string;
+            /** Ticket Id */
+            ticket_id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
         };
         /**
          * RemapSessionRequest
@@ -3221,6 +4277,25 @@ export interface components {
          * @enum {string}
          */
         Runtime: "host" | "container";
+        /**
+         * SendKey
+         * @description Engine-owned key names; the terminal application decides their effect.
+         *
+         *     Values are tmux key names, never flags, targets, literal text or commands.
+         *     Widening this vocabulary is a conscious act at the engine boundary.
+         * @enum {string}
+         */
+        SendKey: "C-c" | "Up" | "Down" | "Left" | "Right" | "Enter" | "Tab" | "Escape";
+        /**
+         * SendKeysRequest
+         * @description Deliver exactly one named key to the workspace's own live terminal.
+         *
+         *     No caller-selected pane, command prefix, repetition count or raw bytes.
+         *     Acknowledgement means delivered, not that the application accepted an action.
+         */
+        SendKeysRequest: {
+            key: components["schemas"]["SendKey"];
+        };
         /**
          * SessionActivityView
          * @description Wire mirror of ``grove.core.activity.SessionActivity``.
@@ -3339,11 +4414,10 @@ export interface components {
          * SessionQueryView
          * @description Wire mirror of one full-text direct user query.
          *
-         *     This deliberately does not reuse ``SessionTurnView``: turns carry an
-         *     unbounded collection of entries and cap each chat-sized body, while a
-         *     recollection is the much smaller list of times a human directly typed. Its
-         *     text is uncapped because recovering the complete instruction is this
-         *     endpoint's purpose.
+         *     This deliberately does not reuse ``SessionTurnView``: a turn carries the
+         *     whole exchange around a prompt, while a recollection is just the list of
+         *     times a human directly typed — the shape you want when the point is to
+         *     recover instructions a compaction has since taken out of the agent's context.
          */
         SessionQueryView: {
             /** Ordinal */
@@ -3918,11 +4992,15 @@ export interface components {
          *     ``tool_use_id`` is the correlation key, so several calls issued in one
          *     assistant turn stay individually addressable however they interleave.
          *
-         *     Both bodies are BOUNDED and say so: ``input_truncated`` / ``result_truncated``
-         *     are explicit rather than left to the trailing ellipsis ``_truncate`` writes,
-         *     because an ellipsis inside a command's own output is indistinguishable from
-         *     output the tool actually produced — the one place this package's usual trim
-         *     signal is not enough.
+         *     Both bodies cross WHOLE, and the pair of ``*_truncated`` flags that used to
+         *     ride here is gone rather than pinned to ``False``. A tool body is the case
+         *     that argued hardest for a cap — a turn holds dozens of calls where it holds
+         *     one or two diffs, so the cost multiplied — and it is also the case where a
+         *     cap was least honest: an ellipsis inside a command's own output is
+         *     indistinguishable from output the tool actually produced, which is why the
+         *     flags had to exist at all. A reader diffing a config, counting test failures
+         *     or reading the tail of a build log needs the bytes the tool returned, not a
+         *     prefix of them, and this route is where those bytes live.
          */
         ToolCallView: {
             /** Name */
@@ -3938,18 +5016,8 @@ export interface components {
             input?: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * Input Truncated
-             * @default false
-             */
-            input_truncated: boolean;
             /** Result */
             result?: string | null;
-            /**
-             * Result Truncated
-             * @default false
-             */
-            result_truncated: boolean;
             /** Duration Ms */
             duration_ms?: number | null;
         };
@@ -4209,6 +5277,30 @@ export interface components {
              *     }
              */
             coverage: components["schemas"]["UsageCoverageView"];
+        };
+        /**
+         * UsageCostBreakdownView
+         * @description The priced portion of a selected session population.
+         *
+         *     ``known_cost`` is deliberately a sum of whole priceable sessions only. A
+         *     switched-model session with incomplete generation evidence contributes
+         *     nothing here: showing its one priced generation would turn a subtotal into
+         *     a partial-session charge. ``UsageSummaryView.cost`` stays the stricter
+         *     all-or-nothing total; this companion explains why it is unavailable without
+         *     recasting unknown cost as zero.
+         */
+        UsageCostBreakdownView: {
+            known_cost?: components["schemas"]["MoneyView"] | null;
+            /**
+             * Priced Sessions
+             * @default 0
+             */
+            priced_sessions: number;
+            /**
+             * Total Sessions
+             * @default 0
+             */
+            total_sessions: number;
         };
         /**
          * UsageCoverageView
@@ -4562,6 +5654,14 @@ export interface components {
             account_label?: string | null;
             /** Source Id */
             source_id?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Workspace Title */
+            workspace_title?: string | null;
+            /** Workspace Description */
+            workspace_description?: string | null;
+            /** Workspace Deleted At */
+            workspace_deleted_at?: string | null;
             /**
              * Models
              * @default []
@@ -4692,6 +5792,7 @@ export interface components {
              */
             files_changed: number;
             cost?: components["schemas"]["MoneyView"] | null;
+            cost_breakdown?: components["schemas"]["UsageCostBreakdownView"] | null;
             /**
              * Accounts
              * @default 0
@@ -4793,6 +5894,8 @@ export interface components {
             update_available: boolean;
             /** Langfuse Host */
             langfuse_host?: string | null;
+            /** Langfuse Project Id */
+            langfuse_project_id?: string | null;
         };
         /**
          * WorkspaceActivityView
@@ -4842,28 +5945,57 @@ export interface components {
         };
         /**
          * WorkspaceDefaults
-         * @description Pre-filled answers for the new-workspace form.
+         * @description Your saved answers for a create that does not name one. Every field is optional and
+         *     an unset one falls through to its normal source.
          *
-         *     Every field is optional and ``None`` means "no saved default" — the field
+         *     Every field is optional, and ``None`` means "no saved default" — the field
          *     falls through to whatever the existing per-field cascade already resolved
          *     (``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's
-         *     own default for model). Title is deliberately absent: it names one task,
-         *     never a default. So are concrete branch/remote names, for the same reason.
+         *     own default for model). Grove applies these in the engine, so every surface
+         *     that creates a workspace — the CLI, the TUI, the web composer, MCP and
+         *     issue-ops — honours them identically, and a create form showing you a
+         *     pre-filled answer is showing you what will actually happen.
+         *
+         *     Title is deliberately absent: it names one task, never a default. So are
+         *     concrete branch and remote names, for the same reason.
          */
         WorkspaceDefaults: {
-            /** Agent */
+            /**
+             * Agent
+             * @description Agent selected when a create form opens.
+             */
             agent?: string | null;
-            /** Runtime */
+            /**
+             * Runtime
+             * @description `host` or `container` for a new workspace. Unset falls through to
+             *     `container.enabled`.
+             */
             runtime?: ("host" | "container") | null;
-            /** Brief */
+            /**
+             * Brief
+             * @description Whether a new agent receives Grove's first turn brief. Unset falls through to
+             *     `brief.enabled`.
+             */
             brief?: boolean | null;
-            /** Model */
+            /**
+             * Model
+             * @description Model id sent to the selected agent. Unset uses the agent's own default.
+             */
             model?: string | null;
-            /** Branch Mode */
+            /**
+             * Branch Mode
+             * @description How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`.
+             */
             branch_mode?: ("auto" | "new" | "existing" | "remote" | "root") | null;
-            /** Base Ref */
+            /**
+             * Base Ref
+             * @description The branch or ref a new branch starts from.
+             */
             base_ref?: string | null;
-            /** Skip Init */
+            /**
+             * Skip Init
+             * @description Whether to skip the configured init script.
+             */
             skip_init?: boolean | null;
         };
         /**
@@ -4949,6 +6081,19 @@ export interface components {
             reason?: ("worktree_missing" | "not_a_repo" | "git_failed") | null;
         };
         /**
+         * WorkspaceHistoryView
+         * @description Everything durably recorded about one workspace, newest first where ordered.
+         */
+        WorkspaceHistoryView: {
+            name?: components["schemas"]["RecordedNameView"] | null;
+            /** Names */
+            names?: components["schemas"]["NameChangeView"][];
+            /** Progress */
+            progress?: components["schemas"]["ProgressEntryView"][];
+            /** Tickets */
+            tickets?: components["schemas"]["RecordedTicketView"][];
+        };
+        /**
          * WorkspacePaneView
          * @description One-shot ANSI snapshot of a workspace's agent tmux pane.
          *
@@ -4965,6 +6110,23 @@ export interface components {
             ansi: string | null;
             /** Taken At */
             taken_at: string | null;
+        };
+        /**
+         * WorkspacePanelView
+         * @description One panel currently resolvable for an authenticated workspace response.
+         *
+         *     The response carries only the browser-facing proxy URL — never the service,
+         *     compose project, container id, or internal address it resolved through. The
+         *     omitted configuration is an ownership-sensitive implementation detail, while
+         *     this small view is exactly what a tab strip needs to render an iframe.
+         */
+        WorkspacePanelView: {
+            /** Name */
+            name: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
         };
         /**
          * WorkspacePeekView
@@ -5086,10 +6248,26 @@ export interface components {
              * @default false
              */
             runtime_no_tmux: boolean;
+            /**
+             * Native
+             * @default false
+             */
+            native: boolean;
+            /**
+             * Telemetry Session Id
+             * @default
+             */
+            telemetry_session_id: string;
             /** Share Token */
             share_token?: string | null;
             /** Share Session Id */
             share_session_id?: string | null;
+            /**
+             * Panels
+             * @default []
+             */
+            panels: components["schemas"]["WorkspacePanelView"][];
+            diagram?: components["schemas"]["DiagramSessionView"] | null;
         };
         /**
          * WorkspaceStatus
@@ -5159,6 +6337,23 @@ export interface components {
             delete_branch?: boolean | null;
         };
         /**
+         * _MailboxAckBody
+         * @description A native owner's bounded observation of one submitted message.
+         */
+        _MailboxAckBody: {
+            /** Message Id */
+            message_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "queued" | "delivered" | "unknown" | "rejected";
+            /** Evidence */
+            evidence?: string | null;
+            /** Reason */
+            reason?: ("unsupported" | "not_registered" | "stale_recipient" | "sender_not_bound" | "scope_denied" | "recipient_refused" | "recipient_blocked" | "reply_unavailable" | "too_large" | "busy_conflict" | "backpressure" | "transport_unknown") | null;
+        };
+        /**
          * _PauseBody
          * @description Pause request body — ``force`` skips the dirty-worktree check.
          *
@@ -5198,10 +6393,22 @@ export interface components {
          *     at validation (422) keeps the engine's typed-error surface for real
          *     state problems. Module-scope for the same forward-ref reason as
          *     ``_PauseBody`` above.
+         *
+         *     ``attachments`` names files already stored through
+         *     ``POST /workspaces/{id}/attachments``. Ids, never paths: a path chosen by
+         *     the caller is the caller choosing which file the agent is told to open,
+         *     and the engine resolves an id against one directory it owns. An id that no
+         *     longer resolves is skipped rather than refused — see
+         *     ``WorkspaceManager.send_message``.
          */
         _SendMessageBody: {
             /** Text */
             text: string;
+            /**
+             * Attachments
+             * @default []
+             */
+            attachments: string[];
         };
         /**
          * _SwitchModelBody
@@ -5417,6 +6624,170 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PairingChallengeView"][];
+                };
+            };
+        };
+    };
+    peers_mailboxes_peers_get: {
+        parameters: {
+            query?: {
+                workspace_id?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxPeerPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_message_mailboxes_messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailboxSendRequest"] | components["schemas"]["MailboxReplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    message_status_mailboxes_messages__message_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connection_mailboxes_connection_get: {
+        parameters: {
+            query: {
+                provider_session_id: string;
+                mcp_ready?: boolean;
+                input_capacity?: number | null;
+                pending_input_ids?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_mailboxes_ack_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_MailboxAckBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5867,6 +7238,39 @@ export interface operations {
             };
         };
     };
+    public_events_public__token__events_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-grove-share-passcode"?: string | null;
+            };
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     public_turns_public__token__turns_get: {
         parameters: {
             query?: {
@@ -6127,6 +7531,41 @@ export interface operations {
             };
         };
     };
+    ingest_assignment_event_issue_ops_assignments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssignmentTicketEvent"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_workspace_workspaces__ws_id__get: {
         parameters: {
             query?: never;
@@ -6180,6 +7619,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workspace_panels_workspaces__ws_id__panels_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePanelView"][];
                 };
             };
             /** @description Validation Error */
@@ -6335,6 +7805,74 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["_SendMessageBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_workspace_attachment_workspaces__ws_id__attachments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachmentUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_workspace_keys_workspaces__ws_id__keys_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendKeysRequest"];
             };
         };
         responses: {
@@ -6537,6 +8075,220 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_workspace_diagram_workspaces__ws_id__diagram_get: {
+        parameters: {
+            query?: {
+                repo?: string | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramDocumentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_workspace_diagram_workspaces__ws_id__diagram_put: {
+        parameters: {
+            query?: {
+                repo?: string | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiagramUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramDocumentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_workspace_diagram_workspaces__ws_id__diagram_post: {
+        parameters: {
+            query?: {
+                repo?: string | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiagramOpenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramDocumentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_workspace_diagram_preview_workspaces__ws_id__diagram_preview_get: {
+        parameters: {
+            query?: {
+                repo?: string | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramPreviewView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_workspace_diagram_preview_workspaces__ws_id__diagram_preview_post: {
+        parameters: {
+            query?: {
+                repo?: string | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiagramPreviewUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramPreviewView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_workspace_diagram_workspaces__ws_id__diagram_stop_post: {
+        parameters: {
+            query?: {
+                repo?: string | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiagramStopRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramDocumentView"];
                 };
             };
             /** @description Validation Error */
@@ -6933,6 +8685,37 @@ export interface operations {
             };
         };
     };
+    workspace_history_workspaces__ws_id__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHistoryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     workspace_phase_workspaces__ws_id__phase_get: {
         parameters: {
             query?: never;
@@ -7018,6 +8801,123 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionSummaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_gallery_gallery_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GalleryItemView"][];
+                };
+            };
+        };
+    };
+    read_gallery_document_gallery__item_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GalleryDocumentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_gallery_preview_gallery__item_id__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GalleryPreviewView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_gallery_preview_gallery__item_id__preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GalleryPreviewUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GalleryPreviewView"];
                 };
             };
             /** @description Validation Error */
@@ -7139,6 +9039,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentSummaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_models_models_get: {
+        parameters: {
+            query: {
+                repo: string;
+                agent?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelOptionView"][];
                 };
             };
             /** @description Validation Error */

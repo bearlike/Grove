@@ -22,6 +22,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.status import (
     HTTP_401_UNAUTHORIZED,
+    HTTP_403_FORBIDDEN,
     HTTP_404_NOT_FOUND,
     HTTP_409_CONFLICT,
     HTTP_429_TOO_MANY_REQUESTS,
@@ -93,14 +94,50 @@ def make_require_session(
     own store + enabled flag (tests benefit; the closure stays
     deterministic).
 
-    When ``enabled=False`` the dep short-circuits to a synthetic Session;
-    only test scaffolding ever flips this off.
+    When ``enabled=False`` the dep short-circuits to a synthetic Session only
+    without a bearer; supplied tokens remain scope-checked in test scaffolding.
     """
 
     async def require_session(request: Request) -> Session:
-        if not enabled:
+        header = request.headers.get("authorization", "")
+        if not enabled and not header.lower().startswith("bearer "):
             # Test-only path — return a sentinel session so handlers that
-            # access ``request.state.session`` still work.
+            # access ``request.state.session`` still work. A supplied bearer
+            # still takes the real scope check below, so this shortcut cannot
+            # hide a scoped-token regression.
+            return _SENTINEL_SESSION
+        if enabled and not header.lower().startswith("bearer "):
+            raise HTTPException(
+                HTTP_401_UNAUTHORIZED,
+                _envelope("auth_missing", "missing or malformed Authorization header"),
+            )
+        token = header[len("Bearer ") :].strip()
+        try:
+            session = auth_store.validate(token)
+        except AuthInvalidToken as exc:
+            raise HTTPException(
+                HTTP_401_UNAUTHORIZED,
+                _envelope("auth_invalid", str(exc)),
+            ) from exc
+        if session.mailbox_identity is not None:
+            raise HTTPException(
+                HTTP_403_FORBIDDEN,
+                _envelope("mailbox_scope_denied", "mailbox session cannot access this route"),
+            )
+        return session
+
+    return require_session
+
+
+def make_require_mailbox_session(
+    *,
+    auth_store: SessionStore,
+    enabled: bool,
+) -> Callable[[Request], Awaitable[Session]]:
+    """Build a mailbox route dependency accepting scoped and ordinary sessions."""
+
+    async def require_mailbox_session(request: Request) -> Session:
+        if not enabled:
             return _SENTINEL_SESSION
         header = request.headers.get("authorization", "")
         if not header.lower().startswith("bearer "):
@@ -117,7 +154,7 @@ def make_require_session(
                 _envelope("auth_invalid", str(exc)),
             ) from exc
 
-    return require_session
+    return require_mailbox_session
 
 
 def make_require_hook_token(*, enabled: bool) -> Callable[[Request], Awaitable[None]]:
@@ -256,5 +293,6 @@ def build_auth_router(
 __all__ = [
     "build_auth_router",
     "make_require_hook_token",
+    "make_require_mailbox_session",
     "make_require_session",
 ]

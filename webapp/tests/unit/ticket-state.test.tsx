@@ -6,7 +6,7 @@ import {
   ticketGlyph,
   ticketState,
   ticketStateColour,
-  ticketStatusTone,
+  ticketStateLabel,
   titleRuns,
   type TicketState,
 } from "@/components/grove/workspace/selectors";
@@ -51,6 +51,8 @@ describe("normalizing a tracker's own word", () => {
       expect(ticketState(word), word).toBe("closed");
     }
     expect(ticketState("merged")).toBe("merged");
+    expect(ticketState("merged", false, "pull_request")).toBe("merged");
+    expect(ticketState("merged", false, "issue")).toBe("closed");
     expect(ticketState("draft")).toBe("draft");
     expect(ticketState("open", true)).toBe("draft");
   });
@@ -73,11 +75,17 @@ describe("the tables over the union are total", () => {
     }
   });
 
-  it("answers a colour and a badge tone for every state", () => {
+  it("answers a colour and a label for every state", () => {
     for (const state of ALL_STATES) {
       expect(ticketStateColour(state), state).toMatch(/^text-/);
-      expect(ticketStatusTone(state), state).toBeTruthy();
+      expect(ticketStateLabel(state, "tracker word"), state).toBeTruthy();
     }
+  });
+
+  it("quotes an unknown tracker word, but says nothing when the tracker did", () => {
+    expect(ticketStateLabel("unknown", "  triaged  ")).toBe("triaged");
+    expect(ticketStateLabel("unknown", null)).toBeNull();
+    expect(ticketStateLabel("unknown")).toBeNull();
   });
 
   // The forge convention, which is the whole reason a reader recognises this
@@ -102,6 +110,15 @@ describe("the row", () => {
     const html = row(ref({ kind: "pull_request", status: "merged" }));
     expect(html).toContain('data-state="merged"');
     expect(html).toContain("text-merged");
+  });
+
+  it("degrades a merged word on an issue to closed rather than claiming a landed branch", () => {
+    const html = row(ref({ kind: "issue", status: "merged" }));
+
+    expect(html).toContain('data-state="closed"');
+    expect(html).toContain("text-destructive");
+    expect(html).not.toContain("text-merged");
+    expect(html).not.toContain('data-state="merged"');
   });
 
   it("marks the id as a destination", () => {

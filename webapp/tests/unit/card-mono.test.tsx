@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { CardField, CardFields, CardStat } from "@/components/grove/card";
+import { CardCell, CardField, CardFields } from "@/components/grove/card";
 
 /**
  * Monospace is semantic here, and these pin the semantics rather than the look.
@@ -11,9 +11,11 @@ import { CardField, CardFields, CardStat } from "@/components/grove/card";
  * how data looks technical. Two places in this primitive had it wrong, and both
  * were invisible because each read as a reasonable local choice:
  *
- *   - `CardStat` set every figure in mono, which is where the work-panel's
- *     `+0 −0` got its treatment. The audit map described that as five separate
- *     per-tab defects; no tab styles its own figures.
+ *   - The metric primitive set every figure in mono, which is where the work
+ *     panel's `+0 −0` got its treatment. The audit map described that as five
+ *     separate per-tab defects; no tab styles its own figures. `CardStat` has
+ *     since been replaced by `CardCell`, and the rule moved with it — which is
+ *     the whole reason this file tests the PRIMITIVE and not a tab.
  *   - `CardField`'s `mono` flag was documented as "identifiers AND timestamps"
  *     and welded `font-mono` to `tabular-nums`, so the two could not be asked
  *     for separately. A timestamp wants tabular figures and not mono.
@@ -27,20 +29,22 @@ function valueTag(html: string): string {
   return match[0];
 }
 
-describe("CardStat", () => {
+describe("CardCell", () => {
   it("sets a metric in sans, because a quantity is not a literal", () => {
-    const html = render(<CardStat label="dirty" value={12} />);
+    const html = render(<CardCell label="Dirty files" value={12} />);
 
     expect(html).not.toContain("font-mono");
     expect(html).toContain("tabular-nums");
   });
 
   it("still colours a signed figure, which keeps its label as the second carrier", () => {
-    // `+12` in green is legal only because "added" sits directly under it.
-    const html = render(<CardStat label="added" value="+12" tone="positive" />);
+    // `+12` in green is legal only because "Lines added" sits above it and the
+    // sign is on the figure — two carriers before the hue is the third.
+    const html = render(<CardCell label="Lines added" value="+12" tone="added" />);
 
     expect(html).toContain("text-success");
-    expect(html).toContain("added");
+    expect(html).toContain("Lines added");
+    expect(html).toContain("+12");
   });
 });
 

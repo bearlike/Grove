@@ -41,23 +41,26 @@ never the manager.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import secrets
 import sys
+from collections import deque
+from contextlib import suppress
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from enum import StrEnum
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from threading import BoundedSemaphore
+from typing import Any, ClassVar, Final
 
 from loguru import logger
 
 from grove._mcp_sdk import McpSdk
 from grove.core import paths
+from grove.core.admission import Admission, AdmissionLimits, BoundedInbox
 from grove.core.config import ChannelsConfig, load_config
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 # The MCP SDK is behind the opt-in `[mcp]` extra, so every import of it here is
 # deferred. `McpSdk` reports an SDK that is installed but incompatible as such,
@@ -86,6 +89,10 @@ REPLY_TOOL: Final = "reply"
 # hook ingest token (``ClaudeHook.ensure_ingest_token``): the daemon and this
 # server both read one file rather than threading a token through a launch flag.
 RECEIVE_ROUTE: Final = "/channel/messages"
+# How long one loopback peer may take to send the body it declared. Generous for
+# a same-host client that has already been admitted by the length cap, and short
+# enough that a stalled one cannot hold the single receiver thread.
+_REQUEST_READ_TIMEOUT_SECONDS: Final = 5.0
 _SETTINGS_FILENAME: Final = "claude-channel-settings.json"
 _ENDPOINT_FILENAME: Final = "channel-endpoint.json"
 
@@ -271,15 +278,43 @@ def channel_settings() -> dict[str, Any]:
 # ─── loopback receiver (server side of the daemon → session delivery path) ──────
 
 
+class ChannelDeliveryStatus(StrEnum):
+    """A terminal disposition for an accepted channel delivery."""
+
+    SENT = "sent"
+    FAILED = "failed"
+    UNDLVRD_PENDING = "undelivered_pending"
+    UNDLVRD_IN_FLIGHT = "undelivered_in_flight"
+
+
+class ChannelDeliveryLedger:
+    """Records bounded terminal delivery outcomes without retaining message bodies."""
+
+    def __init__(self, *, capacity: int = 256) -> None:
+        if capacity <= 0:
+            raise ValueError("capacity must be positive")
+        self._outcomes: deque[tuple[ChannelDeliveryStatus, int]] = deque(maxlen=capacity)
+
+    @property
+    def outcomes(self) -> tuple[tuple[ChannelDeliveryStatus, int], ...]:
+        """Terminal statuses and content lengths, in delivery order."""
+        return tuple(self._outcomes)
+
+    def record(self, message: ChannelMessage, status: ChannelDeliveryStatus) -> None:
+        """Publish an outcome with safe attribution, never its content or metadata."""
+        self._outcomes.append((status, len(message.content)))
+        logger.debug("channel delivery {} ({} chars)", status, len(message.content))
+
+
 class ChannelReceiver:
     """Loopback HTTP receiver the daemon POSTs queued channel messages to.
 
     Bind-only-to-127.0.0.1, ephemeral port by default, gated by a same-host
     bearer token. A valid POST body (``{content, meta, sender}``) whose sender
-    the policy permits is handed to ``on_message``; everything else is dropped
-    with the right status. The side effect (the socket) lives here at the edge;
-    parsing + the allowlist decision are the pure ``handle_body`` seam so the
-    accept/reject logic is testable without a socket.
+    the policy permits reserves the message in a bounded inbox before any
+    cross-thread wakeup; overload is refused explicitly. The side effect (the
+    socket) lives here at the edge; parsing + admission are the pure
+    ``handle_body`` seam so the accept/reject logic is testable without a socket.
 
     TODO(daemon plumbing): the matching daemon-side POST route (read the
     endpoint file, authenticate, forward a delivery) is intentionally deferred —
@@ -290,18 +325,22 @@ class ChannelReceiver:
         self,
         policy: ChannelPolicy,
         token: str,
-        on_message: Callable[[ChannelMessage], None],
+        inbox: BoundedInbox[ChannelMessage],
+        limits: AdmissionLimits,
     ) -> None:
         self._policy = policy
         self._token = token
-        self._on_message = on_message
+        self._inbox = inbox
+        self._limits = limits
+        self._request_slots = BoundedSemaphore(limits.max_items)
 
     def handle_body(self, *, authorization: str | None, body: bytes) -> tuple[int, str]:
         """Pure request handling: ``(status_code, reason)``. No socket, no I/O.
 
-        Fail-closed at every step: a bad token → 401, a junk/empty body → 400, a
-        disallowed sender → 403. Only a permitted, well-formed delivery reaches
-        ``on_message`` and returns 202.
+        Fail-closed at every step: a bad token → 401, a junk/empty body → 400,
+        a disallowed sender → 403, an oversized body → 413, and unavailable
+        admission → 503. Only a permitted, well-formed delivery with a reservation
+        returns 202.
         """
         if authorization != f"Bearer {self._token}":
             return 401, "unauthorized"
@@ -314,29 +353,79 @@ class ChannelReceiver:
             return 400, "malformed message"
         if not self._policy.permits_sender(message.sender):
             return 403, "sender not allowed"
-        self._on_message(message)
-        return 202, "accepted"
+        return self._admit(message, len(body))
 
-    def serve(self, port: int) -> tuple[ThreadingHTTPServer, int]:
-        """Bind a loopback ``ThreadingHTTPServer`` and return it + the bound port.
+    def _admit(self, message: ChannelMessage, size_bytes: int) -> tuple[int, str]:
+        """Reserve before scheduling, translating admission outcomes to HTTP."""
+        admission = self._inbox.offer(message, size_bytes=size_bytes)
+        if admission in (Admission.ACCEPTED, Admission.COALESCED):
+            return 202, "accepted"
+        if admission is Admission.TOO_LARGE:
+            return 413, "message too large"
+        return 503, "channel unavailable"
+
+    def acquire_request(self, *, content_length: str | None) -> tuple[int, str] | None:
+        """Reserve a request slot and reject declared oversized bodies before read."""
+        try:
+            size_bytes = int(content_length or 0)
+        except ValueError:
+            return 400, "invalid content length"
+        if size_bytes < 0:
+            return 400, "invalid content length"
+        if size_bytes > self._limits.max_bytes:
+            return 413, "message too large"
+        if not self._request_slots.acquire(blocking=False):
+            return 503, "channel unavailable"
+        return None
+
+    def release_request(self) -> None:
+        """Release the request reservation after its body was handled or dropped."""
+        self._request_slots.release()
+
+    def serve(self, port: int) -> tuple[HTTPServer, int]:
+        """Bind a loopback HTTP receiver with bounded body admission.
 
         Bound to ``127.0.0.1`` only (never a routable interface — a channel into
-        a running agent is a same-host trust boundary). The caller runs
-        ``serve_forever`` on a daemon thread and publishes the port. Split from
-        ``handle_body`` so the socket is the only thing this method adds.
+        a running agent is a same-host trust boundary). Each request's declared
+        length is refused before reading, and synchronous handling avoids spawning
+        an unbounded thread per connection.
         """
         receiver = self
 
         class _Handler(BaseHTTPRequestHandler):
+            # A HALF-SENT REQUEST MUST COST ITS OWN CONNECTION, NEVER THE
+            # CHANNEL. Handling is single-threaded on purpose (a channel into a
+            # running agent must not spawn a thread per connection), so a client
+            # that declares an in-cap Content-Length and then stops sending
+            # blocks `rfile.read` and every later delivery queues behind it
+            # forever. The length cap bounds how much may be read; this bounds
+            # how long anyone may take to send it, which is the half that makes
+            # "synchronous handling" safe rather than a way for any local
+            # process to silence the channel by opening a socket.
+            timeout = _REQUEST_READ_TIMEOUT_SECONDS
+
             def do_POST(self) -> None:  # BaseHTTPRequestHandler API name
                 if self.path != RECEIVE_ROUTE:
                     self.send_error(404, "not found")
                     return
-                length = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(length) if length else b""
-                status, reason = receiver.handle_body(
-                    authorization=self.headers.get("Authorization"), body=body
+                refusal = receiver.acquire_request(
+                    content_length=self.headers.get("Content-Length")
                 )
+                if refusal is not None:
+                    self._respond(*refusal)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = self.rfile.read(length) if length else b""
+                    self._respond(
+                        *receiver.handle_body(
+                            authorization=self.headers.get("Authorization"), body=body
+                        )
+                    )
+                finally:
+                    receiver.release_request()
+
+            def _respond(self, status: int, reason: str) -> None:
                 self.send_response(status)
                 self.end_headers()
                 self.wfile.write(reason.encode("utf-8"))
@@ -346,7 +435,7 @@ class ChannelReceiver:
                 # nothing, but a channel server should be quiet by default.
                 return
 
-        server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+        server = HTTPServer(("127.0.0.1", port), _Handler)
         return server, server.server_address[1]
 
 
@@ -364,9 +453,16 @@ class ChannelServer:
     layer this only wires together.
     """
 
-    def __init__(self, config: ChannelsConfig, *, port: int = 0) -> None:
+    def __init__(
+        self,
+        config: ChannelsConfig,
+        *,
+        port: int = 0,
+        admission_limits: AdmissionLimits | None = None,
+    ) -> None:
         self._policy = ChannelPolicy(tuple(config.allowed_senders))
         self._port = port
+        self._admission_limits = admission_limits or config.admission
         self._token = ensure_channel_token()
 
     @property
@@ -395,54 +491,86 @@ class ChannelServer:
             logger.debug("could not publish channel endpoint: {}", exc)
         return endpoint
 
-    def run(self) -> None:  # pragma: no cover - live stdio transport
+    # The live MCP lifecycle keeps setup, admission, and teardown in one owner.
+    def run(self) -> None:  # noqa: PLR0915  # pragma: no cover - live stdio transport
         """Serve the channel over stdio until the agent disconnects (blocking).
 
-        Lazily builds the low-level MCP server, starts the loopback receiver on a
-        daemon thread, and bridges an inbound delivery into an outbound
-        ``notifications/claude/channel``. Not unit-tested (a live stdio handshake
-        + real SDK, same as ``GroveMcpServer.run``); the pieces it composes are.
+        Lazily builds the low-level MCP server, waits until its session exists,
+        then starts the loopback receiver on a daemon thread and bridges each
+        admitted delivery into an outbound ``notifications/claude/channel``.
+        Reservations are completed after send and shutdown accounts for pending
+        values. Not unit-tested (a live stdio handshake + real SDK, same as
+        ``GroveMcpServer.run``); the pieces it composes are.
         """
-        import asyncio  # noqa: PLC0415
         import threading  # noqa: PLC0415
 
         server, session_holder = self._build_server()
         loop = asyncio.new_event_loop()
-        queue: asyncio.Queue[ChannelMessage] = asyncio.Queue()
+        inbox = BoundedInbox[ChannelMessage](self._admission_limits)
+        ledger = ChannelDeliveryLedger(capacity=self._admission_limits.max_items)
+        http_server: HTTPServer | None = None
 
-        def _enqueue(message: ChannelMessage) -> None:
-            loop.call_soon_threadsafe(queue.put_nowait, message)
-
-        receiver = ChannelReceiver(self._policy, self._token, _enqueue)
-        http_server, bound_port = receiver.serve(self._port)
-        self.publish_endpoint(bound_port)
-        threading.Thread(target=http_server.serve_forever, daemon=True).start()
+        def _account_undelivered() -> None:
+            for delivery in inbox.close():
+                ledger.record(delivery.value, ChannelDeliveryStatus.UNDLVRD_PENDING)
 
         async def _pump() -> None:
             while True:
-                message = await queue.get()
-                session = session_holder.get("session")
-                if session is None:
-                    continue
+                delivery = await inbox.take()
                 try:
+                    session = session_holder["session"]
                     await session.send_notification(
-                        DELIVER_NOTIFICATION, message.to_notification_params()
+                        DELIVER_NOTIFICATION, delivery.value.to_notification_params()
                     )
+                except asyncio.CancelledError:
+                    ledger.record(delivery.value, ChannelDeliveryStatus.UNDLVRD_IN_FLIGHT)
+                    raise
                 except Exception as exc:  # best-effort delivery, never crash the pump
                     logger.debug("channel delivery failed: {}", exc)
+                    ledger.record(delivery.value, ChannelDeliveryStatus.FAILED)
+                else:
+                    ledger.record(delivery.value, ChannelDeliveryStatus.SENT)
+                finally:
+                    inbox.complete(delivery)
 
         async def _serve() -> None:
+            nonlocal http_server
+            inbox.bind()
+            session_ready = asyncio.Event()
+            stdio = asyncio.create_task(self._serve_stdio(server, session_holder, session_ready))
+            ready = asyncio.create_task(session_ready.wait())
+            done, _ = await asyncio.wait((stdio, ready), return_when=asyncio.FIRST_COMPLETED)
+            if stdio in done:
+                ready.cancel()
+                with suppress(asyncio.CancelledError):
+                    await ready
+                try:
+                    await stdio
+                finally:
+                    _account_undelivered()
+                return
+            ready.result()
+            receiver = ChannelReceiver(self._policy, self._token, inbox, self._admission_limits)
+            http_server, bound_port = receiver.serve(self._port)
+            self.publish_endpoint(bound_port)
+            threading.Thread(target=http_server.serve_forever, daemon=True).start()
             # Held for the serve lifetime so the task is not GC'd mid-run (RUF006).
             pump = asyncio.create_task(_pump())
             try:
-                await self._serve_stdio(server, session_holder)
+                await stdio
             finally:
+                _account_undelivered()
                 pump.cancel()
+                with suppress(asyncio.CancelledError):
+                    await pump
+                _account_undelivered()
 
         try:
             loop.run_until_complete(_serve())
         finally:
-            http_server.shutdown()
+            _account_undelivered()
+            if http_server is not None:
+                http_server.shutdown()
             loop.close()
 
     def _build_server(self) -> tuple[Any, dict[str, Any]]:  # pragma: no cover
@@ -503,8 +631,10 @@ class ChannelServer:
         except (AttributeError, TypeError) as exc:
             logger.debug("could not register channel permission handler: {}", exc)
 
-    async def _serve_stdio(self, server: Any, holder: dict[str, Any]) -> None:  # pragma: no cover
-        """Run the server over stdio, stashing the live session for the pump."""
+    async def _serve_stdio(
+        self, server: Any, holder: dict[str, Any], ready: asyncio.Event
+    ) -> None:  # pragma: no cover
+        """Run the server over stdio, stashing the live session before admitting work."""
         from mcp.server.stdio import stdio_server  # noqa: PLC0415
 
         init_options = server.create_initialization_options()
@@ -518,6 +648,7 @@ class ChannelServer:
             server.run(read_stream, write_stream, init_options) as session,
         ):
             holder["session"] = session
+            ready.set()
             await session.wait_closed()
 
 
@@ -584,6 +715,8 @@ if __name__ == "__main__":  # pragma: no cover
 
 __all__ = [
     "CAPABILITY_KEY",
+    "ChannelDeliveryLedger",
+    "ChannelDeliveryStatus",
     "ChannelEndpoint",
     "ChannelMessage",
     "ChannelPolicy",

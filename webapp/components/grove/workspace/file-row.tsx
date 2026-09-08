@@ -16,9 +16,9 @@ import { FileTypeIcon } from "./file-type-icon";
  * come from — a `computeDiff` over the two strings the agent reported, versus
  * git's own patch header — which is a data difference, not a presentation one.
  *
- * BOTH CALLERS MUST PASS `showIcon={false}` to `DiffViewer`. The vendored
- * header draws the monochrome text chip this component's icon replaces, and
- * leaving it on puts two different icons on one file.
+ * A complete `DiffViewer` beneath this row must pass `showIcon={false}`.
+ * The transcript instead composes its body from native diff lines so this
+ * summary remains the only file header.
  */
 export function FileRowSummary({
   path,

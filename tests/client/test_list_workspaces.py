@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from grove.client import BackendConfig, GroveClient
+from grove.core.contracts.keys import SendKey
 
 _REPO = Path("/repo/acme")
 
@@ -99,3 +100,21 @@ async def test_list_workspaces_ticket_provider_without_id_raises() -> None:
             await client.list_workspaces(ticket_provider="github")
     finally:
         await client.close()
+
+
+async def test_send_keys_serializes_the_closed_one_key_contract() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(204)
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        await client.send_keys("ws-1", SendKey.ESCAPE)
+    finally:
+        await client.close()
+
+    assert captured[0].method == "POST"
+    assert captured[0].url.path == "/workspaces/ws-1/keys"
+    assert captured[0].content == b'{"key":"Escape"}'

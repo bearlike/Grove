@@ -1,0 +1,68 @@
+# Normalize the token and session fields that upstream agent telemetry emits in
+# different locations. Keep this collector in the path: the Langfuse OTLP
+# mapper does not price the bare token names by itself. The endpoint and header
+# are injected as LANGFUSE_OTLP_ENDPOINT and LANGFUSE_BASIC_AUTH at deploy time.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        include_metadata: true
+      grpc:
+        endpoint: 0.0.0.0:4317
+        include_metadata: true
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+    spike_limit_mib: 96
+
+  transform/langfuse_usage:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          # Preserve upstream fields while adding the vocabulary Langfuse prices.
+          - set(attributes["gen_ai.usage.input_tokens"], attributes["input_tokens"]) where attributes["input_tokens"] != nil
+          - set(attributes["gen_ai.usage.output_tokens"], attributes["output_tokens"]) where attributes["output_tokens"] != nil
+          - set(attributes["gen_ai.usage.cache_read_input_tokens"], attributes["cache_read_tokens"]) where attributes["cache_read_tokens"] != nil
+          - set(attributes["gen_ai.usage.cache_creation_input_tokens"], attributes["cache_creation_tokens"]) where attributes["cache_creation_tokens"] != nil
+
+          # Langfuse reads its session id from span attributes. Agent runtimes
+          # may place it on the resource instead, so normalize its placement.
+          - set(attributes["langfuse.session.id"], resource.attributes["langfuse.session.id"]) where attributes["langfuse.session.id"] == nil and resource.attributes["langfuse.session.id"] != nil
+          - set(attributes["langfuse.session.id"], attributes["session.id"]) where attributes["langfuse.session.id"] == nil and attributes["session.id"] != nil
+
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+
+exporters:
+  otlphttp/langfuse:
+    endpoint: ${env:LANGFUSE_OTLP_ENDPOINT}
+    headers:
+      Authorization: ${env:LANGFUSE_BASIC_AUTH}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      queue_size: 2000
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/langfuse_usage, batch]
+      exporters: [otlphttp/langfuse]
+  telemetry:
+    logs:
+      level: info

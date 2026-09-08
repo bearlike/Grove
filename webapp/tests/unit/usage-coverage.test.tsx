@@ -84,6 +84,19 @@ describe("UsageCoverage — the Langfuse button", () => {
  * bump discards the derived cache with nothing to reindex it, so this is the
  * ordinary way a real user meets an empty usage page.
  */
+describe("UsageCoverage — incomplete sources", () => {
+  it("preserves the source detail and names incomplete coverage without claiming every total understates it", () => {
+    const html = render(null, {
+      ...COVERAGE,
+      sources: [{ source_id: "claude", provider: "claude_code", label: ".claude", health: "degraded", detail: "transcript cwd was not measured", session_count: 12 }],
+    });
+
+    expect(html).toContain("Coverage is incomplete for .claude (degraded)");
+    expect(html).toContain("transcript cwd was not measured");
+    expect(html).not.toContain("Totals below understate it");
+  });
+});
+
 describe("UsageCoverage — indexed versus never indexed", () => {
   const NEVER_INDEXED: UsageCoverageView = {
     ...COVERAGE,

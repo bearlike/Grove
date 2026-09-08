@@ -879,6 +879,172 @@
       }
     },
     {
+      "title": "palette-diagram",
+      "repo": "acme-web",
+      "agent": "claude",
+      "branch": "design/palette-diagram",
+      "description": "Diagramming the light and dark colour palettes as one draw.io board, then reading how the landing page applies them.",
+      "tickets": [
+        {
+          "provider": "gitea",
+          "id": "131",
+          "title": "Document the colour palette before the landing redesign",
+          "url": "https://git.acme.internal/acme-web/issues/131",
+          "status": "in progress",
+          "assignee": "mrivera"
+        }
+      ],
+      "phase": {
+        "phase": "verifying",
+        "note": "Comparing the rendered swatches against the CSS tokens"
+      },
+      "diagram": "palette.drawio",
+      "transcript": {
+        "ai_title": "Colour palette diagram",
+        "turns": [
+          {
+            "prompt": "Draw the light and dark colour palettes as one diagram. One card per token with its hex and lightness, light on the left and dark on the right, grouped by role. Then tell me how the landing page applies them and what you would change. Keep it quick.",
+            "thinking": "Read the tokens straight from the stylesheet, then write one managed diagram with the same groups in both columns.",
+            "reply": "The palette is open in the Diagram tab. Six groups per column: surfaces, header, content, edges, accents and the heat ramp, each card labelled with its token, hex and lightness.\n\nThe landing page uses only four of these: `surface-base` for the field, `surface-raised` for the composer, `primary` for the send control and `content-tertiary` for the placeholder. Two changes worth making. The dark `surface-edge` and `border` share one value, so the composer's outline and its divider are indistinguishable. And the light `warning` sits at L 0.49 on an L 0.95 field, which reads as brown rather than amber.",
+            "burst": 14,
+            "tools": [
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "webapp/app/globals.css"
+                },
+                "result": ":root { --surface-base: #eeeef1; --surface-raised: #ffffff; ... }\n.dark { --surface-base: #0c0c0e; ... }"
+              },
+              {
+                "name": "Skill",
+                "input": {
+                  "skill": "grove:collaborating-on-diagrams"
+                },
+                "result": "Launching skill: grove:collaborating-on-diagrams"
+              },
+              {
+                "name": "Write",
+                "input": {
+                  "file_path": ".grove/attachments/palette.drawio",
+                  "content": "<mxfile host=\"embed.diagrams.net\"><diagram id=\"palette\" name=\"Palette\"><mxGraphModel>...</mxGraphModel></diagram></mxfile>"
+                },
+                "result": "File created successfully at: .grove/attachments/palette.drawio"
+              },
+              {
+                "name": "mcp__grove__grove_open_diagram",
+                "input": {
+                  "workspace_id": "c41f0e",
+                  "path": ".grove/attachments/palette.drawio"
+                },
+                "result": "{\"path\": \".grove/attachments/palette.drawio\", \"revision\": \"609239b100af\", \"session_id\": \"d240847dba94\", \"mode\": \"active\"}"
+              }
+            ]
+          },
+          {
+            "prompt": "Check the render before you hand it over.",
+            "thinking": "The browser has the editor open, so the preview read returns the first page as it shows it.",
+            "reply": "The render is clean. Both columns line up group for group, every card fits its label, and no swatch is clipped. The one thing the picture shows that the tokens do not is how close the dark header gradient is to the dark surface, which is the third change I would put on the ticket.",
+            "burst": 6,
+            "tools": [
+              {
+                "name": "mcp__grove__grove_read_diagram_preview",
+                "input": {
+                  "workspace_id": "c41f0e"
+                },
+                "result": "{\"revision\": \"609239b100af\", \"page_index\": 0, \"mime_type\": \"image/png\", \"attachment\": {\"name\": \"diagram-preview.png\", \"path\": \".grove/attachments/3dfbde64090b/diagram-preview.png\"}}"
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": ".grove/attachments/3dfbde64090b/diagram-preview.png"
+                },
+                "result": "[image: 1180x1030 PNG]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "arch-diagram",
+      "repo": "acme-api",
+      "agent": "claude",
+      "branch": "docs/arch-diagram",
+      "description": "Drawing the service architecture as a managed draw.io diagram: four client surfaces, the daemon, the engine, and every data store.",
+      "tickets": [
+        {
+          "provider": "github",
+          "id": "537",
+          "title": "Architecture overview diagram for the onboarding guide",
+          "url": "https://github.com/acme-org/acme-api/issues/537",
+          "status": "in progress",
+          "assignee": "priyaz"
+        }
+      ],
+      "phase": {
+        "phase": "verifying",
+        "note": "Reading the rendered first page back for clipped labels"
+      },
+      "diagram": "grove-stack.drawio",
+      "transcript": {
+        "ai_title": "Service architecture diagram",
+        "turns": [
+          {
+            "prompt": "Draw the architecture as a managed draw.io diagram. Four client surfaces on top, the daemon in the middle, the engine and its subsystems below, and a column on the right naming every data store and who owns it. Keep labels plain text so the export is honest.",
+            "thinking": "Load the diagram skill first, then read the file the human already opened so the update carries the right revision and session id.",
+            "reply": "The diagram is open and the first revision is saved. Five regions: client surfaces, transport, the core engine with its subsystems and side effect modules, the two runtimes, and the data store column on the right.\n\nEvery label is a plain `text;` cell with `whiteSpace=wrap`, so the PNG export places them where the editor does. The next step is a preview read to check for clipped labels before I touch alignment.",
+            "tools": [
+              {
+                "name": "Skill",
+                "input": {
+                  "skill": "grove:collaborating-on-diagrams"
+                },
+                "result": "Launching skill: grove:collaborating-on-diagrams"
+              },
+              {
+                "name": "mcp__grove__grove_read_diagram",
+                "input": {
+                  "workspace_id": "a9c3e1"
+                },
+                "result": "{\"path\": \".grove/attachments/arch-diagram/grove-stack.drawio\", \"revision\": \"5d1fdeef9734\", \"session_id\": \"5c49dbd77d47\", \"mode\": \"active\", \"xml\": \"<mxfile host=\\\"embed.diagrams.net\\\"><diagram id=\\\"grove-stack\\\" name=\\\"Architecture\\\"><mxGraphModel>...</mxGraphModel></diagram></mxfile>\"}"
+              },
+              {
+                "name": "mcp__grove__grove_update_diagram",
+                "input": {
+                  "workspace_id": "a9c3e1",
+                  "session_id": "5c49dbd77d47",
+                  "expected_revision": "5d1fdeef9734",
+                  "xml": "<mxfile host=\"embed.diagrams.net\"><diagram id=\"grove-stack\" name=\"Architecture\"><mxGraphModel>...</mxGraphModel></diagram></mxfile>"
+                },
+                "result": "{\"revision\": \"b81c4c0e2f19\", \"session_id\": \"5c49dbd77d47\", \"mode\": \"active\"}"
+              }
+            ]
+          },
+          {
+            "prompt": "Looks right. Check the render before you call it done.",
+            "thinking": "The browser has acknowledged the new revision, so the preview read returns the first page as the editor shows it.",
+            "reply": "The first page renders cleanly. No clipped labels, the two HTTP arrows land on the daemon, and the data store column fits its frame. One thing I left out on purpose: the diagram names no host, no path under a home directory and no credential, so it can go on the tracker issue as is.",
+            "tools": [
+              {
+                "name": "mcp__grove__grove_read_diagram_preview",
+                "input": {
+                  "workspace_id": "a9c3e1"
+                },
+                "result": "{\"revision\": \"b81c4c0e2f19\", \"page_index\": 0, \"mime_type\": \"image/png\", \"attachment\": {\"name\": \"diagram-preview.png\", \"path\": \".grove/attachments/79233b990a04/diagram-preview.png\"}}"
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": ".grove/attachments/79233b990a04/diagram-preview.png"
+                },
+                "result": "[image: 1900x1340 PNG]"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "title": "auth-refactor",
       "repo": "acme-api",
       "agent": "claude",
@@ -991,7 +1157,8 @@
                 },
                 "result": "9   def read_token_from_cookie(request) -> str | None:\n10      raw = request.cookies.get(\"grove_token\")\n11      if raw is None:\n12          raw = request.cookies.get(\"session\")\n23      header = request.headers.get(\"X-Auth-Token\")\n24      return header or raw\n"
               }
-            ]
+            ],
+            "burst": 9
           },
           {
             "prompt": "Show me every caller of the old accessor before we change its signature. Include the tests.",
@@ -1014,7 +1181,8 @@
                 },
                 "result": "src/grove/core/auth/context.py:23:    header = request.headers.get(\"X-Auth-Token\")\ndocs/features-auth.md:41:| `X-Auth-Token` | legacy | deprecated |\n"
               }
-            ]
+            ],
+            "burst": 11
           },
           {
             "prompt": "Go ahead — pull token resolution onto the request scope.",
@@ -1047,7 +1215,8 @@
                 },
                 "result": "The file src/grove/core/auth/__init__.py has been updated."
               }
-            ]
+            ],
+            "burst": 17
           },
           {
             "prompt": "Refactor the legacy header callers too.",
@@ -1080,7 +1249,8 @@
                 },
                 "result": "Keep it behind a flag"
               }
-            ]
+            ],
+            "burst": 6
           },
           {
             "prompt": "Add the feature flag and gate the legacy path behind it.",
@@ -1104,7 +1274,8 @@
                 },
                 "result": "The file src/grove/core/auth/context.py has been updated."
               }
-            ]
+            ],
+            "burst": 14
           },
           {
             "prompt": "Now run the auth tests and fix anything that breaks.",
@@ -1118,7 +1289,8 @@
                 },
                 "result": "FAILED tests/core/auth/test_middleware.py::test_reads_legacy_cookie\nFAILED tests/core/auth/test_context.py::test_read_token_from_cookie\n10 passed, 2 failed in 1.84s\n"
               }
-            ]
+            ],
+            "burst": 19
           },
           {
             "prompt": "Fix the failing tests.",
@@ -1158,7 +1330,8 @@
                 },
                 "result": "File created at tests/core/auth/test_legacy_header_flag.py"
               }
-            ]
+            ],
+            "burst": 12
           },
           {
             "prompt": "Re-run the suite.",
@@ -1172,7 +1345,8 @@
                 },
                 "result": "13 passed in 1.74s\n\nName                              Stmts   Miss  Cover\n-----------------------------------------------------\nsrc/grove/core/auth/context.py       41      2    95%\nsrc/grove/core/auth/middleware.py    18      0   100%\n-----------------------------------------------------\nTOTAL                                59      2    96%\n"
               }
-            ]
+            ],
+            "burst": 16
           },
           {
             "prompt": "Run the full lint gate before we call this done.",
@@ -1203,7 +1377,8 @@
                 },
                 "result": "ruff check .......................... OK\nruff format --check .................. OK\nmypy src/grove ....................... OK\nlint-imports .......................... OK\n"
               }
-            ]
+            ],
+            "burst": 21
           },
           {
             "prompt": "Update the docs to mention the new request-scoped token, and make sure the legacy header row says what the flag is called.",
@@ -1244,7 +1419,8 @@
                 },
                 "result": "build OK · 32 pages · 0 warnings\n"
               }
-            ]
+            ],
+            "burst": 13
           },
           {
             "prompt": "Where does this stand? Update the todo list.",
@@ -1293,7 +1469,8 @@
                 },
                 "result": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress in this conversation."
               }
-            ]
+            ],
+            "burst": 7
           },
           {
             "prompt": "Good. Run the auth tests one more time to be sure, then we can wrap up.",
@@ -1306,7 +1483,8 @@
                   "description": "Final confirmation run"
                 }
               }
-            ]
+            ],
+            "burst": 12
           }
         ]
       }

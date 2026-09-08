@@ -21,8 +21,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ModelSelector } from "@/components/assistant-ui/model-selector";
+import { agentDescription } from "@/components/grove/launch/controls/agent-pill";
+import { modelOptions } from "@/components/grove/model-option";
 import type { CreateWorkspaceRequest } from "@/lib/grove/api";
-import { useAgents, useBranches } from "@/lib/grove/hooks";
+import { useAgents, useBranches, useModels } from "@/lib/grove/hooks";
 import { AUTO_BRANCH, NEW_BRANCH, ROOT_BRANCH, branchOptionValue, toBranchPlan } from "./branch-plan";
 import { useCreateWorkspace } from "./use-fleet";
 import type { ProjectGroup, Runtime } from "./types";
@@ -34,6 +37,15 @@ import type { ProjectGroup, Runtime } from "./types";
  * `null` is what preserves the third one.
  */
 const INHERIT = "inherit";
+
+/**
+ * "Agent default" is a VALUE — precisely what an omitted `model` produces —
+ * so it is a row of the selector rather than a placeholder on the trigger.
+ * Declared once because both the rendered list and the label-resolution list
+ * must name it identically; two spellings would show one thing and select
+ * another.
+ */
+const AGENT_DEFAULT_ROW = { id: INHERIT, name: "Agent default" } as const;
 
 const TICKET_PROVIDERS = ["gitea", "github", "linear"] as const;
 type TicketProvider = (typeof TICKET_PROVIDERS)[number];
@@ -138,6 +150,7 @@ function CreateWorkspaceForm({
   const [model, setModel] = useState(INHERIT);
   const [runtime, setRuntime] = useState<Runtime | typeof INHERIT>(INHERIT);
   const [brief, setBrief] = useState(INHERIT);
+  const [sessionMode, setSessionMode] = useState(INHERIT);
   const [branchChoice, setBranchChoice] = useState(AUTO_BRANCH);
   const [branchName, setBranchName] = useState("");
   const [ticketProvider, setTicketProvider] = useState<TicketProvider>("gitea");
@@ -147,6 +160,7 @@ function CreateWorkspaceForm({
   // repo chosen yet" where this form uses `""`, so passing the bare string
   // would fetch `/agents?repo=` before the user has picked anything.
   const agents = useAgents(repoRoot || null);
+  const models = useModels(repoRoot || null, agentName || null);
   const localBranches = useBranches(repoRoot || null, "local");
   const remoteBranches = useBranches(repoRoot || null, "remote");
   const create = useCreateWorkspace();
@@ -154,6 +168,17 @@ function CreateWorkspaceForm({
   const agent = useMemo(
     () => agents.data?.find((candidate) => candidate.name === agentName),
     [agents.data, agentName],
+  );
+
+  const { namespace: modelNamespace, options: modelRows } = useMemo(
+    () => modelOptions(models.data ?? []),
+    [models.data],
+  );
+  // The sentinel is a real selectable value, so it belongs in the list the
+  // selector resolves labels from — see the comment at `ModelSelector.Root`.
+  const selectableRows = useMemo(
+    () => [AGENT_DEFAULT_ROW, ...modelRows],
+    [modelRows],
   );
 
   // The agent list is per-repo, so the chosen agent can stop existing when the
@@ -164,7 +189,11 @@ function CreateWorkspaceForm({
     if (available.some((candidate) => candidate.name === agentName)) return;
     setAgentName(available[0]!.name);
     setModel(INHERIT);
+    setSessionMode(INHERIT);
   }, [agents.data, agentName]);
+  // The mode's default belongs to the ENTRY, so a choice made against one
+  // agent is not an answer about the next (the landing page's RULE 1b).
+  const hasSessionMode = agent !== undefined && (agent.kind === "claude_code" || agent.kind === "codex");
 
   const submit = (event: React.FormEvent): void => {
     event.preventDefault();
@@ -180,6 +209,7 @@ function CreateWorkspaceForm({
       ...(model === INHERIT ? {} : { model }),
       ...(runtime === INHERIT ? {} : { runtime }),
       ...(brief === INHERIT ? {} : { brief: brief === "on" }),
+      ...(sessionMode === INHERIT || !hasSessionMode ? {} : { native: sessionMode === "native" }),
       ...(prompt.trim() === "" ? {} : { initial_prompt: prompt.trim() }),
       ...(ticketId.trim() === ""
         ? {}
@@ -259,7 +289,12 @@ function CreateWorkspaceForm({
                   ) : (
                     (agents.data ?? []).map((candidate) => (
                       <SelectItem key={candidate.name} value={candidate.name}>
-                        {candidate.name}
+                        <span className="flex min-w-0 items-baseline gap-2">
+                          <span className="truncate">{candidate.name}</span>
+                          <span className="shrink-0 text-xs text-content-tertiary">
+                            {agentDescription(candidate)}
+                          </span>
+                        </span>
                       </SelectItem>
                     ))
                   )}
@@ -281,19 +316,36 @@ function CreateWorkspaceForm({
             </Field>
 
             <Field label="Model">
-              <Select value={model} onValueChange={setModel}>
-                <SelectTrigger className="w-full" data-testid="create-model">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={INHERIT}>Agent default</SelectItem>
-                  {(agent?.models ?? []).map((name) => (
-                    <SelectItem key={name} value={name}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* `models` must contain EVERY selectable row, including the
+                  sentinel: the bare Trigger resolves its label by looking
+                  `value` up in this list, so a catalog-only list made the
+                  default render as the vendor's "Select model" placeholder —
+                  a control claiming nothing was chosen while the request it
+                  builds is the resolved default. The rendered rows below stay
+                  composed separately so the sentinel keeps its place above the
+                  namespace group. */}
+              <ModelSelector.Root models={selectableRows} value={model} onValueChange={setModel}>
+                {/* Trigger appends its own chevron, so it cannot compose the
+                    outlined Button through `asChild`. */}
+                <ModelSelector.Trigger variant="outline" className="w-full" data-testid="create-model" />
+                <ModelSelector.Content searchable aria-label="Choose model">
+                  <ModelSelector.Search />
+                  <ModelSelector.List>
+                    <ModelSelector.Empty />
+                    {/* Agent default is a VALUE, not a placeholder: an omitted
+                        `model` is exactly what the engine resolves, so it sits
+                        above the catalog rather than inside its namespace group. */}
+                    <ModelSelector.Item model={AGENT_DEFAULT_ROW} />
+                    <ModelSelector.Group heading={modelNamespace || undefined}>
+                      {modelRows.map((option) => (
+                        // `title` keeps the full id reachable: the visible label has
+                        // had the shared namespace folded out of it.
+                        <ModelSelector.Item key={option.id} model={option} title={option.id} />
+                      ))}
+                    </ModelSelector.Group>
+                  </ModelSelector.List>
+                </ModelSelector.Content>
+              </ModelSelector.Root>
             </Field>
 
             <Field label="Runtime">
@@ -324,6 +376,29 @@ function CreateWorkspaceForm({
                 </SelectContent>
               </Select>
             </Field>
+
+            {hasSessionMode ? (
+              <Field
+                label="Session mode"
+                hint={`This entry's default is ${agent.native ? "a native session" : "the terminal"}.`}
+              >
+                <Select
+                  value={sessionMode}
+                  onValueChange={setSessionMode}
+                >
+                  <SelectTrigger className="w-full" data-testid="create-session-mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={INHERIT}>
+                      Entry default ({agent.native ? "native session" : "terminal"})
+                    </SelectItem>
+                    <SelectItem value="native">Native session — headless, Grove-owned</SelectItem>
+                    <SelectItem value="terminal">Terminal — the agent&apos;s interactive UI</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            ) : null}
           </div>
 
           <Field label="Branch">
@@ -340,7 +415,7 @@ function CreateWorkspaceForm({
                   consequence Grove hid.
                 */}
                 <SelectItem value={ROOT_BRANCH}>
-                  Repo root — no worktree, no isolation, no pause/resume
+                  Work in place — no worktree, no isolation, no pause/resume
                 </SelectItem>
                 {branchNote ? <PickerNote>{branchNote}</PickerNote> : null}
                 {(localBranches.data ?? []).map((branch) => (

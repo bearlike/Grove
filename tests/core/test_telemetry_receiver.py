@@ -35,6 +35,13 @@ from grove.core.telemetry._otlp import OtlpAttributes, SpanEnvelope
 from grove.core.telemetry.claude_code import ClaudeCodeSpan
 from grove.core.telemetry.receiver import OtlpIngest, TraceGateway, build_receiver_app
 from grove.core.telemetry.semconv import GenAiAttr, GroveLiveAttr, LangfuseAttr
+from grove.core.telemetry.shell import (
+    SHELL_CATEGORY,
+    ShellAttr,
+    ShellOutcome,
+    ShellResult,
+    ToolSource,
+)
 
 DATA = Path(__file__).parent / "data" / "otlp_claude_code"
 T0 = datetime(2026, 8, 11, 5, 34, tzinfo=UTC)
@@ -176,7 +183,24 @@ def test_a_tool_body_event_becomes_a_tool_body_attribute(gateway: TraceGateway) 
 
     assert attributes[GenAiAttr.OPERATION_NAME] == "execute_tool"
     assert attributes[GenAiAttr.TOOL_CALL_RESULT] == "grove-otlp-probe"
-    assert attributes[LangfuseAttr.OBSERVATION_OUTPUT] == "grove-otlp-probe"
+    # `Bash` is a shell tool, so the vendor-facing payloads are the canonical
+    # envelope — the same `command`/`content` paths the transcript tier gives a
+    # Codex `exec_command`. The convention's own keys above are untouched.
+    assert json.loads(str(attributes[LangfuseAttr.OBSERVATION_OUTPUT])) == {
+        "content": "grove-otlp-probe",
+        "truncated": False,
+    }
+    assert (
+        json.loads(str(attributes[LangfuseAttr.OBSERVATION_INPUT]))["command"]
+        == "echo grove-otlp-probe"
+    )
+    assert attributes[ShellAttr.CATEGORY] == SHELL_CATEGORY
+    assert attributes[ShellAttr.SOURCE] == ToolSource.NATIVE_OTLP
+    assert attributes[ShellAttr.RESULT] == ShellResult.CAPTURED
+    # Claude Code records no exit status on this span, so nothing may claim the
+    # command worked — `unknown` is the whole point, not a gap.
+    assert attributes[ShellAttr.OUTCOME] == ShellOutcome.UNKNOWN
+    assert ShellAttr.EXIT_CODE not in attributes
     # Arguments come from BOTH the span (`full_command`) and the event
     # (`bash_command`) — neither alone is the whole call.
     arguments = json.loads(str(attributes[GenAiAttr.TOOL_CALL_ARGUMENTS]))

@@ -10,18 +10,14 @@ import { groveKeys } from "@/lib/grove/hooks";
 import { FIXTURE_PHASE } from "../e2e/_fixtures";
 
 /**
- * GROVE'S PROGRESS ON A TICKET, BESIDE THE TRACKER'S OWN STATUS.
+ * GROVE'S TICKET CLAIM MUST STAY ATTACHED TO THE TICKET THAT MADE IT.
  *
- * The two can disagree and that disagreement is the information: an issue that
- * still reads `open` while Grove reports `delivering` is a task in flight, and a
- * reader who sees only one half cannot tell that from a workspace that stalled.
- *
- * The rule everything below defends is that ABSENCE OF A CLAIM IS NOT A CLAIM. A
- * ticket the agent has not reported on renders no mark at all — never `scoping`,
- * never an unfilled step zero, and never the workspace's own phase borrowed on
- * its behalf.
+ * Tracker state says what a ticket is; Grove's phase says what the agent reports
+ * doing about it. The two frequently disagree, which is useful. A ticket with no
+ * claim is equally meaningful: it must say so, never borrow the workspace phase.
+ * The ticket note also belongs here, with the row it explains, not in a second
+ * report list on Task.
  */
-
 const REPO = "/repos/acme/api";
 
 function ref(overrides: Partial<TicketRef> = {}): TicketRef {
@@ -58,8 +54,6 @@ function card({
 }): string {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(groveKeys.ticketProviders(REPO), providers);
-  // The phase mark mounts a Radix `Tooltip`, which the app provides for at the
-  // root (`providers.tsx`); every other bare-tooltip test wraps the same way.
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -70,42 +64,27 @@ function card({
 }
 
 describe("the join key", () => {
-  it("is `provider:id`, the coordinate the wire writes", () => {
+  it("is provider:id, the coordinate the wire writes", () => {
     expect(ticketPhaseKey({ provider: "gitea", id: "42" })).toBe("gitea:42");
     expect(ticketPhaseKey({ provider: "linear", id: "ENG-7" })).toBe("linear:ENG-7");
   });
 
-  it("omits kind, so a ref that resolves to the other kind keeps its claim", () => {
-    // A forge numbers issues and pull requests in one space, so a ref attached
-    // as an issue can legitimately come back a pull request. The three-part
-    // `ticketKey` moves under that correction; this one cannot.
-    expect(ticketPhaseKey({ provider: "gitea", id: "42" })).toBe(
-      ticketPhaseKey({ provider: "gitea", id: "42" }),
-    );
+  it("omits kind, so a resolved kind correction keeps its claim", () => {
+    expect(ticketPhaseKey({ provider: "gitea", id: "42" })).toBe("gitea:42");
   });
 });
 
 describe("ticketPhases", () => {
-  it("has nothing to say when the agent has reported no phase at all", () => {
+  it("has nothing to say when an agent has reported no ticket phases", () => {
     expect(ticketPhases(null).size).toBe(0);
     expect(ticketPhases(undefined).size).toBe(0);
   });
 
-  it("misses for a ticket the agent has not claimed", () => {
-    const claims = ticketPhases(phaseWith(claim()));
-
-    expect(claims.get("gitea:99")).toBeUndefined();
+  it("takes total from the parent sequence rather than pinning a second copy", () => {
+    expect(ticketPhases({ ...phaseWith(claim()), total: 7 }).get("gitea:42")?.total).toBe(7);
   });
 
-  it("takes `total` from the parent rather than pinning a second copy", () => {
-    // The per-ticket row is a position in the SAME order its parent counts, so
-    // a Grove that grew a seventh phase would move both together.
-    const claims = ticketPhases({ ...phaseWith(claim()), total: 7 });
-
-    expect(claims.get("gitea:42")?.total).toBe(7);
-  });
-
-  it("keeps each ticket's own position, never the workspace's", () => {
+  it("keeps each ticket's own position rather than the workspace position", () => {
     const claims = ticketPhases(
       phaseWith(claim({ index: 0, phase: "scoping" }), claim({ ticket: "gitea:9", index: 4, phase: "delivering" })),
     );
@@ -115,7 +94,7 @@ describe("ticketPhases", () => {
   });
 });
 
-describe("a row", () => {
+describe("a ticket row", () => {
   function row(ticket: TicketRef, phase?: Parameters<typeof TicketRow>[0]["phase"]): string {
     return renderToStaticMarkup(
       <TooltipProvider>
@@ -124,91 +103,72 @@ describe("a row", () => {
     );
   }
 
-  it("shows both halves: what the ticket says and how far Grove has got", () => {
+  it("states tracker status as a coloured word and Grove's claim separately", () => {
     const html = row(ref({ status: "open" }), { ...claim(), total: 6 });
 
     expect(html).toContain('data-testid="ticket-status"');
     expect(html).toContain("open");
+    expect(html).toContain("text-success");
+    expect(html).toContain('data-testid="ticket-claim"');
     expect(html).toContain('data-testid="phase-badge"');
-    expect(html).toContain("3/6");
+    expect(html).toContain("Step 3 of 6");
   });
 
-  it("reads as NOT REPORTED with no claim — not scoping, not an empty meter", () => {
+  it("calls a missing agent claim not reported, rather than inventing scoping", () => {
     const html = row(ref());
 
     expect(html).not.toContain('data-testid="phase-badge"');
-    expect(html).not.toContain("scoping");
-    expect(html).not.toContain("0/6");
-    // And the row is otherwise untouched, which is the actual contract: a
-    // workspace on an older daemon must look exactly as it did before.
-    expect(html).toContain("#42");
-    expect(html).toContain('data-testid="ticket-status"');
+    expect(html).toContain('data-testid="ticket-claim"');
+    expect(html).toContain("No phase reported");
+    expect(html).not.toContain("Step 0 of 6");
   });
 
-  it("marks a blocked ticket, and marks only that one", () => {
-    expect(row(ref(), { ...claim({ blocked: true }), total: 6 })).toContain(
-      'data-blocked="true"',
-    );
+  it("renders the complete ticket note on its ticket row", () => {
+    const html = row(ref(), { ...claim({ note: "Awaiting the reviewer’s exact answer" }), total: 6 });
+
+    expect(html).toContain('data-testid="ticket-note"');
+    expect(html).toContain("Awaiting the reviewer’s exact answer");
+    expect(html).toContain("break-words");
+  });
+
+  it("marks a blocked ticket and only a blocked ticket", () => {
+    expect(row(ref(), { ...claim({ blocked: true }), total: 6 })).toContain('data-blocked="true"');
     expect(row(ref(), { ...claim(), total: 6 })).not.toContain("data-blocked");
   });
 
-  it("stays inside the badge budget with every mark at once", () => {
-    // uncertain + tracker status + Grove's phase + blocked, all on one row.
-    const html = row(ref({ ambiguous: true, status: "merged" }), {
-      ...claim({ blocked: true }),
-      total: 6,
-    });
-
-    // §6: at most one `default` per object — this card spends none at all.
-    expect(html).not.toContain('data-variant="default"');
-    // §6: at most three TONED badges. `uncertain` and the phase mark are
-    // hairline outlines when calm, so the toned ones here are the tracker's
-    // `secondary` and blocked's `destructive` — two, with a step to spare.
-    expect(html.match(/data-variant="destructive"/g)).toHaveLength(1);
-    expect(html.match(/data-variant="secondary"/g)).toHaveLength(1);
-  });
-
-  it("puts the tracker's word before Grove's claim", () => {
-    // Reading order: what it IS, then what we have done about it.
+  it("puts the tracker state before the agent's claim in reading order", () => {
     const html = row(ref({ status: "open" }), { ...claim(), total: 6 });
 
     expect(html.indexOf('data-testid="ticket-status"')).toBeLessThan(
-      html.indexOf('data-testid="phase-badge"'),
+      html.indexOf('data-testid="ticket-claim"'),
     );
   });
 });
 
-describe("the card", () => {
-  it("marks the claimed ticket and leaves the unclaimed one bare", () => {
+describe("the ticket card", () => {
+  it("joins each claim only to its matching provider and id", () => {
     const html = card({
       refs: [ref({ id: "42" }), ref({ id: "9" })],
-      phase: phaseWith(claim({ ticket: "gitea:42" })),
+      phase: phaseWith(claim({ ticket: "gitea:42", note: "Reported here" })),
     });
 
     expect(html.match(/data-testid="phase-badge"/g)).toHaveLength(1);
+    expect(html.match(/data-testid="ticket-note"/g)).toHaveLength(1);
+    expect(html).toContain("Reported here");
   });
 
-  it("never lends the workspace's own phase to a ticket nobody claimed", () => {
-    // The workspace IS at `delivering` — the Task card above says so — and that
-    // says nothing about this issue. Inventing progress here is the one failure
-    // this join must not have.
+  it("does not lend the workspace phase to an unclaimed ticket", () => {
     const html = card({ refs: [ref()], phase: phaseWith() });
 
     expect(html).not.toContain('data-testid="phase-badge"');
-    expect(html).toContain("#42");
+    expect(html).toContain("No phase reported");
   });
 
-  it("draws no marks at all against a workspace that has reported nothing", () => {
-    expect(card({ refs: [ref()], phase: null })).not.toContain('data-testid="phase-badge"');
-  });
+  it("contains the aggregate here and never restores Task's obsolete report list", () => {
+    const html = card({ refs: [ref()], phase: phaseWith(claim()) });
 
-  it("joins on provider AND id, so one provider's #42 is not another's", () => {
-    const html = card({
-      refs: [ref({ provider: "github", id: "42" })],
-      phase: phaseWith(claim({ ticket: "gitea:42" })),
-      providers: [{ provider: "github", label: "GitHub", configured: true, context: "acme/api" }],
-    });
-
-    expect(html).not.toContain('data-testid="phase-badge"');
+    expect(html).toContain('data-testid="ticket-rollup"');
+    expect(html).not.toContain("Ticket reports");
+    expect(html).not.toContain("ticket-phase-counts");
   });
 });

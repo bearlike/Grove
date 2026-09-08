@@ -4,7 +4,7 @@
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.png" alt="Grove TUI showing four workspaces in mixed states with a live peek rail" /></div>
-  <figcaption class="ms-shot__body">Header, filter bar (slash-toggled), workspace list left, peek rail right, status bar and footer at bottom.</figcaption>
+  <figcaption class="ms-shot__body">Header, filter bar (toggled with <kbd>/</kbd>), workspace list left, peek rail right, status bar and footer at bottom.</figcaption>
 </figure>
 
 - **Header.** Repo name, count chip.
@@ -14,7 +14,7 @@
   state (`▶ working`, `◑ waiting`), and
   [task phase](features-status.md#the-third-axis-task-phase).
 - **Peek rail.** Summary, then linked tickets, then transcript and terminal
-  tabs ([detail](features-peek.md)).
+  tabs, with Stream for a native workspace ([detail](features-activity.md#the-peek-rail)).
 - **Status bar.** Fleet left, workspace right, coloured by state.
 - **Footer.** Global and selection keys.
 
@@ -101,21 +101,22 @@ worktrees.
 
 ### Create
 
-++n++ opens an eight-step modal.
+++n++ opens a nine-step modal.
 
 1. **Agent.** Radio list of agents the cascade resolved.
-2. **Runtime.** Host or Container (`container.enabled` default).
-3. **First-turn brief.** Cascade default, On, or Off (`--brief` on
+2. **Native session.** A checkbox for Claude Code and Codex. It starts at the entry's mode and chooses a Grove-owned native session instead of the terminal.
+3. **Runtime.** Host or Container (`container.enabled` default).
+4. **First-turn brief.** Cascade default, On, or Off (`--brief` on
    [CLI](use-cli.md)).
-4. **Model** (blank = default). Free text like `sonnet`, unvalidated,
+5. **Model** (blank = default). Free text like `sonnet`, unvalidated,
    forwarded verbatim ([`create.py`](repo:src/grove/tui/screens/create.py)).
-5. **Title.** Free text, pre-fills from branch name.
-6. **Branch source.** *Auto*, *New named*, *Existing local*, *Track remote*,
+6. **Title.** Free text, pre-fills from branch name.
+7. **Branch source.** *Auto*, *New named*, *Existing local*, *Track remote*,
    or *Root*: [root workspaces](features-workspace-lifecycle.md#root-workspaces),
    [branch provenance](features-branch-provenance.md).
-7. **Skip init script.** Skips the [init script](configure-init-scripts.md),
+8. **Skip init script.** Skips the [init script](configure-init-scripts.md),
    default checked under *Root*.
-8. **Confirm** with ++enter++, ++esc++ cancels.
+9. **Confirm** with ++enter++, ++esc++ cancels.
 
 ### Edit
 
@@ -163,7 +164,7 @@ page order, and the arrows loop.
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/tui-project-switcher.png" alt="Project switcher listing two repositories with workspace counts and a current tag">
-        <figcaption>Project switcher (<kbd>P</kbd>): type to narrow, arrows to move, <kbd>Enter</kbd> to switch, current repo tagged.</figcaption>
+        <figcaption>Project switcher (<kbd>Shift</kbd>+<kbd>P</kbd>): type to narrow, <kbd>↑</kbd> and <kbd>↓</kbd> to move, <kbd>Enter</kbd> to switch, current repo tagged.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">

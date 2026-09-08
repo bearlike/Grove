@@ -34,11 +34,18 @@ TOUR: Final[tuple[str, ...]] = (
     "webapp-composer",
     "webapp-sessions",
     "webapp-workspace",
+    "webapp-annotate",
+    "webapp-diagram",
     "webapp-usage",
     "webapp-home",
 )
 """The tour, in narrative order: start a workspace, find a session, watch one
-work, see what it spent, then the whole fleet. `webapp-home` is the fleet
+work, hand it a marked-up image, read the diagram it drew, see what it spent,
+then the whole fleet. The two workspace-surface slides follow `webapp-workspace`
+because they are the same page with a pane swapped, so the crossfade between
+them reads as one workspace changing what it shows. The diagram slide is the
+full-pane shot rather than the split: at 960px the split's diagram is a
+thumbnail beside a transcript the previous slide already showed. `webapp-home` is the fleet
 dashboard and it lands last so the loop returns to the composer, which is the
 page a reader would actually open first."""
 
@@ -68,7 +75,7 @@ class SlideshowStyle(BaseModel):
     propagates left-to-right and top-to-bottom across the whole frame, so a
     change confined to the window interior perturbs the dither pattern in the
     wallpaper AFTER it — which destroys exactly the frame-to-frame identity this
-    module is built on. Measured over a five-slide tour: 7840 KB dithered
+    module is built on. Measured over a five-slide tour (before the annotation and diagram slides): 7840 KB dithered
     against 4205 KB not. The banding it costs is far less visible here than in a
     full-resolution still, because the tour is published at 960px and every
     frame is on screen for well under a second.
@@ -118,33 +125,34 @@ class Slideshow(BaseModel):
                 durations.append(self.style.fade_frame_ms)
         return frames, durations
 
-    def _palette(self, frames: list[Image.Image]) -> Image.Image:
+    def _palette(self, stills: list[Image.Image]) -> Image.Image:
         """One adaptive palette for the whole tour.
 
         Per-frame palettes make the backdrop resolve to slightly different
         colours from frame to frame, which both destroys the delta encoding this
         module is built around and shows up as a faint shimmer in flat areas.
-        The palette is derived from a coarse tile of every frame so no single
-        still dominates it.
+        The palette is cut from every still at the published size, stacked so
+        each weighs the same; the blends between them need no seat of their own,
+        being linear mixes of colours already present.
+
+        AT THE PUBLISHED SIZE, NOT A COARSE TILE. A 120px thumbnail of each
+        slide is dominated by wallpaper and dark chrome, and the median cut
+        spends its 256 entries there: the annotation slide's red and violet
+        marker boxes came out umber and slate, on the one slide whose point is
+        the colour of what was drawn. Full-size stills cost nothing measurable
+        in output size (5669 KB against 5465 KB over seven slides) and keep
+        the saturated accents.
         """
-        cell = max(1, self.style.width // 8)
-        columns = min(len(frames), 8)
-        rows = (len(frames) + columns - 1) // columns
-        ratio = frames[0].height / frames[0].width
-        tile_h = max(1, round(cell * ratio))
-        sheet = Image.new("RGB", (cell * columns, tile_h * rows))
-        for index, frame in enumerate(frames):
-            sheet.paste(
-                frame.resize((cell, tile_h), _LANCZOS),
-                ((index % columns) * cell, (index // columns) * tile_h),
-            )
+        sheet = Image.new("RGB", (stills[0].width, stills[0].height * len(stills)))
+        for index, still in enumerate(stills):
+            sheet.paste(still, (0, index * still.height))
         return sheet.quantize(colors=self.style.colors, method=Image.Quantize.MEDIANCUT)
 
     def render(self, sources: list[Path], out_path: Path) -> int:
         """Write the looping GIF, returning its size in bytes."""
         stills = [self._load(path) for path in sources]
         frames, durations = self._timeline(stills)
-        palette = self._palette(frames)
+        palette = self._palette(stills)
         dither = Image.Dither.FLOYDSTEINBERG if self.style.dither else Image.Dither.NONE
         mapped = [frame.quantize(palette=palette, dither=dither) for frame in frames]
 

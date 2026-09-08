@@ -3,7 +3,7 @@ import type { LucideIcon } from "lucide-react";
 // — which is exactly why seven glyphs ended up imported both ways. Usage is
 // `ChartColumnIcon` and a session is `HistoryIcon` per the entity table; the
 // bare `BarChart3`/`Activity` here were the second name for each.
-import { ChartColumnIcon, HistoryIcon, SproutIcon, TreesIcon } from "lucide-react";
+import { ChartColumnIcon, HistoryIcon, ImagesIcon, SproutIcon, TreesIcon } from "lucide-react";
 
 /** A top-level destination in the shell. */
 export interface NavItem {
@@ -46,6 +46,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // item and the page's own header both read it from here, so the destination
   // cannot end up called two things.
   { href: "/sessions", label: "All Sessions", icon: HistoryIcon, placement: "account" },
+  // The diagram gallery is the sessions catalog's sibling — host-wide, a
+  // browse surface, off the rail for the same reason — so it lives beside it.
+  { href: "/gallery", label: "Gallery", icon: ImagesIcon, placement: "account" },
 ];
 
 /** The destinations the rail offers. `/` is excluded: the brand mark links there. */

@@ -1803,3 +1803,34 @@ async def test_rail_shows_the_build_log_in_the_terminal_tab(
         assert "#9 exporting layers" in rail.body_text
         await pilot.press("q")
         await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_the_pane_tab_is_named_stream_for_a_native_workspace(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Same tab, same capture path; the label says what the pane SHOWS.
+
+    A native workspace's pane is the worker's protocol log, so `terminal`
+    would promise a prompt that is not there. The pane id is stable so a
+    user's tab choice and the tests keep addressing it.
+    """
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="label"))
+    stored = manager.store.get(state.id)
+    stored.native = True
+    manager.store.save(stored)
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        rail = app.screen.query_one(PeekRail)
+        tabs = rail.query_one("#peek-tabs", TabbedContent)
+        assert tabs.get_tab("tab-terminal").label_text == "stream"
+        stored.native = False
+        manager.store.save(stored)
+        rail.set_peek(manager.peek(state.id))
+        await pilot.pause()
+        assert tabs.get_tab("tab-terminal").label_text == "terminal"
+        await pilot.press("q")
+        await pilot.pause()

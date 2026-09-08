@@ -12,13 +12,15 @@ not a substitute for verifying the actual subprocess argv we emit.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from grove.core import tmux
 from grove.core.config import AgentSpec, GroveConfig
-from grove.core.errors import TmuxError
+from grove.core.errors import ProcessError, TmuxError
+from grove.core.process import ProcessTree
 
 
 @pytest.fixture
@@ -47,6 +49,30 @@ def fake_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr(tmux.time, "sleep", lambda _seconds: None)
     return calls
+
+
+def test_native_stop_failure_keeps_tmux_session_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    killed: list[str] = []
+    monkeypatch.setattr(tmux, "has_session", lambda name: True)
+    server = SimpleNamespace(
+        cmd=lambda *args: SimpleNamespace(stdout=["123"], stderr=[]),
+        kill_session=lambda *, target_session: killed.append(target_session),
+    )
+    monkeypatch.setattr(tmux, "_server", lambda: server)
+    monkeypatch.setattr(
+        ProcessTree, "capture", classmethod(lambda cls, roots, **kwargs: ProcessTree(()))
+    )
+
+    def refuse(self: ProcessTree, **kwargs: object) -> None:
+        raise ProcessError("provider did not stop")
+
+    monkeypatch.setattr(ProcessTree, "terminate_and_wait", refuse)
+    for _ in range(2):
+        with pytest.raises(TmuxError, match="provider did not stop"):
+            tmux.kill_session("native", wait_for_exit=True)
+    assert killed == []
 
 
 def test_capture_pane_snapshot_flags(fake_run: list[list[str]]) -> None:
@@ -439,27 +465,44 @@ def test_list_windows_skips_blank_lines(
 # ─── send_text ───────────────────────────────────────────────────────────────
 
 
-def test_send_text_emits_literal_payload_then_separate_enter(
+def test_send_text_pastes_the_payload_then_sends_a_separate_enter(
     fake_run: list[list[str]],
 ) -> None:
-    """Pin the exact argv pair: `send-keys -l -- <text>`, then `send-keys Enter`.
+    """Pin the argv: a bracketed PASTE of the text, then `send-keys Enter`.
 
-    Every token is load-bearing: dropping `-l` makes tmux interpret key
-    names (a message containing "Enter" or "C-c" becomes keystrokes),
-    dropping `--` makes a leading-dash payload parse as a flag, and
-    folding Enter into the literal call would type the word instead of
-    submitting. Verified against real tmux 3.2a.
+    Every token is load-bearing. `-p` is what makes it a bracketed paste rather
+    than a raw buffer dump — the terminal-level "this is literal text" signal a
+    vim-mode composer honours in normal mode, where typed bytes would run as
+    editor commands (measured on Claude Code 2.1.263). `--` keeps a
+    leading-dash payload from parsing as a flag. `-d` drops the buffer so it
+    never reaches the user's own paste history and two concurrent steers cannot
+    read each other's. And Enter stays its own call, because only a lone
+    keypress submits.
     """
     tmux.send_text("sess:agent", "-please continue, then press Enter")
 
     # A third call follows: the post-Enter verify-and-retry snapshot.
     # The fixture's fake pane ("line1\nline2\n") never echoes the sent text,
     # so no residual is detected and no second Enter fires.
+    buffer_name = fake_run[0][3]
+    assert buffer_name.startswith("grove-steer-")
     assert fake_run == [
-        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "-please continue, then press Enter"],
+        ["tmux", "set-buffer", "-b", buffer_name, "--", "-please continue, then press Enter"],
+        ["tmux", "paste-buffer", "-p", "-d", "-b", buffer_name, "-t", "sess:agent"],
         ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
         ["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"],
     ]
+
+
+def test_two_steers_never_share_a_paste_buffer(fake_run: list[list[str]]) -> None:
+    """A fixed buffer name is a cross-workspace data race on one tmux server:
+    two steers in flight would have the second overwrite the first's payload
+    between its own set and paste."""
+    tmux.send_text("sess:agent", "first")
+    tmux.send_text("other:agent", "second")
+
+    names = [call[3] for call in fake_run if call[1] == "set-buffer"]
+    assert len(names) == len(set(names)) == 2
 
 
 def test_send_text_raises_when_tmux_missing(
@@ -560,8 +603,10 @@ def test_send_text_retries_enter_once_when_composer_holds_residual(
 
     tmux.send_text("sess:agent", "please continue")
 
+    buffer_name = calls[0][3]
     assert calls == [
-        ["tmux", "send-keys", "-t", "sess:agent", "-l", "--", "please continue"],
+        ["tmux", "set-buffer", "-b", buffer_name, "--", "please continue"],
+        ["tmux", "paste-buffer", "-p", "-d", "-b", buffer_name, "-t", "sess:agent"],
         ["tmux", "send-keys", "-t", "sess:agent", "Enter"],
         ["tmux", "capture-pane", "-p", "-e", "-S", "-500", "-t", "sess:agent"],
         ["tmux", "send-keys", "-t", "sess:agent", "Enter"],  # the single retry
@@ -625,6 +670,16 @@ def test_send_keys_dispatches_literal_runs_and_named_keys(
     ]
 
 
+@pytest.mark.parametrize("key", list(tmux.SendKey))
+def test_send_keys_sends_one_named_key_without_literal_or_retry(
+    fake_run: list[list[str]], key: tmux.SendKey
+) -> None:
+    """The public one-key operation is one bare named tmux send, never paste/retry."""
+    tmux.send_keys("sess:agent", (key,))
+
+    assert fake_run == [["tmux", "send-keys", "-t", "sess:agent", key.value]]
+
+
 def test_send_keys_types_free_text_literally(fake_run: list[list[str]]) -> None:
     """A free-text run is sent with ``-l --`` so its content is typed verbatim,
     never interpreted as key names (a value like "Enter" would submit)."""
@@ -638,11 +693,17 @@ def test_send_keys_types_free_text_literally(fake_run: list[list[str]]) -> None:
     ]
 
 
-def test_send_keys_settles_only_before_a_terminal_enter(
+def test_send_keys_settles_between_every_op(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-terminal Enter (mid-sequence) is neither delayed nor verified —
-    only the sequence's LAST op, if it's Enter, gets the send_text treatment."""
+    """Every op after the first is preceded by a settle, not just a terminal Enter.
+
+    Each keystroke in this grammar repaints the picker (a digit selects an option
+    AND advances to the next question's tab), so an op fired into a still-painting
+    TUI is dropped and every op after it lands on the wrong question. Measured on
+    Claude Code 2.1.x: an unsettled 4-question batch answered question 1, skipped
+    the multiSelect and collapsed the rest to option 1, silently.
+    """
     sleeps: list[float] = []
     monkeypatch.setattr(tmux.time, "sleep", sleeps.append)
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
@@ -657,14 +718,34 @@ def test_send_keys_settles_only_before_a_terminal_enter(
 
     monkeypatch.setattr(tmux.subprocess, "run", _run)
 
-    # No trailing Enter: nothing "submits", so no settle/verify at all.
+    # No trailing Enter: still one settle, between the two ops.
     tmux.send_keys("sess:agent", ["1", tmux.SendKey.TAB], settle_ms=250)
+    assert sleeps == [0.25]
+
+    sleeps.clear()
+    # A single op races nothing, so nothing is waited on.
+    tmux.send_keys("sess:agent", ["1"], settle_ms=250)
     assert sleeps == []
 
     sleeps.clear()
-    # Trailing Enter: settle before it, then the verify wait.
+    # A per-step driver settles before its one op, because the preceding
+    # capture merely observed a frame — it did not guarantee the next paint.
+    tmux.send_keys("sess:agent", ["1"], settle_ms=250, settle_before=True)
+    assert sleeps == [0.25]
+
+    sleeps.clear()
+    # Trailing Enter: the inter-op settle before it, then the verify wait.
     tmux.send_keys("sess:agent", ["1", tmux.SendKey.ENTER], settle_ms=250)
     assert sleeps == [0.25, 0.25]
+
+    sleeps.clear()
+    # A real 4-question batch: one settle per gap, plus the verify wait.
+    tmux.send_keys(
+        "sess:agent",
+        ["2", "1", "3", tmux.SendKey.TAB, "2", "3", tmux.SendKey.ENTER],
+        settle_ms=250,
+    )
+    assert sleeps == [0.25] * 7
 
 
 def test_send_keys_retries_terminal_enter_once_on_residual(

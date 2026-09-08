@@ -147,6 +147,10 @@ describe("streamAction", () => {
     expect(action).toEqual({ kind: "adopt", snapshot: FLEET });
   });
 
+  it("invalidates only catalog consumers for a catalog source mutation", () => {
+    expect(streamAction(FLEET, frame("catalog_changed"))).toEqual({ kind: "catalog_changed" });
+  });
+
   it("ignores a heartbeat, so a quiet fleet costs nothing", () => {
     expect(streamAction(FLEET, frame("heartbeat"))).toEqual({ kind: "ignore" });
   });

@@ -12,6 +12,7 @@ const values: LaunchValues = {
   customModel: false,
   runtime: "container",
   brief: true,
+  native: null,
   branchMode: "auto",
   branchName: "feature/launch",
   existingBranch: "feature/existing",
@@ -128,7 +129,7 @@ describe("buildCreateRequest", () => {
     // The regression: branch_plan is the one field whose omission is not
     // "resolve it from the cascade later". CreateWorkspaceRequest defaults it
     // to AutoBranch() and nothing engine-side reads defaults.branch_mode, so a
-    // user whose saved default is `root` would see the pill say "Repo root"
+    // user whose saved default is `root` would see the pill say "Work in place"
     // and get an ordinary worktree — the display and the behaviour disagreeing
     // silently, on the one control that decides whether isolation exists.
     const seeded = state();
@@ -163,5 +164,17 @@ describe("buildCreateRequest", () => {
       branch_plan: { kind: "auto", base_ref: "main" },
       ticket: { provider: "gitea", id: "42", kind: "issue" },
     });
+  });
+});
+
+describe("the session mode rides the request only when touched", () => {
+  it("omits `native` untouched, so the roster entry's default decides at create", () => {
+    expect(buildCreateRequest(state([]), "Build it")).not.toHaveProperty("native");
+  });
+
+  it("pins a touched mode as `native`", () => {
+    const touched = state(["native"]);
+    const values = { ...touched.values, native: false };
+    expect(buildCreateRequest({ ...touched, values }, "Build it")).toMatchObject({ native: false });
   });
 });

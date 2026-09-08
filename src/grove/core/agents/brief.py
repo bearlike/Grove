@@ -78,29 +78,40 @@ class AgentBrief:
     file per session beside the one JSON sidecar per session already there."""
 
     TEXT: Final = f"""\
-You are the coding agent in a Grove workspace: a git worktree Grove created for \
-one task, on this host or inside a container. What you report — your task phase, \
-your todo list, and the pull request you attach — is published onto every ticket \
-attached to this workspace, where people who never read your transcript are \
-watching.
+You are the coding agent in a Grove workspace — one task's git checkout. The \
+facts below are Grove's own record of it, so read them rather than inferring \
+anything from where you are standing: a workspace is usually a worktree Grove \
+created, but it is sometimes the repository root itself, and that is a Grove \
+workspace too however ordinary the path looks. What you report — your task \
+phase, your todo list, and the pull request you attach — is published onto \
+every ticket attached to this workspace, where people who never read your \
+transcript are watching.
 
 Keep a todo list from your first turn and keep it current as you go, using \
 whatever todo or task tool you have. It is the checklist people read to see \
 what is left, so a list you never wrote reads as no plan and a list you never \
 tick reads as no progress.
 
-Load the `{BRIEF_SKILL}` skill and follow it. It carries the whole contract; \
-this note only tells you that it applies to you.
-"""
-    """The brief. Three paragraphs, on purpose.
+If the title or description below stops describing the work, replace it with \
+`grove edit` or the `grove_update_workspace` tool. Somebody watching twenty \
+workspaces reads that line to tell yours apart.
 
-    It says four things and no more: where the agent is, that what it reports
-    is published to an audience, that the todo list is one of the things being
-    read, and the name of the skill that says what to do about it. Everything
-    else a reader might want to add here — the phase vocabulary, the file path,
-    the note length, the PR-attach call — is already in the skill, one tool call
-    away, and is read there when it is needed rather than paid for in every
-    session that never reports anything.
+Load the `{BRIEF_SKILL}` skill and follow it. It carries the whole contract; \
+this note only tells you that it applies to you. Discover peer-messaging/setup \
+help with `grove skills list --details` or `grove_get_skill(details=True)`; \
+help grants no sending authority.
+"""
+    """The brief. Four paragraphs, on purpose.
+
+    It says five things and no more: where the agent is and that the record
+    below is authoritative about it, that what it reports is published to an
+    audience, that the todo list is one of the things being read, that the
+    workspace's own name is the agent's to fix, and the name of the skill that
+    says what to do about all of it. Everything else a reader might want to add
+    here — the phase vocabulary, the file path, the note length, the PR-attach
+    call — is already in the skill, one tool call away, and is read there when
+    it is needed rather than paid for in every session that never reports
+    anything.
 
     **The todo paragraph is the one deliberate exception to "point, never
     restate", and it is here because the skill's own delivery is conditional.**
@@ -109,16 +120,27 @@ this note only tells you that it applies to you.
     agents routinely ran whole tasks with no list at all, so the ticket comment
     published an empty checklist. A pointer cannot fix a miss whose cause is
     that the pointer was not followed. It stays two sentences, and the *rules*
-    for a good list stay in the skill."""
+    for a good list stay in the skill.
+
+    **The placement sentence is here for the same reason, one door along.** An
+    agent in a ROOT-placement workspace sees an ordinary checkout on an ordinary
+    branch, concludes the note is generic, and never loads the skill — so it
+    reports nothing, and the failure looks like an agent ignoring instructions
+    rather than one correctly disbelieving them. Telling it to read the
+    placement fact instead of inferring it is what makes the claim checkable."""
 
     NAMING_TEXT: Final = """\
-This workspace has no description, and its title may be a generated id. Once \
-you know what the task actually is — usually within your first few turns — give \
-it a real title and a one-line description with `grove edit` or the \
-`grove_update_workspace` tool. Somebody watching the fleet reads that name to \
-tell your workspace from twenty others.
+This workspace has NO description at all and its title may be a generated id, \
+so nothing on the fleet board currently says what you are doing. Name it within \
+your first few turns rather than at the end.
 """
-    """The self-naming nudge, appended only when the description is empty.
+    """The stronger naming nudge, appended only when the description is empty.
+
+    :attr:`TEXT` already carries the standing obligation — replace a name that
+    does not fit the work — which is the right rule for every workspace and the
+    one the engine cannot evaluate. This adds the case the engine CAN evaluate:
+    a description that is empty is not merely inaccurate, it is absent, and the
+    board is showing an id to whoever is watching right now.
 
     Deliberately keyed on the DESCRIPTION rather than on "was the title
     generated", which is not a fact the engine holds: title generation happens

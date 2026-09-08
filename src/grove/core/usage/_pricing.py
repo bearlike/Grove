@@ -36,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 
 from grove.core.config import ModelPriceConfig, UsagePricingConfig
 from grove.core.contracts.usage import MoneyView
@@ -76,10 +77,51 @@ class PriceBook:
     """
 
     def __init__(self, cfg: UsagePricingConfig) -> None:
-        self._currency = cfg.currency
-        self._models: Mapping[str, ModelPriceConfig] = cfg.models
-        # Longest first: the first prefix that matches is then the right one.
-        self._by_length = sorted(cfg.models, key=len, reverse=True)
+        self.replace(cfg)
+
+    def replace(self, cfg: UsagePricingConfig) -> None:
+        """Atomically install one immutable configuration snapshot."""
+        manual_models = MappingProxyType(dict(cfg.models))
+        # Assignment is the atomic transition: callers retain either the old
+        # complete tuple or the new one, never a mixture while aggregating.
+        self._snapshot = (
+            cfg.currency,
+            manual_models,
+            tuple(sorted(manual_models, key=len, reverse=True)),
+            frozenset(cfg.fetched_models),
+            MappingProxyType(dict(cfg.aliases)),
+            frozenset(cfg.models).difference(cfg.fetched_models),
+        )
+
+    def snapshot(self) -> PriceBook:
+        """Return a stable book for an aggregate spanning one price revision."""
+        result = object.__new__(PriceBook)
+        result._snapshot = self._snapshot
+        return result
+
+    @property
+    def _currency(self) -> str:
+        return self._snapshot[0]
+
+    @property
+    def _models(self) -> Mapping[str, ModelPriceConfig]:
+        return self._snapshot[1]
+
+    @property
+    def _by_length(self) -> tuple[str, ...]:
+        return self._snapshot[2]
+
+    @property
+    def _fetched_models(self) -> frozenset[str]:
+        return self._snapshot[3]
+
+    @property
+    def _aliases(self) -> Mapping[str, str]:
+        return self._snapshot[4]
+
+    @property
+    def _manual_models(self) -> frozenset[str]:
+        return self._snapshot[5]
 
     @property
     def currency(self) -> str:
@@ -94,14 +136,37 @@ class PriceBook:
 
     def price_for(self, model: str | None) -> ModelPriceConfig | None:
         """The price entry governing ``model``, or ``None`` when none does."""
+        return self._price_for(model, self._snapshot)
+
+    @staticmethod
+    def _price_for(
+        model: str | None,
+        snapshot: tuple[
+            str,
+            Mapping[str, ModelPriceConfig],
+            tuple[str, ...],
+            frozenset[str],
+            Mapping[str, str],
+            frozenset[str],
+        ],
+    ) -> ModelPriceConfig | None:
         if not model:
             return None
-        exact = self._models.get(model)
+        _, models, by_length, fetched_models, aliases, manual_models = snapshot
+        # An operator's exact spelling is deliberate. Alias normalization only
+        # applies when it would not displace that explicit manual override.
+        if model in manual_models:
+            return models[model]
+        while model in aliases:
+            model = aliases[model]
+        exact = models.get(model)
         if exact is not None:
             return exact
-        for candidate in self._by_length:
-            if model.startswith(candidate):
-                return self._models[candidate]
+        # A source's entry names one deployment exactly. Prefix matching it would
+        # silently charge an unrelated deployment that happened to share a stem.
+        for candidate in by_length:
+            if candidate not in fetched_models and model.startswith(candidate):
+                return models[candidate]
         return None
 
     def amount(self, model: str | None, counts: TokenCounts) -> Decimal | None:
@@ -111,7 +176,36 @@ class PriceBook:
         an unknown. A priced model with all-``None`` counts is not a free
         request: there is no token evidence from which to calculate a price.
         """
-        price = self.price_for(model)
+        snapshot = self._snapshot
+        return self._amount(model, counts, snapshot)
+
+    @classmethod
+    def _amount(
+        cls,
+        model: str | None,
+        counts: TokenCounts,
+        snapshot: tuple[
+            str,
+            Mapping[str, ModelPriceConfig],
+            tuple[str, ...],
+            frozenset[str],
+            Mapping[str, str],
+            frozenset[str],
+        ],
+    ) -> Decimal | None:
+        # Explicitly measured zero usage needs no model rate. Missing counts
+        # remain unknown; in particular None must never compare as free usage.
+        if all(
+            value == 0
+            for value in (
+                counts.fresh_input,
+                counts.cache_read,
+                counts.cache_creation,
+                counts.output,
+            )
+        ):
+            return Decimal(0).quantize(_QUANTUM)
+        price = cls._price_for(model, snapshot)
         if price is None or all(
             value is None
             for value in (
@@ -128,13 +222,15 @@ class PriceBook:
             (price.cache_read, counts.cache_read),
             (price.cache_write, counts.cache_creation),
         )
-        if any(rate != 0 and value is None for rate, value in required):
+        if any(rate is None and value != 0 for rate, value in required):
+            return None
+        if any(rate not in (None, 0) and value is None for rate, value in required):
             return None
         total = (
-            Decimal(str(price.input)) * _tokens(counts.fresh_input)
-            + Decimal(str(price.output)) * _tokens(counts.output)
-            + Decimal(str(price.cache_read)) * _tokens(counts.cache_read)
-            + Decimal(str(price.cache_write)) * _tokens(counts.cache_creation)
+            _rate_amount(price.input, counts.fresh_input)
+            + _rate_amount(price.output, counts.output)
+            + _rate_amount(price.cache_read, counts.cache_read)
+            + _rate_amount(price.cache_write, counts.cache_creation)
         ) / _PER_MILLION
         return total.quantize(_QUANTUM)
 
@@ -147,9 +243,10 @@ class PriceBook:
         Unpriced groups drop out of the sum rather than zeroing it — a mixed
         range still reports what it can, and coverage says the rest is unknown.
         """
+        snapshot = self._snapshot
         running: Decimal | None = None
         for model, counts in groups:
-            part = self.amount(model, counts)
+            part = self._amount(model, counts, snapshot)
             if part is None:
                 return None
             running = part if running is None else running + part
@@ -164,13 +261,19 @@ class PriceBook:
         """
         if amount is None:
             return None
-        return MoneyView(
-            amount=format(amount, "f"), currency=self._currency, provenance="estimated"
-        )
+        currency = self._snapshot[0]
+        return MoneyView(amount=format(amount, "f"), currency=currency, provenance="estimated")
 
 
 def _tokens(value: int | None) -> Decimal:
     return Decimal(value) if value else Decimal(0)
+
+
+def _rate_amount(rate: float | None, tokens: int | None) -> Decimal:
+    """A known zero or missing rate can price only zero-or-absent evidence."""
+    if rate is None:
+        return Decimal(0)
+    return Decimal(str(rate)) * _tokens(tokens)
 
 
 def parse_amount(raw: str | None) -> Decimal | None:

@@ -128,6 +128,35 @@ def test_webapp_unit_carries_its_own_node_toolchain() -> None:
     assert "@WEBAPP_DESC@" not in out
 
 
+def test_webapp_recipes_resolve_npm_without_an_override() -> None:
+    """`make webapp-install` must name a real npm when nobody overrides one.
+
+    `WEBAPP_NPM_BIN` defaults to `NPM_BIN`, and `NPM_BIN` was defined ~55 lines
+    BELOW the `WEBAPP_NPM :=` that consumes it. A `:=` assignment expands
+    immediately, so it read an as-yet-undefined variable and expanded to the
+    empty string — the recipe then ran `PATH=":$PATH" ci`, i.e. the npm
+    SUBCOMMAND as the command, and `sh` answered `ci: not found` (127). Every
+    caller that passes `WEBAPP_NPM_BIN=` explicitly (reinstall.sh, this file's
+    other tests) supplied the value the ordering had dropped, so the whole
+    suite stayed green while an init script running the bare target failed.
+    """
+    npm = shutil.which("npm")
+    if npm is None:
+        pytest.skip("npm not on PATH")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NPM_BIN", "WEBAPP_NPM"))}
+    result = subprocess.run(
+        ["make", "-n", "webapp-install"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert npm in result.stdout, result.stdout
+    assert 'PATH=":' not in result.stdout, result.stdout
+
+
 def test_webapp_unit_default_host_is_lan_reachable() -> None:
     """Default WEBAPP_HOST is 0.0.0.0 (LAN-reachable, the whole point of the webapp)."""
     out = _run_print(with_webapp=True)

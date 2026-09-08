@@ -727,6 +727,18 @@ class MewboAdapter:
             )
         return summaries
 
+    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+        """``None`` — a remote session has no local transcript to locate.
+
+        The protocol resolves this seam through ``locate_transcripts``, which is
+        empty here by construction, so there is nothing to find. A remote
+        session that genuinely belongs to this cwd already surfaces through
+        :meth:`list_sessions`; the relocation this seam exists for is a local
+        filesystem behaviour that cannot occur on a backend.
+        """
+        del cwd, session_id
+        return None
+
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
         # No message spine: a remote session's history is the backend's own
         # timeline, projected here as turns rather than as the lineage-preserving

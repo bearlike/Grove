@@ -387,7 +387,9 @@ class Complete:
             if manager is None:
                 return []
             ref = ctx.params.get("workspace")
-            state = resolve_or_infer_workspace(manager, ref if isinstance(ref, str) else None)
+            _, state = resolve_or_infer_workspace(
+                ref if isinstance(ref, str) else None, manager=manager
+            )
             return [(t.key, t.kind) for t in state.ticket_refs]
 
         return _candidates(produce)
@@ -478,13 +480,10 @@ class Complete:
         def produce() -> list[tuple[str, str]]:
             from grove.tui.cli_workspace import resolve_workspace  # noqa: PLC0415
 
-            manager = _manager()
-            if manager is None:
-                return []
             ref = ctx.params.get("workspace")
             if not isinstance(ref, str) or not ref:
                 return []
-            state = resolve_workspace(manager, ref)
+            manager, state = resolve_workspace(ref)
             return [
                 (agent.name, "primary" if agent.primary else "extra")
                 for agent in manager.container_agents(state.id)

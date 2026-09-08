@@ -1,81 +1,93 @@
 "use client";
 
+import type { ReactNode } from "react";
 import {
-  CheckIcon,
-  CpuIcon,
-  TerminalIcon,
+  CopyIcon,
   PlayIcon,
   ServerIcon,
   SparklesIcon,
   SquareSlashIcon,
+  TerminalIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import {
+  CardGrid,
+  CardRegion,
+  CardScroll,
+  SectionCard,
+} from "@/components/grove/card";
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TerminalBlock } from "@/components/elements/terminal-block";
+import { runtimeLabel } from "@/components/grove/fleet/tokens";
+import { HelpLabel } from "./help-hint";
 import { Button } from "@/components/ui/button";
 import {
   EmptyState,
   EmptyStateGreeting,
 } from "@/components/elements/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { SessionControlView, SessionControlsView } from "@/lib/grove/api";
-import {
-  useInvokeControl,
-  useSessionControls,
-  useSwitchModel,
-} from "@/lib/grove/hooks";
-import { cn } from "@/lib/utils";
-import { CardGrid, SectionCard, CardScroll } from "@/components/grove/card";
-import { CopyButton, ShareCard } from "./share-card";
+import type {
+  SessionControlView,
+  SessionControlsView,
+  WorkspaceStateView,
+} from "@/lib/grove/api";
+import { useInvokeControl, useSessionControls } from "@/lib/grove/hooks";
+import { LifecycleActions } from "./lifecycle-actions";
+import { SendKeysCard } from "./send-keys";
+import { ShareCard } from "./share-card";
 
-/**
- * Both lists use the pane's width instead of a column of it, and neither knows
- * how wide the pane is.
- *
- * A model id is a short label, so the chips simply flow and wrap — a grid track
- * would stretch the word "opus" across a third of the panel. A command carries
- * a name and a sentence of detail, so it gets a real column, sized by `auto-
- * fill` from a minimum: the panel is ~380 px docked and full-window undocked,
- * and a fixed `grid-cols-2` is wrong at both ends.
- */
-const MODEL_LIST = "flex flex-wrap gap-1.5";
 const CONTROL_GRID =
   "grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-3";
+const CONTROL_FOCUS =
+  "min-h-[24px] border focus-visible:border-ring focus-visible:ring-ring/50";
 
 /**
- * The session's input-control surface: the model catalog with a switch, plus
- * the enumerated slash commands, skills and configured MCP servers.
+ * Workspace verbs and the agent-session controls that the daemon reports.
  *
- * Read-only enumeration is the core value; Run and Switch are thin best-effort
- * verbs over the daemon's `/controls/*` routes. An agent kind with no control
- * surface (a shell or remote agent) renders the quiet empty state rather than
- * empty chrome.
+ * The first three cards are workspace concerns and remain useful around agents
+ * that expose no control protocol. Commands, skills, and MCP enumeration are
+ * session concerns, so their empty state is deliberately separate.
  */
-export function ControlsTab({ workspaceId }: { workspaceId: string }) {
+export function ControlsTab({
+  state,
+  onKilled,
+  canInterrupt,
+}: {
+  state: WorkspaceStateView;
+  onKilled: () => void;
+  canInterrupt: boolean;
+}) {
+  const workspaceId = state.id;
   const { data, isLoading } = useSessionControls(workspaceId);
   const invoke = useInvokeControl(workspaceId);
-  const switchModel = useSwitchModel(workspaceId);
+
+  const workspaceCards = (
+    <>
+      <SessionCard state={state} onKilled={onKilled} />
+      <SendKeysCard
+        workspaceId={workspaceId}
+        status={state.status}
+        canInterrupt={canInterrupt}
+        native={state.native}
+      />
+      <ShareCard workspaceId={workspaceId} />
+    </>
+  );
 
   if (isLoading && !data) {
     return (
-      <CardGrid data-testid="controls-tab">
-        <AttachCommandCard workspaceId={workspaceId} />
-        <ShareCard workspaceId={workspaceId} />
+      <CardGrid className="@xl:grid-cols-2" data-testid="controls-tab">
+        {workspaceCards}
         <Skeleton className="h-32" />
         <Skeleton className="h-48" />
       </CardGrid>
     );
   }
 
-  // Sharing is a workspace capability, not an agent-control capability: a
-  // shell or remote agent can still have a useful public transcript. Keep the
-  // card mounted around the agent's quiet empty state instead of returning it
-  // away with the unavailable controls.
-  if (!data || !hasAnyControl(data)) {
+  if (!data || !hasVisibleControl(data)) {
     return (
-      <CardGrid data-testid="controls-tab">
-        <AttachCommandCard workspaceId={workspaceId} />
-        <ShareCard workspaceId={workspaceId} />
+      <CardGrid className="@xl:grid-cols-2" data-testid="controls-tab">
+        {workspaceCards}
         <div className="flex flex-1 items-center justify-center">
           <EmptyState>
             <EmptyStateGreeting>
@@ -87,49 +99,9 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
     );
   }
 
-  // A refusal (501 capability_unavailable, or a 409) is expected rather than
-  // exceptional here — surface the daemon's own message and move on.
-  const failure = invoke.error ?? switchModel.error;
-
   return (
     <CardGrid className="@xl:grid-cols-2" data-testid="controls-tab">
-      <AttachCommandCard workspaceId={workspaceId} />
-      <ShareCard workspaceId={workspaceId} />
-      {data.models.length > 0 && (
-        <SectionCard
-          icon={<CpuIcon />}
-          title="Model"
-          description="The catalog this agent will accept a switch to."
-          action={
-            data.permission_mode ? (
-              // Not a badge: the permission mode is how this session was
-              // configured, not something it is currently doing. `muted` was
-              // the giveaway — a pill drawn in the metadata colour is metadata
-              // that has been given chrome it does not use.
-              <span
-                className="font-mono text-xs text-content-tertiary"
-                title="The permission mode this session prompts with by default"
-              >
-                {data.permission_mode}
-              </span>
-            ) : undefined
-          }
-          className="@xl:col-span-2"
-        >
-          <div className={MODEL_LIST} data-testid="model-picker">
-            {data.models.map((id) => (
-              <ModelChip
-                key={id}
-                id={id}
-                selected={id === data.current_model}
-                pending={switchModel.isPending}
-                onSelect={() => switchModel.mutate(id)}
-              />
-            ))}
-          </div>
-        </SectionCard>
-      )}
-
+      {workspaceCards}
       <ControlList
         icon={<SquareSlashIcon />}
         label="Commands"
@@ -144,7 +116,6 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
         pending={invoke.isPending}
         onRun={(name) => invoke.mutate(name)}
       />
-
       {data.mcp_servers.length > 0 && (
         <SectionCard
           icon={<ServerIcon />}
@@ -152,17 +123,6 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
           description={`${data.mcp_servers.length} configured for this session`}
           className="@xl:col-span-2"
         >
-          {/* A LIST OF NAMES, NOT A ROW OF STATES. A badge marks something
-              about an object that could change; every server here is simply
-              configured, and none of them is more or less configured than the
-              next. Fifteen pills that all say the same nothing is fifteen
-              things the eye has to reject before it can read one.
-
-              Mono stays — a server name is an identifier you would retype into
-              a config file. What goes is the chrome around it. The repeated
-              glyph goes with the pills: the card's own header already carries
-              one, and stamping it fifteen more times says nothing the heading
-              has not. */}
           <ul className="flex flex-wrap gap-x-3 gap-y-1">
             {data.mcp_servers.map((server) => (
               <li
@@ -175,81 +135,132 @@ export function ControlsTab({ workspaceId }: { workspaceId: string }) {
           </ul>
         </SectionCard>
       )}
-
-      {failure && (
+      {invoke.error && (
         <p role="status" className="text-xs text-destructive @xl:col-span-2">
-          {failure.message}
+          {invoke.error.message}
         </p>
       )}
     </CardGrid>
   );
 }
 
-/** The exact CLI handoff, with no current-session prerequisite. */
-export function AttachCommandCard({ workspaceId }: { workspaceId: string }) {
-  const command = `grove attach ${workspaceId}`;
+/** Attach, lifecycle, and runtime are one workspace session, not three cards. */
+function SessionCard({
+  state,
+  onKilled,
+}: {
+  state: WorkspaceStateView;
+  onKilled: () => void;
+}) {
   return (
     <SectionCard
       icon={<TerminalIcon />}
-      title="Attach terminal"
-      description="Run this on the host. Containerized workspaces enter the container’s own tmux session."
+      title="Session"
       className="@xl:col-span-2"
-      data-testid="attach-command-card"
+      data-testid="session-card"
     >
-      <div className="flex min-w-0 gap-2">
-        <code
-          className="min-w-0 flex-1 truncate font-mono text-xs"
-          title={command}
-          data-testid="attach-command"
+      {/*
+        THE COMMAND TAKES THE FULL MEASURE AND THE OTHER TWO SHARE THE ROW BELOW.
+        Three equal columns gave a 32-character workspace id a 222px well and
+        broke `grove attach <id>` over four lines, while `Lifecycle` (two
+        buttons) and `Runtime` (one truncating line) each held the same 222px
+        with nothing to put in it. Sizing by information rather than by count
+        is the whole fix: the id is the one value here that must be read
+        character for character, so it gets the width, and the pair that fits
+        in half a row gets half a row.
+      */}
+      <div className="grid gap-2">
+        <SessionRegion
+          label="Attach"
+          tooltip={
+            state.native
+              ? "Use this command on the host. A native session attaches read-only: the pane is the protocol event stream, and steering goes through Grove."
+              : "Use this command on the host. Containerized workspaces enter their own tmux session."
+          }
         >
-          {command}
-        </code>
-        <CopyButton text={command} />
+          <AttachCommand workspaceId={state.id} />
+        </SessionRegion>
+        <div className="grid gap-2 @lg:grid-cols-2">
+          <SessionRegion
+            label="Lifecycle"
+            tooltip={state.native
+              ? "Recover the agent without deleting workspace files, or permanently remove the workspace. Native sessions cannot be paused."
+              : "Pause, resume, respawn, or permanently remove this workspace."}
+          >
+            <LifecycleActions state={state} onKilled={onKilled} />
+          </SessionRegion>
+          <SessionRegion
+            label="Runtime"
+            tooltip="The environment, agent, and branch currently assigned to this workspace."
+          >
+            <span
+              className="block min-w-0 truncate text-xs"
+              title={`${runtimeLabel(state.runtime)} · ${state.agent_name} · ${state.branch}`}
+            >
+              {runtimeLabel(state.runtime)} · {state.agent_name} · {state.branch}
+            </span>
+          </SessionRegion>
+        </div>
       </div>
     </SectionCard>
   );
 }
 
-/**
- * One selectable model.
- *
- * A `Badge` around a button rather than the vendored `ModelPicker`: the daemon
- * offers bare model ids and nothing else, so the picker's four descriptive
- * columns — family, capabilities, context, price — were all empty, and it drew
- * a `max-w-sm` single column of blank metadata down the middle of a pane twice
- * that wide. A short label is a chip.
- */
-function ModelChip({
-  id,
-  selected,
-  pending,
-  onSelect,
+/** The exact CLI handoff, with no current-session prerequisite. */
+export function AttachCommand({ workspaceId }: { workspaceId: string }) {
+  const command = `grove attach ${workspaceId}`;
+  return (
+    <div className="min-w-0" data-testid="attach-command-card">
+      <div className="flex min-w-0 items-start gap-2">
+        <TerminalBlock
+          command="attach"
+          lines={[command]}
+          visibleCount={1}
+          done
+          // This is a command to copy, not execution evidence. Suppress the
+          // vendor's exit-status header and output-log minimum height.
+          //
+          // `break-all` is deliberately NOT here any more: at a full-width
+          // measure the id fits, and a mid-token break is what turned one
+          // command into four lines the moment the well was narrow. It wraps
+          // at whitespace like the rest of the transcript, and the row scrolls
+          // rather than clips if a future id outgrows even this width — a
+          // command a reader cannot see in full is a command they cannot
+          // retype, which is the whole point of §3's mono rule.
+          className="min-w-0 max-w-none flex-1 [&>div:first-child]:hidden [&>div:last-child]:min-h-0 [&>div:last-child]:overflow-x-auto [&>div:last-child]:py-2 [&>div:last-child]:whitespace-pre"
+          data-testid="attach-command"
+        />
+        <TooltipIconButton
+          variant="ghost"
+          tooltip="Copy attach command"
+          aria-label="Copy attach command"
+          className="size-6 shrink-0"
+          onClick={() => {
+            void navigator.clipboard.writeText(command);
+          }}
+        >
+          <CopyIcon aria-hidden />
+        </TooltipIconButton>
+      </div>
+    </div>
+  );
+}
+
+/** Session facts get distinct cells so their verbs do not read as one sentence. */
+function SessionRegion({
+  label,
+  tooltip,
+  children,
 }: {
-  id: string;
-  selected: boolean;
-  pending: boolean;
-  onSelect: () => void;
+  label: string;
+  tooltip: string;
+  children: ReactNode;
 }) {
   return (
-    <Badge asChild variant={selected ? "secondary" : "outline"}>
-      <button
-        type="button"
-        aria-pressed={selected}
-        disabled={pending}
-        onClick={onSelect}
-        className={cn(
-          "min-w-0 justify-start gap-1.5 font-mono disabled:opacity-60",
-          !selected && "hover:bg-accent hover:text-accent-foreground",
-        )}
-        data-testid="model-chip"
-      >
-        <CheckIcon
-          className={cn("shrink-0", !selected && "invisible")}
-          aria-hidden
-        />
-        <span className="truncate">{id}</span>
-      </button>
-    </Badge>
+    <CardRegion>
+      <HelpLabel label={label} tooltip={tooltip} />
+      {children}
+    </CardRegion>
   );
 }
 
@@ -281,9 +292,6 @@ function ControlList({
               key={`${item.scope}:${item.name}`}
               className="flex items-center gap-1 px-1.5 py-1 hover:bg-muted/50"
             >
-              {/* The name is what you came to find, its description is what
-                  tells you whether it is the right one — primary over tertiary,
-                  which is the rank a list of near-identical rows needs most. */}
               <div className="min-w-0 flex-1">
                 <p className="truncate font-mono text-xs text-content-primary">
                   /{item.name}
@@ -300,6 +308,7 @@ function ControlList({
               <Button
                 size="xs"
                 variant="ghost"
+                className={CONTROL_FOCUS}
                 disabled={pending}
                 onClick={() => onRun(item.name)}
                 aria-label={`Run ${item.name}`}
@@ -315,12 +324,10 @@ function ControlList({
   );
 }
 
-function hasAnyControl(controls: SessionControlsView): boolean {
+function hasVisibleControl(controls: SessionControlsView): boolean {
   return (
-    controls.models.length > 0 ||
     controls.commands.length > 0 ||
     controls.skills.length > 0 ||
-    controls.mcp_servers.length > 0 ||
-    controls.permission_mode != null
+    controls.mcp_servers.length > 0
   );
 }

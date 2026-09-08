@@ -25,7 +25,7 @@ from pathlib import Path
 
 import typer
 
-from grove.core import GroveError, build
+from grove.core import GroveError
 from grove.core.container_runtime import ContainerRuntimeState
 from grove.core.container_shell import ContainerShell
 from grove.core.workspace import WorkspaceState, ensure_can_attach
@@ -77,8 +77,7 @@ def shell_workspace(workspace: str = _WORKSPACE_ARG) -> None:
       grove shell a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         container = _container_target(state)
         # The engine's own attach precondition, reused rather than restated: a
         # container that is gone reconciles to OFFLINE, and execing into

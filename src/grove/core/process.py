@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -83,6 +85,76 @@ def spawn_detached(
         raise ProcessError(f"could not spawn headless agent {argv!r}: {exc}") from exc
     logger.info("spawned headless agent pid={} in {}: {}", proc.pid, cwd, " ".join(argv))
     return proc.pid
+
+
+@dataclass(slots=True, frozen=True)
+class ProcessTree:
+    """Snapshot a pane's process identities before its parent/session disappears."""
+
+    identities: tuple[tuple[int, str], ...]
+    proc_root: Path = Path("/proc")
+
+    @staticmethod
+    def _identity(path: Path) -> tuple[int, str] | None:
+        try:
+            # comm may contain spaces or parentheses; stat's final ')' ends it.
+            fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+            if fields[0] == "Z":
+                return None
+            return int(fields[1]), fields[19]
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+        except (OSError, IndexError, ValueError) as exc:
+            raise ProcessError(f"cannot verify process identity at {path}") from exc
+
+    @classmethod
+    def capture(
+        cls, roots: Sequence[int], *, proc_root: Path = Path("/proc"), include_roots: bool = True
+    ) -> ProcessTree:
+        if sys.platform != "linux":
+            raise ProcessError("verified native runtime recovery requires Linux /proc")
+        try:
+            entries = tuple(proc_root.iterdir())
+        except OSError as exc:
+            raise ProcessError("cannot inspect native runtime processes") from exc
+        rows = {
+            int(entry.name): identity
+            for entry in entries
+            if entry.name.isdigit() and (identity := cls._identity(entry)) is not None
+        }
+        selected = set(roots) & rows.keys()
+        ordered = sorted(selected) if include_roots else []
+        while descendants := (
+            {pid for pid, (parent, _) in rows.items() if parent in selected} - selected
+        ):
+            selected.update(descendants)
+            ordered.extend(sorted(descendants))
+        return cls(tuple((pid, rows[pid][1]) for pid in reversed(ordered)), proc_root)
+
+    def terminate_and_wait(self, *, timeout: float = 5.0) -> None:
+        """Signal only the captured incarnations, then refuse overlap on timeout."""
+        deadline = time.monotonic() + timeout
+        # Children exit before their ancestors, so a refusal leaves the pane's
+        # ancestry available to inspect again rather than orphaning a provider.
+        for pid, start in self.identities:
+            identity = self._identity(self.proc_root / str(pid))
+            if identity is None or identity[1] != start:
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except OSError as exc:
+                raise ProcessError(f"cannot stop native runtime process {pid}") from exc
+            while True:
+                identity = self._identity(self.proc_root / str(pid))
+                if identity is None or identity[1] != start:
+                    break
+                if time.monotonic() >= deadline:
+                    raise ProcessError(
+                        "native runtime did not stop; refusing to launch another owner"
+                    )
+                time.sleep(0.05)
 
 
 @dataclass(slots=True, frozen=True)

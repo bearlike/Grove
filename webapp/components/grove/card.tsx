@@ -102,7 +102,9 @@ export function SectionCard({
 }) {
   return (
     <CardShell className={className} {...props}>
-      <CardHeader className="gap-0.5 bg-muted/40 px-3 py-2.5">
+      {/* Description lives in the body, so the vendor's two-row grid would
+          leave the action misaligned. Title and action share one flex row. */}
+      <CardHeader className="surface-header flex min-h-8 items-center justify-between gap-2 px-3 py-1.5">
         <CardTitle className="flex min-w-0 items-center gap-2 text-sm leading-5 font-medium">
           {icon && (
             <span className="flex size-4 shrink-0 items-center justify-center text-content-tertiary [&_svg]:size-4">
@@ -111,10 +113,7 @@ export function SectionCard({
           )}
           <span className="min-w-0 truncate">{title}</span>
         </CardTitle>
-        {description && (
-          <CardDescription className="min-w-0 text-xs leading-4">{description}</CardDescription>
-        )}
-        {action && <CardAction className="self-center">{action}</CardAction>}
+        {action && <CardAction className="flex shrink-0 items-center self-center">{action}</CardAction>}
       </CardHeader>
       {/* `flex-1` so the body FILLS its card rather than sitting at its natural
           height with dead space under it. It matters wherever two cards share a
@@ -129,6 +128,11 @@ export function SectionCard({
           flush ? "p-0" : "p-3",
         )}
       >
+        {description && (
+          <CardDescription className={cn("min-w-0 text-xs text-content-tertiary", flush && "px-3 pt-3")}>
+            {description}
+          </CardDescription>
+        )}
         {children}
       </CardContent>
     </CardShell>
@@ -168,12 +172,9 @@ export function SectionCard({
  *     `SectionCard`'s title-bar-for-an-object case.
  *   - `workspace/files-tab.tsx`'s `FileDiffRow` — no `header`. A row in a
  *     `SectionCard`'s own `divide-y` list, not a card of its own.
- *   - `workspace/data-parts.tsx`'s `NotificationPart`, `workspace/file-edit-
- *     part.tsx`'s `FileEditPart` — no `header`, left as-is. Both wrap only a
- *     `CardDisclosure` in a `CardShell`, the same shape as the plan and queue
- *     cards, so they are plausible next candidates — but they sit in files
- *     this change does not own, so the decision here is explicitly deferred
- *     rather than applied silently.
+ *   - `workspace/file-edit-part.tsx` — `header`. Native diff lines form its
+ *     body directly, without another viewer header or card.
+ *   - `workspace/data-parts.tsx`'s `NotificationPart` — no `header`.
  */
 export function CardDisclosure({
   open,
@@ -260,47 +261,137 @@ export function CardScroll({ children, className, ...props }: React.ComponentPro
 }
 
 /**
- * A labelled number. The label sits UNDER the value so a row of them reads as
- * one baseline of figures rather than a paragraph of words.
+ * A NAMED REGION INSIDE A CARD BODY: one bounded enclosure around facts that
+ * belong together, so a reader sees where one thought ends without a rule
+ * across the card or a heading above it.
  *
- * SANS, NOT MONO. Mono means "a literal you could retype and have it mean the
- * same thing" — a path, a ref, an id. Everything that reaches here is a
- * QUANTITY: commits ahead, dirty files, `+12 −4`, turns, tool calls, tokens.
- * The alignment those need is `tabular-nums`, which is doing the whole job the
- * monospace face was credited with, and the usage page already renders the same
- * class of data in sans. This one line is why the audit map described the same
- * defect five times, once per work-panel tab — none of them styles its own
- * figures, they all come through here.
+ * `CardShell`, not a `div` with a border, and that is the whole reason this
+ * exists rather than being open-coded per surface: `CardShell` is the one place
+ * radius and elevation enter Grove code. `card-region` scopes its container
+ * radius token to the inner-cell role without overriding the vendored class.
+ * `bg-muted/30` lifts it off the darker base body in either theme. This wash is
+ * deliberately not claimed as a full ladder rung; the border groups the facts
+ * even where the alpha's lightness step is small.
  *
- * `tone` survives §4.7 because the label sits directly under the value: `+12`
- * in green is a coloured figure with the word "added" beneath it, so the colour
- * is the second carrier rather than the only one.
+ * A REGION IS AN ENCLOSURE, NEVER A CROP. It has no height of its own, so the
+ * prose inside it wraps to whatever it needs; the bound is the perimeter, not a
+ * `max-h-*`. A region whose data is absent is not rendered at all — an empty
+ * enclosure claims a fact was measured and came back empty.
  */
-export function CardStat({
+export function CardRegion({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <CardShell
+      className={cn("card-region flex min-w-0 flex-col gap-1.5 bg-muted/30 p-2.5", className)}
+      {...props}
+    />
+  );
+}
+
+/**
+ * ONE BOUNDED FACT: a label with its glyph on top, the figure beneath, and a
+ * perimeter that groups the pair.
+ *
+ * The geometry is the contract, not the decoration. `min-h-16` is a REFERENCE
+ * height rather than a fixed one — a row of these lines up at default scale, and
+ * a cell whose label wraps under 200% zoom or a longer translation grows instead
+ * of clipping. 10px inside, a 16px glyph 4px from a 12px/16px label, a 20px/26px
+ * figure: 10 + 16 + 2 + 26 + 10 lands on 64.
+ *
+ * A CELL IS NOT A BUTTON. No pointer, no hover elevation, no tab stop — the
+ * perimeter groups a label and a value, and a reader who cannot click it must
+ * never be told otherwise. Where a term genuinely needs defining, the definition
+ * rides the LABEL through `Explain`'s dotted affordance, so at most the few
+ * cells with real vocabulary gain a stop rather than all of them.
+ *
+ * `derived` is §3's provenance rule applied to a figure Grove computed or summed
+ * rather than read off a provider — a dashed underline on the VALUE, with the
+ * `title` saying what it was computed from. Dashed, never dotted: dotted is the
+ * glossary affordance on the label beside it, and two claims sharing one
+ * decoration is two claims nobody can read.
+ *
+ * `muted` is for an absence — `Not measured` — which renders quieter and smaller
+ * than a real figure so a missing class can never be mistaken for a small one. A
+ * genuine zero is a figure and takes the ordinary treatment.
+ */
+export function CardCell({
+  icon,
   label,
   value,
+  title,
   tone,
-}: {
-  label: string;
+  derived = false,
+  muted = false,
+  ...props
+}: Omit<React.ComponentProps<"div">, "title"> & {
+  icon?: ReactNode;
+  label: ReactNode;
   value: ReactNode;
-  /** `positive`/`negative` colour the VALUE only; the label stays muted. */
-  tone?: "positive" | "negative";
+  /** What the figure was computed from, and its exact value where abbreviated. */
+  title?: string;
+  /**
+   * The figure's semantic tone: the two the fleet's counters spend on these
+   * exact numbers, plus the warning rung its dirty count takes. It survives
+   * §4.7 because the label sits directly above the value and the sign is on the
+   * figure, so the colour is the second carrier and never the only one. A
+   * caller passing a tone for a ZERO would be claiming a change that did not
+   * happen — the selector withholds it, not this component.
+   */
+  tone?: "added" | "removed" | "pending";
+  derived?: boolean;
+  muted?: boolean;
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5" data-testid={`panel-stat-${label}`}>
-      <span
-        className={cn(
-          "text-sm tabular-nums",
-          tone === "positive" && "text-success",
-          tone === "negative" && "text-destructive",
+    <CardShell
+      className="card-region flex min-h-16 min-w-0 flex-col justify-between gap-0.5 bg-muted/30 p-2.5"
+      {...props}
+    >
+      {/* THE LABEL WRAPS; IT DOES NOT TRUNCATE. `Output tokens` at 12px needs
+          about 84px and a cell in a 300px panel gives it 81, so truncation was
+          not a rare edge — it was the ordinary narrow reading, and
+          `Output toke…` is a label a reader has to guess at. The cell has a
+          MINIMUM height rather than a fixed one precisely so it can absorb a
+          second line, and grid siblings stretch together, so a row stays
+          aligned. `items-start` keeps the glyph on the label's first line. */}
+      <span className="flex min-w-0 items-start gap-1 text-xs leading-4 text-content-tertiary">
+        {icon && (
+          <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
+            {icon}
+          </span>
         )}
+        <span className="min-w-0">{label}</span>
+      </span>
+      <span
+        title={title}
+        className={cn(
+          "min-w-0 truncate tabular-nums",
+          // `text-2xl`, NOT `text-xl` — this app rebased the whole ramp one
+          // step down (`app/globals.css`), so its `--text-2xl` is exactly the
+          // 20px/26px the metric figure asks for and `--text-xl` is 18px/24px.
+          // Reading a Tailwind default off memory is how a figure ships a size
+          // smaller than the one it was specified at, with nothing failing.
+          muted
+            ? "text-xs leading-4 text-content-tertiary"
+            : cn("text-2xl", tone ? CELL_TONE[tone] : "text-content-primary"),
+          derived && "underline decoration-dashed underline-offset-2",
+        )}
+        data-derived={derived || undefined}
       >
         {value}
       </span>
-      <span className="truncate text-xs text-content-tertiary">{label}</span>
-    </div>
+    </CardShell>
   );
 }
+
+/**
+ * One tone table, never a call-site choice (§4.1) — and the same three the
+ * fleet's counters already spend on these exact figures, so one number renders
+ * one way wherever it appears.
+ */
+const CELL_TONE = {
+  added: "text-success",
+  removed: "text-destructive",
+  pending: "text-warning",
+} as const;
 
 /**
  * Term-and-value rows. The term column sizes to the widest term rather than to

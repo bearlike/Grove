@@ -208,11 +208,11 @@ def test_tmux_backend_unpacks_the_spec_into_the_tmux_calls(
         worktree=tmp_path / "wt",
         kind="claude_code",
     )
-    created: list[tuple[str, Path, int]] = []
+    created: list[tuple[str, Path, int, str]] = []
     laid_out: list[dict[str, object]] = []
 
-    def _create(name: str, cwd: Path, *, history_limit: int = 50_000) -> None:
-        created.append((name, cwd, history_limit))
+    def _create(name: str, cwd: Path, *, history_limit: int = 50_000, size: str = "") -> None:
+        created.append((name, cwd, history_limit, size))
 
     def _layout(session_name: str, **kwargs: object) -> None:
         laid_out.append({"session_name": session_name, **kwargs})
@@ -222,7 +222,14 @@ def test_tmux_backend_unpacks_the_spec_into_the_tmux_calls(
 
     TmuxLaunchBackend().launch(spec)
 
-    assert created == [("test-sess", tmp_path / "wt", GroveConfig().tmux.history_limit)]
+    assert created == [
+        (
+            "test-sess",
+            tmp_path / "wt",
+            GroveConfig().tmux.history_limit,
+            GroveConfig().tmux.detached_size,
+        )
+    ]
     assert laid_out == [
         {
             "session_name": "test-sess",

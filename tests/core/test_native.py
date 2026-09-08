@@ -1,54 +1,44 @@
-"""Native steering delivery: render_answer + the ChannelSteerClient seam.
+"""Native steering delivery: the channel client and the daemon-backed client.
 
-The paneless twin of tmux keystroke steering — an answer/message is rendered to
-text and delivered over the channel receiver. Best-effort by contract: no
-endpoint (channels off / server down) is a logged no-op, never a raise.
+Two ``NativeSteerClient`` impls, opposite process shapes: ``ChannelSteerClient``
+is the PANELESS backend's (messages only, best-effort), ``DaemonSteerClient``
+is the out-of-process road a CLI/TUI manager takes to a native workspace's
+owner (every op POSTs a daemon steer route). A refusal on ``interrupt`` /
+``set_model`` RAISES — a silent no-op there is a control that looks wired and
+is not, which is the bug this seam replaced.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
 
 from grove.core import channel, native
-from grove.core.agents.model import AgentQuestion, AgentQuestionOption, AnswerSelection
+from grove.core.errors import AgentSessionNotFound, SteeringUnsupported
+from grove.core.workspace import WorkspaceState, WorkspaceStatus
 
-# ─── render_answer: questions + selections → deliverable text ────────────────
 
-
-def _question(prompt: str, *labels: str) -> AgentQuestion:
-    return AgentQuestion(
-        id="q#0",
-        group_id="g",
-        kind="single_select",
-        prompt=prompt,
-        options=tuple(AgentQuestionOption(label=x) for x in labels),
+def _state(session_id: str | None = "sess-1") -> WorkspaceState:
+    now = datetime.now(UTC)
+    return WorkspaceState(
+        id="a" * 32,
+        title="t",
+        repo_root="/repo",
+        branch="b",
+        base_branch="main",
+        worktree_path="/repo/.worktrees/t",
+        tmux_session="grove-t",
+        agent_name="claude",
+        status=WorkspaceStatus.RUNNING,
+        created_at=now,
+        updated_at=now,
+        agent_session_id=session_id,
+        native=True,
     )
-
-
-def test_render_answer_maps_indexes_to_option_labels() -> None:
-    q = _question("Which color?", "Blue", "Green")
-    text = native.render_answer((q,), [AnswerSelection(indexes=(1,))])
-    assert text == "Which color? Green"
-
-
-def test_render_answer_passes_free_text_through() -> None:
-    q = _question("Name?")
-    text = native.render_answer((q,), [AnswerSelection(text="Ada")])
-    assert text == "Name? Ada"
-
-
-def test_render_answer_skips_out_of_range_index_without_raising() -> None:
-    q = _question("Pick", "A")
-    # index 5 doesn't exist — dropped, not raised; the prompt still rides.
-    assert native.render_answer((q,), [AnswerSelection(indexes=(5,))]) == "Pick"
-
-
-def test_render_answer_empty_degrades_to_acknowledgement() -> None:
-    assert native.render_answer((), []) == "(answer submitted)"
 
 
 # ─── ChannelSteerClient: best-effort delivery over the channel receiver ──────
@@ -63,7 +53,7 @@ def test_send_message_no_endpoint_is_noop(monkeypatch: pytest.MonkeyPatch, tmp_p
         raise AssertionError("no POST should be attempted without an endpoint")
 
     monkeypatch.setattr(httpx, "post", _boom)
-    native.ChannelSteerClient().send_message("sess-1", "hi")  # must not raise
+    native.ChannelSteerClient().send_message(_state(), "hi")  # must not raise
 
 
 def test_send_message_posts_to_receiver_with_bearer(
@@ -83,7 +73,7 @@ def test_send_message_posts_to_receiver_with_bearer(
         return _Resp()
 
     monkeypatch.setattr(httpx, "post", _fake_post)
-    native.ChannelSteerClient().send_message("sess-1", "hello")
+    native.ChannelSteerClient().send_message(_state(), "hello")
 
     assert captured["url"] == f"http://127.0.0.1:54321{channel.RECEIVE_ROUTE}"
     assert captured["headers"] == {"Authorization": "Bearer tok"}
@@ -104,8 +94,98 @@ def test_send_message_swallows_http_error(monkeypatch: pytest.MonkeyPatch, tmp_p
         raise httpx.ConnectError("refused")
 
     monkeypatch.setattr(httpx, "post", _raise)
-    native.ChannelSteerClient().send_message("sess-1", "hello")  # must not raise
+    native.ChannelSteerClient().send_message(_state(), "hello")  # must not raise
 
 
-def test_interrupt_is_best_effort_noop() -> None:
-    native.ChannelSteerClient().interrupt("sess-1")  # deferred primitive; must not raise
+def test_channel_client_needs_a_recorded_session() -> None:
+    with pytest.raises(AgentSessionNotFound):
+        native.ChannelSteerClient().send_message(_state(None), "hi")
+
+
+@pytest.mark.parametrize("op", ["interrupt", "set_model"])
+def test_channel_client_refuses_controls_loudly(op: str) -> None:
+    """A channel carries text only; a control that silently did nothing would read
+    as a working control, so the refusal is the typed 501 the daemon maps."""
+    client = native.ChannelSteerClient()
+    with pytest.raises(SteeringUnsupported):
+        if op == "interrupt":
+            client.interrupt(_state())
+        else:
+            client.set_model(_state(), "opus")
+
+
+# ─── DaemonSteerClient: every op is a daemon steer route ────────────────────
+
+
+class _Resp:
+    def __init__(self, status_code: int, body: dict[str, object] | None = None) -> None:
+        self.status_code = status_code
+        self.content = b"x" if body is not None else b""
+        self.text = json.dumps(body or {})
+        self._body = body or {}
+
+    def json(self) -> dict[str, object]:
+        return self._body
+
+
+@pytest.fixture
+def local_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the same-host pairing mint; the bearer's shape is not under test."""
+    monkeypatch.setattr(native.DaemonSteerClient, "_bearer", lambda _self: "local-tok")
+
+
+@pytest.mark.usefixtures("local_bearer")
+@pytest.mark.parametrize(
+    ("op", "verb", "body"),
+    [
+        ("send_message", "message", {"text": "hi"}),
+        ("interrupt", "interrupt", None),
+        ("set_model", "controls/model", {"model": "opus"}),
+    ],
+)
+def test_daemon_client_posts_the_matching_steer_route(
+    monkeypatch: pytest.MonkeyPatch, op: str, verb: str, body: dict[str, str] | None
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_post(url: str, **kwargs: object) -> object:
+        captured.update({"url": url, **kwargs})
+        return _Resp(204)
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    client = native.DaemonSteerClient("http://127.0.0.1:7421/")
+    state = _state()
+    if op == "send_message":
+        client.send_message(state, "hi")
+    elif op == "interrupt":
+        client.interrupt(state)
+    else:
+        client.set_model(state, "opus")
+    assert captured["url"] == f"http://127.0.0.1:7421/workspaces/{state.id}/{verb}"
+    assert captured["json"] == body
+    assert captured["headers"] == {"Authorization": "Bearer local-tok"}
+
+
+@pytest.mark.usefixtures("local_bearer")
+def test_daemon_client_surfaces_a_refusal_as_a_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The daemon's refusal (no owner connected → 409) reaches the caller with the
+    daemon's own message, never as a swallowed 'delivered'."""
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_a, **_k: _Resp(
+            409, {"detail": {"error": "pane_not_found", "message": "no connected native owner"}}
+        ),
+    )
+    with pytest.raises(SteeringUnsupported, match="no connected native owner"):
+        native.DaemonSteerClient("http://127.0.0.1:7421").interrupt(_state())
+
+
+@pytest.mark.usefixtures("local_bearer")
+def test_daemon_client_names_an_unreachable_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> object:
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "post", _raise)
+    with pytest.raises(SteeringUnsupported, match="did not answer"):
+        native.DaemonSteerClient("http://127.0.0.1:1").set_model(_state(), "opus")

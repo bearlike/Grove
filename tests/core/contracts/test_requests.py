@@ -15,9 +15,14 @@ from grove.core.contracts.requests import (
 from grove.core.contracts.tickets import TicketSelector
 
 
-def test_create_request_skip_init_defaults_false() -> None:
+def test_create_request_skip_init_defaults_to_unspecified() -> None:
+    """`None`, not `False` — a bool cannot say "I did not answer", and the
+    engine has to tell an omitted field from a deliberate one to resolve
+    `defaults.skip_init` at all."""
     req = CreateWorkspaceRequest(agent_name="claude", title="t")
-    assert req.skip_init is False
+    assert req.skip_init is None
+    answered = CreateWorkspaceRequest(agent_name="claude", title="t", skip_init=False)
+    assert answered.skip_init is False
 
 
 def test_create_request_accepts_skip_init_and_root_plan() -> None:

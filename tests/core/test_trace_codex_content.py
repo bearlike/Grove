@@ -245,16 +245,29 @@ def test_codex_content_owner_replays_prompts_replies_and_tool_payloads(
     # on `turn_context` rather than per message, so the spine used to carry none
     # and these spans were the bare word `chat` — which also meant the cost
     # layer, which looks a rate up BY model, could never price them.
-    assert names.count("chat gpt-5.5") == 4
+    # Reasoning, text and tool-call fragments share their provider request.
+    assert names.count("chat gpt-5.5") == 2
 
     prompts = _attributes(exporter, "langfuse.observation.input")
     completions = _attributes(exporter, "langfuse.observation.output")
     assert "Add a healthcheck endpoint to the service" in prompts
-    assert "I'll add the endpoint." in completions
+    assert any("I'll add the endpoint." in text for text in completions)
     tool = _by_name(exporter, "execute_tool exec_command")
     assert tool.attributes is not None
     assert "sed -n '1,40p' app.py" in str(tool.attributes["langfuse.observation.input"])
-    assert tool.attributes["langfuse.observation.output"] == "ok\nProcess exited with code 0"
+    # A shell call's payloads ride the canonical ENVELOPE, not as bare strings:
+    # `command` and `content` are the paths a rubric reads, and they are the
+    # same paths a Claude `Bash` call lands on.
+    assert json.loads(str(tool.attributes["langfuse.observation.input"]))["command"] == (
+        "sed -n '1,40p' app.py"
+    )
+    assert json.loads(str(tool.attributes["langfuse.observation.output"])) == {
+        "content": "ok\nProcess exited with code 0",
+        "truncated": False,
+    }
+    # The provider's own result still rides the convention's key, untouched, so
+    # a consumer reading `gen_ai.*` never has to know Grove normalized anything.
+    assert tool.attributes["gen_ai.tool.call.result"] == "ok\nProcess exited with code 0"
 
 
 def test_the_preamble_is_not_a_prompt_because_the_adapter_already_filtered_it(
@@ -289,7 +302,7 @@ def test_the_preamble_is_not_a_prompt_because_the_adapter_already_filtered_it(
     generation_prompts = _attributes_of_kind(exporter, "langfuse.observation.input", "generation")
     assert generation_prompts.count("Add a healthcheck endpoint to the service") == 1
     generation_replies = _attributes_of_kind(exporter, "langfuse.observation.output", "generation")
-    assert generation_replies.count("I'll add the endpoint.") == 1
+    assert sum(text.count("I'll add the endpoint.") for text in generation_replies) == 1
 
 
 def test_codex_emits_no_sub_agent_spans_because_it_records_no_threads(

@@ -835,3 +835,47 @@ def test_discover_all_is_the_same_listing_unfiltered_by_cwd() -> None:
 def test_discover_all_empty_when_no_client_configured() -> None:
     adapter = MewboAdapter()
     assert adapter.discover_all() == ()
+
+
+def test_a_401_with_no_key_configured_names_the_unset_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The silent half of the auth failure, and the one that actually happens.
+
+    `MewboClient` sends NO header when its `api_key_env` names a variable the
+    process does not carry, so the server's 401 describes its own opinion and
+    says nothing about the local cause — measured on the reference host, a
+    daemon under systemd never carried the key a shell export had set, and the
+    first symptom was a create failing after the worktree already existed.
+
+    The pre-existing 401 test ran WITH a key set, which is why this path was
+    never exercised: a rejected key and an absent one produced the same
+    message and only one of them was tested.
+    """
+    monkeypatch.delenv("GROVE_TEST_MEWBO_ABSENT", raising=False)
+
+    def unauthorized(request: httpx.Request) -> httpx.Response:
+        assert "X-API-KEY" not in request.headers
+        return httpx.Response(401, json={"error": {"code": 401, "reason": "no token"}})
+
+    cfg = MewboConfig(api_key_env="GROVE_TEST_MEWBO_ABSENT")
+    client = MewboClient(cfg, transport=httpx.MockTransport(unauthorized))
+    with pytest.raises(MewboError, match="GROVE_TEST_MEWBO_ABSENT carries no value"):
+        client.create_session(cwd="/x")
+
+
+def test_a_401_with_a_key_present_blames_nothing_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected key is the SERVER's answer about that key; a local hint there
+    would send the reader to fix a variable that is already set correctly."""
+    monkeypatch.setenv("GROVE_TEST_MEWBO_KEY", "sekret")
+
+    def unauthorized(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"code": 401, "reason": "bad key"}})
+
+    cfg = MewboConfig(api_key_env="GROVE_TEST_MEWBO_KEY")
+    client = MewboClient(cfg, transport=httpx.MockTransport(unauthorized))
+    with pytest.raises(MewboError, match="bad key") as caught:
+        client.create_session(cwd="/x")
+    assert "carries no value" not in str(caught.value)

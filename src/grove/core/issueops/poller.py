@@ -1,41 +1,31 @@
-"""The assignee poll — the daemon's background worker over :class:`PickupEngine`.
+"""Event-owned assignment reconciliation for the assignee work queue.
 
-One bounded, best-effort worker on its own timer, copying the discipline
-``TicketStatusPublisher`` established in this package: :meth:`from_config`
-returns ``None`` when there is nothing to do, :meth:`bind` starts a
-single-worker pool and a self-arming timer, :meth:`close` unwinds both, and
-unbound it runs :meth:`tick` inline on the caller's thread — which is the seam
-every test drives, with no threads and no clock.
+The old timer called every configured provider and scanned every workspace on
+repeat.  That made an unchanged fleet perform unbounded discovery, while a
+slow ``create`` accumulated timer jobs behind it.  ``AssigneePoller`` now has
+three explicit inputs instead:
 
-**Why a poll at all**, when this tree's standing preference is to subscribe to an
-edge that already exists: there is no edge. The tracker is somebody else's
-service and it pushes nothing to a loopback daemon; the existing inbound path
-(`@grove` in a comment) needs a CI workflow AND a host-labeled runner, which a
-deployment with zero runners can never have. A poll is what makes inbound
-automation reachable there at all. It is gated the way the doctrine asks: both
-halves default off, so a daemon that was not asked for this does no work.
+* :meth:`bootstrap` is an operator-controlled reconciliation for tracker
+  providers without push support.  It is never armed as a timer.
+* :meth:`handle_ticket_event` receives an authenticated-forwarder-normalized
+  Gitea/GitHub assignment wake-up and re-reads only its authoritative ticket.
+* :meth:`handle_lifecycle_event` maintains the holder index from Grove
+  lifecycle edges, releasing only assignments this process made.
 
-**The two halves are independently gated and share one worker.** ``assign_bot``
-reconciles the outbound assignment over live workspaces; ``pickup_enabled``
-scans for inbound work. Either one alone builds the poller; neither builds
-nothing.
-
-**Assignment is reconciled on the tick rather than inline at create**, and that
-is forced rather than chosen: the ticket layer's own rule is that a provider
-method doing network must not become reachable from a lifecycle path, which is
-what keeps ``create``/``attach_ticket`` deterministic and offline-safe. So the
-tick sweeps live workspaces' refs instead, memoized per ticket for the process,
-and a freshly attached ticket is marked within one interval. The explicit
-`grove tickets handover` command assigns immediately, for the human who wants it
-now.
+The optional ``bind(subscribe)`` accepts one narrow manager-subscription
+callable.  There is no package event bus: the daemon supplies
+``RepoRegistry.subscribe_managers`` and each manager's existing ``subscribe``.
+The subscriber callback merely admits a compact lifecycle wake-up; expensive
+provider reads and provisioning run on the dedicated bounded worker.
 """
 
 from __future__ import annotations
 
 import contextlib
-import threading
+import itertools
+from collections import OrderedDict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -44,41 +34,56 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from grove.core.contracts.tickets import TicketKind, TicketProviderName
+from grove.core.contracts.assignment_events import (
+    AssignmentLifecycleEvent,
+    AssignmentTicketEvent,
+    AssignmentTicketIdentity,
+)
+from grove.core.contracts.tickets import TicketKind, TicketProviderName, TicketRef
 from grove.core.errors import GroveError
 from grove.core.issueops.handover import HandoverLog
 from grove.core.issueops.pickup import PickupCandidate, PickupEngine, PickupPlan
 
 if TYPE_CHECKING:
     from grove.core.config import IssueOpsConfig
-    from grove.core.contracts.tickets import TicketRef
-    from grove.core.manager import WorkspaceManager
+    from grove.core.manager import WorkspaceEvent, WorkspaceManager
     from grove.core.registry import RepoRegistry
     from grove.core.tickets.provider import TicketProvider
 
-# A backoff/identity key: which repo's configured provider we are talking to.
-# The repo is in it because two repos' configs can point one provider NAME at
-# different hosts and different credentials, so one of them rate-limiting says
-# nothing about the other.
+# The provider name is not global: two repositories can point a name at distinct
+# hosts and credentials. It is retained for compatibility with callers that
+# inspect the internal assignment set in tests.
 _ProviderKey = tuple[str, TicketProviderName]
+_SubscribeManagers = Callable[[Callable[..., None]], Callable[[], None]]
+_AssignmentEvent = AssignmentTicketEvent | AssignmentLifecycleEvent
 
 
 @dataclass(frozen=True, slots=True)
 class _Assigned:
-    """Where a ticket Grove assigned came from, so the release can reach it again.
-
-    The workspace that occasioned the assignment is deliberately NOT in here: by
-    the time a release is due that record is gone (``kill`` deletes it outright),
-    so the only durable coordinates are the ones that name the TICKET.
-    """
+    """Ticket coordinates Grove may later release, plus its indexed holder."""
 
     repo_root: str
     provider: TicketProviderName
     ticket_id: str
+    workspace_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Work:
+    """One admitted event. Reservations remain held through provisioning."""
+
+    event: _AssignmentEvent
+    size_bytes: int
 
 
 class AssigneePoller:
-    """Polls each configured tracker for the bot's assigned issues and starts work."""
+    """Own assignee reconciliation from explicit tracker and lifecycle edges.
+
+    The public class name remains for daemon and plugin compatibility. It no
+    longer polls periodically: ``tick`` is the explicit manual reconcile for a
+    no-push provider, and normal operation is ``handle_ticket_event`` plus
+    ``handle_lifecycle_event``.
+    """
 
     def __init__(
         self,
@@ -92,30 +97,30 @@ class AssigneePoller:
         self._registry = registry
         self._engine = engine if engine is not None else PickupEngine(log=HandoverLog())
         self._clock = clock if clock is not None else self._utcnow
-        self._interval = timedelta(seconds=config.pickup_interval_seconds)
-        self._backoff_for = timedelta(seconds=config.pickup_backoff_seconds)
-        # Skip-until per provider, set on any provider failure. Not compounding:
-        # one failure buys one window, and a successful poll clears the entry.
-        self._backoff: dict[_ProviderKey, datetime] = {}
-        # Which identity each provider's credential turned out to be. Resolved
-        # once and LOGGED, because "assigned to me" is only the intended rule
-        # while the credential really is the bot's — a deployment that
-        # configured a person's token would otherwise silently pick up that
-        # person's tickets, which is alarming rather than helpful. Grove does
-        # not refuse it (the token is deliberately the only identity there is),
-        # it says whose queue it is draining.
-        self._identity: dict[_ProviderKey, str] = {}
-        # Tickets this process assigned, and where each came from. The outbound
-        # write is idempotent upstream, so the memo saves a round-trip per
-        # workspace per tick; it resets on restart and self-heals in one call.
-        # It carries the repo/provider/id rather than just the key because it is
-        # ALSO the release set — a ticket is unassigned only if Grove is the one
-        # that assigned it, and the release has to resolve a provider to do it.
-        self._assigned: dict[str, _Assigned] = {}
         self._lock = Lock()
+        # The only assignment ownership authority. A ticket entering through
+        # publish-edge assign_now lands here too, so a later lifecycle kill can
+        # release it without a fleet sweep.
+        self._assigned: dict[str, _Assigned] = {}
+        # A bounded LRU metadata index carries replay and ordering state only for
+        # keys that are still recent. A key's delivery ids are capped as well.
+        self._generation: OrderedDict[str, int] = OrderedDict()
+        self._delivery_ids: OrderedDict[str, list[str]] = OrderedDict()
+        self._metadata_capacity = 256
+        self._delivery_capacity = 32
+        self._backoff: dict[_ProviderKey, datetime] = {}
+        self._identity: dict[_ProviderKey, str] = {}
         self._pool: ThreadPoolExecutor | None = None
-        self._timer: threading.Timer | None = None
-        self._scheduling = False  # true only while bound
+        self._pending: OrderedDict[str, _Work] = OrderedDict()
+        self._in_flight: set[str] = set()
+        self._futures: set[Future[None]] = set()
+        self._pending_limit = config.admission.max_items
+        self._pending_bytes = 0
+        self._max_pending_bytes = config.admission.max_bytes
+        self._closed = False
+        self._unsubscribe: Callable[[], None] | None = None
+        self._workspace_unsubscribers: list[Callable[[], None]] = []
+        self._next_lifecycle_generation = itertools.count()
 
     @classmethod
     def from_config(
@@ -125,218 +130,404 @@ class AssigneePoller:
         registry: RepoRegistry | None,
         log: HandoverLog | None = None,
     ) -> AssigneePoller | None:
-        """Build a poller, or ``None`` when neither half is enabled.
-
-        Both halves default off deliberately: this spawns real agents and writes
-        to somebody else's tracker, and a feature with that blast radius does not
-        get to be on by default.
-        """
+        """Build the assignment owner only when either explicit feature is enabled."""
         if not (cfg.pickup_enabled or cfg.assign_bot):
             return None
-        assert registry is not None  # enabled requires a registry to resolve against
+        assert registry is not None
         return cls(config=cfg, registry=registry, engine=PickupEngine(log=log))
 
-    # ─── lifecycle ──────────────────────────────────────────────────────────
+    # ─── lifecycle subscription and bounded delivery ────────────────────────
 
-    def bind(self) -> None:
-        """Start the dispatch worker and arm the first tick."""
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="grove-pickup")
-        self._scheduling = True
-        self._arm()
+    def bind(self, subscribe: _SubscribeManagers | None = None) -> None:
+        """Enable bounded delivery and optionally subscribe to manager lifecycles.
+
+        The optional argument preserves old ``bind()`` callers. A normal daemon
+        passes ``registry.subscribe_managers``; it is deliberately a narrow
+        callable rather than a new generic event bus.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            if self._pool is None:
+                self._pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="grove-assignment"
+                )
+        if subscribe is not None and self._unsubscribe is None:
+            self._unsubscribe = subscribe(self._bind_manager)
 
     def close(self) -> None:
-        """Stop scheduling, cancel the pending tick, and let an in-flight one go.
-
-        ``wait=False`` on purpose: a tick can be midway through a ``create``,
-        which for a container workspace is minutes of ``devcontainer up``, and
-        shutdown must never block on side-effecting work already in flight.
-        """
-        self._scheduling = False
+        """Stop new work and abandon pending wakes without waiting for provisioning."""
         with self._lock:
-            timer, self._timer = self._timer, None
-        if timer is not None:
-            timer.cancel()
-        if self._pool is not None:
-            self._pool.shutdown(wait=False, cancel_futures=True)
-            self._pool = None
-
-    def _arm(self) -> None:
-        if not self._scheduling:
-            return
-        with self._lock:
-            if self._timer is not None:
+            if self._closed:
                 return
-            timer = threading.Timer(self._interval.total_seconds(), self._on_timer)
-            timer.daemon = True
-            self._timer = timer
-        timer.start()
-
-    def _on_timer(self) -> None:
-        with self._lock:
-            self._timer = None
-        pool = self._pool
+            self._closed = True
+            self._pending.clear()
+            self._pending_bytes = 0
+            pool, self._pool = self._pool, None
+            unsubscribe, self._unsubscribe = self._unsubscribe, None
+            unsubscribers, self._workspace_unsubscribers = self._workspace_unsubscribers, []
+        if unsubscribe is not None:
+            with contextlib.suppress(Exception):
+                unsubscribe()
+        for workspace_unsubscribe in unsubscribers:
+            with contextlib.suppress(Exception):
+                workspace_unsubscribe()
         if pool is not None:
-            with contextlib.suppress(RuntimeError):  # shutting down
-                pool.submit(self._run_tick)
-        self._arm()
+            pool.shutdown(wait=False, cancel_futures=True)
 
-    def _run_tick(self) -> None:
-        """The worker body — swallows everything, exactly like the publisher's."""
-        try:
-            self.tick()
-        except Exception as exc:  # a bad tick must never kill the poller
-            logger.warning("issue-ops pickup tick failed (swallowed): {}", exc)
+    def _bind_manager(self, _root: Path, manager: WorkspaceManager) -> None:
+        """Translate the manager's existing callback into a compact lifecycle wake."""
+        unsubscribe = manager.subscribe(self._on_workspace_event)
+        with self._lock:
+            if self._closed:
+                unsubscribe()
+            else:
+                self._workspace_unsubscribers.append(unsubscribe)
 
-    # ─── the tick ───────────────────────────────────────────────────────────
+    def _on_workspace_event(self, event: WorkspaceEvent) -> None:
+        if event.kind not in {"created", "updated", "paused", "resumed", "respawned", "killed"}:
+            return
+        generation = next(self._next_lifecycle_generation)
+        self.handle_lifecycle_event(
+            AssignmentLifecycleEvent(
+                workspace_id=event.workspace_id,
+                lifecycle=event.kind,
+                delivery_id=f"workspace:{event.workspace_id}:{generation}",
+                generation=generation,
+            )
+        )
 
-    def tick(self, now: datetime | None = None) -> PickupPlan:
-        """One pass: reconcile assignments, then pick up what is eligible.
+    def handle_ticket_event(self, event: AssignmentTicketEvent) -> bool:
+        """Admit one normalized tracker assignment delivery.
 
-        Returns the plan so a caller (and every test) can see what was deferred
-        without reading the log.
+        The daemon must authenticate its forwarding token before calling this.
+        The supplied ``change`` is only a wake-up: processing always re-reads
+        this one target to defeat reorder and an incomplete forge payload.
         """
+        return self._admit(event, key=event.target.key)
+
+    def handle_lifecycle_event(self, event: AssignmentLifecycleEvent) -> bool:
+        """Admit one Grove workspace lifecycle wake-up without scanning the fleet."""
+        return self._admit(event, key=f"workspace:{event.workspace_id}")
+
+    def _admit(self, event: _AssignmentEvent, *, key: str) -> bool:  # noqa: PLR0911
+        """Reserve a bounded delivery before scheduling a worker for it.
+
+        The reservation covers pending AND in-flight work. A target may replace
+        one pending wake, but never queues a second behind the same provisioning
+        operation; that is the per-target exclusion lost once lifecycle work
+        moved off the synchronous manager path.
+        """
+        size = len(event.model_dump_json().encode())
+        with self._lock:
+            unusable = self._closed or size > self._max_pending_bytes
+            if unusable or self._seen_delivery(key, event.delivery_id):
+                return False
+            latest = self._generation.get(key, -1)
+            if event.generation < latest:
+                return False
+            old = self._pending.get(key)
+            if old is not None and event.generation < old.event.generation:
+                return False
+            replacing = old is not None
+            items = len(self._pending) + len(self._in_flight)
+            bytes_after = self._pending_bytes + size - (old.size_bytes if old else 0)
+            full_bytes = bytes_after > self._max_pending_bytes
+            full_items = not replacing and items >= self._pending_limit
+            if full_bytes or full_items:
+                logger.warning("issue-ops assignment delivery rejected — bounded intake is full")
+                return False
+            self._generation[key] = event.generation
+            self._generation.move_to_end(key)
+            self._trim_metadata()
+            self._pending[key] = _Work(event=event, size_bytes=size)
+            self._pending.move_to_end(key)
+            self._pending_bytes = bytes_after
+            self._remember_delivery(key, event.delivery_id)
+            pool = self._pool
+            if pool is None:
+                work = self._take_pending(key)
+            elif key in self._in_flight:
+                return True
+            else:
+                return self._submit_next(pool)
+        self._dispatch(key, work)
+        return True
+
+    def _take_pending(self, key: str) -> _Work:
+        work = self._pending.pop(key)
+        self._pending_bytes -= work.size_bytes
+        return work
+
+    def _submit_next(self, pool: ThreadPoolExecutor) -> bool:
+        if not self._pending or len(self._in_flight) >= 1:
+            return True
+        key = next(iter(self._pending))
+        work = self._take_pending(key)
+        self._in_flight.add(key)
+        future = pool.submit(self._run_work, key, work)
+        self._futures.add(future)
+        future.add_done_callback(self._futures.discard)
+        return True
+
+    def _run_work(self, key: str, work: _Work) -> None:
+        try:
+            self._dispatch(key, work)
+        except Exception as exc:  # a provider/create failure never kills intake
+            logger.warning("issue-ops assignment delivery failed (swallowed): {}", exc)
+        finally:
+            with self._lock:
+                self._in_flight.discard(key)
+                pool = self._pool
+                if not self._closed and pool is not None:
+                    self._submit_next(pool)
+
+    def _dispatch(self, _key: str, work: _Work) -> None:
+        if isinstance(work.event, AssignmentTicketEvent):
+            self._handle_ticket_event(work.event)
+        else:
+            self._handle_lifecycle_event(work.event)
+
+    def _seen_delivery(self, key: str, delivery_id: str) -> bool:
+        deliveries = self._delivery_ids.get(key, [])
+        if deliveries:
+            self._delivery_ids.move_to_end(key)
+        return delivery_id in deliveries
+
+    def _remember_delivery(self, key: str, delivery_id: str) -> None:
+        deliveries = self._delivery_ids.setdefault(key, [])
+        deliveries.append(delivery_id)
+        del deliveries[: -self._delivery_capacity]
+        self._delivery_ids.move_to_end(key)
+        self._trim_metadata()
+
+    def _trim_metadata(self) -> None:
+        while len(self._generation) > self._metadata_capacity:
+            self._generation.popitem(last=False)
+        while len(self._delivery_ids) > self._metadata_capacity:
+            self._delivery_ids.popitem(last=False)
+
+    # ─── explicit no-push reconcile ─────────────────────────────────────────
+
+    def bootstrap(self, now: datetime | None = None) -> PickupPlan:
+        """Manually reconcile configured no-push providers once, never on a timer.
+
+        This is the supported fallback for a tracker that cannot forward an
+        authenticated assignment delivery. Operators invoke it at bootstrap or
+        after repairing a webhook. It intentionally retains the old expensive
+        discovery only behind that explicit policy boundary.
+        """
+        return self.tick(now)
+
+    def tick(self, now: datetime | None = None) -> PickupPlan:  # noqa: PLR0912
+        """Compatibility alias for explicit manual reconciliation, not a periodic job."""
         moment = now if now is not None else self._clock()
         if self._cfg.assign_bot:
-            self._reconcile_assignments()
+            self._bootstrap_assignments()
         if not self._cfg.pickup_enabled:
             return PickupPlan()
-
         try:
             handed = self._engine.log.keys()
         except GroveError as exc:
-            # Fail CLOSED. An unreadable marker file is indistinguishable from
-            # "nothing has ever been handed over", and acting on that reading is
-            # precisely the unbounded self-trigger loop the marker exists to
-            # prevent — so the whole tick is skipped and says why.
-            logger.error("issue-ops pickup skipped this tick — {}", exc)
+            logger.error("issue-ops pickup bootstrap skipped — {}", exc)
             return PickupPlan()
-
-        candidates, active = self._scan(handed, moment)
-        plan = PickupEngine.plan(candidates, active=active, ceiling=self._cfg.pickup_max_active)
-        for deferred in plan.defer:
-            logger.info(
-                "issue-ops pickup deferred {} to the next tick — {} of {} pickup workspaces "
-                "are already working",
-                deferred.key.wire,
-                plan.active + len(plan.take),
-                self._cfg.pickup_max_active,
-            )
-        for candidate in plan.take:
-            self._start(candidate, moment)
-        return plan
-
-    def _scan(self, handed: set[str], now: datetime) -> tuple[list[PickupCandidate], int]:
-        """Ask every configured tracker what it has for us. All the I/O lives here.
-
-        ``active`` counts the assigned tickets that ALREADY have a live
-        workspace — which is what the ceiling is about, and it costs nothing
-        extra because the same ``find_by_ticket`` call decides eligibility.
-        """
         candidates: list[PickupCandidate] = []
         active = 0
         for root in self._registry.known_roots():
             try:
-                mgr = self._registry.get(root)
-            except GroveError as exc:  # one unreadable repo must not blind the rest
-                logger.warning("issue-ops pickup skipping {}: {}", root, exc)
+                manager = self._registry.get(root)
+            except GroveError as exc:
+                logger.warning("issue-ops pickup bootstrap skipping {}: {}", root, exc)
                 continue
-            for provider in mgr.ticket_providers.providers():
+            for provider in manager.ticket_providers.providers():
                 pkey = (str(root), provider.name)
-                if not self._ready(pkey, provider, now):
+                if not provider.configured or not self._ready(pkey, moment):
                     continue
-                for ref in self._assigned_refs(pkey, provider, now):
+                self._announce_identity(pkey, provider)
+                try:
+                    refs = provider.list_assigned()
+                except GroveError as exc:
+                    self._backoff[pkey] = moment + timedelta(
+                        seconds=self._cfg.pickup_backoff_seconds
+                    )
+                    logger.warning(
+                        "issue-ops pickup bootstrap could not read {}: {}", provider.name, exc
+                    )
+                    continue
+                self._backoff.pop(pkey, None)
+                for ref in refs:
+                    if ref.kind != "issue" or (ref.status or "open") != "open":
+                        continue
                     try:
-                        key = PickupEngine.key_for(mgr, provider.name, ref.id)
+                        handover_key = PickupEngine.key_for(manager, provider.name, ref.id)
                     except GroveError:
-                        continue  # a tracker with no owner/repo cannot be keyed
-                    if mgr.find_by_ticket(provider.name, ref.id) is not None:
+                        continue
+                    if manager.find_by_ticket(provider.name, ref.id) is not None:
                         active += 1
-                        continue
-                    if key.wire in handed:
-                        continue
-                    candidates.append(PickupCandidate(repo_root=root, key=key, ref=ref))
-        return candidates, active
+                    elif handover_key.wire not in handed:
+                        candidates.append(PickupCandidate(root, handover_key, ref))
+        plan = PickupEngine.plan(candidates, active=active, ceiling=self._cfg.pickup_max_active)
+        for candidate in plan.take:
+            self._start(candidate, moment)
+        return plan
 
-    def _ready(self, pkey: _ProviderKey, provider: TicketProvider, now: datetime) -> bool:
-        """Is this provider usable right now — configured, and not backed off?"""
-        if not provider.configured:
-            return False
+    def _ready(self, pkey: _ProviderKey, now: datetime) -> bool:
         until = self._backoff.get(pkey)
         return until is None or now >= until
 
-    def _assigned_refs(
-        self, pkey: _ProviderKey, provider: TicketProvider, now: datetime
-    ) -> list[TicketRef]:
-        """The open issues assigned to this credential's own account.
-
-        ``list_assigned`` already asks the tracker for "issues where I am AN
-        assignee" — verified against a live Gitea on an issue carrying a human
-        assignee alongside Grove's, which came back — so a ticket a human is
-        also on is picked up, per the product rule, with no widening and no
-        per-issue read. GitHub's ``filter=assigned`` is the documented analogue
-        and is INFERRED to behave the same way; it has not been exercised
-        against a live GitHub here.
-
-        Any failure backs the whole provider off, because a 403 or a 429 is a
-        statement about the credential or the budget rather than about whichever
-        issue happened to be asked for.
-        """
-        self._announce_identity(pkey, provider)
-        try:
-            refs = provider.list_assigned()
-        except GroveError as exc:
-            self._backoff[pkey] = now + self._backoff_for
-            logger.warning(
-                "issue-ops pickup backing {} off for {}s after a failed poll: {}",
-                provider.name,
-                self._backoff_for.total_seconds(),
-                exc,
-            )
-            return []
-        self._backoff.pop(pkey, None)
-        return [r for r in refs if r.kind == "issue" and (r.status or "open") == "open"]
-
     def _announce_identity(self, pkey: _ProviderKey, provider: TicketProvider) -> None:
-        """Log, once, whose queue this poll is actually draining.
-
-        The whole design rests on the configured token being Grove's own bot
-        account: that is what makes "assigned to me" mean "assigned to Grove".
-        Nothing in the code can enforce it — the token IS the only identity there
-        is — so the honest defence is to say out loud which account answered, and
-        let an operator who sees their own name there fix their config.
-        """
         if pkey in self._identity:
             return
         try:
-            login = provider.viewer_login()
-        except GroveError as exc:
-            logger.debug("issue-ops could not resolve {}'s identity: {}", provider.name, exc)
+            self._identity[pkey] = provider.viewer_login()
+        except GroveError:
             return
-        self._identity[pkey] = login
-        logger.info(
-            "issue-ops pickup is polling {} ({}) as {!r} — every open issue assigned to "
-            "that account is treated as work for Grove",
-            provider.name,
-            provider.context or "no scope",
-            login,
+
+    # ─── tracker event reconciliation ───────────────────────────────────────
+
+    def _handle_ticket_event(self, event: AssignmentTicketEvent) -> None:
+        manager = self._manager_for(event.target)
+        if manager is None:
+            return
+        try:
+            provider = manager.ticket_providers.get(event.target.provider)
+            # The event is never authoritative assignment state. A fetch of ONLY
+            # this target makes late "assigned" after "unassigned" harmless.
+            ref = provider.get_ticket(event.target.ticket_id)
+        except GroveError as exc:
+            logger.warning("issue-ops assignment could not re-read {}: {}", event.target.key, exc)
+            return
+        if ref.kind != "issue":
+            return
+        if event.change == "unassigned":
+            self._release_ticket(manager, ref.provider, ref.id)
+            return
+        if self._cfg.pickup_enabled and (ref.status or "open") == "open":
+            self._pickup_target(manager, ref, self._clock())
+
+    def _manager_for(self, target: AssignmentTicketIdentity) -> WorkspaceManager | None:
+        # Registry state is authoritative and manager lookup is lazy. Scanning
+        # configured roots is a configuration lookup, never a provider/fleet
+        # scan: no tickets or workspaces are read on an inbound event.
+        for root in self._registry.known_roots():
+            try:
+                manager = self._registry.get(root)
+            except GroveError:
+                continue
+            config = getattr(manager.config.tickets, target.provider, None)
+            if (
+                getattr(config, "owner", "") == target.owner
+                and getattr(config, "repo", "") == target.repo
+            ):
+                return manager
+        logger.debug("issue-ops assignment event names no configured repo: {}", target.key)
+        return None
+
+    def _pickup_target(self, manager: WorkspaceManager, ref: TicketRef, now: datetime) -> None:
+        try:
+            key = PickupEngine.key_for(manager, ref.provider, ref.id)
+            if manager.find_by_ticket(ref.provider, ref.id) is not None:
+                return
+            if self._engine.log.contains(key):
+                return
+        except GroveError as exc:
+            logger.warning("issue-ops assignment could not prepare {}: {}", ref.id, exc)
+            return
+        # No host-wide scan: active capacity is an index fact maintained by
+        # lifecycle events. A lost lifecycle event fails closed (defer), never
+        # invents extra running work.
+        active = self._active_pickups()
+        plan = PickupEngine.plan(
+            [PickupCandidate(manager.repo_root, key, ref)],
+            active=active,
+            ceiling=self._cfg.pickup_max_active,
         )
+        if not plan.take:
+            logger.info("issue-ops assignment deferred {} — pickup capacity is full", key.wire)
+            return
+        self._start(plan.take[0], now)
+
+    def _active_pickups(self) -> int:
+        with self._lock:
+            return sum(entry.workspace_id is not None for entry in self._assigned.values())
 
     def _start(self, candidate: PickupCandidate, now: datetime) -> None:
         try:
-            mgr = self._registry.get(candidate.repo_root)
-            self._engine.hand_over(mgr, key=candidate.key, source="poll", now=now)
+            manager = self._registry.get(candidate.repo_root)
+            state = self._engine.hand_over(manager, key=candidate.key, source="poll", now=now)
         except GroveError as exc:
-            # The marker is already claimed by now, so a failed create is NOT
-            # retried on the next tick. That is the deliberate trade: a lost
-            # pickup a human can re-trigger, over a create loop nothing stops.
             logger.warning(
-                "issue-ops pickup could not start a workspace for {} (it stays claimed, "
-                "so it will not be retried automatically): {}",
+                "issue-ops pickup could not start {} (it stays claimed): {}",
                 candidate.key.wire,
                 exc,
             )
+            return
+        self._record_holder(candidate.key.wire, state.id)
 
-    # ─── the outbound half ──────────────────────────────────────────────────
+    # ─── lifecycle reconciliation ───────────────────────────────────────────
+
+    def _handle_lifecycle_event(self, event: AssignmentLifecycleEvent) -> None:
+        if event.lifecycle == "killed":
+            self._release_workspace(event.workspace_id)
+            return
+        # Read exactly one workspace rather than every repo's fleet. The manager
+        # event may be stale after a kill; `resolve_workspace` then honestly says
+        # absent and no release happens except on the killed event itself.
+        try:
+            manager, state = self._registry.resolve_workspace(event.workspace_id)
+        except GroveError:
+            return
+        self._index_workspace(manager, state.id, state.ticket_refs)
+
+    def _index_workspace(
+        self, manager: WorkspaceManager, workspace_id: str, refs: list[TicketRef]
+    ) -> None:
+        wanted: set[str] = set()
+        for ref in refs:
+            wire = self._assign_once(
+                manager, ref.provider, ref.id, ref.kind, workspace_id=workspace_id
+            )
+            if wire is not None:
+                wanted.add(wire)
+        self._release_workspace_except(workspace_id, wanted)
+
+    def _record_holder(self, wire: str, workspace_id: str) -> None:
+        with self._lock:
+            assigned = self._assigned.get(wire)
+            if assigned is not None:
+                self._assigned[wire] = _Assigned(
+                    assigned.repo_root, assigned.provider, assigned.ticket_id, workspace_id
+                )
+
+    def _release_workspace(self, workspace_id: str) -> None:
+        self._release_workspace_except(workspace_id, set())
+
+    def _release_ticket(
+        self, manager: WorkspaceManager, provider_name: TicketProviderName, ticket_id: str
+    ) -> None:
+        """Release only a matching assignment Grove previously recorded as its own."""
+        try:
+            wire = PickupEngine.key_for(manager, provider_name, ticket_id).wire
+        except GroveError:
+            return
+        with self._lock:
+            entry = self._assigned.pop(wire, None)
+        if entry is not None:
+            self._release(entry)
+
+    def _release_workspace_except(self, workspace_id: str, wanted: set[str]) -> None:
+        with self._lock:
+            release = [
+                (wire, entry)
+                for wire, entry in self._assigned.items()
+                if entry.workspace_id == workspace_id and wire not in wanted
+            ]
+            for wire, _entry in release:
+                del self._assigned[wire]
+        for _wire, entry in release:
+            self._release(entry)
+
+    # ─── publish edge and explicit assignment ownership ─────────────────────
 
     def assign_now(
         self,
@@ -344,127 +535,82 @@ class AssigneePoller:
         provider_name: TicketProviderName,
         ticket_id: str,
         kind: TicketKind = "issue",
+        *,
+        workspace_id: str | None = None,
     ) -> bool:
-        """Assign the bot to one ticket immediately, recording Grove's ownership.
+        """Assign on the publisher's demand edge and retain release ownership.
 
-        The seam an edge-triggered caller uses instead of waiting up to a poll
-        interval — the publisher calls it as it upserts a sticky comment, which
-        is the moment a ticket is *deterministically* known to be Grove's work.
-
-        **It exists so there is exactly ONE ownership memo.** An assignment made
-        anywhere else would be absent from ``_assigned``, and ``_release_ended``
-        releases only what that memo holds — so a directly-assigned ticket would
-        never be released and the board would keep claiming Grove was working it
-        forever. That is the same leak this poller was just fixed to close, so a
-        second assignment path must feed the same memo rather than run beside it.
-
-        Idempotent and cheap on the repeat: the memo short-circuits a ticket
-        already assigned this process, so a per-flush call costs nothing after
-        the first. Returns whether the ticket is now Grove-owned.
+        ``workspace_id`` names the holder, and passing it is what keeps the
+        pickup ceiling honest: ``_active_pickups`` counts only entries that
+        resolve to a live workspace, so an edge assignment recorded without one
+        is invisible to capacity until some unrelated lifecycle event fills it
+        in. In that window the fleet reads emptier than it is and a ticket event
+        takes work past ``pickup_max_active``. The publisher always knows the
+        answer — it is publishing FOR a workspace — so the identity travels with
+        the assignment rather than being reconstructed later.
         """
         try:
-            mgr = self._registry.get(Path(repo_root))
+            manager = self._registry.get(Path(repo_root))
         except GroveError as exc:
             logger.debug("issue-ops assign_now could not resolve {}: {}", repo_root, exc)
             return False
-        return self._assign_once(mgr, provider_name, ticket_id, kind) is not None
-
-    def _reconcile_assignments(self) -> None:
-        """Assign the bot to every ticket a live workspace holds, and release the rest.
-
-        Both directions run off ONE sweep of the live fleet, because they are the
-        same question asked twice: the tickets a live workspace holds are what the
-        assignment means, so a key Grove assigned that is no longer in that set is
-        precisely a ticket whose workspace has ended. Reconciling rather than
-        hooking teardown is what makes the release correct for every way a
-        workspace can stop — `kill`, a detach, a record that vanished — including
-        the ones that never run a verb Grove could have hooked.
-        """
-        live: set[str] = set()
-        answered: set[str] = set()
-        for root in self._registry.known_roots():
-            try:
-                mgr = self._registry.get(root)
-                states = mgr.list()
-            except GroveError as exc:
-                # A repo that could not be read has not said its tickets are
-                # gone. Releasing on that silence would unassign a live
-                # workspace's ticket over a transient config error, so an
-                # unreadable repo is skipped by the release too (below).
-                logger.warning("issue-ops assignment skipping {}: {}", root, exc)
-                continue
-            answered.add(str(root))
-            for state in states:
-                for ref in state.ticket_refs:
-                    wire = self._assign_once(mgr, ref.provider, ref.id, ref.kind)
-                    if wire is not None:
-                        live.add(wire)
-        self._release_ended(live, answered)
+        return (
+            self._assign_once(manager, provider_name, ticket_id, kind, workspace_id=workspace_id)
+            is not None
+        )
 
     def _assign_once(
         self,
-        mgr: WorkspaceManager,
+        manager: WorkspaceManager,
         provider_name: TicketProviderName,
         ticket_id: str,
         kind: TicketKind = "issue",
+        *,
+        workspace_id: str | None = None,
     ) -> str | None:
-        """Assign the bot once per ticket; return its key iff GROVE owns the assignment.
-
-        ``None`` covers four different situations that all mean the same thing
-        here — not an issue, unkeyable, unassignable, or already assigned by
-        somebody else — because none of them makes this ticket Grove's to
-        release later.
-
-        **The issues-only rule lives HERE because two callers need it and only
-        one of them used to have it.** The reconcile sweep filtered kind itself
-        while the publisher's edge-triggered ``assign_now`` did not, so a pull
-        request was assigned on the publish edge, recorded as owned, then found
-        missing from the sweep's live set and RELEASED on the next tick — an
-        assign/unassign flap writing noise to somebody else's tracker once per
-        interval, forever. A rule two callers share belongs at the seam they
-        share, or the copy that is missing is the one nobody notices.
-
-        A pull request already records its author, so assigning one adds noise
-        rather than a fact a reader did not have.
-        """
-        if kind != "issue":
+        """Assign exactly issues and retain only assignments Grove itself made."""
+        if kind != "issue" or not self._cfg.assign_bot:
             return None
         try:
-            key = PickupEngine.key_for(mgr, provider_name, ticket_id)
-            provider = mgr.ticket_providers.get(provider_name)
+            key = PickupEngine.key_for(manager, provider_name, ticket_id)
+            provider = manager.ticket_providers.get(provider_name)
         except GroveError:
             return None
-        if key.wire in self._assigned:
-            return key.wire
+        with self._lock:
+            existing = self._assigned.get(key.wire)
+            if existing is not None:
+                if workspace_id is not None and existing.workspace_id != workspace_id:
+                    self._assigned[key.wire] = _Assigned(
+                        existing.repo_root, existing.provider, existing.ticket_id, workspace_id
+                    )
+                return key.wire
         if self._engine.assign_bot(provider, ticket_id):
-            self._assigned[key.wire] = _Assigned(
-                repo_root=str(mgr.repo_root), provider=provider_name, ticket_id=ticket_id
-            )
+            with self._lock:
+                self._assigned[key.wire] = _Assigned(
+                    str(manager.repo_root), provider_name, ticket_id, workspace_id
+                )
             return key.wire
         return None
 
-    def _release_ended(self, live: set[str], answered: set[str]) -> None:
-        """Unassign the bot from the tickets it assigned whose workspace has ended.
-
-        Only keys in ``_assigned`` are ever released, and that memo is the whole
-        safety argument: it holds what GROVE assigned in THIS process, so a
-        ticket a human assigned to the bot by hand is never touched, and a
-        restart forgets rather than sweeping somebody else's board.
-
-        A repo that failed to answer this tick is skipped rather than treated as
-        empty — the failure direction that matters, since reading "no live
-        workspaces" out of an error would unassign every ticket on that repo.
-        """
-        for wire, entry in list(self._assigned.items()):
-            if wire in live or entry.repo_root not in answered:
-                continue
-            del self._assigned[wire]  # dropped either way: released, or unreleasable
+    def _bootstrap_assignments(self) -> None:
+        """Explicitly index live work only during manual bootstrap reconciliation."""
+        for root in self._registry.known_roots():
             try:
-                mgr = self._registry.get(Path(entry.repo_root))
-                provider = mgr.ticket_providers.get(entry.provider)
-            except GroveError:
+                manager = self._registry.get(root)
+                states = manager.list()
+            except GroveError as exc:
+                logger.warning("issue-ops assignment bootstrap skipping {}: {}", root, exc)
                 continue
-            self._engine.release_bot(provider, entry.ticket_id)
+            for state in states:
+                self._index_workspace(manager, state.id, state.ticket_refs)
+
+    def _release(self, entry: _Assigned) -> None:
+        try:
+            manager = self._registry.get(Path(entry.repo_root))
+            provider = manager.ticket_providers.get(entry.provider)
+        except GroveError:
+            return
+        self._engine.release_bot(provider, entry.ticket_id)
 
     @staticmethod
     def _utcnow() -> datetime:

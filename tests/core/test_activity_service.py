@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -23,6 +25,7 @@ from grove.core import tmux
 from grove.core.activity import (
     ActivityService,
     DashboardDelta,
+    DashboardSnapshot,
     FleetSummary,
     SessionActivity,
     WorkspaceActivity,
@@ -32,8 +35,13 @@ from grove.core.agents import AgentActivity, AgentActivityState, AgentMessage, A
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
 from grove.core.agents.hook import ClaudeHook, SubagentHookRecord
 from grove.core.agents.model import TokenUsage
+from grove.core.agents.session_registry import NativeClaudeSession
 from grove.core.config import GroveConfig, load_config
-from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
+from grove.core.contracts.activity import (
+    AgentActivityView,
+    DashboardEvent,
+    DashboardSnapshotView,
+)
 from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.usage import DurationView, TokenClassesView
@@ -216,6 +224,28 @@ def test_blend_truth_table(
     )
 
 
+def test_native_status_overrides_only_the_tmux_activity_dimension() -> None:
+    busy = NativeClaudeSession(1, "s", "/w", None, "busy", None)
+    idle = NativeClaudeSession(1, "s", "/w", None, "idle", None)
+
+    assert (
+        ActivityService._with_native_status(AgentActivityState.IDLE, busy)
+        is AgentActivityState.WORKING
+    )
+    assert (
+        ActivityService._with_native_status(AgentActivityState.WORKING, idle)
+        is AgentActivityState.IDLE
+    )
+    assert (
+        ActivityService._with_native_status(AgentActivityState.BLOCKED, busy)
+        is AgentActivityState.BLOCKED
+    )
+    assert (
+        ActivityService._with_native_status(AgentActivityState.WAITING, busy)
+        is AgentActivityState.WAITING
+    )
+
+
 def test_blend_fresh_transcript_outranks_quiet_pane() -> None:
     """The adapter's abstraction wins over the tmux heuristic: a WORKING
     transcript that advanced recently stays WORKING through a quiet pane (a
@@ -307,7 +337,13 @@ def test_snapshot_groups_across_repos(
     registry.get(repo_a).create(CreateWorkspaceRequest(agent_name="claude", title="a-task"))
     registry.get(repo_b).create(CreateWorkspaceRequest(agent_name="shell", title="b-task"))
 
-    snap = service.snapshot()
+    # A read BOOTSTRAPS rather than answering an empty fleet. The old
+    # assertion here pinned the opposite — that an unbootstrapped projection
+    # reports no projects — which is indistinguishable on the wire from a host
+    # that genuinely has none, and is the answer a maintained projection must
+    # never invent. `bootstrap` is idempotent, so asking twice costs one scan.
+    assert service.snapshot().total_workspaces == 2
+    snap = service.bootstrap()
 
     assert snap.total_workspaces == 2
     names = {g.repo_name for g in snap.projects}
@@ -348,7 +384,7 @@ def test_snapshot_parses_real_transcript(
         encoding="utf-8",
     )
 
-    primary = service.snapshot().projects[0].workspaces[0].primary
+    primary = service.bootstrap().projects[0].workspaces[0].primary
     assert primary is not None
     assert primary.human_turns == 1
     assert primary.current_task == "do the thing"
@@ -406,7 +442,7 @@ def test_snapshot_itemizes_fleet_and_excludes_it_from_attention(
         '{"agentType":"Explore","description":"Explore it","toolUseId":"tu1"}', encoding="utf-8"
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert len(row.sessions) == 2
     primary, fleet_member = row.sessions
     assert primary.session.session_id == sid
@@ -422,6 +458,87 @@ def test_snapshot_itemizes_fleet_and_excludes_it_from_attention(
     assert row.needs_attention is False
 
 
+def test_a_stale_dead_witness_never_outvotes_a_live_session(
+    env: tuple[ActivityService, RepoRegistry],
+    tmp_path: Path,
+) -> None:
+    """The maintained cache SUPPLEMENTS the probe; a `False` may not replace it.
+
+    A runtime witness is an observation from a moment that has passed, and the
+    session it describes can be created again under the same name — which is
+    exactly what `respawn`, and a create reusing a freed name, both do. Taking
+    `False` as final therefore reported a workspace whose tmux session is alive
+    RIGHT NOW as OFFLINE, and every steer against it was refused
+    `pane_not_found` until some unrelated event refreshed the witness.
+
+    `None` already falls through to the probe for the same reason. This pins the
+    other half: a NEGATIVE witness is a claim about the past, so it is confirmed
+    against the live session rather than believed. A genuinely dead session
+    still reconciles away from a viewport, because the probe agrees.
+    """
+    service, registry = env
+    del service
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="stale-witness"))
+
+    # The session is live (the fake tmux server holds it), but the cache still
+    # carries the observation from before it existed.
+    mgr.bind_runtime_liveness(
+        container=lambda _identity: None,
+        host_tmux=lambda _session: False,
+        host_tmux_activity=lambda _session: None,
+    )
+    assert tmux.has_session(state.tmux_session) is True
+
+    reconciled = mgr.reconciled(state.id)
+    assert reconciled.status is not WorkspaceStatus.OFFLINE, (
+        "a dead witness outvoted a live session, so every steer is refused"
+    )
+
+
+def test_a_cursor_read_during_a_bootstrap_cannot_deadlock_the_daemon(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    """THE BOOTSTRAP MUST HAPPEN BEFORE THE PROJECTION LOCK, NEVER INSIDE IT.
+
+    `snapshot` builds the projection on demand, and building it takes
+    `_bootstrap_lock` and then `_projection_lock`. `snapshot_with_cursor` used
+    to call `snapshot` while already holding `_projection_lock`, inverting that
+    order — so a reader bootstrapping and a cursor read taken at the same moment
+    each held what the other needed. It took the whole daemon down rather than
+    one request: every route hung, `/healthz` included, because the event loop
+    thread was one of the waiters, and the process still reported `active`.
+    """
+    service, registry = env
+    del registry
+    entered = threading.Event()
+    collect = service._collect_snapshot
+
+    def slow_collect() -> DashboardSnapshot:
+        entered.set()
+        time.sleep(0.5)  # hold the bootstrap open across the cursor read
+        return collect()
+
+    service._collect_snapshot = slow_collect  # type: ignore[method-assign]
+
+    reader = threading.Thread(target=service.snapshot, daemon=True)
+    reader.start()
+    assert entered.wait(5), "the bootstrap never started"
+
+    done = threading.Event()
+
+    def cursor() -> None:
+        service.snapshot_with_cursor()
+        done.set()
+
+    threading.Thread(target=cursor, daemon=True).start()
+
+    assert done.wait(10), "snapshot_with_cursor deadlocked against the bootstrap"
+    reader.join(10)
+    assert not reader.is_alive(), "the bootstrapping reader deadlocked"
+
+
 def test_snapshot_never_calls_peek(
     env: tuple[ActivityService, RepoRegistry],
     monkeypatch: pytest.MonkeyPatch,
@@ -434,7 +551,7 @@ def test_snapshot_never_calls_peek(
     mgr.create(CreateWorkspaceRequest(agent_name="claude", title="cheap"))
     monkeypatch.setattr(mgr, "peek", lambda *a, **k: pytest.fail("snapshot must not call peek()"))
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert isinstance(row.diff_added, int)
     assert isinstance(row.diff_removed, int)
 
@@ -563,7 +680,7 @@ def test_snapshot_view_serializes(
     repo = _init_repo(tmp_path / "repo")
     registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="view"))
 
-    view = DashboardSnapshotView.from_snapshot(service.snapshot())
+    view = DashboardSnapshotView.from_snapshot(service.bootstrap())
     payload = view.model_dump_json()
     assert '"total_workspaces":1' in payload
     assert view.projects[0].workspaces[0].state.title == "view"
@@ -575,7 +692,7 @@ def test_event_from_delta_round_trips(
     service, registry = env
     repo = _init_repo(tmp_path / "repo")
     state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="ev"))
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     delta = DashboardDelta(
         kind="session_activity", seq=7, workspace_id=state.id, repo_root=str(repo), workspace=row
     )
@@ -608,9 +725,61 @@ def test_sidecar_overrides_polled_state(
         tmux_pane=None,
         now=datetime.now(tz=UTC),
     )
-    primary = service.snapshot().projects[0].workspaces[0].primary
+    primary = service.bootstrap().projects[0].workspaces[0].primary
     assert primary is not None
     assert primary.state is AgentActivityState.BLOCKED
+
+
+def test_sidecar_context_window_rides_the_activity_and_the_wire(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The statusLine arm's window reaches the activity stream and the view.
+
+    Claude's transcript parser never fills ``context`` (the transcript has no
+    window), so the sidecar is the ONLY source for a Claude workspace and this
+    fold is what makes the meter exist at all. Pinned through the service and
+    the wire view: a parser-level test cannot see a fold that lives in the
+    service, and the daemon serves the view.
+    """
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="ctx"))
+    now = datetime.now(tz=UTC)
+    ClaudeHook.record_event(
+        {"hook_event_name": "Stop", "session_id": state.agent_session_id},
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=now,
+    )
+    # Verbatim shape of a Claude Code 2.1.270 statusLine payload after one turn.
+    ClaudeHook.record_statusline(
+        {
+            "session_id": state.agent_session_id,
+            "context_window": {
+                "context_window_size": 983616,
+                "current_usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 92,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 42610,
+                },
+            },
+        },
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=now,
+    )
+    primary = service.bootstrap().projects[0].workspaces[0].primary
+    assert primary is not None
+    assert primary.context is not None
+    assert (primary.context.size, primary.context.used) == (983616, 42704)
+    view = AgentActivityView.from_activity(primary)
+    assert view.context is not None
+    assert view.context.used_fraction == pytest.approx(42704 / 983616)
 
 
 # ─── live pending question ───────────────────────────────────────────────────
@@ -654,7 +823,7 @@ def test_live_question_surfaces_on_activity_view(
     state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="q"))
     _ask_capture(sidecar_dir, state.agent_session_id, now=datetime.now(tz=UTC))
 
-    primary = service.snapshot().projects[0].workspaces[0].primary
+    primary = service.bootstrap().projects[0].workspaces[0].primary
     assert primary is not None
     assert len(primary.questions) == 1
     q = primary.questions[0]
@@ -693,7 +862,7 @@ def test_live_question_surfaces_whole_batch_in_order(
         now=datetime.now(tz=UTC),
     )
 
-    primary = service.snapshot().projects[0].workspaces[0].primary
+    primary = service.bootstrap().projects[0].workspaces[0].primary
     assert primary is not None
     assert [q.prompt for q in primary.questions] == ["Color?", "Toppings?"]
     # Same batch → shared group_id (the answer-back tool_use_id); distinct ids.
@@ -701,10 +870,14 @@ def test_live_question_surfaces_whole_batch_in_order(
     assert [q.id for q in primary.questions] == ["toolu_1#0", "toolu_1#1"]
 
 
+@pytest.mark.parametrize("result_id", [None, "other_call", "toolu_1"])
+@pytest.mark.parametrize("answer", ["Your questions have been answered", ""])
 def test_live_question_suppressed_once_transcript_resolves_it(
     env: tuple[ActivityService, RepoRegistry],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    result_id: str | None,
+    answer: str,
 ) -> None:
     """Once the transcript carries the resolving tool_result for the captured
     tool_use_id (the flush after an answer/cancel), the pending question is not
@@ -730,16 +903,36 @@ def test_live_question_suppressed_once_transcript_resolves_it(
         '"isSidechain":false,"message":{"id":"m1","role":"assistant","stop_reason":"tool_use",'
         '"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use",'
         '"id":"toolu_1","name":"AskUserQuestion","input":{"questions":[{"question":"Pick a color",'
-        '"options":[{"label":"Blue"}]}]}}]}}\n'
-        '{"type":"user","uuid":"u2","timestamp":"2026-06-01T10:00:06.000Z","isSidechain":false,'
-        '"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1",'
-        '"content":"Your questions have been answered"}]}}\n',
+        '"options":[{"label":"Blue"}]}]}}]}}\n',
         encoding="utf-8",
     )
+    if result_id is not None:
+        with (folder / f"{state.agent_session_id}.jsonl").open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "uuid": "u2",
+                        "timestamp": "2026-06-01T10:00:06.000Z",
+                        "isSidechain": False,
+                        "message": {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": result_id,
+                                    "content": answer,
+                                }
+                            ],
+                        },
+                    }
+                )
+                + "\n"
+            )
 
-    primary = service.snapshot().projects[0].workspaces[0].primary
+    primary = service.bootstrap().projects[0].workspaces[0].primary
     assert primary is not None
-    assert primary.questions == ()
+    assert bool(primary.questions) is (result_id != "toolu_1")
 
 
 def test_sidecar_superseded_by_newer_transcript(
@@ -773,7 +966,7 @@ def test_sidecar_superseded_by_newer_transcript(
         encoding="utf-8",
     )
 
-    primary = service.snapshot().projects[0].workspaces[0].primary
+    primary = service.bootstrap().projects[0].workspaces[0].primary
     assert primary is not None
     # Human-turn tail → transcript WORKING; tmux quiet (FakeTmux) → polled IDLE.
     # The point: NOT the sidecar's WAITING.
@@ -806,10 +999,11 @@ def test_degraded_read_keeps_last_definitive_state(
         encoding="utf-8",
     )
 
-    first = service.snapshot().projects[0].workspaces[0].primary
+    first = service.bootstrap().projects[0].workspaces[0].primary
     assert first is not None and first.state is AgentActivityState.WAITING
 
     transcript.unlink()  # the transient collapse (mid-rotation / racing read)
+    service.refresh_workspace(str(repo), state.id)
     second = service.snapshot().projects[0].workspaces[0].primary
     assert second is not None
     assert second.state is AgentActivityState.WAITING  # not STARTING
@@ -944,7 +1138,7 @@ def test_fs_discovery_surfaces_handstarted_session(
         encoding="utf-8",
     )
 
-    sessions = service.snapshot().projects[0].workspaces[0].sessions
+    sessions = service.bootstrap().projects[0].workspaces[0].sessions
     provenances = {s.session.provenance for s in sessions}
     assert "grove_launched" in provenances
     assert "fs_discovered" in provenances
@@ -986,7 +1180,7 @@ def test_null_session_id_recovered_by_discovery(
         encoding="utf-8",
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert len(row.sessions) == 1
     assert row.primary is not None
     assert row.sessions[0].session.provenance == "fs_discovered"
@@ -1025,7 +1219,7 @@ def test_unmaterialized_minted_id_yields_primary_to_discovered_session(
         encoding="utf-8",
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert [s.session.provenance for s in row.sessions] == ["fs_discovered", "grove_launched"]
     assert row.sessions[0].session.session_id == live_sid
     assert row.primary is not None
@@ -1088,7 +1282,7 @@ def test_persisted_agent_kind_resolves_when_name_absent_from_config(
         encoding="utf-8",
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert len(row.sessions) == 1
     assert row.primary is not None
     assert row.primary.current_task == "scoped session"
@@ -1127,7 +1321,7 @@ def test_null_id_discovery_adopts_single_most_recent(
         )
         os.utime(path, (mtime, mtime))
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert len(row.sessions) == 1
     assert row.sessions[0].session.session_id == newest
 
@@ -1166,7 +1360,7 @@ def test_root_workspace_never_promotes_stale_repo_root_session_to_primary(
     )
     assert Path(state.worktree_path).resolve() == repo.resolve()
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert row.primary is not None
     assert row.primary.state is AgentActivityState.STARTING
     assert row.primary.current_task != "leftover from a prior life"
@@ -1227,7 +1421,7 @@ def test_sessionend_dead_pointer_recovers_resumed_session(
         now=state.created_at + timedelta(seconds=8),
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert row.primary is not None
     assert row.sessions[0].session.session_id == resumed
     assert row.sessions[0].session.provenance == "fs_discovered"
@@ -1288,7 +1482,7 @@ def test_resumed_session_adopted_via_sidecar_evidence(
         now=state.created_at + timedelta(seconds=5),
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     ids = [s.session.session_id for s in row.sessions]
     assert ids[0] == resumed  # recovery promotes the resumed session to primary
     assert minted in ids  # the dead minted entry rides behind
@@ -1350,7 +1544,7 @@ def test_cross_tenant_live_session_rejected_on_pane_mismatch(
         now=state.created_at + timedelta(seconds=5),
     )
 
-    ids = [s.session.session_id for s in service.snapshot().projects[0].workspaces[0].sessions]
+    ids = [s.session.session_id for s in service.bootstrap().projects[0].workspaces[0].sessions]
     assert minted in ids
     assert tenant_b not in ids  # pane mismatch → not ours
 
@@ -1381,7 +1575,7 @@ def test_minted_card_excludes_historical_session(
         encoding="utf-8",
     )
 
-    sessions = service.snapshot().projects[0].workspaces[0].sessions
+    sessions = service.bootstrap().projects[0].workspaces[0].sessions
     ids = [s.session.session_id for s in sessions]
     assert ids == [state.agent_session_id]  # only the minted session; history excluded
 
@@ -1428,7 +1622,7 @@ def test_historical_sessions_never_full_parsed(
         return real_parse(self, cwd, session_id)
 
     monkeypatch.setattr(ClaudeCodeAdapter, "parse_activity", spy)
-    service.snapshot()
+    service.bootstrap()
 
     assert minted in parsed
     for hid in historical:
@@ -1479,7 +1673,7 @@ def test_materialized_sessionend_stays_primary(
         encoding="utf-8",
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert row.sessions[0].session.session_id == minted  # materialized end stays primary
     assert bystander in [s.session.session_id for s in row.sessions]  # bystander rides behind
 
@@ -1523,7 +1717,7 @@ def test_stale_cwd_session_with_predating_sidecar_not_adopted(
         now=state.created_at - timedelta(days=2),  # sidecar predates create too
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert row.sessions == ()  # nothing adopted — the prior tenant is not ours
 
 
@@ -1573,7 +1767,7 @@ def test_sessionend_before_transcript_keeps_minted_materialized(
         encoding="utf-8",
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert row.primary is not None
     assert row.sessions[0].session.session_id == minted  # minted stayed primary
     assert row.primary.current_task == "still going"
@@ -1619,7 +1813,7 @@ def test_nested_project_discovery_scans_agent_cwd(
         encoding="utf-8",
     )
 
-    rows = list(service.snapshot().iter_workspaces())
+    rows = list(service.bootstrap().iter_workspaces())
     assert len(rows) == 1
     by_id = {s.session.session_id: s for s in rows[0].sessions}
     assert handstarted in by_id
@@ -1667,7 +1861,7 @@ def test_extras_discovered_without_hooks_enabled(
         encoding="utf-8",
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     ids = {s.session.session_id for s in row.sessions}
     provenances = {s.session.provenance for s in row.sessions}
     assert ids == {minted, hand}
@@ -1709,7 +1903,7 @@ def test_dirty_files_best_effort_zero_when_worktree_gone(
     state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="gone"))
     registry.get(repo).pause(state.id)  # removes the worktree dir
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
     assert row.dirty_files == 0
 
 
@@ -1723,7 +1917,7 @@ def test_snapshot_includes_config_declared_empty_project(
     store = JsonWorkspaceStore(path=tmp_path / "state.json")
     service = ActivityService(registry=RepoRegistry(cfg=cfg, store=store))
 
-    snap = service.snapshot()
+    snap = service.bootstrap()
     by_root = {g.repo_root: g for g in snap.projects}
     assert str(empty_repo) in by_root
     assert by_root[str(empty_repo)].workspaces == ()
@@ -1751,7 +1945,7 @@ def test_snapshot_groups_nested_projects_distinctly(fake_tmux: FakeTmux, tmp_pat
     mgr.create(CreateWorkspaceRequest(agent_name="shell", title="root-task"))
     mgr.create(CreateWorkspaceRequest(agent_name="shell", title="nested-task", project_cwd=homelab))
 
-    snap = service.snapshot()
+    snap = service.bootstrap()
 
     by_cwd = {g.cwd: g for g in snap.projects}
     assert set(by_cwd) == {str(repo.resolve()), str(homelab.resolve())}
@@ -2071,7 +2265,7 @@ def test_a_repo_with_unparseable_config_degrades_alone(
     service = ActivityService(registry=registry)
     registry.get(healthy).create(CreateWorkspaceRequest(agent_name="claude", title="alive"))
 
-    snap = service.snapshot()
+    snap = service.bootstrap()
 
     by_name = {g.repo_name: g for g in snap.projects}
     assert set(by_name) == {"healthy", "broken"}
@@ -2086,12 +2280,12 @@ def test_a_repo_with_unparseable_config_degrades_alone(
     assert degraded.error is not None
     assert "ConfigError" in degraded.error
 
-    # The poll path shares the failure and must survive it too; the healthy
-    # repo's workspace still produces a delta.
+    # Explicit recovery preserves the healthy row without inventing an unchanged delta.
     events: list[object] = []
     service.subscribe(events.append)
     service.poll_once()
-    assert events
+    assert not events
+    assert service.snapshot().total_workspaces == 1
 
 
 def test_a_repo_that_becomes_readable_is_picked_up_without_a_restart(
@@ -2119,11 +2313,10 @@ def test_a_repo_that_becomes_readable_is_picked_up_without_a_restart(
         cfg=cfg, store=JsonWorkspaceStore(path=tmp_path / "state.json"), config_loader=load_config
     )
     service = ActivityService(registry=registry)
-    assert service.snapshot().projects[0].error is not None
+    assert service.bootstrap().projects[0].error is not None
 
     (broken / ".grove" / "config.json").write_text("{}\n", encoding="utf-8")
-
-    healed = service.snapshot()
+    healed = service.reconcile()
     assert healed.projects[0].error is None
 
 
@@ -2169,7 +2362,7 @@ def test_workspace_activity_fleet_is_none_with_no_subagents(
     repo = _init_repo(tmp_path / "repo")
     registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="no-fleet"))
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
 
     assert row.fleet is None
 
@@ -2215,13 +2408,13 @@ def test_workspace_activity_fleet_reflects_live_hook_pushes(
         now=now + timedelta(seconds=5),
     )
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
 
     assert row.fleet is not None
     assert row.fleet.total == 2
     assert row.fleet.active == 1  # a-1 still running, a-2 stopped
 
-    view = DashboardSnapshotView.from_snapshot(service.snapshot())
+    view = DashboardSnapshotView.from_snapshot(service.bootstrap())
     fleet_view = view.projects[0].workspaces[0].fleet
     assert fleet_view is not None
     assert fleet_view.active == 1
@@ -2239,7 +2432,7 @@ def test_workspace_activity_fleet_is_none_for_a_non_claude_kind(
     repo = _init_repo(tmp_path / "repo")
     registry.get(repo).create(CreateWorkspaceRequest(agent_name="shell", title="not-claude"))
 
-    row = service.snapshot().projects[0].workspaces[0]
+    row = service.bootstrap().projects[0].workspaces[0]
 
     assert row.fleet is None
 

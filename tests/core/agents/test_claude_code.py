@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1047,7 +1048,7 @@ def test_question_entries_resolve_once_answered(
     assert questions[0].question.answer == "Merge"
 
 
-def test_exit_plan_mode_renders_one_confirm_question(
+def test_exit_plan_mode_renders_a_plan_approval_question(
     adapter: ClaudeCodeAdapter, claude_home: Path
 ) -> None:
     """ExitPlanMode is a plan-approval gate → a single ``role="question"``
@@ -1072,8 +1073,11 @@ def test_exit_plan_mode_renders_one_confirm_question(
     assert len(questions) == 1
     assert questions[0].text == "Step 1: refactor. Step 2: ship."
     assert questions[0].question is not None
-    assert questions[0].question.kind == "confirm"
+    assert questions[0].question.kind == "plan_approval"
     assert questions[0].question.prompt == "Step 1: refactor. Step 2: ship."
+    # The dialog's rows reach the transcript too, so a settled plan renders the
+    # same way the live one did rather than degrading to an optionless card.
+    assert len(questions[0].question.options) == 3
 
 
 def test_regular_tool_still_renders_as_tool(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
@@ -1495,6 +1499,91 @@ def test_locate_finds_main_and_subagents(adapter: ClaudeCodeAdapter, claude_home
     assert found.index(main) < found.index(sub)  # main thread first
 
 
+def test_a_memoized_locate_still_sees_a_new_subagent(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The memo may not outlive the answer, and a FLEET GROWS MID-SESSION.
+
+    `locate_transcripts` is memoized because it dominated the activity
+    projection (measured 96% of a warm `read_messages`, 7.7 ms per call). The
+    whole risk of that memo is a stale path set: a sub-agent spawned after the
+    first call must still be found, or the fleet count freezes at whatever it
+    was when the session was first read.
+
+    A first attempt keyed the signature on the PROJECTS dir and shipped exactly
+    that bug — a nested `subagents/agent-*.jsonl` does not move its mtime.
+    Signing the directories that actually hold the located files is what makes
+    the invalidation honest, and this pins it.
+
+    The spawn is forced into the SAME mtime tick as the scan that missed it,
+    which is the only arm that can fail: a directory mtime is coarse (measured
+    1 ms on ext4) and a scan is far quicker, so a real fleet growing mid-scan
+    lands here routinely. Restoring the stamp by hand is what makes that
+    deterministic — letting the clock supply it passes on tick alignment alone,
+    so the test agreed with a memo that froze the path set for good.
+    """
+    cwd = Path("/home/dev/work/grow")
+    sid = "55555555-5555-4555-8555-555555555555"
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    main = folder / f"{sid}.jsonl"
+    main.write_text('{"type":"user","cwd":"/home/dev/work/grow"}\n', encoding="utf-8")
+
+    assert adapter.locate_transcripts(cwd, sid) == [main]
+    assert adapter.locate_transcripts(cwd, sid) == [main]
+    stamp = folder.stat().st_mtime_ns
+
+    sub_dir = folder / sid / "subagents"
+    sub_dir.mkdir(parents=True)
+    sub = sub_dir / "agent-late.jsonl"
+    sub.write_text('{"type":"assistant"}\n', encoding="utf-8")
+    # The spawn and the scan share one mtime tick: the sub-agent is absent from
+    # the answer and invisible to the stamp that answer would be keyed on.
+    os.utime(folder, ns=(stamp, stamp))
+
+    assert sub in adapter.locate_transcripts(cwd, sid)
+
+
+def test_a_quiet_locate_is_served_from_the_memo(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The other half: refusing to memoize a racing scan must not disable the memo.
+
+    `locate_transcripts` is memoized because it dominated the activity
+    projection (96% of a warm `read_messages`, 7.7 ms per call), so a guard that
+    bought correctness by rescanning every tick would give the whole win back
+    while every correctness test stayed green.
+    """
+    cwd = Path("/home/dev/work/quiet")
+    sid = "66666666-6666-4666-8666-666666666666"
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    main = folder / f"{sid}.jsonl"
+    main.write_text('{"type":"user","cwd":"/home/dev/work/quiet"}\n', encoding="utf-8")
+    settled = time.time_ns() - 10_000_000_000  # long since quiet
+    os.utime(folder, ns=(settled, settled))
+
+    assert adapter.locate_transcripts(cwd, sid) == [main]
+
+    scans = 0
+    real = _ClaudeHome.locate
+
+    def counting(scan_cwd: Path, scan_sid: str) -> list[Path]:
+        nonlocal scans
+        scans += 1
+        return real(scan_cwd, scan_sid)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(_ClaudeHome, "locate", staticmethod(counting))
+    try:
+        for _ in range(20):
+            assert adapter.locate_transcripts(cwd, sid) == [main]
+    finally:
+        monkeypatch.undo()
+
+    assert scans == 0
+
+
 def test_locate_missing_returns_empty(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
     del claude_home
     found = adapter.locate_transcripts(Path("/nowhere"), "44444444-4444-4444-8444-444444444444")
@@ -1737,6 +1826,74 @@ def test_list_sessions_empty_when_nothing_recorded(
 ) -> None:
     del claude_home
     assert adapter.list_sessions(Path("/nowhere")) == []
+
+
+def test_session_summary_finds_a_relocated_transcript(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Entering a native `.claude/worktrees/` checkout re-homes the transcript
+    under the worktree, so the folder no longer encodes the session's own cwd —
+    `list_sessions` goes blind while `session_summary` still resolves it.
+
+    The on-host shape this reproduces: the folder encodes the worktree, while
+    every record keeps naming the directory it was written in. Pinned as a PAIR
+    because the whole point is that the id-keyed read answers where the
+    directory scan cannot.
+    """
+    cwd = Path("/home/dev/work/listing")
+    sid = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+    # The file is filed under the worktree Claude Code entered...
+    folder = (
+        claude_home / "projects" / _ClaudeHome.encode_cwd(cwd / ".claude" / "worktrees" / "feat")
+    )
+    folder.mkdir(parents=True)
+    # ...while its records still record the session's own cwd.
+    _write_realistic_transcript(folder, sid, cwd, mtime=3_000)
+
+    assert adapter.list_sessions(cwd) == []
+
+    summary = adapter.session_summary(cwd, sid)
+
+    assert summary is not None
+    assert summary.session_id == sid
+    assert summary.cwd == str(cwd)
+    # A real parse of the relocated file, not a synthesized stub.
+    assert summary.title == "Fix the widget"
+    assert summary.first_prompt == "Please fix the widget"
+    assert summary.activity.human_turns == 1
+
+
+def test_session_summary_is_none_for_an_unknown_session(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """Absence stays absent — never a stub row for an id the store never held."""
+    del claude_home
+    assert adapter.session_summary(Path("/nowhere"), "no-such-session") is None
+
+
+def test_session_summary_ignores_subagent_files(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A summary describes the MAIN transcript only, the same scope
+    `list_sessions` keeps — `locate_transcripts` also returns sub-agent files,
+    and one of those must never be mistaken for the session itself."""
+    cwd = Path("/home/dev/work/fleet")
+    sid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    main = _write_realistic_transcript(folder, sid, cwd, mtime=1_000)
+    subagents = folder / sid / "subagents"
+    subagents.mkdir(parents=True)
+    (subagents / "agent-a1.jsonl").write_text(
+        '{"type":"user","uuid":"s1","timestamp":"2026-06-09T08:00:00.000Z",'
+        f'"isSidechain":true,"cwd":"{cwd}","message":{{"role":"user","content":"sub"}}}}\n',
+        encoding="utf-8",
+    )
+
+    summary = adapter.session_summary(cwd, sid)
+
+    assert summary is not None
+    assert summary.transcript_path == main
 
 
 # ─── read_turns (the `sessions show` view) ──────────────────────────────────

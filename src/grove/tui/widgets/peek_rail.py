@@ -173,6 +173,8 @@ class PeekRail(Vertical):
     _NO_TRANSCRIPT: ClassVar[str] = "[dim](no transcript)[/]"
     _TRANSCRIPT_TAB: ClassVar[str] = "tab-transcript"
     _TERMINAL_TAB: ClassVar[str] = "tab-terminal"
+    _TERMINAL_LABEL: ClassVar[str] = "terminal"
+    _STREAM_LABEL: ClassVar[str] = "stream"
 
     def __init__(self) -> None:
         super().__init__()
@@ -213,7 +215,7 @@ class PeekRail(Vertical):
                 VerticalScroll(id="transcript-scroll"),
             ):
                 yield Static(self._NO_TRANSCRIPT, id="card-transcript")
-            with TabPane("terminal", id=self._TERMINAL_TAB):
+            with TabPane(self._TERMINAL_LABEL, id=self._TERMINAL_TAB):
                 yield Static("", id="card-pane")
 
     def on_mount(self) -> None:
@@ -297,7 +299,12 @@ class PeekRail(Vertical):
         # A build in flight counts as live for the container: it gets the brand
         # border and stays visible, the one case where the tab has content but
         # no tmux session behind it.
-        self._update_tabs(peek.state.id, live=live or building is not None, has_turns=bool(turns))
+        self._update_tabs(
+            peek.state.id,
+            live=live or building is not None,
+            has_turns=bool(turns),
+            native=peek.state.native,
+        )
 
     @property
     def body_text(self) -> str:
@@ -410,12 +417,22 @@ class PeekRail(Vertical):
             self._pane_text = ""
             self.query_one("#card-pane", Static).update(Text.from_markup("[dim](no output)[/]"))
 
-    def _update_tabs(self, wid: str, *, live: bool, has_turns: bool) -> None:
-        """Container visibility, `-live` chrome, and the default-tab policy."""
+    def _update_tabs(self, wid: str, *, live: bool, has_turns: bool, native: bool = False) -> None:
+        """Container visibility, `-live` chrome, and the default-tab policy.
+
+        The pane tab is named for what it SHOWS: a native workspace's pane is
+        Grove's worker printing the session's protocol frames, so the tab
+        reads ``stream``; a terminal workspace's pane is the agent's own UI,
+        so it reads ``terminal``. Same widget, same capture path, one label.
+        """
         if wid != self._tab_wid:
             self._tab_wid = wid
             self._user_tab_choice = False
         tabs = self.query_one("#peek-tabs", TabbedContent)
+        label = self._STREAM_LABEL if native else self._TERMINAL_LABEL
+        tab = tabs.get_tab(self._TERMINAL_TAB)
+        if tab.label_text != label:
+            tab.label = label
         if not (live or has_turns):
             # Nothing to preview: no live pane and no recorded transcript.
             tabs.add_class("-hidden")

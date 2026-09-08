@@ -1,8 +1,19 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
-import { CopyIcon, GlobeIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CopyIcon,
+  GlobeIcon,
+  KeyRoundIcon,
+  LinkIcon,
+  RefreshCwIcon,
+  ShieldOffIcon,
+  Trash2Icon,
+} from "lucide-react";
 
+import { CardField, CardFields, CardRegion, SectionCard } from "@/components/grove/card";
+import { HelpLabel } from "./help-hint";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,9 +33,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { components } from "@/lib/grove/api/types.gen";
-import { SectionCard } from "@/components/grove/card";
 import { primarySessionId } from "@/lib/grove/adapters";
+import type { components } from "@/lib/grove/api/types.gen";
 import {
   useActivityStream,
   useSaveSharePolicy,
@@ -39,6 +49,10 @@ const TTL_CHOICES = [
   { value: "2592000", label: "30 days", seconds: 2_592_000 },
   { value: "never", label: "Never", seconds: null },
 ] as const;
+const FIELD_COLUMN =
+  "grid-cols-[72px_minmax(0,1fr)] [&>dd]:overflow-visible [&>dd]:whitespace-normal";
+const CONTROL_FOCUS =
+  "min-h-[24px] border focus-visible:border-ring focus-visible:ring-ring/50";
 
 type TtlChoice = (typeof TTL_CHOICES)[number];
 type SharePolicyUpdateRequest =
@@ -60,7 +74,7 @@ export function needsShareSessionPin(
   return currentSessionId !== null && shareSessionId !== currentSessionId;
 }
 
-/** The workspace's public read-only link and its project's share policy. */
+/** The public workspace link and its project-wide policy share one surface. */
 export function ShareCard({ workspaceId }: { workspaceId: string }) {
   const peek = useWorkspacePeek(workspaceId);
   const { snapshot } = useActivityStream();
@@ -68,103 +82,52 @@ export function ShareCard({ workspaceId }: { workspaceId: string }) {
   const [origin, setOrigin] = useState<string | null>(null);
   const [revokeOpen, setRevokeOpen] = useState(false);
 
-  // `window` is unavailable during the route's server render. Delaying only
-  // the origin keeps the initial client tree identical, while the token itself
-  // remains available from the ordinary workspace query.
   useEffect(() => {
     setOrigin(window.location.origin);
   }, []);
 
   const token = peek.data?.state.share_token ?? null;
   const url = token && origin ? `${origin}/public/${token}` : null;
-  const error = update.error;
   const repoRoot = peek.data?.state.repo_root ?? null;
   const shareSessionId = peek.data?.state.share_session_id ?? null;
   const currentSessionId = primarySessionId(snapshot, workspaceId);
-
-  const revoke = () => {
-    update.mutate(
-      { share: false },
-      {
-        onSuccess: () => setRevokeOpen(false),
-      },
-    );
-  };
-
-  const pinCurrentSession = () => {
-    if (!currentSessionId) return;
-    update.mutate({ share: true, share_session_id: currentSessionId });
-  };
 
   return (
     <>
       <SectionCard
         icon={<GlobeIcon />}
-        title="Public link"
-        description={
-          token
-            ? "Anyone with the link can view this workspace read-only."
-            : "Share a read-only view of Info, Changes, and the live transcript; never the terminal, files, or controls."
-        }
+        title="Sharing"
         className="@xl:col-span-2"
+        data-testid="share-card"
       >
-        {token ? (
-          <>
-            {url ? (
-              <div className="flex min-w-0 gap-2">
-                <Input
-                  readOnly
-                  value={url}
-                  aria-label="Public workspace link"
-                  onFocus={(event) => event.currentTarget.select()}
-                  className="truncate font-mono text-xs"
-                />
-                <CopyButton text={url} />
-              </div>
+        <div className="grid min-w-0 gap-3 @lg:grid-cols-2">
+          <WorkspaceShare
+            token={token}
+            url={url}
+            error={update.error}
+            pending={update.isPending}
+            shareSessionId={shareSessionId}
+            currentSessionId={currentSessionId}
+            onShare={() => update.mutate({ share: true })}
+            onRevoke={() => setRevokeOpen(true)}
+            onPinCurrentSession={() => {
+              if (currentSessionId) {
+                update.mutate({
+                  share: true,
+                  share_session_id: currentSessionId,
+                });
+              }
+            }}
+          />
+          <div className="border-t border-border pt-3 @lg:border-t-0 @lg:border-l @lg:pt-0 @lg:pl-3">
+            {repoRoot ? (
+              <SharePolicy repoRoot={repoRoot} />
             ) : (
-              <p className="text-xs text-content-tertiary">
-                Preparing public link…
-              </p>
+              <SharePolicySkeleton />
             )}
-            <ShareTranscript
-              shareSessionId={shareSessionId}
-              currentSessionId={currentSessionId}
-              pending={update.isPending}
-              onPinCurrentSession={pinCurrentSession}
-            />
-            <div>
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                disabled={update.isPending}
-                onClick={() => setRevokeOpen(true)}
-              >
-                Stop sharing
-              </Button>
-            </div>
-          </>
-        ) : (
-          <div>
-            <Button
-              type="button"
-              size="sm"
-              disabled={update.isPending}
-              onClick={() => update.mutate({ share: true })}
-            >
-              <GlobeIcon aria-hidden />
-              Share workspace
-            </Button>
           </div>
-        )}
-        {!revokeOpen && error && (
-          <p role="status" className="text-xs text-destructive">
-            {error.message}
-          </p>
-        )}
+        </div>
       </SectionCard>
-
-      {repoRoot ? <SharePolicy repoRoot={repoRoot} /> : <SharePolicySkeleton />}
 
       <Dialog open={revokeOpen} onOpenChange={setRevokeOpen}>
         <DialogContent data-testid="share-revoke-dialog">
@@ -175,21 +138,35 @@ export function ShareCard({ workspaceId }: { workspaceId: string }) {
               different link.
             </DialogDescription>
           </DialogHeader>
-          {error && (
+          {update.error && (
             <p role="status" className="text-xs text-destructive">
-              {error.message}
+              {update.error.message}
             </p>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRevokeOpen(false)}>
+            <Button
+              size="xs"
+              variant="outline"
+              className={CONTROL_FOCUS}
+              onClick={() => setRevokeOpen(false)}
+            >
+              <ShieldOffIcon aria-hidden />
               Cancel
             </Button>
             <Button
+              size="xs"
               variant="destructive"
+              className={CONTROL_FOCUS}
               disabled={update.isPending}
-              onClick={revoke}
+              onClick={() =>
+                update.mutate(
+                  { share: false },
+                  { onSuccess: () => setRevokeOpen(false) },
+                )
+              }
               data-testid="share-revoke-confirm"
             >
+              <Trash2Icon aria-hidden />
               Stop sharing
             </Button>
           </DialogFooter>
@@ -199,13 +176,111 @@ export function ShareCard({ workspaceId }: { workspaceId: string }) {
   );
 }
 
+function WorkspaceShare({
+  token,
+  url,
+  error,
+  pending,
+  shareSessionId,
+  currentSessionId,
+  onShare,
+  onRevoke,
+  onPinCurrentSession,
+}: {
+  token: string | null;
+  url: string | null;
+  error: Error | null;
+  pending: boolean;
+  shareSessionId: string | null;
+  currentSessionId: string | null;
+  onShare: () => void;
+  onRevoke: () => void;
+  onPinCurrentSession: () => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <CardRegion>
+        <HelpLabel
+          label="This workspace"
+          tooltip="Anyone with the link can read Info, Changes, and the live transcript; never the terminal, files, or controls."
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-content-tertiary">
+            {token ? "Shared" : "Private"}
+          </span>
+          {token ? (
+            <>
+              <ShareTranscript
+                shareSessionId={shareSessionId}
+                currentSessionId={currentSessionId}
+                pending={pending}
+                onPinCurrentSession={onPinCurrentSession}
+              />
+              <Button
+                type="button"
+                size="xs"
+                variant="destructive"
+                className={CONTROL_FOCUS}
+                disabled={pending}
+                onClick={onRevoke}
+              >
+                <Trash2Icon aria-hidden />
+                Revoke
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              size="xs"
+              className={CONTROL_FOCUS}
+              disabled={pending}
+              onClick={onShare}
+            >
+              <LinkIcon aria-hidden />
+              Share workspace
+            </Button>
+          )}
+        </div>
+      </CardRegion>
+      {token && (
+        <CardRegion>
+          <HelpLabel
+            label="Once shared"
+            tooltip="This link is read-only. Expiry changes affect new links; passcode changes apply to existing links immediately."
+          />
+          {url ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <Input
+                readOnly
+                value={url}
+                aria-label="Public workspace link"
+                onFocus={(event) => event.currentTarget.select()}
+                className="min-w-0 truncate font-mono text-xs"
+              />
+              <CopyButton text={url} />
+            </div>
+          ) : (
+            <p className="text-xs text-content-tertiary">Preparing public link…</p>
+          )}
+        </CardRegion>
+      )}
+      {error && (
+        <p role="status" className="text-xs text-destructive">
+          {error.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** One clipboard affordance for a paste-ready string. */
 export function CopyButton({ text }: { text: string }) {
   return (
     <Button
       type="button"
-      size="sm"
+      size="xs"
       variant="outline"
+      className={CONTROL_FOCUS}
       onClick={() => {
         void navigator.clipboard.writeText(text);
       }}
@@ -216,7 +291,6 @@ export function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** The public link's transcript identity, separated from its URL and policy. */
 function ShareTranscript({
   shareSessionId,
   currentSessionId,
@@ -227,49 +301,38 @@ function ShareTranscript({
   currentSessionId: string | null;
   pending: boolean;
   onPinCurrentSession: () => void;
-}): React.ReactNode {
+}) {
   const needsPin = needsShareSessionPin(shareSessionId, currentSessionId);
+  const sessionLabel = shareSessionId
+    ? `Session ${shareSessionId.slice(0, 8)}`
+    : "Follows current session";
+  const tooltip = shareSessionId
+    ? `Published transcript: ${shareSessionId}.`
+    : "This legacy link follows the workspace’s current session.";
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      {shareSessionId ? (
-        <p className="text-xs text-content-tertiary">
-          Published transcript:{" "}
-          <span
-            className="font-mono text-content-primary"
-            title={shareSessionId}
-          >
-            {shareSessionId.slice(0, 8)}
-          </span>
-        </p>
-      ) : (
-        <p className="text-xs text-content-tertiary">
-          This link follows the workspace&apos;s current session.
-        </p>
-      )}
+    <>
+      <span className="font-mono text-xs" title={tooltip}>
+        {sessionLabel}
+      </span>
       {needsPin && (
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-xs text-content-secondary">
-            {shareSessionId
-              ? "This link is showing an older session."
-              : "Pin the current session so this link stays on its shared transcript."}
-          </p>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={pending}
-            onClick={onPinCurrentSession}
-          >
-            Pin current session
-          </Button>
-        </div>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          className={CONTROL_FOCUS}
+          disabled={pending}
+          onClick={onPinCurrentSession}
+        >
+          <CheckIcon aria-hidden />
+          Pin current session
+        </Button>
       )}
-    </div>
+    </>
   );
 }
 
-/** Project-wide expiry and passcode controls sit with the link they govern. */
+/** Project-wide expiry and passcode controls beside the link they govern. */
 function SharePolicy({ repoRoot }: { repoRoot: string }) {
   const policy = useSharePolicy(repoRoot);
   const save = useSaveSharePolicy(repoRoot);
@@ -286,27 +349,28 @@ function SharePolicy({ repoRoot }: { repoRoot: string }) {
 
   if (policy.isError) {
     return (
-      <SectionCard
-        icon={<GlobeIcon />}
-        title="Project share policy"
-        description="Both settings apply to every shared workspace in this project, not just this one."
-        className="@xl:col-span-2"
-      >
+      <CardRegion>
+        <HelpLabel
+          label="Project policy"
+          tooltip="These settings apply to every shared workspace in this project."
+        />
         <p role="status" className="text-xs text-destructive">
           Could not load the project share policy: {policy.error.message}
         </p>
         <div>
           <Button
             type="button"
-            size="sm"
+            size="xs"
             variant="outline"
+            className={CONTROL_FOCUS}
             disabled={policy.isFetching}
             onClick={() => void policy.refetch()}
           >
+            <RefreshCwIcon aria-hidden />
             Retry
           </Button>
         </div>
-      </SectionCard>
+      </CardRegion>
     );
   }
 
@@ -315,6 +379,8 @@ function SharePolicy({ repoRoot }: { repoRoot: string }) {
 
   const saveTtl = (choice: TtlChoice) => {
     setSelectedTtl(choice.value);
+    // This is a full replacement endpoint: retaining the passcode is impossible
+    // without plaintext, so expiry is disabled while one is set.
     save.mutate(sharePolicyRequest(choice.seconds, null), {
       onSettled: () => setSelectedTtl(null),
     });
@@ -322,77 +388,87 @@ function SharePolicy({ repoRoot }: { repoRoot: string }) {
 
   return (
     <>
-      <SectionCard
-        icon={<GlobeIcon />}
-        title="Project share policy"
-        description="Both settings apply to every shared workspace in this project, not just this one."
-        className="@xl:col-span-2"
-        data-testid="share-policy-card"
-      >
-        <div className="flex min-w-0 flex-col gap-1">
-          <Label htmlFor="share-policy-ttl">Link expiry</Label>
-          <Select
-            value={selectedTtl ?? ttlValue(current.ttl_seconds)}
-            disabled={save.isPending || current.passcode_set}
-            onValueChange={(value) => saveTtl(ttlChoice(value))}
+      <CardRegion>
+        <HelpLabel
+          label="Project policy"
+          tooltip="These settings apply to every shared workspace in this project."
+        />
+        <CardFields className={FIELD_COLUMN}>
+          <CardField
+            label={
+              <HelpLabel
+                inherit
+                label="Link expiry"
+                tooltip={
+                  current.passcode_set
+                    ? "Expiry is disabled while a passcode is set because this endpoint replaces both policy fields."
+                    : "Applies only to links minted after this change; existing links keep their stamped expiry."
+                }
+              />
+            }
           >
-            <SelectTrigger id="share-policy-ttl" size="sm" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TTL_CHOICES.map((choice) => (
-                <SelectItem key={choice.value} value={choice.value}>
-                  {choice.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-content-tertiary">
-            Applies only to links minted after this change; existing links keep
-            their stamped expiry.
-          </p>
-          {current.passcode_set && (
-            <p className="text-xs text-content-tertiary">
-              Change or clear the passcode before changing expiry, so this full
-              policy save cannot remove it.
-            </p>
-          )}
-        </div>
-
-        <div className="flex min-w-0 flex-col gap-1">
-          <Label>Passcode</Label>
-          <p className="text-xs text-content-tertiary">
-            {current.passcode_set
-              ? "A passcode is set. Changing it applies immediately to every existing shared link."
-              : "No passcode is set. A passcode change applies immediately to every existing shared link."}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant={current.passcode_set ? "outline" : "default"}
-              disabled={save.isPending}
-              onClick={() => {
-                setPasscodeSaveError(null);
-                setPasscodeOpen(true);
-              }}
+            <Select
+              value={selectedTtl ?? ttlValue(current.ttl_seconds)}
+              disabled={save.isPending || current.passcode_set}
+              onValueChange={(value) => saveTtl(ttlChoice(value))}
             >
-              {current.passcode_set ? "Change passcode" : "Set passcode"}
-            </Button>
-            {current.passcode_set && (
+              <SelectTrigger
+                id="share-policy-ttl"
+                size="sm"
+                className="min-h-[24px] w-fit"
+                aria-label="Link expiry"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TTL_CHOICES.map((choice) => (
+                  <SelectItem key={choice.value} value={choice.value}>
+                    {choice.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </CardField>
+          <CardField
+            label={
+              <HelpLabel
+                inherit
+                label="Passcode"
+                tooltip="Changing or clearing this passcode applies immediately to every existing shared link."
+              />
+            }
+          >
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                size="sm"
-                variant="destructive"
+                size="xs"
+                variant={current.passcode_set ? "outline" : "default"}
+                className={CONTROL_FOCUS}
                 disabled={save.isPending}
-                onClick={() => setClearOpen(true)}
+                onClick={() => {
+                  setPasscodeSaveError(null);
+                  setPasscodeOpen(true);
+                }}
               >
-                Clear passcode
+                <KeyRoundIcon aria-hidden />
+                {current.passcode_set ? "Change passcode" : "Set passcode"}
               </Button>
-            )}
-          </div>
-        </div>
-
+              {current.passcode_set && (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="destructive"
+                  className={CONTROL_FOCUS}
+                  disabled={save.isPending}
+                  onClick={() => setClearOpen(true)}
+                >
+                  <Trash2Icon aria-hidden />
+                  Clear passcode
+                </Button>
+              )}
+            </div>
+          </CardField>
+        </CardFields>
         {save.isPending && (
           <p role="status" className="text-xs text-content-tertiary">
             Saving project share policy…
@@ -403,7 +479,7 @@ function SharePolicy({ repoRoot }: { repoRoot: string }) {
             {save.error.message}
           </p>
         )}
-      </SectionCard>
+      </CardRegion>
 
       <PasscodeDialog
         open={passcodeOpen}
@@ -435,20 +511,31 @@ function SharePolicy({ repoRoot }: { repoRoot: string }) {
             </p>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setClearOpen(false)}>
+            <Button
+              size="xs"
+              variant="outline"
+              className={CONTROL_FOCUS}
+              onClick={() => setClearOpen(false)}
+            >
+              <ShieldOffIcon aria-hidden />
               Cancel
             </Button>
             <Button
+              size="xs"
               variant="destructive"
+              className={CONTROL_FOCUS}
               disabled={save.isPending}
               data-testid="share-passcode-clear-confirm"
               onClick={() =>
                 save.mutate(
                   sharePolicyRequest(current.ttl_seconds ?? null, null),
-                  { onSuccess: () => setClearOpen(false) },
+                  {
+                    onSuccess: () => setClearOpen(false),
+                  },
                 )
               }
             >
+              <Trash2Icon aria-hidden />
               Clear passcode
             </Button>
           </DialogFooter>
@@ -519,16 +606,22 @@ function PasscodeDialog({
           <DialogFooter>
             <Button
               type="button"
+              size="xs"
               variant="outline"
+              className={CONTROL_FOCUS}
               onClick={() => onOpenChange(false)}
             >
+              <ShieldOffIcon aria-hidden />
               Cancel
             </Button>
             <Button
               type="submit"
+              size="xs"
+              className={CONTROL_FOCUS}
               disabled={saving || empty}
               data-testid="share-passcode-save"
             >
+              <CheckIcon aria-hidden />
               Save passcode
             </Button>
           </DialogFooter>
@@ -553,14 +646,13 @@ export function ttlChoice(value: string): TtlChoice {
 
 function SharePolicySkeleton() {
   return (
-    <SectionCard
-      icon={<GlobeIcon />}
-      title="Project share policy"
-      description="Both settings apply to every shared workspace in this project, not just this one."
-      className="@xl:col-span-2"
-    >
+    <CardRegion>
+      <HelpLabel
+        label="Project policy"
+        tooltip="These settings apply to every shared workspace in this project."
+      />
       <Skeleton className="h-8 w-full" />
       <Skeleton className="h-8 w-32" />
-    </SectionCard>
+    </CardRegion>
   );
 }

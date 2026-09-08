@@ -9,6 +9,10 @@ class GroveError(Exception):
     """Base for every error raised by grove.core. Clients catch this."""
 
 
+class WorkCapacityExceeded(GroveError):
+    """An expensive boundary refused work before acquiring resources."""
+
+
 class ConfigError(GroveError):
     """Configuration could not be loaded, parsed, or validated."""
 
@@ -89,6 +93,14 @@ class WorkspaceNotFound(GroveError):
 
 class WorkspaceStateError(GroveError):
     """A lifecycle transition was requested from an incompatible status."""
+
+
+class DiagramConflict(GroveError):
+    """A diagram update names a stale revision, session, path, or edit mode."""
+
+
+class DiagramUnavailable(GroveError):
+    """The persisted diagram descriptor or its authoritative file is unavailable."""
 
 
 class AgentSessionNotFound(GroveError):
@@ -291,12 +303,17 @@ class QuestionNotPending(GroveError):
 class QuestionAnswerInvalid(GroveError):
     """The answer plan doesn't fit the captured question payload.
 
-    Raised when the per-question kind rules fail against the *captured*
-    questions (wrong number of answers, an out-of-range option index, a
-    free-text answer on a multiSelect, an unsupported question kind). Maps to
-    422 — the plan itself is malformed for these questions, not a state
-    conflict. Structural shape (exactly one of indexes/text, non-blank text)
-    is caught earlier by the wire model's own validation.
+    Raised by ``AgentQuestion.plan_mismatch``: the wrong number of answers, or
+    an index naming an option the question does not offer. Maps to 422 — the
+    plan is malformed for these questions, not a state conflict. Structural
+    shape (an item that says nothing, blank text, a control byte) is caught
+    earlier by the wire model's own validation.
+
+    There is deliberately no sibling "the terminal did not confirm this"
+    error any more. That existed while Grove drove the provider's picker
+    widget by keystroke, where the rendered screen was the only witness that a
+    digit reached the question it was meant for; answers are now delivered as
+    text and there is no widget state to verify.
     """
 
 

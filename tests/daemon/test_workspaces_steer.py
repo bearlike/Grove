@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from grove.core.store import JsonWorkspaceStore
+from grove.core.tmux import SendKey
 from grove.daemon import build_app
 from tests.conftest import FakeTmux
 from tests.daemon.conftest import daemon_test_config
@@ -103,20 +105,94 @@ def test_send_message_no_pane_is_409_pane_not_found(
     assert fake_tmux.sent_texts == []
 
 
+# ─── /keys ───────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("key", list(SendKey))
+def test_send_keys_returns_204_and_delivers_exactly_one_named_key(
+    daemon: TestClient, created_ws: str, fake_tmux: FakeTmux, key: SendKey
+) -> None:
+    response = daemon.post(f"/workspaces/{created_ws}/keys", json={"key": key.value})
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert len(fake_tmux.sent_keys) == 1
+    target, sent = fake_tmux.sent_keys[0]
+    assert target.endswith(":agent")
+    assert sent == [key]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"key": "C-c; new-session -d"},
+        {"key": "$(id)"},
+        {"key": "Enter", "target": "other:agent"},
+        {"key": "Enter", "command": ["tmux", "send-keys"]},
+        {"key": "Enter", "keys": ["C-c", "Enter"]},
+        {"key": ["C-c", "Enter"]},
+        {"key": "Enter", "repeat": 2},
+        {},
+    ],
+)
+def test_send_keys_rejects_untrusted_input_shapes_before_delivery(
+    daemon: TestClient, created_ws: str, fake_tmux: FakeTmux, body: dict[str, object]
+) -> None:
+    response = daemon.post(f"/workspaces/{created_ws}/keys", json=body)
+
+    assert response.status_code == 422
+    assert fake_tmux.sent_keys == []
+
+
+def test_send_keys_remote_agent_is_501_without_local_injection(
+    daemon: TestClient, created_ws: str, fake_tmux: FakeTmux
+) -> None:
+    store = JsonWorkspaceStore()
+    state = store.get(created_ws)
+    store.save(replace(state, agent_kind="mewbo"))
+
+    response = daemon.post(f"/workspaces/{created_ws}/keys", json={"key": "Escape"})
+
+    assert response.status_code == 501
+    assert response.json()["detail"]["error"] == "steering_unsupported"
+    assert fake_tmux.sent_keys == []
+
+
 # ─── /interrupt ──────────────────────────────────────────────────────────────
 
 
-def test_interrupt_is_501_steering_unsupported(
+def test_interrupt_claude_code_sends_escape_and_returns_204(
     daemon: TestClient, created_ws: str, fake_tmux: FakeTmux
 ) -> None:
-    # Capability refusal, not a state conflict: no tmux-hosted agent kind
-    # has a safe interrupt.
+    # Escape drives Claude Code's own abort controller — the same path its
+    # remote-control interrupt frame uses — so a claude_code workspace now
+    # succeeds rather than hitting the generic-kind capability refusal.
+    resp = daemon.post(f"/workspaces/{created_ws}/interrupt")
+
+    assert resp.status_code == 204
+    assert resp.content == b""
+    assert len(fake_tmux.escapes) == 1
+    assert fake_tmux.escapes[0].endswith(":agent")
+    assert fake_tmux.sent_texts == []
+    assert fake_tmux.sent_keys == []
+
+
+def test_interrupt_generic_kind_is_501_steering_unsupported(
+    daemon: TestClient, created_ws: str, fake_tmux: FakeTmux
+) -> None:
+    # Capability refusal, not a state conflict: an agent kind with no verified
+    # abort path never gets a guessed cancel keystroke.
+    store = JsonWorkspaceStore()
+    state = store.get(created_ws)
+    store.save(replace(state, agent_kind="generic"))
+
     resp = daemon.post(f"/workspaces/{created_ws}/interrupt")
 
     assert resp.status_code == 501
     detail = resp.json()["detail"]
     assert detail["error"] == "steering_unsupported"
     assert fake_tmux.sent_texts == []
+    assert fake_tmux.escapes == []
 
 
 def test_interrupt_unknown_workspace_is_404(daemon: TestClient) -> None:

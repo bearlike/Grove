@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 from grove.core.activity import SessionActivity, WorkspaceActivity
 from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
+from grove.core.contracts.activity import WorkspaceActivityView
 from grove.core.phase import PhaseReport
 from grove.core.workspace import Placement, Runtime, WorkspaceState, WorkspaceStatus
 from grove.tui._status import (
@@ -87,7 +88,8 @@ def _activity(
 
 
 def _lines(activity: WorkspaceActivity, **kw: object) -> list[str]:
-    return _render_card_body(activity, dark=True, now=_NOW, **kw).plain.split("\n")  # type: ignore[arg-type]
+    view = WorkspaceActivityView.from_activity(activity)
+    return _render_card_body(view, dark=True, now=_NOW, **kw).plain.split("\n")
 
 
 # ─── compact (idle) tiles ────────────────────────────────────────────────────
@@ -106,7 +108,7 @@ def test_compact_tile_is_exactly_three_rows() -> None:
 
 def test_untracked_workspace_is_compact() -> None:
     # No agent session at all → not promoted, three compact rows.
-    assert not is_promoted(_activity(agent_state=None))
+    assert not is_promoted(WorkspaceActivityView.from_activity(_activity(agent_state=None)))
     assert len(_lines(_activity(agent_state=None))) == 3
 
 
@@ -124,7 +126,9 @@ def test_promoted_working_tile_shows_task_and_fills_with_pane() -> None:
         tokens_in=12000,
         tokens_out=3000,
     )
-    plain = _render_card_body(activity, dark=True, now=_NOW).plain
+    plain = _render_card_body(
+        WorkspaceActivityView.from_activity(activity), dark=True, now=_NOW
+    ).plain
     assert "working" in plain  # promoted state label on row 1
     assert "Refactoring the auth module" in plain  # the agent's own summary
     assert "sonnet" in plain and "8t 14r 31⚒" in plain  # model + counts
@@ -136,7 +140,9 @@ def test_promoted_working_tile_shows_task_and_fills_with_pane() -> None:
 def test_promoted_tile_renders_fit_to_cell_pane_tail() -> None:
     snap = "\n".join(f"line{i}" for i in range(1, 7))  # 6 lines of pane output
     activity = _activity(agent_state=AgentActivityState.WORKING, title="t")
-    plain = _render_card_body(activity, dark=True, now=_NOW, pane_snapshot=snap).plain
+    plain = _render_card_body(
+        WorkspaceActivityView.from_activity(activity), dark=True, now=_NOW, pane_snapshot=snap
+    ).plain
     # The tail is fit to the promoted cell (last rows win); earlier lines crop.
     assert "line6" in plain and "line5" in plain
     assert "line1" not in plain
@@ -151,7 +157,9 @@ def test_interpreted_status_wins_over_raw_task() -> None:
         current_task="raw current task",
         interpreted_status="Waiting for you to approve the migration",
     )
-    plain = _render_card_body(activity, dark=True, now=_NOW).plain
+    plain = _render_card_body(
+        WorkspaceActivityView.from_activity(activity), dark=True, now=_NOW
+    ).plain
     assert "Waiting for you to approve the migration" in plain
     assert "raw ai title" not in plain
 
@@ -161,7 +169,9 @@ def test_interpreted_status_wins_over_raw_task() -> None:
 
 def test_root_placement_carries_a_tag() -> None:
     plain = _render_card_body(
-        _activity(state=_state(placement=Placement.ROOT), agent_state=AgentActivityState.IDLE),
+        WorkspaceActivityView.from_activity(
+            _activity(state=_state(placement=Placement.ROOT), agent_state=AgentActivityState.IDLE)
+        ),
         dark=True,
         now=_NOW,
     ).plain
@@ -170,7 +180,11 @@ def test_root_placement_carries_a_tag() -> None:
 
 def test_worktree_placement_has_no_tag() -> None:
     plain = _render_card_body(
-        _activity(state=_state(placement=Placement.WORKTREE), agent_state=AgentActivityState.IDLE),
+        WorkspaceActivityView.from_activity(
+            _activity(
+                state=_state(placement=Placement.WORKTREE), agent_state=AgentActivityState.IDLE
+            )
+        ),
         dark=True,
         now=_NOW,
     ).plain
@@ -181,13 +195,16 @@ def test_worktree_placement_has_no_tag() -> None:
 
 
 def test_is_promoted_tracks_live_states() -> None:
-    assert is_promoted(_activity(agent_state=AgentActivityState.WORKING))
-    assert is_promoted(_activity(agent_state=AgentActivityState.WAITING))
-    assert is_promoted(_activity(agent_state=AgentActivityState.BLOCKED))
-    assert is_promoted(_activity(agent_state=AgentActivityState.ERROR))
-    assert not is_promoted(_activity(agent_state=AgentActivityState.IDLE))
-    assert not is_promoted(_activity(agent_state=AgentActivityState.STARTING))
-    assert not is_promoted(_activity(agent_state=None))
+    def promoted(state: AgentActivityState | None) -> bool:
+        return is_promoted(WorkspaceActivityView.from_activity(_activity(agent_state=state)))
+
+    assert promoted(AgentActivityState.WORKING)
+    assert promoted(AgentActivityState.WAITING)
+    assert promoted(AgentActivityState.BLOCKED)
+    assert promoted(AgentActivityState.ERROR)
+    assert not promoted(AgentActivityState.IDLE)
+    assert not promoted(AgentActivityState.STARTING)
+    assert not promoted(None)
 
 
 # ─── task-phase segment (third axis) ────────────────────────────────────────
@@ -199,7 +216,11 @@ def test_tile_phase_shows_glyph_and_label_no_progress_fraction() -> None:
     coarse signal."""
     report = PhaseReport(phase="verifying", note=None, updated_at=_NOW)
     plain = _render_card_body(
-        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+        WorkspaceActivityView.from_activity(
+            _activity(agent_state=AgentActivityState.IDLE, phase=report)
+        ),
+        dark=True,
+        now=_NOW,
     ).plain
     assert f"{phase_glyph('verifying')} {phase_label('verifying')}" in plain
     assert "4/6" not in plain
@@ -209,10 +230,16 @@ def test_tile_phase_none_is_byte_identical_to_pre_phase_render() -> None:
     """`phase=None` (the field's default) renders identical bytes to a tile
     built with no phase param at all — absence is the default."""
     baseline = _render_card_body(
-        _activity(agent_state=AgentActivityState.WORKING), dark=True, now=_NOW
+        WorkspaceActivityView.from_activity(_activity(agent_state=AgentActivityState.WORKING)),
+        dark=True,
+        now=_NOW,
     )
     explicit = _render_card_body(
-        _activity(agent_state=AgentActivityState.WORKING, phase=None), dark=True, now=_NOW
+        WorkspaceActivityView.from_activity(
+            _activity(agent_state=AgentActivityState.WORKING, phase=None)
+        ),
+        dark=True,
+        now=_NOW,
     )
     assert baseline.plain == explicit.plain
     assert baseline.spans == explicit.spans
@@ -224,7 +251,11 @@ def test_tile_blocked_phase_appends_the_flag_beside_the_phase() -> None:
     place of it."""
     report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=True)
     plain = _render_card_body(
-        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+        WorkspaceActivityView.from_activity(
+            _activity(agent_state=AgentActivityState.IDLE, phase=report)
+        ),
+        dark=True,
+        now=_NOW,
     ).plain
     assert f"{phase_glyph('verifying')} {phase_label('verifying')} {BLOCKED_GLYPH}" in plain
 
@@ -232,7 +263,11 @@ def test_tile_blocked_phase_appends_the_flag_beside_the_phase() -> None:
 def test_tile_unblocked_phase_omits_the_flag() -> None:
     report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=False)
     plain = _render_card_body(
-        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+        WorkspaceActivityView.from_activity(
+            _activity(agent_state=AgentActivityState.IDLE, phase=report)
+        ),
+        dark=True,
+        now=_NOW,
     ).plain
     assert BLOCKED_GLYPH not in plain
 
@@ -240,7 +275,11 @@ def test_tile_unblocked_phase_omits_the_flag() -> None:
 def test_tile_blocked_flag_uses_blocked_color() -> None:
     report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=True)
     text = _render_card_body(
-        _activity(agent_state=AgentActivityState.IDLE, phase=report), dark=True, now=_NOW
+        WorkspaceActivityView.from_activity(
+            _activity(agent_state=AgentActivityState.IDLE, phase=report)
+        ),
+        dark=True,
+        now=_NOW,
     )
     hex_ = blocked_color(dark=True).lower()
     assert any(
@@ -265,7 +304,9 @@ def test_tile_marks_every_runtime_leading_row_two() -> None:
 
 def test_tile_runtime_mark_uses_the_shared_contract_color() -> None:
     text = _render_card_body(
-        _activity(state=_state(runtime=Runtime.CONTAINER), agent_state=AgentActivityState.IDLE),
+        WorkspaceActivityView.from_activity(
+            _activity(state=_state(runtime=Runtime.CONTAINER), agent_state=AgentActivityState.IDLE)
+        ),
         dark=True,
         now=_NOW,
     )

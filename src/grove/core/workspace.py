@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import secrets
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from grove.core.config import AgentKind, GroveConfig, expand_template
-from grove.core.errors import WorkspaceStateError
+from grove.core.errors import GroveError, WorkspaceStateError
 
 if TYPE_CHECKING:
     # Imported for the annotation only. `ticket_refs` defaults to an empty list,
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     # `git` imports this module, so a runtime import would close a cycle. The
     # field defaults to None, so no symbol is needed at runtime.
     from grove.core.container_runtime import ContainerRuntimeState
+    from grove.core.contracts.diagrams import DiagramSessionView
     from grove.core.contracts.tickets import TicketRef
 
 
@@ -546,6 +547,14 @@ class WorkspaceState:
     # existed load as what they are — never briefed — with no migration, the
     # placement/branch_provenance precedent.
     brief: bool = False
+    # Whether Grove OWNS this workspace's agent session — launched it on the
+    # provider's native protocol (Claude stream-json / Codex app-server) and
+    # holds its control channel — rather than running the interactive TUI in
+    # the pane. Resolved once at create from `AgentSpec.owns_native_session`
+    # and persisted like `brief`: every launch and every steer reads it here,
+    # so a later roster edit never re-decides for a workspace that exists.
+    # Defaults to False so a pre-native record loads as the terminal it was.
+    native: bool = False
     # Non-None ⟺ a container was wanted and a host workspace was produced,
     # because the container runtime was UNAVAILABLE at create (D5 arm 4).
     # The requested value needs no second field: the fallback only ever runs
@@ -621,6 +630,8 @@ class WorkspaceState:
     # authenticated surface gives. Cleared with the token, because a pin without
     # a link is a claim about nothing.
     share_session_id: str | None = None
+    # Identity and lifecycle survive daemon restarts; XML stays in the worktree.
+    diagram: DiagramSessionView | None = None
 
     @property
     def runtime_no_tmux(self) -> bool:
@@ -997,6 +1008,43 @@ class WorkspaceIdentity:
         return base / f"{slug(title)}-{ts}"
 
 
+class WorkspaceRef:
+    """Resolution of a user-typed workspace reference to exactly one record.
+
+    Lives beside :class:`WorkspaceIdentity` because it is that class pointed
+    the other way — one mints the identity, this one reads it back. It is pure
+    over a caller-supplied sequence, which is what lets the SAME rule serve two
+    scopes that differ only in where the records came from: the CLI resolves
+    against one repo's reconciled ``manager.list()``, the registry against the
+    host-wide store. A second copy of the prefix rule would drift on exactly
+    the axis nobody tests — the error message a user reads when it misses.
+    """
+
+    #: Candidates named in an ambiguity message. Enough to disambiguate by eye,
+    #: bounded so a stale prefix on a large fleet does not print the fleet.
+    AMBIGUITY_LIMIT: ClassVar[int] = 8
+
+    @staticmethod
+    def resolve(states: Sequence[WorkspaceState], ref: str) -> WorkspaceState:
+        """The workspace whose id equals ``ref`` or uniquely starts with it.
+
+        Exact match wins outright, so a full id is never ambiguous against a
+        longer one. Nothing matching, or several, raises ``GroveError`` naming
+        the candidates — the user extends the prefix rather than re-running a
+        listing to find out what they could have typed.
+        """
+        for state in states:
+            if state.id == ref:
+                return state
+        matches = [s for s in states if s.id.startswith(ref)]
+        if not matches:
+            raise GroveError(f"no workspace matches {ref!r}")
+        if len(matches) > 1:
+            ids = ", ".join(s.id for s in matches[: WorkspaceRef.AMBIGUITY_LIMIT])
+            raise GroveError(f"workspace ref {ref!r} is ambiguous: {ids}")
+        return matches[0]
+
+
 # ─── transition validators (pure; raise WorkspaceStateError) ────────────────
 
 
@@ -1068,7 +1116,14 @@ def ensure_can_resume(state: WorkspaceState) -> None:
 def ensure_can_respawn(
     state: WorkspaceState, *, promotable: bool = False, sessionless: bool = False
 ) -> None:
-    """Respawn restarts a dead session — or promotes a fallback workspace.
+    """Recover a dead session, restart a host native owner, or promote a fallback.
+
+    Native worker liveness cannot prove its provider control path still works.
+    Explicit recovery is allowed for a live host-native session, preserving its
+    worktree and saved conversation. Automatic recovery must keep its narrower
+    OFFLINE gate; a transient disconnect is not permission to restart. Container
+    owners are excluded here: rebuilding their host viewport reattaches rather
+    than replacing the in-container worker.
 
     The OFFLINE gate is right for the recovery case it was written for: a
     session that vanished. But respawn is ALSO the documented way out of a
@@ -1104,7 +1159,9 @@ def ensure_can_respawn(
     """
     if promotable:
         return
-    if sessionless and state.status in LIVE_STATUSES:
+    if state.status in LIVE_STATUSES and (
+        sessionless or (state.native and state.runtime is Runtime.HOST)
+    ):
         return
     if state.status != WorkspaceStatus.OFFLINE:
         raise WorkspaceStateError(

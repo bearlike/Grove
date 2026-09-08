@@ -16,17 +16,17 @@
  * vendored original. Everything else is upstream's typography, spacing and
  * colour, and a "small improvement" here is how the look drifts.
  *
- *   1. `maxWidth` — `--thread-max-width` becomes an input (see `THREAD_WIDTH`),
- *      and the column's flat `px-4` becomes `THREAD_INSET`, which scales with
- *      the thread's own container. Same element, same concern: how wide the
+ *   1. `maxWidth`/`inset` — `--thread-max-width` and the column's flat `px-4`
+ *      both become inputs (see `THREAD_WIDTH` / `THREAD_INSET`), keyed by the
+ *      same mode. Same element, same concern: how wide the
  *      column is and how far it sits from the edge are one decision, and this
  *      is the element that carries BOTH the message stream and the viewport
  *      footer — so the stream, the plan card and the composer cannot drift out
  *      of alignment with each other. Upstream needs no scale because its thread
  *      is never wider than its own centred measure; Grove's is.
- *   2. `footer`   — a caller-supplied node inside `ViewportFooter`, above the
- *                   composer, so it sticks with it instead of stranding at the
- *                   top of the page.
+ *   2. `footer`   — a caller-supplied node in the fixed thread footer, above
+ *                   the composer. It is a flex sibling of the viewport: a
+ *                   sticky descendant overlaps transcript rows by definition.
  *   3. `UserMessage` clamps behind a fade (see `./user-message`).
  *   4. `turnAnchor="bottom"` — measured, not preferred. Upstream anchors a
  *      turn's TOP because it streams one message into a conversation you read
@@ -55,14 +55,17 @@
  *      30px of empty gutter under every row, which is the exact complaint.
  *      `relative` stays: it is the positioning context vendored part renderers
  *      inherit, and it costs nothing.
- *   7. Two SCROLL-EDGE SCRIMS plus the sentinels that drive them. Grove's
- *      chrome sits on top of a live transcript — a header above, a plan card
- *      and composer below — and upstream needs no cue because its thread is a
- *      short conversation, not a scrolling log with fixed furniture over it.
- *      Conditional, never decorative: painted only while content is actually
- *      hidden past that edge (see `./scroll-edges`). They are scoped to the
- *      THREAD ROOT, which is what keeps them off the work panel in split view —
- *      that pane is a sibling and cannot be reached from here by construction.
+ *   7. Two persistent edge shadows give the fixed header and composer depth.
+ *      The positioned, clipping thread root contains their paint so neither
+ *      shadow reaches the work panel. The lower edge ends at the composer and
+ *      fades upward behind the status region at the pane's width.
+ *
+ *  15. The footer is a FLEX SIBLING of the viewport. A sticky footer stays in
+ *      the scroller's paint box and therefore overlaps its last rows; putting
+ *      the whole footer outside makes the viewport's own flex height end above
+ *      every card and the composer without measured-height arithmetic. It is a
+ *      plain div: `ViewportFooter` consumes the viewport context and must stay
+ *      inside the viewport; the scroll control remains there for the same reason.
  *
  *   8. The COMPOSER is gated on the runtime's own capability. Upstream mounts
  *      it unconditionally because every thread in the demo is writable; an
@@ -134,17 +137,47 @@
  *      jump would be most noticed. A click is a single, bounded resize the
  *      reader initiated and is already braced for.
  *
+ *  12. ATTACHMENTS RENDER AS `File` ROWS, in the composer and on a sent
+ *      message, through ONE Grove composition (`grove/attachment-file`).
+ *      Upstream mounts the vendored `ComposerAttachments` tile grid and
+ *      `UserMessageAttachments`, both drawing the attachment TILE — one
+ *      hard-coded `FileText` glyph for every non-image file, the name hidden
+ *      in a tooltip — and neither takes a prop that would change either. The
+ *      vendored `File` element is what assistant-ui's own page names for a
+ *      file on a message, so both mounts become `./composer-attachment`'s rows:
+ *      the same primitives (`ComposerPrimitive.Attachments`,
+ *      `MessagePrimitive.Attachments`, `AttachmentPrimitive.Root`) composed
+ *      around `File.Root/Icon/Name/Size`.
+ *
+ *      The sent message's files ride `message.attachments` — lifted off the
+ *      daemon's text by `adapters/attachments` — and NOT `file` content parts,
+ *      because the grid's first row is above the bubble and outside DELTA 3's
+ *      clamp, while a content part is the first thing the clamp hides.
+ *
+ *  13. RESPONSE CONTENT OPENS ITS LINKS IN A NEW TAB. The assistant message's
+ *      content element is `NewTabLinks` rather than a plain `div`, so every
+ *      anchor the answer renders — Markdown, reasoning, tool cards, data
+ *      parts — carries `target="_blank"` and `rel="noopener noreferrer"`.
+ *      A Grove workspace page is a streaming transcript, a scroll position and
+ *      an attached terminal, and a citation that replaces all of it is a loss
+ *      rather than a navigation. It sits HERE, on the region, because the
+ *      vendored Markdown renderer hard-codes its own `components` map and
+ *      exposes no `a` — and because fixing the anchor per renderer would still
+ *      miss every card. See `./new-tab-links` for the whole argument.
+ *
+ *  14. COMPOSER DRAFTS RESTORE THROUGH THE RUNTIME after mount. The browser
+ *      preserves words and the file list per tab, but never turns saved file
+ *      metadata into a staged byte upload: restored rows explicitly ask for a
+ *      re-add. `WorkspaceComposer` takes the workspace key rather than finding
+ *      it itself, because this port is also the read-only catalog's fallback.
+ *
  * `components/assistant-ui/thread.tsx` stays in place, unmodified: it is the
  * oracle this file is diffed against. Nothing renders it any more — the
  * archived-session route switched to THIS file precisely so a transcript is
  * rendered one way, which is what delta 9 exists to make safe.
  */
 
-import {
-  ComposerAddAttachment,
-  ComposerAttachments,
-  UserMessageAttachments,
-} from "@/components/assistant-ui/attachment";
+import { ComposerAttachButton } from "@/components/elements/composer";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import {
@@ -169,25 +202,42 @@ import {
   ComposerPrimitive,
   ErrorPrimitive,
   groupPartByType,
+  useAui,
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
   type ToolCallMessagePartComponent,
   useAuiState,
 } from "@assistant-ui/react";
-import { ArrowDownIcon, ArrowUpIcon, MicIcon, SquareIcon } from "lucide-react";
+import { ArrowDownIcon, MicIcon, SquareIcon } from "lucide-react";
 import {
   createContext,
+  useCallback,
   useContext,
-  useRef,
+  useEffect,
+  useMemo,
+  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
   type ReactNode,
+  type RefObject,
 } from "react";
 
-import { useScrollEdges } from "./scroll-edges";
+import {
+  ComposerActions,
+  ComposerBody,
+  ComposerSend,
+  ComposerToolbar,
+} from "@/components/grove/composer";
+import { useWorkspaceOnboardingDemands } from "@/components/grove/onboarding";
+import { ComposerAttachmentRows, MessageAttachmentRows } from "./composer-attachment";
+import { NewTabLinks } from "./new-tab-links";
 import { THREAD_INSET, THREAD_WIDTH } from "./thread-width";
+
+/** The tour's one ask of the composer. A module constant so the hook's deps stay stable. */
+const TOUR_KINDS = ["workspace-prompt"] as const;
+import { flushComposerDraft, useComposerDraft } from "./use-composer-draft";
 import {
   clampStyle,
   showsToggle,
@@ -208,17 +258,18 @@ export type ThreadComponents = {
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ToolGroup?:
-    | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
-    | undefined;
+    ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined;
   ReasoningGroup?:
-    | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
-    | undefined;
+    ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined;
 };
 
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
   /** GROVE DELTA 1 — the value for `--thread-max-width`; see {@link THREAD_WIDTH}. */
   maxWidth?: string | undefined;
+  /** GROVE DELTA 1 — the column's horizontal margin, keyed by the same mode as
+   * `maxWidth`; see {@link THREAD_INSET}. */
+  inset?: string | undefined;
   /** GROVE DELTA 2 — rendered inside the viewport footer, directly above the
    * composer, so it sticks with the composer rather than scrolling away. */
   footer?: ReactNode;
@@ -229,6 +280,9 @@ export type ThreadProps = {
   loadingEarlier?: boolean;
   /** GROVE DELTA 11 — widen the held window backwards by one doubling. */
   onLoadEarlier?: () => void;
+  /** GROVE DELTA 14 — the workspace composer belongs to the workspace seam,
+   * not this reusable transcript port. */
+  composer?: ReactNode;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
@@ -245,10 +299,12 @@ const isNewChatView = (s: AssistantState) =>
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   maxWidth = THREAD_WIDTH.full,
+  inset = THREAD_INSET.full,
   footer,
   hasEarlier = false,
   loadingEarlier = false,
   onLoadEarlier,
+  composer,
 }) => {
   const isEmpty = useAuiState(isNewChatView);
 
@@ -257,10 +313,12 @@ export const Thread: FC<ThreadProps> = ({
       <ThreadRoot
         isEmpty={isEmpty}
         maxWidth={maxWidth}
+        inset={inset}
         footer={footer}
         hasEarlier={hasEarlier}
         loadingEarlier={loadingEarlier}
         onLoadEarlier={onLoadEarlier}
+        composer={composer}
       />
     </ThreadComponentsContext.Provider>
   );
@@ -269,62 +327,58 @@ export const Thread: FC<ThreadProps> = ({
 const ThreadRoot: FC<{
   isEmpty: boolean;
   maxWidth: string;
+  inset: string;
   footer: ReactNode;
   hasEarlier: boolean;
   loadingEarlier: boolean;
   onLoadEarlier: (() => void) | undefined;
-}> = ({ isEmpty, maxWidth, footer, hasEarlier, loadingEarlier, onLoadEarlier }) => {
+  composer: ReactNode;
+}> = ({
+  isEmpty,
+  maxWidth,
+  inset,
+  footer,
+  hasEarlier,
+  loadingEarlier,
+  onLoadEarlier,
+  composer,
+}) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
-  // GROVE DELTA 7 — the scrims need the viewport ELEMENT as their
-  // `IntersectionObserver` root, and upstream neither takes a ref nor renders
-  // anything at that level. Held as a ref rather than found by selector so a
-  // second thread on the page can never capture the first one's edges.
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const edges = useScrollEdges(viewportRef);
 
   return (
     <ThreadPrimitive.Root
-      className="aui-root aui-thread-root bg-background @container relative flex h-full flex-col"
+      className="aui-root aui-thread-root bg-background @container relative isolate flex h-full flex-col overflow-hidden"
       style={{
         ["--thread-max-width" as string]: maxWidth,
         ["--composer-bg" as string]:
           "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
-        ["--composer-radius" as string]: "1.5rem",
-        ["--composer-padding" as string]: "8px",
+        // GROVE DELTA 15 — theme radius instead of upstream's inline 1.5rem.
+        // The shell's 1px border plus 11px padding gives the send control its
+        // measured 12px inset. Attachment corners have their own cell role.
+        ["--composer-radius" as string]: "var(--radius-lg)",
+        ["--composer-padding" as string]: "11px",
       }}
     >
-      {/* GROVE DELTA 7 — the top scroll-edge scrim. It is a child of the ROOT
-          and comes BEFORE the viewport on purpose: a positioned element paints
-          over the viewport's in-flow messages, while the composer below (also
-          positioned, and later in the DOM) still paints over it. That ordering
-          is what lets one scrim fade the transcript without ever dimming the
-          chrome it exists to make readable. */}
+      {/* GROVE DELTA 7 — chrome depth stays inside this pane. Explicit stacking
+          keeps the top shadow above the positioned viewport, not behind it. */}
       <div
         aria-hidden
-        data-visible={!edges.atTop}
         data-testid="scroll-edge-top"
-        className="scroll-edge-top pointer-events-none absolute inset-x-0 top-0 h-8 opacity-0 transition-opacity duration-200 data-[visible=true]:opacity-100"
+        className="scroll-edge-top pointer-events-none absolute inset-x-0 top-0 z-10 h-6"
       />
 
       <ThreadPrimitive.Viewport
-        ref={viewportRef}
         turnAnchor="bottom"
         data-slot="aui_thread-viewport"
-        className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth"
+        className="relative min-h-0 flex-1 overflow-x-auto overflow-y-scroll scroll-smooth"
       >
         <div
           className={cn(
-            "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col pt-4",
-            THREAD_INSET,
-            isEmpty && "justify-center",
+            "mx-auto flex w-full max-w-(--thread-max-width) flex-col pt-6",
+            inset,
+            isEmpty && "min-h-full justify-center",
           )}
         >
-          {/* GROVE DELTA 7 — zero-height sentinels the edge observer watches.
-              They mark the content's own start and end, so the cue stays
-              correct as the transcript grows instead of being a measurement
-              taken once. */}
-          <div ref={edges.topRef} aria-hidden className="h-0 shrink-0" />
-
           <AuiIf condition={isNewChatView}>
             <Welcome />
           </AuiIf>
@@ -345,7 +399,9 @@ const ThreadRoot: FC<{
                   onClick={onLoadEarlier}
                   data-testid="load-earlier"
                 >
-                  {loadingEarlier ? "Loading earlier messages…" : "Load earlier messages"}
+                  {loadingEarlier
+                    ? "Loading earlier messages…"
+                    : "Load earlier messages"}
                 </Button>
               </div>
             )}
@@ -353,47 +409,50 @@ const ThreadRoot: FC<{
               {() => <ThreadMessage />}
             </ThreadPrimitive.Messages>
           </div>
-
-          <div ref={edges.bottomRef} aria-hidden className="h-0 shrink-0" />
-
-          <ThreadPrimitive.ViewportFooter
-            className={cn(
-              "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
-              !isEmpty &&
-                "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
-            )}
-          >
-            {/* GROVE DELTA 7 — the bottom scrim rides the footer rather than
-                the root, because the root's bottom edge is BEHIND the composer
-                where a scrim would be invisible. `-top-8` puts it immediately
-                above the footer's own edge, which is where content actually
-                passes out of view. The footer is `sticky` and therefore already
-                a containing block, so no extra `relative` is needed. */}
-            <div
-              aria-hidden
-              data-visible={!edges.atBottom}
-              data-testid="scroll-edge-bottom"
-              className="scroll-edge-bottom pointer-events-none absolute inset-x-0 -top-8 h-8 opacity-0 transition-opacity duration-200 data-[visible=true]:opacity-100"
-            />
-            <ThreadScrollToBottom />
-            <ThreadFollowupSuggestions />
-            {footer}
-            {/* DELTA 8: the composer is gated on the runtime's own capability.
-                Upstream mounts it unconditionally because every thread in the
-                demo is writable; an archived session's runtime sets
-                `isDisabled`, and upstream's answer to that is a greyed-out
-                input — which promises an affordance the wire cannot honour.
-                Keyed off the capability rather than a `composer?: boolean`
-                prop so no caller can forget it. */}
-            <AuiIf condition={(s) => !s.thread.isDisabled}>
-              <Composer />
-            </AuiIf>
-            <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-              <ThreadSuggestions />
-            </AuiIf>
-          </ThreadPrimitive.ViewportFooter>
+        </div>
+        <div className="sticky bottom-4 z-10 flex h-0 justify-center">
+          <ThreadScrollToBottom />
         </div>
       </ThreadPrimitive.Viewport>
+
+      <div
+        data-testid="transcript-footer"
+        className="aui-thread-viewport-footer bg-surface-base relative z-10 max-h-[65%] shrink-0 overflow-y-auto"
+      >
+        <div
+          className={cn(
+            "mx-auto flex w-full max-w-(--thread-max-width) flex-col pb-4 md:pb-6",
+            inset,
+          )}
+        >
+          {/* The fade ends at the composer, not above the generating status.
+              Let this region size it so loader/queue changes need no measurement. */}
+          <div className="relative isolate flex flex-col gap-4 pb-4">
+            <AuiIf condition={(s) => !s.thread.isDisabled}>
+              <div
+                aria-hidden
+                data-testid="scroll-edge-bottom"
+                className="scroll-edge-bottom pointer-events-none absolute left-1/2 -top-6 bottom-0 -z-10 w-[100cqw] -translate-x-1/2"
+              />
+            </AuiIf>
+            <ThreadFollowupSuggestions />
+            {footer}
+          </div>
+          {/* DELTA 8: the composer is gated on the runtime's own capability.
+              Upstream mounts it unconditionally because every thread in the
+              demo is writable; an archived session's runtime sets
+              `isDisabled`, and upstream's answer to that is a greyed-out
+              input — which promises an affordance the wire cannot honour.
+              Keyed off the capability rather than a `composer?: boolean`
+              prop so no caller can forget it. */}
+          <AuiIf condition={(s) => !s.thread.isDisabled}>
+            {composer ?? <Composer />}
+          </AuiIf>
+          <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
+            <ThreadSuggestions />
+          </AuiIf>
+        </div>
+      </div>
     </ThreadPrimitive.Root>
   );
 };
@@ -415,7 +474,7 @@ const ThreadScrollToBottom: FC = () => {
       <TooltipIconButton
         tooltip="Scroll to bottom"
         variant="outline"
-        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible"
+        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent -translate-y-full rounded-full p-4 disabled:invisible"
       >
         <ArrowDownIcon />
       </TooltipIconButton>
@@ -459,35 +518,202 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
-const Composer: FC = () => {
+export function WorkspaceComposer({
+  inputRef,
+  toolbar,
+  notice,
+  expanded = false,
+  draftKey,
+}: {
+  readonly inputRef?: RefObject<HTMLTextAreaElement | null>;
+  /** Workspace-only controls composed at the reply composer's native toolbar seam. */
+  readonly toolbar?: ReactNode;
+  /** A session-state explanation immediately above the next send action. */
+  readonly notice?: string | null;
+  /** The dialog moves this same composer and lets its editor use the available height. */
+  readonly expanded?: boolean;
+  /** The workspace owns draft identity; the reusable port never assumes one. */
+  readonly draftKey?: string;
+}): ReactNode {
+  const aui = useAui();
+  const composer = aui.composer;
+  const text = useAuiState((state) => state.composer.text);
+  const attachments = useAuiState((state) => state.composer.attachments);
+  // Names a previous visit staged and this one cannot: see `onRestore`. It
+  // clears the moment a file of that name is staged again, so re-adding the
+  // file is what dismisses the reminder rather than a separate ✕.
+  const [pendingReAdd, setPendingReAdd] = useState<readonly string[]>([]);
+  const staged = new Set(attachments.map(({ name }) => name));
+  const outstanding = pendingReAdd.filter((name) => !staged.has(name));
+  const savedAttachments = useMemo(
+    () =>
+      attachments.map((attachment) => ({
+        name: attachment.name,
+        contentType: attachment.contentType ?? "application/octet-stream",
+      })),
+    [attachments],
+  );
+  useComposerDraft({
+    storageKey: draftKey ?? "",
+    draft: {
+      text,
+      attachments: [
+        ...savedAttachments,
+        // Kept in the draft so the reminder survives a SECOND navigation; a
+        // reader who did not re-add the file the first time has not changed
+        // their mind about wanting it.
+        ...outstanding.map((name) => ({
+          name,
+          contentType: "application/octet-stream",
+          pendingReAdd: true,
+        })),
+      ],
+    },
+    // TEXT GOES BACK INTO THE RUNTIME; ATTACHMENTS DO NOT, and that asymmetry
+    // is the honest one rather than an omission.
+    //
+    // A browser cannot recover a local file's bytes after a navigation, so a
+    // restored attachment is a REMINDER to re-add it — and pushing a
+    // zero-byte entry into the composer's own store to represent that says the
+    // opposite: it would render as staged, and send a message promising a file
+    // that does not exist. It also does not work: the runtime outlives this
+    // component (a pane switch or the expand dialog remounts the composer while
+    // the store keeps its state), so re-adding on every mount hands
+    // assistant-ui a duplicate id and it throws "Duplicate key … in
+    // useResources", taking the whole workspace page down.
+    //
+    // So the names ride beside the editor as Grove's own row (see
+    // `pendingReAdd` below) and the store holds only what is genuinely staged.
+    // The text guard is the same rule one field over: only restore into an
+    // editor the reader has not already started typing in.
+    onRestore: ({ text: restoredText, attachments: restoredAttachments }) => {
+      if (!draftKey) return;
+      if (!aui.composer.getState().text) composer.setText(restoredText);
+      setPendingReAdd(restoredAttachments.map(({ name }) => name));
+    },
+    onAcknowledged: () => setPendingReAdd([]),
+  });
+
+  // The onboarding tour writes its diagram query here, through the same
+  // `setText` the draft restore uses. Only the inline mount takes it, so the
+  // expand dialog's copy of this component cannot write it a second time.
+  useWorkspaceOnboardingDemands(
+    TOUR_KINDS,
+    useCallback(
+      (demand) => {
+        if (draftKey && !expanded) composer.setText(demand.text);
+      },
+      [composer, draftKey, expanded],
+    ),
+  );
+
+  useEffect(() => {
+    setPendingReAdd((current) => {
+      const dismissed = current.filter((name) =>
+        savedAttachments.some((attachment) => attachment.name === name),
+      );
+      if (dismissed.length === 0) return current;
+      const next = current.filter((name) => !dismissed.includes(name));
+      // A re-added file dismisses its own reminder immediately, ahead of the
+      // debounce: without this, navigating within that window would restore a
+      // reminder for a file that is once again genuinely staged.
+      if (draftKey) {
+        flushComposerDraft(draftKey, {
+          text: aui.composer.getState().text,
+          attachments: [
+            ...savedAttachments,
+            ...next.map((name) => ({
+              name,
+              contentType: "application/octet-stream",
+              pendingReAdd: true,
+            })),
+          ],
+        });
+      }
+      return next;
+    });
+  }, [aui, draftKey, savedAttachments]);
+
+
   return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+    <ComposerPrimitive.Root
+      className={cn(
+        "aui-composer-root relative flex w-full flex-col",
+        expanded && "min-h-0 flex-1",
+      )}
+    >
+      {/* `asChild` ONTO the shared bar, never a wrapper around it: the dropzone
+          sets `data-dragging="true"` on whatever element it renders, and the
+          vendored bar is the element the theme layer can show that on. A wrapper
+          would make the drop target a different box from the one that reacts. */}
       <ComposerPrimitive.AttachmentDropzone asChild>
-        <div
-          data-slot="aui_composer-shell"
-          className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:shadow-none"
-        >
-          <ComposerAttachments />
+        <ComposerBody className={cn("relative", expanded && "min-h-0 flex-1")}>
+          {/* GROVE DELTA 12 — `File` rows in place of the vendored tile grid. */}
+          <ComposerAttachmentRows />
+          {outstanding.length > 0 && (
+            <p
+              role="status"
+              className="px-2.5 text-xs text-content-tertiary"
+              data-testid="composer-pending-re-add"
+            >
+              Re-add to send:{" "}
+              <span className="text-content-secondary">{outstanding.join(", ")}</span>
+            </p>
+          )}
+          {notice ? (
+            <p role="status" className="px-2.5 text-xs text-content-secondary" data-testid="composer-session-ended">
+              {notice}
+            </p>
+          ) : null}
           <ComposerPrimitive.Input
+            addAttachmentOnPaste
+            ref={inputRef}
             placeholder="Send a message..."
-            className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
+            // The VENDORED slot, not just the `aui-` class: `Input` spreads
+            // native textarea props, so the theme's shared focus and placeholder
+            // rules — which key on `[data-slot=composer-input]` — reach this
+            // editor exactly as they reach the landing brief's.
+            data-slot="composer-input"
+            className={cn(
+              "aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none",
+              expanded && "max-h-none min-h-0 flex-1",
+            )}
             rows={1}
             autoFocus
             enterKeyHint="send"
             aria-label="Message input"
           />
-          <ComposerAction />
-        </div>
+          <ComposerAction>{toolbar}</ComposerAction>
+        </ComposerBody>
       </ComposerPrimitive.AttachmentDropzone>
     </ComposerPrimitive.Root>
   );
-};
+}
 
-const ComposerAction: FC = () => {
+const Composer: FC = () => <WorkspaceComposer />;
+
+/**
+ * The reply composer's action row: attach on the LEFT, everything that answers
+ * "how will this be sent" grouped against the send button on the right.
+ *
+ * Both Grove composers read that way round, and the row is the vendored
+ * `ComposerToolbar`'s `justify-between` plus two `ComposerActions` groups rather
+ * than three hand-rolled flex divs. `items-end` rather than the vendored
+ * `items-center` is the one delta: the left group can wrap on a narrow pane and
+ * Send must stay in the composer's bottom-right corner, where it is on every
+ * other surface, instead of floating against the middle of a two-line group.
+ */
+const ComposerAction: FC<PropsWithChildren> = ({ children }) => {
+  const canSend = useAuiState((state) => state.composer.canSend);
   return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <ComposerAddAttachment />
-      <div className="flex items-center gap-1.5">
+    <ComposerToolbar className="aui-composer-action-wrapper relative items-end gap-1.5">
+      <ComposerActions className="shrink-0">
+        <ComposerPrimitive.AddAttachment asChild>
+          <ComposerAttachButton aria-label="Add Attachment" />
+        </ComposerPrimitive.AddAttachment>
+      </ComposerActions>
+      <ComposerActions className="min-w-0 justify-end gap-1.5">
+        {children}
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>
             <ComposerPrimitive.Dictate asChild>
@@ -522,34 +748,21 @@ const ComposerAction: FC = () => {
         </AuiIf>
         <AuiIf condition={(s) => !s.thread.isRunning}>
           <ComposerPrimitive.Send asChild>
-            <TooltipIconButton
-              tooltip="Send message"
-              side="bottom"
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-send size-7 rounded-full"
-              aria-label="Send message"
-            >
-              <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
-            </TooltipIconButton>
+            <ComposerSend
+              streaming={false}
+              idle={!canSend}
+              className="aui-composer-send size-[28px]"
+              title="Send message"
+            />
           </ComposerPrimitive.Send>
         </AuiIf>
         <AuiIf condition={(s) => s.thread.isRunning}>
           <ComposerPrimitive.Cancel asChild>
-            <Button
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-cancel size-7 rounded-full"
-              aria-label="Stop generating"
-            >
-              <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
-            </Button>
+            <ComposerSend streaming idle={false} className="aui-composer-cancel size-[28px]" title="Stop generating" />
           </ComposerPrimitive.Cancel>
         </AuiIf>
-      </div>
-    </div>
+      </ComposerActions>
+    </ComposerToolbar>
   );
 };
 
@@ -576,7 +789,11 @@ const AssistantMessage: FC = () => {
       data-role="assistant"
       className="fade-in slide-in-from-bottom-1 animate-in relative duration-150"
     >
-      <div
+      {/* GROVE DELTA 13: response content owns its link targets. Everything below is
+          the agent's answer — Markdown, reasoning, tool cards, data parts — and
+          a link in it must not replace the session the reader is in. See
+          `new-tab-links.tsx` for why this is a region rather than an anchor. */}
+      <NewTabLinks
         data-slot="aui_assistant-message-content"
         className="text-foreground px-2 leading-relaxed wrap-break-word"
       >
@@ -644,7 +861,7 @@ const AssistantMessage: FC = () => {
           }}
         </MessagePrimitive.GroupedParts>
         <MessageError />
-      </div>
+      </NewTabLinks>
     </MessagePrimitive.Root>
   );
 };
@@ -675,7 +892,10 @@ const UserMessage: FC = () => {
       className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [&:where(>*)]:col-start-2"
       data-role="user"
     >
-      <UserMessageAttachments />
+      {/* GROVE DELTA 12 — the message's files, as `File` rows in the grid's
+          first row: ABOVE the bubble and outside its clamp, so every attached
+          file stays visible while the prompt is collapsed. */}
+      <MessageAttachmentRows />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 flex min-w-0 flex-col items-end">
         <div

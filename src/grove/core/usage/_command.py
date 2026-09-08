@@ -54,50 +54,38 @@ from loguru import logger
 
 from grove.core.config import UsageCommandsConfig
 
-try:  # pragma: no cover - exercised by the degrade path, not by a branch test
-    import bashlex  # type: ignore[import-untyped]
-    from bashlex import errors as _bashlex_errors
+_BASHLEX_UNLOADED: Final[object] = object()
+"""Sentinel for 'import never attempted', distinct from `bashlex = None`
+(attempted, unavailable) — a test deliberately sets the latter to force the
+fallback scan, so the two must not collapse into one falsy check."""
 
-    _BASHLEX_ERRORS: tuple[type[Exception], ...] = (
-        _bashlex_errors.ParsingError,
-        NotImplementedError,
-    )
-except ImportError:  # pragma: no cover - only on a lean/older install
-    # A missing distribution degrades this module to its own scan rather than
-    # breaking `import grove.core`, because `usage/projector.py` is reached
-    # from the daemon's startup path.
-    bashlex = None
-    _BASHLEX_ERRORS = ()
-    logger.debug("bashlex unavailable; shell-command attribution uses the fallback scan")
+bashlex: Any = _BASHLEX_UNLOADED
+_BASHLEX_ERRORS: tuple[type[Exception], ...] = ()
 
 
-SHELL_TOOL_NAMES: Final = frozenset(
-    {
-        # Claude Code. `BashOutput`/`KillShell` are deliberately absent: they
-        # address an already-running background job by id and carry no command,
-        # so counting them as shell calls would only inflate `unattributed`.
-        "Bash",
-        # Codex. `exec_command` is the current shape (10,872+ real calls);
-        # `shell`/`local_shell` are the older function names, kept because a
-        # historical rollout on disk still carries them.
-        "exec_command",
-        "shell",
-        "local_shell",
-    }
-)
-"""Tool names whose call IS a shell command.
+def _ensure_bashlex() -> Any | None:
+    """Import `bashlex` on first actual use, never at module import time.
 
-Shared by the projector (which fills `target`) and the ranking query (which
-selects the rows), so the write side and the read side cannot disagree about
-what counts as a shell call.
-"""
+    `usage/projector.py` (hence this module) is reached from every `grove` CLI
+    invocation via `session_duration.py`, and bashlex's yacc-generated parser
+    cost ~90ms to import — most invocations never attribute a single shell
+    command. A missing distribution still degrades this module to its own
+    scan rather than breaking `import grove.core`, because `usage/projector.py`
+    is also reached from the daemon's startup path.
+    """
+    global bashlex, _BASHLEX_ERRORS  # noqa: PLW0603 — `bashlex` is a test-patchable seam, must stay a plain module attribute
+    if bashlex is _BASHLEX_UNLOADED:
+        try:  # pragma: no cover - exercised by the degrade path, not by a branch test
+            import bashlex as _bashlex_module  # type: ignore[import-untyped]  # noqa: PLC0415
+            from bashlex import errors as _bashlex_errors_mod  # noqa: PLC0415
 
-_COMMAND_KEYS: Final = ("command", "cmd")
-"""Where each harness puts the command string. Claude's `Bash` uses `command`
-(a string); Codex's `exec_command` uses `cmd`. A list value (`["bash", "-lc",
-"…"]`, the OpenAI local-shell shape) is joined back into one line."""
+            bashlex = _bashlex_module
+            _BASHLEX_ERRORS = (_bashlex_errors_mod.ParsingError, NotImplementedError)
+        except ImportError:  # pragma: no cover - only on a lean/older install
+            bashlex = None
+            logger.debug("bashlex unavailable; shell-command attribution uses the fallback scan")
+    return bashlex
 
-_BACKGROUND_KEY: Final = "run_in_background"
 
 # ---------------------------------------------------------------------------
 # Bash's own grammar. Not config: these are facts about bash and about the
@@ -358,32 +346,6 @@ class LeadingCommand:
 
     # -- public surface ----------------------------------------------------
 
-    @staticmethod
-    def command_text(tool_input: dict[str, Any] | None) -> str | None:
-        """The command string a shell tool call carried, or `None`."""
-        if not isinstance(tool_input, dict):
-            return None
-        for key in _COMMAND_KEYS:
-            value = tool_input.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-            if isinstance(value, list):
-                joined = " ".join(part for part in value if isinstance(part, str))
-                if joined.strip():
-                    return joined
-        return None
-
-    @staticmethod
-    def in_background(tool_input: dict[str, Any] | None) -> bool:
-        """Whether the harness was asked to detach this call.
-
-        ~2.7% of real calls set it. The tool result then returns near-instantly
-        with a handle, so the measured duration is the LAUNCH, not the work —
-        which is why the count rides the wire beside the ranking rather than
-        being quietly folded into it.
-        """
-        return bool(isinstance(tool_input, dict) and tool_input.get(_BACKGROUND_KEY))
-
     def of(self, command: str | None) -> str | None:
         """The normalized leading executable, or `None` when none is resolvable.
 
@@ -414,7 +376,7 @@ class LeadingCommand:
 
     def _bashlex_words(self, command: str) -> list[str] | None:
         """Every simple command's words in source order, or `None` if unparsed."""
-        if bashlex is None or len(command) > self.MAX_LENGTH:
+        if len(command) > self.MAX_LENGTH or _ensure_bashlex() is None:
             return None
         try:
             trees = self._guarded_parse(command)

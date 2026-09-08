@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
 import {
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 
@@ -14,34 +16,142 @@ import type {
 } from "@/lib/grove/api";
 import { mergeTurns, turnCursor } from "@/lib/grove/adapters";
 import { INITIAL_TURN_WINDOW } from "./queries";
-import { publicClient } from "../api/public-client";
+import { PublicClient, publicClient } from "../api/public-client";
 
-const PUBLIC_POLL_MS = 5_000;
+const RECONNECT_MAX_MS = 10_000;
+
+type PublicStreamOwner = {
+  clients: Map<QueryClient, number>;
+  source: EventSource | null;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  attempt: number;
+  token: string;
+};
 
 const publicKeys = {
+  root: (token: string) => ["grove", "public", token] as const,
   workspace: (token: string) => ["grove", "public", token] as const,
   turns: (token: string) => ["grove", "public", token, "turns"] as const,
   diff: (token: string, path: string | undefined) =>
     ["grove", "public", token, "diff", path ?? null] as const,
 };
 
+const publicStreams = new Map<string, PublicStreamOwner>();
+
+/** Only state-bearing public frames make the cached reads stale. */
+export function publicStreamAction(kind: string): "invalidate" | "ignore" {
+  return kind === "snapshot" || kind === "changed" ? "invalidate" : "ignore";
+}
+
+/** Retry a public capability stream without permitting unbounded quiet retries. */
+export function publicStreamReconnectDelay(attempt: number): number {
+  return Math.min(1_000 * 2 ** Math.max(attempt - 1, 0), RECONNECT_MAX_MS);
+}
+
 /**
- * The public page's complete bounded overview.
+ * One EventSource per share capability, regardless of how many public reads its
+ * page mounts.
  *
- * A public share has no SSE: `/events` is a host-wide fan-out and cannot become
- * a capability endpoint. Its polling is therefore the freshness mechanism,
- * not an SSE backstop. Do not use `backstopInterval` here — that helper gates
- * on the private activity stream, which this page has none of, and would leave
- * every shared page permanently stale.
+ * EventSource cannot attach the reader's passcode header. The public BFF
+ * receives that header on an ordinary public read and scopes a cookie to this
+ * endpoint, so this connection never exposes a host credential or creates a
+ * second browser-side authentication path.
  */
+function usePublicStream(token: string): void {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!token || typeof EventSource === "undefined") return undefined;
+
+    const owner = publicStreams.get(token) ?? createPublicStreamOwner(token);
+    owner.clients.set(queryClient, (owner.clients.get(queryClient) ?? 0) + 1);
+    startPublicStream(owner);
+
+    return () => unsubscribePublicStream(owner, queryClient);
+  }, [queryClient, token]);
+}
+
+function createPublicStreamOwner(token: string): PublicStreamOwner {
+  const owner: PublicStreamOwner = {
+    clients: new Map(),
+    source: null,
+    reconnectTimer: null,
+    attempt: 0,
+    token,
+  };
+  publicStreams.set(token, owner);
+  return owner;
+}
+
+function startPublicStream(owner: PublicStreamOwner): void {
+  if (owner.source !== null || owner.clients.size === 0) return;
+
+  const source = new EventSource(
+    `${PublicClient.basePath}/${encodeURIComponent(owner.token)}/events`,
+  );
+  owner.source = source;
+
+  const receive = (event: Event): void => {
+    if (owner.source !== source || publicStreamAction(event.type) !== "invalidate") return;
+    for (const queryClient of owner.clients.keys()) {
+      void queryClient.invalidateQueries({ queryKey: publicKeys.root(owner.token) });
+    }
+  };
+
+  source.addEventListener("snapshot", receive);
+  source.addEventListener("changed", receive);
+  source.onopen = () => {
+    if (owner.source !== source) return;
+    owner.attempt = 0;
+    clearPublicStreamReconnect(owner);
+  };
+  source.onerror = () => {
+    if (owner.source !== source) return;
+    source.close();
+    owner.source = null;
+    schedulePublicStreamReconnect(owner);
+  };
+}
+
+function schedulePublicStreamReconnect(owner: PublicStreamOwner): void {
+  if (owner.clients.size === 0 || owner.reconnectTimer !== null) return;
+  owner.attempt += 1;
+  owner.reconnectTimer = setTimeout(() => {
+    owner.reconnectTimer = null;
+    startPublicStream(owner);
+  }, publicStreamReconnectDelay(owner.attempt));
+}
+
+function clearPublicStreamReconnect(owner: PublicStreamOwner): void {
+  if (owner.reconnectTimer === null) return;
+  clearTimeout(owner.reconnectTimer);
+  owner.reconnectTimer = null;
+}
+
+function unsubscribePublicStream(owner: PublicStreamOwner, queryClient: QueryClient): void {
+  const references = owner.clients.get(queryClient) ?? 0;
+  if (references > 1) {
+    owner.clients.set(queryClient, references - 1);
+    return;
+  }
+  owner.clients.delete(queryClient);
+  if (owner.clients.size > 0) return;
+
+  owner.source?.close();
+  owner.source = null;
+  clearPublicStreamReconnect(owner);
+  publicStreams.delete(owner.token);
+}
+
+/** The public page's complete bounded overview. */
 export function usePublicWorkspace(
   token: string,
 ): UseQueryResult<PublicWorkspaceView> {
+  usePublicStream(token);
   return useQuery({
     queryKey: publicKeys.workspace(token),
     queryFn: () => publicClient.overview(token),
     enabled: Boolean(token),
-    refetchInterval: PUBLIC_POLL_MS,
   });
 }
 
@@ -56,6 +166,7 @@ export function usePublicWorkspace(
 export function usePublicTurns(
   token: string,
 ): UseQueryResult<SessionDetailView | null> {
+  usePublicStream(token);
   const queryClient = useQueryClient();
   const key = publicKeys.turns(token);
 
@@ -68,7 +179,7 @@ export function usePublicTurns(
         afterTurn !== undefined
           ? { afterTurn }
           : // `null` is a real "no transcript yet" response, but it holds no
-            // window. If one appears between polls, start with the bounded tail
+            // window. If one appears between reads, start with the bounded tail
             // rather than turning that first readable response into a full fetch.
             held === undefined || held === null
             ? { last: INITIAL_TURN_WINDOW }
@@ -92,7 +203,6 @@ export function usePublicTurns(
       };
     },
     enabled: Boolean(token),
-    refetchInterval: PUBLIC_POLL_MS,
   });
 }
 
@@ -101,10 +211,10 @@ export function usePublicDiff(
   token: string,
   path?: string,
 ): UseQueryResult<WorkspaceDiffView> {
+  usePublicStream(token);
   return useQuery({
     queryKey: publicKeys.diff(token, path),
     queryFn: () => publicClient.diff(token, path),
     enabled: Boolean(token),
-    refetchInterval: PUBLIC_POLL_MS,
   });
 }

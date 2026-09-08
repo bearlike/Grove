@@ -24,12 +24,13 @@ from pathlib import Path
 import pytest
 
 from grove.core import process as process_mod
+from grove.core import tmux
 from grove.core.activity import ActivityService
 from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig
 from grove.core.contracts.questions import QuestionAnswerItem, QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.errors import ProcessError, WorkspaceStateError
+from grove.core.errors import ProcessError, SteeringUnsupported, WorkspaceStateError
 from grove.core.launch import (
     HeadlessLaunchBackend,
     HostNamespaceBackend,
@@ -39,22 +40,33 @@ from grove.core.launch import (
 from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
-from grove.core.workspace import WorkspaceStatus
+from grove.core.workspace import WorkspaceState, WorkspaceStatus
 from tests.conftest import FakeTmux
 
 
 class FakeNativeSteer:
-    """Records native-steer deliveries instead of POSTing to a channel (the DI seam)."""
+    """Records native-steer deliveries instead of POSTing to a channel (the DI seam).
+
+    Keyed by the workspace's recorded session id, the way the channel client is.
+    """
 
     def __init__(self) -> None:
         self.messages: list[tuple[str, str]] = []
         self.interrupts: list[str] = []
+        self.models: list[tuple[str, str]] = []
+        self.answers: list[tuple[str, str]] = []
 
-    def send_message(self, session_id: str, text: str) -> None:
-        self.messages.append((session_id, text))
+    def send_message(self, state: WorkspaceState, text: str) -> None:
+        self.messages.append((str(state.agent_session_id), text))
 
-    def interrupt(self, session_id: str) -> None:
-        self.interrupts.append(session_id)
+    def interrupt(self, state: WorkspaceState) -> None:
+        self.interrupts.append(str(state.agent_session_id))
+
+    def set_model(self, state: WorkspaceState, model: str) -> None:
+        self.models.append((str(state.agent_session_id), model))
+
+    def answer(self, state: WorkspaceState, plan: str) -> None:
+        self.answers.append((str(state.agent_session_id), plan))
 
 
 class FakeHeadlessBackend(HostNamespaceBackend):
@@ -89,6 +101,7 @@ def _cfg(tmp_path: Path) -> GroveConfig:
                     "name": "claude",
                     "command": "claude",
                     "kind": "claude_code",
+                    "native": False,
                     "env": {"FOO": "bar"},
                     "env_unset": ["CLAUDE_CONFIG_DIR"],
                 }
@@ -284,6 +297,18 @@ def test_send_message_headless_routes_native(
 
     assert steer.messages == [(str(state.agent_session_id), "hello")]
     assert fake_tmux.sent_texts == []  # never reached the tmux injection seam
+
+
+def test_send_keys_headless_refuses_without_native_or_tmux_injection(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    mgr, _ = _headless_manager(tmp_repo, tmp_path, native=FakeNativeSteer())
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="headless"))
+
+    with pytest.raises(SteeringUnsupported, match="live terminal"):
+        mgr.send_keys(state.id, tmux.SendKey.TAB)
+
+    assert fake_tmux.sent_keys == []
 
 
 def test_interrupt_headless_routes_native(

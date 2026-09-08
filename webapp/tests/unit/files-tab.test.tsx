@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { filesSource, fromPatch, totalsOf } from "@/components/grove/workspace/files-source";
+import {
+  filesSource,
+  fromPatch,
+  totalsOf,
+} from "@/components/grove/workspace/files-source";
 import { FilesView } from "@/components/grove/workspace/files-tab";
 import type { WorkspaceDiffView } from "@/lib/grove/api";
 
@@ -64,7 +68,13 @@ index 5555555..0000000
 `;
 
 function view(overrides: Partial<WorkspaceDiffView> = {}): WorkspaceDiffView {
-  return { patch: PATCH, files: 3, truncated: false, available: true, ...overrides };
+  return {
+    patch: PATCH,
+    files: 3,
+    truncated: false,
+    available: true,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -82,19 +92,28 @@ describe("filesSource", () => {
   it("distinguishes a clean tree from a diff git could not produce", () => {
     // Two states that must never share copy: one means there is nothing to
     // see, the other means we cannot see.
-    expect(filesSource(view({ patch: "", files: 0 }))).toEqual({ kind: "clean" });
-    expect(filesSource(view({ available: false, reason: "not_a_repo", patch: "" }))).toEqual({
+    expect(filesSource(view({ patch: "", files: 0 }))).toEqual({
+      kind: "clean",
+    });
+    expect(
+      filesSource(view({ available: false, reason: "not_a_repo", patch: "" })),
+    ).toEqual({
       kind: "unavailable",
       reason: "not_a_repo",
     });
   });
 
   it("treats a missing response as unavailable rather than clean", () => {
-    expect(filesSource(undefined)).toEqual({ kind: "unavailable", reason: "unknown" });
+    expect(filesSource(undefined)).toEqual({
+      kind: "unavailable",
+      reason: "unknown",
+    });
   });
 
   it("carries truncation through instead of swallowing it", () => {
-    expect(filesSource(view({ truncated: true }))).toMatchObject({ truncated: true });
+    expect(filesSource(view({ truncated: true }))).toMatchObject({
+      truncated: true,
+    });
   });
 
   it("computes no diff of its own", () => {
@@ -149,7 +168,8 @@ describe("fromPatch", () => {
 });
 
 describe("FilesView", () => {
-  const diff = (overrides: Partial<WorkspaceDiffView> = {}) => filesSource(view(overrides));
+  const diff = (overrides: Partial<WorkspaceDiffView> = {}) =>
+    filesSource(view(overrides));
 
   it("renders no diff at all until a row is opened", () => {
     const html = renderToStaticMarkup(<FilesView source={diff()} />);
@@ -171,7 +191,9 @@ describe("FilesView", () => {
       (_, i) =>
         `diff --git a/src/file${i}.ts b/src/file${i}.ts\n--- a/src/file${i}.ts\n+++ b/src/file${i}.ts\n@@ -1 +1 @@\n-old\n+new\n`,
     ).join("\n");
-    const html = renderToStaticMarkup(<FilesView source={filesSource(view({ patch: many }))} />);
+    const html = renderToStaticMarkup(
+      <FilesView source={filesSource(view({ patch: many }))} />,
+    );
 
     expect(html).toContain("60 changed files");
     expect(html.match(/data-testid="file-diff-row"/g)).toHaveLength(60);
@@ -180,7 +202,9 @@ describe("FilesView", () => {
   it("never computes a diff, on any path", () => {
     renderToStaticMarkup(<FilesView source={diff()} />);
     renderToStaticMarkup(<FilesView source={diff({ truncated: true })} />);
-    renderToStaticMarkup(<FilesView source={filesSource(view({ patch: "", files: 0 }))} />);
+    renderToStaticMarkup(
+      <FilesView source={filesSource(view({ patch: "", files: 0 }))} />,
+    );
 
     expect(spy.diffLines).toBe(0);
   });
@@ -194,9 +218,9 @@ describe("FilesView", () => {
   it("says so when the daemon cut the patch, and stays silent when it did not", () => {
     // The repo's no-silent-caps rule: the files shown are complete, the LIST is
     // not, and only the response knows.
-    expect(renderToStaticMarkup(<FilesView source={diff({ truncated: true })} />)).toContain(
-      'data-testid="diff-truncated"',
-    );
+    expect(
+      renderToStaticMarkup(<FilesView source={diff({ truncated: true })} />),
+    ).toContain('data-testid="diff-truncated"');
     expect(renderToStaticMarkup(<FilesView source={diff()} />)).not.toContain(
       'data-testid="diff-truncated"',
     );
@@ -207,25 +231,33 @@ describe("FilesView", () => {
       <FilesView source={filesSource(view({ patch: "", files: 0 }))} />,
     );
     expect(clean).toContain('data-source="clean"');
-    expect(clean).toContain("No uncommitted changes");
+    expect(clean).toContain("Working tree is clean");
 
     const broken = renderToStaticMarkup(
-      <FilesView source={filesSource(view({ available: false, reason: "worktree_missing" }))} />,
+      <FilesView
+        source={filesSource(
+          view({ available: false, reason: "worktree_missing" }),
+        )}
+      />,
     );
     expect(broken).toContain('data-source="unavailable"');
     expect(broken).toContain('data-reason="worktree_missing"');
     expect(broken).toContain("worktree is gone from disk");
-    expect(broken).not.toContain("No uncommitted changes");
+    expect(broken).not.toContain("Working tree is clean");
   });
 
   it("explains every reason the wire can send", () => {
-    for (const reason of ["worktree_missing", "not_a_repo", "git_failed"] as const) {
+    for (const reason of [
+      "worktree_missing",
+      "not_a_repo",
+      "git_failed",
+    ] as const) {
       const html = renderToStaticMarkup(
         <FilesView source={filesSource(view({ available: false, reason }))} />,
       );
       expect(html).toContain(`data-reason="${reason}"`);
       // A reason with no copy would render an empty paragraph and look broken.
-      expect(html).toMatch(/text-muted-foreground">[A-Za-z]/);
+      expect(html).toMatch(/text-content-tertiary">[A-Za-z]/);
     }
   });
 });

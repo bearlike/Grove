@@ -45,17 +45,23 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import islice
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from threading import Lock, RLock
+from time import monotonic, sleep
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loguru import logger
 
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.model import AgentMessage, TokenUsage
+from grove.core.agents.shell import SHELL_TOOL_NAMES, ShellCall
 from grove.core.config import TelemetryConfig, TelemetryContent
 from grove.core.telemetry.semconv import (
     ATTR_TEXT_CAP,
@@ -71,7 +77,9 @@ from grove.core.telemetry.semconv import (
     ToolCallPart,
     ToolCallResponsePart,
     TraceIdentity,
+    filterable_identity,
 )
+from grove.core.telemetry.shell import ShellObservation, ToolSource
 from grove.core.usage._pricing import _PER_MILLION, _QUANTUM, PriceBook, TokenCounts
 
 if TYPE_CHECKING:
@@ -161,6 +169,31 @@ mutable attribute value would make its hashability a lie.
 
 __all__ = ["ObservationKind"]  # re-exported: this module was its home before
 # `telemetry.semconv` existed, and consumers import it from here.
+
+
+def _encode_arguments(tool_input: object) -> str:
+    """A tool call's arguments as an attribute value that stays PARSEABLE.
+
+    The old form was ``json.dumps(...)[:ATTR_TEXT_CAP]``, which for any
+    oversized call published a JSON document cut mid-token — structurally valid
+    as an attribute and unparseable as the JSON it announces itself to be, with
+    nothing on the wire admitting it. Over the cap this returns a small, valid
+    envelope that says so and keeps a prefix of the original, so a reader gets
+    a truthful "this was clipped" instead of a broken document.
+
+    ``preview`` is deliberately the clipped ENCODING rather than a re-encoded
+    subset of the arguments: which keys to keep is a judgement about somebody
+    else's payload, and the first few thousand characters of the real document
+    are the honest answer to "what did this look like".
+    """
+    try:
+        encoded = json.dumps(tool_input, default=str)
+    except (TypeError, ValueError):
+        encoded = str(tool_input)
+    if len(encoded) <= ATTR_TEXT_CAP:
+        return encoded
+    preview = encoded[: ATTR_TEXT_CAP // 2]
+    return json.dumps({"truncated": True, "original_length": len(encoded), "preview": preview})
 
 
 def _usage_details(usage: TokenUsage) -> dict[str, int]:
@@ -415,35 +448,67 @@ class SpanRecord:
         tool_input: object | None = None,
         tool_output: str | None = None,
         is_error: bool = False,
+        source: ToolSource,
+        agent_kind: str = "",
+        exit_code: int | None = None,
+        resolved: bool | None = None,
     ) -> SpanRecord:
         """One tool call. ``tool_input`` rides as the span's input verbatim
         (capped) and the resolving ``tool_result``'s text as its output —
         normalizing shape, never interpreting the call's meaning. A call still
         in flight has no result, so ``tool_output`` is omitted rather than
         emitted empty: "no output yet" and "returned nothing" are different
-        facts and only the omission can say the first.
+        facts and only the omission can say the first. **The test is
+        ``is not None``, not truthiness** — an empty string IS a result, and a
+        truthiness gate published a command that printed nothing as a command
+        that had not returned.
 
         ``tool_call_id`` is the harness's own id for the invocation. It is the
         join a sub-agent's root span parents itself on, so a consumer can
         reconstruct the spawn edge from attributes alone even if it discards
         Grove's span ids.
+
+        A call whose provider tool name is a known shell tool additionally
+        carries the canonical shell observation (:mod:`grove.core.telemetry.shell`):
+        flat filterable metadata, and Langfuse-facing input/output ENVELOPES
+        that replace the raw payloads. The ``gen_ai.tool.call.*`` attributes
+        keep carrying the provider's own arguments and result, because those
+        are the convention's keys and a consumer reading the convention must
+        not have to know Grove normalized anything.
         """
         shape = ObservationShapes.TOOL
         attributes: dict[str, AttributeValue] = dict(shape.attributes(name))
         if tool_call_id:
             attributes[GenAiAttr.TOOL_CALL_ID] = tool_call_id
         if tool_input is not None:
-            try:
-                encoded = json.dumps(tool_input, default=str)
-            except (TypeError, ValueError):
-                encoded = str(tool_input)
-            attributes[LangfuseAttr.OBSERVATION_INPUT] = encoded[:ATTR_TEXT_CAP]
-            attributes[GenAiAttr.TOOL_CALL_ARGUMENTS] = encoded[:ATTR_TEXT_CAP]
-        if tool_output:
+            encoded = _encode_arguments(tool_input)
+            attributes[LangfuseAttr.OBSERVATION_INPUT] = encoded
+            attributes[GenAiAttr.TOOL_CALL_ARGUMENTS] = encoded
+        if tool_output is not None:
             attributes[LangfuseAttr.OBSERVATION_OUTPUT] = tool_output[:ATTR_TEXT_CAP]
             attributes[GenAiAttr.TOOL_CALL_RESULT] = tool_output[:ATTR_TEXT_CAP]
         if is_error:
             attributes[LangfuseAttr.OBSERVATION_LEVEL] = "ERROR"
+        if name in SHELL_TOOL_NAMES:
+            arguments = tool_input if isinstance(tool_input, Mapping) else None
+            attributes.update(
+                ShellObservation(
+                    call=ShellCall.of(name, arguments),
+                    source=source,
+                    agent_kind=agent_kind,
+                    tool_name=name,
+                    # A redacting policy hands over no text for a call that
+                    # finished, so "did a result land" cannot be read off the
+                    # text. A caller that does not know says so by omitting it,
+                    # and the presence of text is then the honest best answer.
+                    resolved=tool_output is not None if resolved is None else resolved,
+                    tool_call_id=tool_call_id,
+                    arguments=arguments,
+                    output=tool_output,
+                    exit_code=exit_code,
+                    is_error=is_error,
+                ).span_attributes()
+            )
         return cls(
             trace_id=trace_id,
             span_id=span_id,
@@ -505,10 +570,14 @@ class SpanSink(Protocol):
     def __call__(self, record: SpanRecord) -> None:
         """Emit one already-built, already-timed span."""
 
-    def flush(self) -> None:
-        """Force-drain the batch processor. Call once per logical unit of
-        work (e.g. once per :meth:`TraceInstrumentor.replay`), not once per
-        span — calling it per-span defeats batching."""
+    def flush(self) -> bool:
+        """Force-drain the batch processor and acknowledge acceptance.
+
+        Call once per logical unit of work (e.g. once per
+        :meth:`TraceInstrumentor.replay`), not once per span — calling it
+        per-span defeats batching. ``False`` means the sink could not confirm
+        the write, so a live replay must leave the trace eligible for retry.
+        """
 
 
 def _to_ns(moment: datetime) -> int:
@@ -598,9 +667,10 @@ def sink_from_processor(processor: SpanProcessor, resource: Resource) -> SpanSin
             span.set_attribute(key, value)
         span.end(end_time=_to_ns(record.end_time))
 
-    def _flush() -> None:
+    def _flush() -> bool:
         if not processor.force_flush():
             raise RuntimeError("OpenTelemetry span processor did not flush")
+        return True
 
     return _SinkAdapter(_emit, _flush)
 
@@ -612,13 +682,233 @@ class _SinkAdapter:
     Protocol (structural, not nominal)."""
 
     _emit: Callable[[SpanRecord], None]
-    _flush: Callable[[], None]
+    _flush: Callable[[], bool]
 
     def __call__(self, record: SpanRecord) -> None:
         self._emit(record)
 
-    def flush(self) -> None:
-        self._flush()
+    def flush(self) -> bool:
+        return self._flush()
+
+
+class _AcknowledgingSpanProcessor:
+    """Export only accepted spans, keeping failed work available for replay.
+
+    ``SpanProcessor.on_end`` cannot report admission to its caller. Refusals are
+    therefore recorded and surfaced through ``force_flush``: the replay that
+    offered the span cannot checkpoint, so its durable source remains eligible
+    to emit it again. A successful queue drain alone is never an acknowledgement.
+    """
+
+    DEFAULT_MAX_PENDING_ITEMS = 2_048
+    DEFAULT_MAX_PENDING_BYTES = 8 * 1024 * 1024
+    DEFAULT_BATCH_SIZE = 512
+    DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+    DEFAULT_MAX_RETRY_BACKOFF_SECONDS = 30.0
+
+    def __init__(
+        self,
+        span_exporter: Any,
+        *,
+        max_pending_items: int = DEFAULT_MAX_PENDING_ITEMS,
+        max_pending_bytes: int = DEFAULT_MAX_PENDING_BYTES,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        max_retries: int = 0,
+        retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+        max_retry_backoff_seconds: float = DEFAULT_MAX_RETRY_BACKOFF_SECONDS,
+        clock: Callable[[], float] = monotonic,
+        sleeper: Callable[[float], None] = sleep,
+    ) -> None:
+        """Keep bounded pending spans until the exporter explicitly accepts them."""
+        if max_pending_items < 1:
+            raise ValueError("max_pending_items must be positive")
+        if max_pending_bytes < 1:
+            raise ValueError("max_pending_bytes must be positive")
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if max_retries < 0:
+            raise ValueError("max_retries cannot be negative")
+        if retry_backoff_seconds < 0 or max_retry_backoff_seconds < retry_backoff_seconds:
+            raise ValueError("retry backoff must be non-negative and bounded")
+        self._exporter = span_exporter
+        self._max_pending_items = max_pending_items
+        self._max_pending_bytes = max_pending_bytes
+        self._batch_size = batch_size
+        self._max_retries = max_retries
+        self._retry_backoff_seconds = retry_backoff_seconds
+        self._max_retry_backoff_seconds = max_retry_backoff_seconds
+        self._clock = clock
+        self._sleeper = sleeper
+        self._pending: deque[tuple[ReadableSpan, int]] = deque()
+        self._pending_bytes = 0
+        # Bound identity tracking at the admission capacity. Once it fills, a
+        # conservative poison flag is enough: force_flush must stay false until
+        # its replay owner constructs a fresh processor for a fresh replay.
+        self._rejected_spans: set[tuple[int, int]] = set()
+        self._rejection_overflowed = False
+        self._retry_at = 0.0
+        self._unhealthy = False
+        self._lock = Lock()
+        self._flush_lock = RLock()
+        self._export_lock = Lock()
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        del span, parent_context
+
+    def on_end(self, span: ReadableSpan) -> None:
+        """Admit a finished span only when its pre-append bounds fit."""
+        estimated_bytes = self._estimated_span_bytes(span)
+        with self._lock:
+            if (
+                len(self._pending) >= self._max_pending_items
+                or estimated_bytes > self._max_pending_bytes
+                or self._pending_bytes + estimated_bytes > self._max_pending_bytes
+            ):
+                key = self._span_key(span)
+                if key not in self._rejected_spans:
+                    if len(self._rejected_spans) == self._max_pending_items:
+                        self._rejection_overflowed = True
+                    else:
+                        self._rejected_spans.add(key)
+                return
+            self._pending.append((span, estimated_bytes))
+            self._pending_bytes += estimated_bytes
+            self._rejected_spans.discard(self._span_key(span))
+
+    def shutdown(self) -> None:
+        """Make one bounded acknowledgement attempt before closing the exporter."""
+        self.force_flush()
+        self._exporter.shutdown()
+
+    @property
+    def is_on(self) -> bool:
+        """The OTel SDK consults this before calling ``on_start``/``on_end``."""
+        return True
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        """Return true only after every offered span has export acknowledgement.
+
+        Failed and deadline-skipped batches remain at the head of the queue.
+        The next explicit flush may retry them; no background loop can keep an
+        unavailable collector busy forever.
+        """
+        deadline = self._clock() + max(timeout_millis, 0) / 1_000
+        with self._flush_lock:
+            while True:
+                # WHAT THERE IS TO DO IS ASKED BEFORE HOW LONG IS LEFT. A caller
+                # passing `timeout_millis=0` is asking whether anything is
+                # outstanding, not granting time to find out — and answering
+                # "ran out of time" for an empty queue reports data loss that
+                # never happened, which a shutdown path acts on.
+                batch = self._peek_batch()
+                if not batch:
+                    return not self._has_rejections()
+                if self._clock() >= deadline:
+                    return False
+                if self._clock() < self._retry_at:
+                    return False
+                if not self._export_batch(batch, deadline):
+                    return False
+                self._acknowledge(len(batch))
+
+    def _export_batch(self, batch: Sequence[ReadableSpan], deadline: float) -> bool:
+        """Try one batch a finite number of times inside its caller's deadline."""
+        from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
+
+        for attempt in range(self._max_retries + 1):
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                return False
+            accepted = self._export_once(batch, remaining) is SpanExportResult.SUCCESS
+            if accepted:
+                if self._unhealthy:
+                    logger.info("telemetry export recovered")
+                    self._unhealthy = False
+                self._retry_at = 0.0
+                return True
+            if not self._unhealthy:
+                logger.warning("telemetry export failed; retaining spans for explicit retry")
+            self._unhealthy = True
+            retry_delay = min(
+                self._retry_backoff_seconds * (2**attempt),
+                self._max_retry_backoff_seconds,
+            )
+            self._retry_at = self._clock() + retry_delay
+            if attempt == self._max_retries or self._retry_at >= deadline:
+                return False
+            self._sleeper(retry_delay)
+        return False
+
+    def _export_once(self, batch: Sequence[ReadableSpan], timeout_seconds: float) -> Any:
+        """Call exactly one exporter request with the flush's remaining deadline.
+
+        The installed HTTP exporter owns a synchronous request timeout. Updating
+        that per call is safe under the dedicated lock and prevents a request
+        from outliving its owning force-flush without launching overlapping work.
+        """
+        with self._export_lock:
+            timeout = getattr(self._exporter, "_timeout", None)
+            if timeout is None:
+                try:
+                    return self._exporter.export(batch)
+                except Exception:
+                    return None
+            self._exporter._timeout = min(timeout, timeout_seconds)
+            try:
+                return self._exporter.export(batch)
+            except Exception:
+                return None
+            finally:
+                self._exporter._timeout = timeout
+
+    def _peek_batch(self) -> tuple[ReadableSpan, ...]:
+        with self._lock:
+            return tuple(span for span, _size in islice(self._pending, self._batch_size))
+
+    def _acknowledge(self, count: int) -> None:
+        with self._lock:
+            for _ in range(count):
+                _span, size = self._pending.popleft()
+                self._pending_bytes -= size
+
+    def _has_rejections(self) -> bool:
+        with self._lock:
+            return self._rejection_overflowed or bool(self._rejected_spans)
+
+    @staticmethod
+    def _span_key(span: ReadableSpan) -> tuple[int, int]:
+        context = getattr(span, "context", None)
+        if context is None:
+            return id(span), 0
+        return context.trace_id, context.span_id
+
+    @classmethod
+    def _estimated_span_bytes(cls, span: ReadableSpan) -> int:
+        """Approximate live object size without serializing an unbounded queue."""
+        seen: set[int] = set()
+        return cls._value_size(span, seen) + sum(
+            cls._value_size(getattr(span, name, None), seen)
+            for name in ("attributes", "events", "links", "resource")
+        )
+
+    @classmethod
+    def _value_size(cls, value: Any, seen: set[int]) -> int:
+        identity = id(value)
+        if identity in seen:
+            return 0
+        seen.add(identity)
+        size = sys.getsizeof(value)
+        if isinstance(value, Mapping):
+            return size + sum(
+                cls._value_size(key, seen) + cls._value_size(item, seen)
+                for key, item in value.items()
+            )
+        if isinstance(value, (tuple, list, set, frozenset, deque)):
+            return size + sum(cls._value_size(item, seen) for item in value)
+        attributes = getattr(value, "attributes", None)
+        if attributes is not None:
+            size += cls._value_size(attributes, seen)
+        return size
 
 
 def build_span_sink(
@@ -665,11 +955,7 @@ def build_span_sink(
             ExportTraceServiceResponse,
         )
         from opentelemetry.sdk.resources import Resource  # noqa: PLC0415
-        from opentelemetry.sdk.trace import SpanProcessor  # noqa: PLC0415
-        from opentelemetry.sdk.trace.export import (  # noqa: PLC0415
-            SpanExporter,
-            SpanExportResult,
-        )
+        from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
     except ImportError as exc:
         logger.debug(
             "opentelemetry not installed (grove[telemetry] extra); tracing stays no-op: {}", exc
@@ -709,43 +995,17 @@ def build_span_sink(
 
     exporter = _VerifiedOTLPSpanExporter(endpoint=endpoint, headers=_parse_headers(headers_raw))
 
-    class _VerifiedSpanProcessor(SpanProcessor):
-        """Synchronously expose the export result at the durability boundary.
-
-        ``BatchSpanProcessor.force_flush`` only says its queue drained; it does
-        not propagate whether the exporter accepted the batch. Historical
-        checkpointing needs the stronger answer before it may even attempt a
-        remote read-back.
-        """
-
-        def __init__(self, span_exporter: SpanExporter) -> None:
-            self._exporter = span_exporter
-            self._pending: list[ReadableSpan] = []
-
-        def on_start(self, span: Any, parent_context: Any = None) -> None:
-            del span, parent_context
-
-        def on_end(self, span: ReadableSpan) -> None:
-            self._pending.append(span)
-
-        def shutdown(self) -> None:
-            self._exporter.shutdown()
-
-        def force_flush(self, timeout_millis: int = 30_000) -> bool:
-            del timeout_millis
-            pending, self._pending = self._pending, []
-            try:
-                return all(
-                    self._exporter.export(pending[offset : offset + 512])
-                    is SpanExportResult.SUCCESS
-                    for offset in range(0, len(pending), 512)
-                )
-            except Exception:
-                return False
-
-    processor = _VerifiedSpanProcessor(exporter)
+    processor = _AcknowledgingSpanProcessor(
+        exporter,
+        max_pending_items=cfg.export.admission.max_items,
+        max_pending_bytes=cfg.export.admission.max_bytes,
+        batch_size=cfg.export.batch_size,
+        max_retries=cfg.export.max_retries,
+        retry_backoff_seconds=cfg.export.retry_backoff_seconds,
+        max_retry_backoff_seconds=cfg.export.max_retry_backoff_seconds,
+    )
     resource = Resource.create({"service.name": "grove"})
-    return sink_from_processor(processor, resource)
+    return sink_from_processor(cast("SpanProcessor", processor), resource)
 
 
 def _bounds(messages: Sequence[AgentMessage]) -> tuple[datetime, datetime] | None:
@@ -766,6 +1026,15 @@ class _ToolResult:
     timestamp: datetime | None
     text: str | None
     is_error: bool
+    exit_code: int | None = None
+    """The process's real exit status, when the harness recorded one.
+
+    Codex pairs an ``exec_command_end`` record with its call and Claude records
+    none, so this is ``None`` far more often than not — and that is the point:
+    it is the ONLY evidence from which a shell observation may claim the
+    command succeeded. Carrying it here rather than re-deriving it is what
+    keeps :meth:`SpanRecord.tool` from having to interpret result prose.
+    """
 
 
 @dataclass(slots=True, frozen=True)
@@ -950,7 +1219,10 @@ def _tool_results(messages: Sequence[AgentMessage]) -> dict[str, _ToolResult]:
     one every turn/digest projection already does."""
     return {
         block.tool_use_id: _ToolResult(
-            timestamp=msg.timestamp, text=block.text, is_error=block.is_error
+            timestamp=msg.timestamp,
+            text=block.text,
+            is_error=block.is_error,
+            exit_code=block.exit_code,
         )
         for msg in messages
         for block in msg.content
@@ -1145,7 +1417,7 @@ def price_book_estimator(prices: PriceBook) -> CostEstimator:
         return {
             name: (Decimal(str(rate)) * Decimal(count) / _PER_MILLION).quantize(_QUANTUM)
             for name, (rate, count) in priced.items()
-            if count is not None
+            if count is not None and rate is not None
         }
 
     return _estimate
@@ -1197,6 +1469,44 @@ def _turns(messages: Sequence[AgentMessage]) -> tuple[_Turn, ...]:
             )
         )
     return tuple(turns)
+
+
+@dataclass(slots=True, frozen=True)
+class _CompletedTurn:
+    """A timeable completed turn with its stable export identity.
+
+    This deliberately stops before `_Fleet` and span construction. Replay can
+    therefore discard already-acknowledged trace ids before it reads sub-agent
+    sidecars or creates any records, while public `plan` still asks for every
+    complete manifest.
+    """
+
+    ordinal: int
+    turn: _Turn
+    bounds: tuple[datetime, datetime]
+    trace_id: int
+
+
+def _completed_turns(
+    messages: Sequence[AgentMessage], span_seed: str
+) -> tuple[_CompletedTurn, ...]:
+    """Return completed, timeable turns and their deterministic trace ids."""
+    completed: list[_CompletedTurn] = []
+    for ordinal, turn in enumerate(_turns(messages)):
+        if not turn.complete:
+            continue
+        bounds = _bounds(turn.messages)
+        if bounds is None:
+            continue
+        completed.append(
+            _CompletedTurn(
+                ordinal=ordinal,
+                turn=turn,
+                bounds=bounds,
+                trace_id=derive_turn_trace_id(span_seed, turn.turn_id, first=ordinal == 0),
+            )
+        )
+    return tuple(completed)
 
 
 def _message_identity(message: AgentMessage) -> str:
@@ -1264,8 +1574,15 @@ class TraceInstrumentor:
         self._cfg = cfg
         self._sink = sink if sink is not None else build_span_sink(cfg, env=env)
         self._cost_estimator = cost_estimator
-        # Live cost control only. Durable exactly-once behavior belongs to the
-        # backfill coordinator, which reconciles against the remote backend.
+        # An acknowledgement freezes a turn for this live instrumentor. A
+        # completed turn is immutable by contract, so late sidechain discovery,
+        # transcript replacement, and newly available identity do not mutate or
+        # resend an accepted trace under its deterministic id; that would append
+        # duplicate observations at OTLP. The durable backfill coordinator is
+        # the only layer allowed to reconcile a changed manifest remotely.
+        #
+        # This is an id set, never a positional cursor: insertion before a
+        # recorded turn cannot make later completed turns look acknowledged.
         self._emitted: set[int] = set()
 
     @property
@@ -1295,53 +1612,73 @@ class TraceInstrumentor:
             sink = self._sink
             if sink is None:  # pragma: no cover - guarded by enabled
                 return
-            for manifest in self.plan(
-                cwd, session_id, adapter, session_group_id=session_group_id, identity=identity
+            messages = adapter.read_messages(cwd, session_id)
+            main_thread = tuple(message for message in messages if not message.is_sidechain)
+            pending = frozenset(
+                item.trace_id
+                for item in _completed_turns(main_thread, session_id)
+                if item.trace_id not in self._emitted
+            )
+            for manifest in self._plan_messages(
+                messages,
+                cwd,
+                session_id,
+                adapter,
+                session_group_id=session_group_id,
+                content="all",
+                source_id=None,
+                identity=identity,
+                trace_ids=pending,
             ):
-                if manifest.trace_id in self._emitted:
-                    continue
                 for record in manifest.spans:
                     sink(record)
-                sink.flush()
+                if not sink.flush():
+                    raise RuntimeError("OpenTelemetry span sink did not acknowledge the replay")
                 self._emitted.add(manifest.trace_id)
         except Exception as exc:  # best-effort — mirrors peek()'s discipline
             logger.debug("trace replay failed for session {}: {}", session_id, exc)
 
-    def plan(
+    def _plan_messages(
         self,
+        messages: Sequence[AgentMessage],
         cwd: Path,
         session_id: str,
         adapter: SpineAdapter,
         *,
-        session_group_id: str | None = None,
-        content: TelemetryContent = "all",
-        source_id: str | None = None,
-        identity: TraceIdentity | None = None,
+        session_group_id: str | None,
+        content: TelemetryContent,
+        source_id: str | None,
+        identity: TraceIdentity | None,
+        trace_ids: frozenset[int] | None = None,
     ) -> tuple[TraceManifest, ...]:
-        """Build complete immutable manifests; reads only through the adapter.
+        """Build selected manifests after their stable ids are known.
 
-        *identity* is the workspace the session ran in. It is optional because
-        this tier is deliberately reachable without one — the historical
-        backfill replays transcripts whose workspace may no longer exist, and
-        inventing an identity for those would be worse than omitting it. A
-        caller that HAS the workspace should always pass it: without it the
-        richest tree Grove produces is also the one nobody can filter.
+        `trace_ids` is an internal replay optimization, not a public planning
+        policy. The public plan API leaves it unset and returns every completed
+        turn; replay supplies only trace ids not yet acknowledged before any
+        fleet reconstruction or span construction begins.
         """
-        messages = adapter.read_messages(cwd, session_id)
         if not messages:
             return ()
-        main_thread = tuple(m for m in messages if not m.is_sidechain)
+        main_thread = tuple(message for message in messages if not message.is_sidechain)
+        span_seed = f"{source_id}/{session_id}" if source_id else session_id
+        completed = tuple(
+            item
+            for item in _completed_turns(main_thread, span_seed)
+            if trace_ids is None or item.trace_id in trace_ids
+        )
+        if not completed:
+            return ()
+        # Reading Claude sub-agent sidecars dominates a growing transcript replay,
+        # so it follows the trace-id gate rather than preceding it.
         fleet = _Fleet.of(adapter, cwd, session_id, messages)
 
         manifests: list[TraceManifest] = []
-        span_seed = f"{source_id}/{session_id}" if source_id else session_id
-        for ordinal, turn in enumerate(_turns(main_thread)):
-            if not turn.complete:
-                continue
-            bounds = _bounds(turn.messages)
-            if bounds is None:
-                continue
-            trace_id = derive_turn_trace_id(span_seed, turn.turn_id, first=ordinal == 0)
+        for item in completed:
+            ordinal = item.ordinal
+            turn = item.turn
+            bounds = item.bounds
+            trace_id = item.trace_id
             span_turn = () if ordinal == 0 else (turn.turn_id,)
             root_span_id = derive_span_id(span_seed, "agent", "root", *span_turn)
             attachments = _attachments(turn.messages, fleet.spawned)
@@ -1387,6 +1724,7 @@ class TraceInstrumentor:
                     turn_id=turn.turn_id if ordinal else None,
                     content=content,
                     generation_ids=generation_ids,
+                    agent_kind=adapter.kind,
                 )
             )
             for thread, depth in attachments:
@@ -1450,6 +1788,7 @@ class TraceInstrumentor:
                         turn_id=turn.turn_id if ordinal else None,
                         content=content,
                         generation_ids=generation_ids,
+                        agent_kind=adapter.kind,
                     )
                 )
             # Repeated onto EVERY span of the turn, not just its root. LangFuse
@@ -1466,6 +1805,13 @@ class TraceInstrumentor:
             }
             if identity is not None:
                 common.update(identity.attributes())
+                # A third projection of the same facts, and the only one an
+                # automated evaluation rule can filter on: LangFuse nests every
+                # attribute it does not recognise under `metadata.attributes`
+                # and documents that nesting as not queryable, so the `grove.*`
+                # keys above are stored and unfindable. Derived from those keys
+                # rather than from the identity object, so the two cannot drift.
+                common.update(filterable_identity(common))
                 common[LangfuseAttr.TRACE_TAGS] = identity.tags()
             immutable = tuple(
                 replace(record, attributes={**record.attributes, **common}) for record in records
@@ -1480,6 +1826,37 @@ class TraceInstrumentor:
             )
         return tuple(manifests)
 
+    def plan(
+        self,
+        cwd: Path,
+        session_id: str,
+        adapter: SpineAdapter,
+        *,
+        session_group_id: str | None = None,
+        content: TelemetryContent = "all",
+        source_id: str | None = None,
+        identity: TraceIdentity | None = None,
+    ) -> tuple[TraceManifest, ...]:
+        """Build complete immutable manifests; reads only through the adapter.
+
+        *identity* is the workspace the session ran in. It is optional because
+        this tier is deliberately reachable without one — the historical
+        backfill replays transcripts whose workspace may no longer exist, and
+        inventing an identity for those would be worse than omitting it. A
+        caller that HAS the workspace should always pass it: without it the
+        richest tree Grove produces is also the one nobody can filter.
+        """
+        return self._plan_messages(
+            adapter.read_messages(cwd, session_id),
+            cwd,
+            session_id,
+            adapter,
+            session_group_id=session_group_id,
+            content=content,
+            source_id=source_id,
+            identity=identity,
+        )
+
     def _thread_spans(
         self,
         session_id: str,
@@ -1491,6 +1868,7 @@ class TraceInstrumentor:
         turn_id: str | None,
         content: TelemetryContent,
         generation_ids: set[int],
+        agent_kind: str,
     ) -> list[SpanRecord]:
         """Build generation/tool descendants for a main or sub-agent thread.
 
@@ -1584,6 +1962,18 @@ class TraceInstrumentor:
                             result.text if result is not None and content == "all" else None
                         ),
                         is_error=result.is_error if result is not None else False,
+                        source=ToolSource.TRANSCRIPT,
+                        agent_kind=agent_kind,
+                        # The transcript holds the tool_result whether or not
+                        # the content policy lets its text ride, so a redacted
+                        # deployment reports `redacted` rather than reporting
+                        # every finished call as still in flight.
+                        resolved=result is not None,
+                        # The harness's own recorded exit status, and the only
+                        # evidence a shell observation may claim success from.
+                        # It rides even under a redacting content policy: a
+                        # status code is an outcome, not a payload.
+                        exit_code=result.exit_code if result is not None else None,
                     )
                 )
         # Applied once, at the one place every descendant leaves this method,

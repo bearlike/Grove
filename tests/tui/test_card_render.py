@@ -920,3 +920,14 @@ def test_render_card_non_provisioning_row_with_a_stale_stamp_is_unchanged() -> N
         _render_card(stamped, dark=True, now=_NOW).plain
         == _render_card(_state(), dark=True, now=_NOW).plain
     )
+
+
+def test_native_tag_is_a_quiet_qualifier_and_absent_for_a_terminal_workspace() -> None:
+    """A Grove-owned session marks the row the way `root` does — muted, after
+    the lifecycle status — and a terminal workspace renders byte-identically
+    to a record that predates the flag."""
+    plain = _render_card(_state(), dark=True, now=_NOW).plain
+    owned = _render_card(_state(native=True), dark=True, now=_NOW).plain
+    assert "native" not in plain
+    assert "· native" in owned
+    assert owned.replace("  · native", "") == plain

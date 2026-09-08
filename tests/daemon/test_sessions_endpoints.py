@@ -43,6 +43,31 @@ ROOT_SID = "55555555-5555-4555-8555-555555555555"
 FLEET_THREAD_ID = "77777777-7777-4777-8777-777777777777"
 
 
+def _await_session(client: TestClient, session_id: str, *, timeout: float = 5.0) -> list[dict]:
+    """Return the host listing once it carries ``session_id``.
+
+    The catalog is event-maintained rather than scanned per request, so a
+    transcript planted AFTER the client started becomes visible when the
+    filesystem watcher observes it — not synchronously on the next read. That
+    is a real boundary and not a fixture detail, so the wait is on the
+    condition the test actually depends on rather than a fixed sleep. Measured
+    at ~0.1 s locally; the budget is generous because CI is slower and a
+    timeout here means the watcher genuinely never fired, which is a defect
+    worth failing on rather than papering over.
+    """
+    deadline = time.monotonic() + timeout
+    rows: list[dict] = []
+    while time.monotonic() < deadline:
+        rows = client.get("/sessions").json()
+        if any(row["session_id"] == session_id for row in rows):
+            return rows
+        time.sleep(0.05)
+    raise AssertionError(
+        f"{session_id} never reached the host catalog in {timeout}s; "
+        f"saw {[row['session_id'] for row in rows]}"
+    )
+
+
 def _state(ws_id: str, repo_root: str, *, session_id: str | None = None) -> WorkspaceState:
     now = datetime.now(tz=UTC)
     return WorkspaceState(
@@ -148,6 +173,14 @@ def client(
     store = JsonWorkspaceStore()
     repo_root = tmp_state_dir / "repo-a"
     repo_root.mkdir()  # the project scan needs a real cwd for `git worktree list`
+    # Walk-up markers for project attribution. They live HERE, before the
+    # daemon starts, because a directory becoming a git repository is not a
+    # watched filesystem event: the catalog is event-maintained, so a marker
+    # planted mid-test would never be observed and the affected rows would
+    # report `project: null` forever. `elsewhere` stands for a repo Grove has
+    # never managed and is created here for the same reason.
+    (repo_root / ".git").mkdir()
+    (tmp_state_dir / "elsewhere" / ".git").mkdir(parents=True)
     state = _state("a1", str(repo_root), session_id=MINTED_SID)
     store.save(state)
     _write_transcript(claude_home, MINTED_SID, state.worktree_path, mtime=2_000, prompt="minted")
@@ -445,15 +478,17 @@ def test_host_sessions_span_every_repo_including_ones_grove_never_managed(
     """Omitting ``repo`` widens the SAME route to host scope: every session in
     the store, including one recorded in a repo no workspace has ever touched
     — the reason the catalog exists at all."""
-    (tmp_state_dir / "repo-a" / ".git").mkdir()  # walk-up marker for the row's project
+    # The `.git` markers are planted by the `client` fixture, BEFORE the daemon
+    # starts. A directory becoming a git repository is deliberately not a
+    # watched event — the catalog's sources cover transcripts and diagram roots
+    # — so a marker created here would never be observed and the row's project
+    # would stay null however long the test waited. Only the transcript below
+    # is a genuine post-start change, which is what the wait covers.
     other = tmp_state_dir / "elsewhere"
-    (other / ".git").mkdir(parents=True)
     other_sid = "88888888-8888-4888-8888-888888888888"
     _write_transcript(claude_home, other_sid, str(other), mtime=6_000, prompt="unmanaged")
 
-    resp = client.get("/sessions")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
+    body = _await_session(client, other_sid)
     assert [s["session_id"] for s in body] == [other_sid, ROOT_SID, HAND_SID, MINTED_SID]
 
     by_id = {s["session_id"]: s for s in body}
@@ -522,7 +557,8 @@ def test_host_sessions_places_a_session_with_no_enclosing_repo(
     loose_sid = "99999999-9999-4999-8999-999999999999"
     _write_transcript(claude_home, loose_sid, str(loose), mtime=7_000, prompt="no repo")
 
-    row = next(s for s in client.get("/sessions").json() if s["session_id"] == loose_sid)
+    rows = _await_session(client, loose_sid)
+    row = next(s for s in rows if s["session_id"] == loose_sid)
     assert row["project"] is None
     assert row["cwd"] == str(loose)
 
@@ -543,14 +579,20 @@ def test_host_sessions_live_flag_reflects_a_running_agent_in_that_cwd(
     is what keeps the signal honest rather than "some agent is in this folder"."""
     worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
     fresh_sid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    _write_transcript(
-        claude_home, fresh_sid, worktree, mtime=int(time.time()), prompt="running now"
-    )
+    # The RUNTIME is registered before the transcript, and the order matters
+    # now that the catalog is event-maintained: liveness is folded when a row
+    # is built, so writing the transcript first lets the watcher cache the row
+    # in the window before the runtime exists — reporting `live: false` for a
+    # process that is running. Registering first makes the fact true for
+    # whichever build observes the file.
     runtimes.append(
         LiveRuntime(pid=4242, kind="claude_code", cwd=Path(worktree), started_at=datetime.now(UTC))
     )
+    _write_transcript(
+        claude_home, fresh_sid, worktree, mtime=int(time.time()), prompt="running now"
+    )
 
-    by_id = {s["session_id"]: s for s in client.get("/sessions").json()}
+    by_id = {s["session_id"]: s for s in _await_session(client, fresh_sid)}
     assert by_id[fresh_sid]["live"] is True
     assert by_id[MINTED_SID]["live"] is False  # same cwd, 1970 transcript → stale, not live
 
@@ -566,6 +608,7 @@ def test_catalog_turns_render_a_session_that_belongs_to_no_workspace(
     loose_sid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     _write_transcript(claude_home, loose_sid, str(loose), mtime=8_000, prompt="hello from nowhere")
 
+    _await_session(client, loose_sid)
     resp = client.get(
         f"/sessions/{loose_sid}/turns", params={"kind": "claude_code", "cwd": str(loose)}
     )

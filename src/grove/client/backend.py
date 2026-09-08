@@ -8,6 +8,7 @@ consumes it and picks the right ``Transport``: ``LocalTransport`` when
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(slots=True, frozen=True)
@@ -32,6 +33,14 @@ class BackendConfig:
     daemon_port: int = 7421
     """Daemon port on the remote host. Ignored for local backends
     (LocalTransport always picks an ephemeral port)."""
+
+    daemon_socket: Path | None = None
+    """Private Unix HTTP socket for an already-running daemon endpoint.
+
+    When set, the HTTP client connects through this path rather than a TCP
+    URL. It remains an externally supervised URL transport: no child daemon,
+    SSH tunnel, or local credential mint is involved.
+    """
 
     daemon_token: str | None = None
     """Bearer token issued by the remote daemon's pairing flow.

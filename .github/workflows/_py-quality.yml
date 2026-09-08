@@ -1,0 +1,77 @@
+name: Python quality (reusable)
+
+# The four gates `make lint` runs, each reporting its own verdict.
+#
+# Sequence was the problem worth fixing: as one `run: make lint` a ruff failure
+# exited before mypy ever ran, so one red gate hid the state of the other three
+# and every fix cost a round trip to learn the next one.
+#
+# ONE JOB, FOUR STEPS — not four parallel jobs, which is what this file tried
+# first and had to abandon. act_runner mounts a SHARED `act-toolcache` volume at
+# /opt/hostedtoolcache, and that cache is not concurrency-safe: four legs
+# calling setup-uv within the same second corrupt each other, and exactly one
+# died per run with a bare `❌ Failure - Main astral-sh/setup-uv@v3` carrying no
+# message. It moved between legs run to run (mypy on one, lint-imports on the
+# next), which is what proved it was the cache rather than any gate. Upstream
+# added `tool_cache_mode` in runner v3.2.0 for this, but that is runner config,
+# not something a workflow can assert.
+#
+# `if: ${{ !cancelled() }}` on each step is what preserves the property the
+# split exists for: every gate runs and reports even when an earlier one failed,
+# while the job still ends red. A real cancellation still stops the rest.
+# This also costs ONE uv install instead of four — with runner capacity at 1,
+# the "parallel" legs were serializing anyway, so this is strictly less work.
+
+on:
+  workflow_call:
+    inputs:
+      gates:
+        description: "all | comma-separated subset of: ruff,ruff-format,mypy,imports (no spaces)"
+        type: string
+        required: false
+        default: "all"
+      ref:
+        description: "Ref to check out; empty uses the triggering ref"
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  quality:
+    name: ruff · format · mypy · imports
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      # `--frozen --group dev`, never `--all-groups`: the latter reaches for
+      # metadata on every group's direct-URL requirement even when excluded,
+      # which pulled the docs theme (a GitHub release asset with no index
+      # mirror) and failed installs over a package no gate here runs.
+      - name: Install
+        run: uv sync --frozen --group dev
+
+      # Selection is comma-ANCHORED: a bare contains(gates, 'ruff') also fires
+      # `ruff-format`, and the two are deliberately distinct — `ruff check --fix`
+      # can reflow code and still leave the formatter red, so a green check
+      # never implies a green format. Expressions have no replace(), so the
+      # input must carry no spaces.
+      - name: ruff check
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',ruff,')) }}
+        run: uv run ruff check src tests
+
+      - name: ruff format --check
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',ruff-format,')) }}
+        run: uv run ruff format --check src tests
+
+      - name: mypy
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',mypy,')) }}
+        run: uv run mypy src/grove
+
+      - name: import-linter
+        if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',imports,')) }}
+        run: uv run lint-imports

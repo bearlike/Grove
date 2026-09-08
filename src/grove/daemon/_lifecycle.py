@@ -33,6 +33,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
+from grove.core.errors import WorkCapacityExceeded
+
 T = TypeVar("T")
 
 # Size of the dedicated lifecycle thread pool (see the module docstring and
@@ -108,11 +110,19 @@ class _LifecycleRunner:
     Threads are lazy, so this costs nothing until the first lifecycle request.
     """
 
-    def __init__(self, *, max_workers: int = _LIFECYCLE_EXECUTOR_WORKERS) -> None:
+    def __init__(
+        self, *, max_workers: int = _LIFECYCLE_EXECUTOR_WORKERS, max_pending: int = 64
+    ) -> None:
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="grove-lifecycle"
         )
         self._locks = _KeyedLocks()
+        if max_pending < 1:
+            raise ValueError("max_pending must be positive")
+        self._max_pending = max_pending
+        self._pending = 0
+        self._closed = False
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     async def run(self, key: str | None, fn: Callable[..., T], *args: Any) -> T:
         """Await ``fn(*args)`` on the pool, exclusive against other verbs on ``key``.
@@ -124,9 +134,35 @@ class _LifecycleRunner:
         lock covers the record insert). Keying create globally would serialize
         exactly the case the pool was added for.
         """
-        loop = asyncio.get_running_loop()
+        if self._closed or self._pending >= self._max_pending:
+            raise WorkCapacityExceeded("lifecycle admission is full or closed")
+        self._pending += 1
+
+        async def execute() -> T:
+            try:
+                async with self.hold(key):
+                    return await asyncio.get_running_loop().run_in_executor(
+                        self._executor, fn, *args
+                    )
+            finally:
+                self._pending -= 1
+
+        task = asyncio.create_task(execute())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        # A disconnected request must not release the key while its side effect runs.
+        return await asyncio.shield(task)
+
+    @asynccontextmanager
+    async def hold(self, key: str | None) -> AsyncIterator[None]:
+        """Share lifecycle exclusion with a bounded non-lifecycle operation.
+
+        Mailbox submission waits for the recipient's runtime acknowledgement;
+        holding only that bounded wait prevents teardown from deleting its live
+        transport midway, without sending the wait into the scarce worker pool.
+        """
         async with self._locks.hold(key):
-            return await loop.run_in_executor(self._executor, fn, *args)
+            yield
 
     def shutdown(self) -> None:
         """Drop queued verbs, let running ones finish, never block shutdown.
@@ -138,4 +174,5 @@ class _LifecycleRunner:
         effects on disk and in the container runtime, so it is left to finish
         rather than half-torn-down.
         """
+        self._closed = True
         self._executor.shutdown(wait=False, cancel_futures=True)

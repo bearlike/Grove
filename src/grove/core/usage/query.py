@@ -10,6 +10,7 @@ import base64
 import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Final
@@ -47,6 +48,21 @@ def day_calendar_sql(buckets: Sequence[DayBucket]) -> tuple[str, list[Any]]:
 
 def _dt(value: int | None) -> datetime | None:
     return datetime.fromtimestamp(value, UTC) if value is not None else None
+
+
+def _optional(row: Any, column: str) -> Any:
+    """A column that may not be in the SELECT at all, as ``None`` when absent.
+
+    The workspace-name columns come from an ATTACHed database, so a store that
+    could not attach serves rows without them — and indexing a missing key on a
+    ``sqlite3.Row`` raises ``IndexError`` rather than returning ``None``. This
+    keeps "the name store was unreachable" and "no name was recorded" answering
+    the same honest absence instead of one of them being a 500.
+    """
+    try:
+        return row[column]
+    except (IndexError, KeyError):
+        return None
 
 
 def _window_start(window: SubscriptionWindowView, declared: Mapping[str, int]) -> datetime | None:
@@ -188,6 +204,14 @@ def _has_temporal_filter(filters: UsageFilters) -> bool:
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class _CostAccounting:
+    """The all-or-nothing cost and its explainable whole-session subtotal."""
+
+    cost: MoneyView | None
+    breakdown: UsageCostBreakdownView
+
+
 class UsageQuery:
     """Construct frozen wire views from parameterized, capped SQLite reads."""
 
@@ -204,8 +228,10 @@ class UsageQuery:
             params,
         )[0]
         event_where, event_params = self._event_where(filters)
-        cost = self._cost(where, params)
-        coverage = self.coverage().model_copy(update={"cost_available": cost is not None})
+        accounting = self._cost_accounting(filters)
+        coverage = self.coverage().model_copy(
+            update={"cost_available": accounting.cost is not None}
+        )
         return UsageSummaryView(
             since=filters.since,
             until=filters.until,
@@ -231,7 +257,8 @@ class UsageQuery:
                 or 0,
             ),
             files_changed=row["files_changed"] or 0,
-            cost=cost,
+            cost=accounting.cost,
+            cost_breakdown=accounting.breakdown,
             accounts=row["accounts"] or 0,
             projects=row["projects"] or 0,
             coverage=coverage,
@@ -271,8 +298,24 @@ class UsageQuery:
                     f"({expression} = ? AND ({time_after})))"
                 )
                 params.extend((key, key, *time_params))
+        # The name join is LEFT and its columns are conditional on the ATTACH:
+        # most sessions have no workspace at all (hand-started, or predating the
+        # history store), and a session whose workspace was killed keeps its
+        # name precisely because that store outlives `state.json`. An absent
+        # name must read as absent, never as a placeholder.
+        names = (
+            ", n.title workspace_title, n.description workspace_description, "
+            "n.deleted_at workspace_deleted_at"
+            if self.store.history_attached
+            else ""
+        )
+        name_join = (
+            " LEFT JOIN history.workspace_names n ON n.workspace_id=s.workspace_id"
+            if self.store.history_attached
+            else ""
+        )
         rows = self.store.query(
-            f"SELECT s.*, a.label account_label, {expression} sort_key FROM sessions s LEFT JOIN accounts a ON a.account_id=s.account_id WHERE {where} ORDER BY ({expression} IS NULL), {expression} DESC, s.last_event_at DESC, s.session_id DESC, s.source_id DESC LIMIT ?",
+            f"SELECT s.*, a.label account_label{names}, {expression} sort_key FROM sessions s LEFT JOIN accounts a ON a.account_id=s.account_id{name_join} WHERE {where} ORDER BY ({expression} IS NULL), {expression} DESC, s.last_event_at DESC, s.session_id DESC, s.source_id DESC LIMIT ?",
             [*params, limit + 1],
         )
         page = rows[:limit]
@@ -291,9 +334,16 @@ class UsageQuery:
             if _has_temporal_filter(filters)
             else {}
         )
+        cost_amounts = self._session_cost_amounts(
+            filters, prices=self.prices.snapshot(), sessions=page
+        )
         return UsageSessionPageView(
             rows=tuple(
-                self._session(row, bounded.get((row["session_id"], row["source_id"])))
+                self._session(
+                    row,
+                    bounded.get((row["session_id"], row["source_id"])),
+                    cost_amount=cost_amounts[(row["session_id"], row["source_id"])],
+                )
                 for row in page
             ),
             next_cursor=next_cursor,
@@ -433,7 +483,7 @@ class UsageQuery:
         column = {"provider": "provider", "account": "account_id", "project": "project"}[dimension]
         where, params = self._where(filters)
         rows = self.store.query(
-            f"SELECT {column} key, COUNT(*) sessions, {_complete_breakdown_sums()}, SUM(tool_calls) tool_calls, SUM(tool_failures) tool_failures, CASE WHEN COUNT(cost_amount)<COUNT(*) THEN NULL ELSE SUM(CAST(cost_amount AS REAL)) END cost_amount FROM sessions WHERE {where} GROUP BY {column} ORDER BY sessions DESC LIMIT ?",
+            f"SELECT {column} key, COUNT(*) sessions, {_complete_breakdown_sums()}, SUM(tool_calls) tool_calls, SUM(tool_failures) tool_failures, CASE WHEN COUNT(cost_amount)<COUNT(*) THEN NULL ELSE json_group_array(cost_amount) END cost_amount FROM sessions WHERE {where} GROUP BY {column} ORDER BY sessions DESC LIMIT ?",
             [*params, self.cfg.usage.max_breakdown_rows + 1],
         )
         return self._breakdown_view(dimension, rows)
@@ -549,30 +599,154 @@ class UsageQuery:
             quota_available=bool(self.store.scalar("SELECT COUNT(*) FROM quota_snapshots")),
         )
 
-    def _cost(self, where: str, params: list[Any]) -> MoneyView | None:
-        rows = self.store.query(
-            f"SELECT models, fresh_input, cache_read, cache_creation, output "
-            f"FROM sessions WHERE {where}",
-            params,
-        )
-        if not rows:
-            return None
+    def _cost_accounting(self, filters: UsageFilters) -> _CostAccounting:
+        """Price the exact selected session population without model guessing.
+
+        Whole-session summaries retain the legitimate single-model session-token
+        fallback because one model governs all stored token evidence. Switched
+        sessions instead price their stored generation evidence per model. Every
+        selected generation must have both a model and every price-bearing token
+        class; otherwise the whole session is unknown, never a partial charge.
+        """
+        sessions = self._selected_sessions(filters)
+        if not sessions:
+            return _CostAccounting(
+                cost=None,
+                breakdown=UsageCostBreakdownView(total_sessions=0),
+            )
+        prices = self.prices.snapshot()
+        event_counts = self._generation_counts(filters)
         total = Decimal(0)
-        for row in rows:
-            models = _models(row["models"])
-            amount = self.prices.amount(
-                models[0] if len(models) == 1 else None,
-                TokenCounts(
-                    fresh_input=row["fresh_input"],
-                    cache_read=row["cache_read"],
-                    cache_creation=row["cache_creation"],
-                    output=row["output"],
-                ),
+        priced_sessions = 0
+        complete = True
+        require_events = _has_temporal_filter(filters)
+        for session in sessions:
+            amount = self._session_cost(
+                session,
+                event_counts.get((session["session_id"], session["source_id"])),
+                prices=prices,
+                require_events=require_events,
             )
             if amount is None:
-                return None
+                complete = False
+                continue
             total += amount
-        return self.prices.money(total)
+            priced_sessions += 1
+        known = prices.money(total) if priced_sessions else None
+        return _CostAccounting(
+            cost=prices.money(total) if complete and priced_sessions == len(sessions) else None,
+            breakdown=UsageCostBreakdownView(
+                known_cost=known,
+                priced_sessions=priced_sessions,
+                total_sessions=len(sessions),
+            ),
+        )
+
+    def _selected_sessions(self, filters: UsageFilters) -> list[Any]:
+        """The population every summary cost field accounts for."""
+        where, params = self._session_where(filters, alias="s")
+        return self.store.query(
+            f"SELECT s.session_id, s.source_id, s.models, s.fresh_input, s.cache_read, "
+            f"s.cache_creation, s.output FROM sessions s WHERE {where}",
+            params,
+        )
+
+    def _generation_counts(
+        self,
+        filters: UsageFilters,
+        *,
+        session_keys: Sequence[tuple[str, str]] | None = None,
+    ) -> dict[tuple[str, str], list[tuple[str | None, TokenCounts]]]:
+        """Generation evidence for selected sessions, never the whole cache page path."""
+        if session_keys is not None and not session_keys:
+            return {}
+        where, params = self._event_where(filters)
+        key_filter = ""
+        if session_keys is not None:
+            key_filter = (
+                " AND (e.session_id, e.source_id) IN ("
+                + ", ".join("(?, ?)" for _ in session_keys)
+                + ")"
+            )
+            params.extend(value for key in session_keys for value in key)
+        rows = self.store.query(
+            f"SELECT e.session_id, e.source_id, e.model, e.fresh_input, e.cache_read, "
+            f"e.cache_creation, e.output FROM usage_events e "
+            f"JOIN sessions s ON s.session_id=e.session_id AND s.source_id=e.source_id "
+            f"WHERE {where}{key_filter} AND e.kind IN ('generation', 'subagent')",
+            params,
+        )
+        grouped: dict[tuple[str, str], list[tuple[str | None, TokenCounts]]] = defaultdict(list)
+        for row in rows:
+            grouped[(row["session_id"], row["source_id"])].append(
+                (
+                    row["model"],
+                    TokenCounts(
+                        fresh_input=row["fresh_input"],
+                        cache_read=row["cache_read"],
+                        cache_creation=row["cache_creation"],
+                        output=row["output"],
+                    ),
+                )
+            )
+        return grouped
+
+    def _session_cost(
+        self,
+        session: Any,
+        events: list[tuple[str | None, TokenCounts]] | None,
+        *,
+        prices: PriceBook,
+        require_events: bool,
+    ) -> Decimal | None:
+        """One session's complete cost, preferring exact event-model attribution."""
+        if events:
+            # ``PriceBook.total`` stops on the first unsupported generation. Its
+            # per-model arithmetic makes switching safe; its None result makes
+            # missing model/token evidence fail the entire selected session.
+            return prices.total(events)
+        models = _models(session["models"])
+        if not require_events and len(models) == 1:
+            # Older/provider-total-style session rows may legitimately have no
+            # generation rows. Once events exist, their per-generation evidence
+            # is authoritative and a partial session aggregate may not override
+            # it.
+            return prices.amount(
+                models[0],
+                TokenCounts(
+                    fresh_input=session["fresh_input"],
+                    cache_read=session["cache_read"],
+                    cache_creation=session["cache_creation"],
+                    output=session["output"],
+                ),
+            )
+        return None
+
+    def _session_cost_amounts(
+        self,
+        filters: UsageFilters,
+        *,
+        prices: PriceBook,
+        sessions: Sequence[Any] | None = None,
+    ) -> dict[tuple[str, str], Decimal | None]:
+        """Per-session costs from the same selected population as the summary."""
+        selected = list(sessions) if sessions is not None else self._selected_sessions(filters)
+        if not selected:
+            return {}
+        events = self._generation_counts(
+            filters,
+            session_keys=[(row["session_id"], row["source_id"]) for row in selected],
+        )
+        require_events = _has_temporal_filter(filters)
+        return {
+            (row["session_id"], row["source_id"]): self._session_cost(
+                row,
+                events.get((row["session_id"], row["source_id"])),
+                prices=prices,
+                require_events=require_events,
+            )
+            for row in selected
+        }
 
     def _temporal_summary(self, filters: UsageFilters) -> UsageSummaryView:
         groups = self._event_groups(filters)
@@ -592,8 +766,10 @@ class UsageQuery:
         )
         active = _complete_group_sum(groups, "active_ms")
         execution = _complete_group_sum(groups, "execution_ms")
-        cost = self._event_cost(filters)
-        coverage = self.coverage().model_copy(update={"cost_available": cost is not None})
+        accounting = self._cost_accounting(filters)
+        coverage = self.coverage().model_copy(
+            update={"cost_available": accounting.cost is not None}
+        )
         return UsageSummaryView(
             since=filters.since,
             until=filters.until,
@@ -615,7 +791,8 @@ class UsageQuery:
                 distinct_tools=distinct_tools or 0,
             ),
             files_changed=sum(row["files_changed"] or 0 for row in groups),
-            cost=cost,
+            cost=accounting.cost,
+            cost_breakdown=accounting.breakdown,
             accounts=len({row["account_id"] for row in groups if row["account_id"]}),
             projects=len({row["project"] for row in groups if row["project"]}),
             coverage=coverage,
@@ -745,27 +922,25 @@ class UsageQuery:
         calendar, where, params = self._day_scope(filters, buckets)
         rows = self.store.query(
             f"{calendar} SELECT bucket.day day, e.session_id session_id, e.source_id source_id, "
-            f"e.model model, SUM(e.fresh_input) fresh_input, SUM(e.cache_read) cache_read, "
-            f"SUM(e.cache_creation) cache_creation, SUM(e.output) output "
+            f"e.model model, e.fresh_input, e.cache_read, e.cache_creation, e.output "
             f"{DAY_EVENT_JOIN} "
-            f"WHERE {where} AND (e.fresh_input IS NOT NULL OR e.cache_read IS NOT NULL OR "
-            f"e.cache_creation IS NOT NULL OR e.output IS NOT NULL) "
-            f"GROUP BY bucket.day, e.session_id, e.source_id, e.model",
+            f"WHERE {where} AND e.kind IN ('generation', 'subagent')",
             params,
         )
         priced: dict[str, list[Any]] = defaultdict(list)
         for row in rows:
             priced[str(row["day"])].append(row)
+        prices = self.prices.snapshot()
         costs: dict[str, MoneyView | None] = {}
         for day, groups in daily.items():
             if not groups:
                 continue
             measured = priced.get(day, [])
-            if len({(row["session_id"], row["source_id"]) for row in measured}) != len(groups):
-                costs[day] = None
-                continue
-            costs[day] = self.prices.money(
-                self.prices.total(
+            by_session: dict[tuple[str, str], list[tuple[str | None, TokenCounts]]] = defaultdict(
+                list
+            )
+            for row in measured:
+                by_session[(row["session_id"], row["source_id"])].append(
                     (
                         row["model"],
                         TokenCounts(
@@ -775,8 +950,15 @@ class UsageQuery:
                             output=row["output"],
                         ),
                     )
-                    for row in measured
                 )
+            amounts = [
+                prices.total(by_session.get((row["session_id"], row["source_id"]), []))
+                for row in groups
+            ]
+            costs[day] = (
+                prices.money(sum((amount for amount in amounts if amount is not None), Decimal(0)))
+                if all(amount is not None for amount in amounts)
+                else None
             )
         return costs
 
@@ -867,64 +1049,28 @@ class UsageQuery:
         return {key: ActiveIntervals.of(spans) for key, spans in collected.items()}
 
     def _event_cost(self, filters: UsageFilters) -> MoneyView | None:
-        """The whole filtered range's cost, all-or-nothing.
-
-        Day-bounded costing lives in :meth:`_daily_event_cost`; the ``start``/
-        ``end`` parameters this method used to carry existed only for the
-        activity loop that called it once per day, so they left with it rather
-        than staying as a seam with no producer.
-        """
-        groups = self._event_groups(filters)
-        if not groups:
-            return None
-        where, params = self._event_where(filters)
-        rows = self.store.query(
-            f"SELECT e.session_id, e.source_id, e.model, SUM(e.fresh_input) fresh_input, "
-            f"SUM(e.cache_read) cache_read, SUM(e.cache_creation) cache_creation, SUM(e.output) output "
-            f"FROM usage_events e JOIN sessions s ON s.session_id=e.session_id AND s.source_id=e.source_id "
-            f"WHERE {where} AND (e.fresh_input IS NOT NULL OR e.cache_read IS NOT NULL OR "
-            f"e.cache_creation IS NOT NULL OR e.output IS NOT NULL) "
-            f"GROUP BY e.session_id, e.source_id, e.model",
-            params,
-        )
-        measured_sessions = {(row["session_id"], row["source_id"]) for row in rows}
-        if len(measured_sessions) != len(groups):
-            return None
-        total = self.prices.total(
-            (
-                row["model"],
-                TokenCounts(
-                    fresh_input=row["fresh_input"],
-                    cache_read=row["cache_read"],
-                    cache_creation=row["cache_creation"],
-                    output=row["output"],
-                ),
-            )
-            for row in rows
-        )
-        return self.prices.money(total)
+        """The range cost using the shared complete-session accounting reducer."""
+        return self._cost_accounting(filters).cost
 
     def refresh_cost_cache(self) -> None:
-        """Recompute sortable cache columns from the current startup price book."""
+        """Recompute sortable costs with the same per-session reducer as views."""
+        prices = self.prices.snapshot()
         rows = self.store.query(
             "SELECT session_id, source_id, models, fresh_input, cache_read, cache_creation, output FROM sessions"
         )
+        events = self._generation_counts(UsageFilters())
         updates: list[tuple[str | None, str, str, str, str]] = []
         for row in rows:
-            models = _models(row["models"])
-            amount = self.prices.amount(
-                models[0] if len(models) == 1 else None,
-                TokenCounts(
-                    fresh_input=row["fresh_input"],
-                    cache_read=row["cache_read"],
-                    cache_creation=row["cache_creation"],
-                    output=row["output"],
-                ),
+            amount = self._session_cost(
+                row,
+                events.get((row["session_id"], row["source_id"])),
+                prices=prices,
+                require_events=False,
             )
             updates.append(
                 (
                     format(amount, "f") if amount is not None else None,
-                    self.prices.currency,
+                    prices.currency,
                     "estimated" if amount is not None else "unknown",
                     row["session_id"],
                     row["source_id"],
@@ -937,23 +1083,12 @@ class UsageQuery:
                     updates,
                 )
 
-    def _session(self, row: Any, bounded: Any | None = None) -> UsageSessionRowView:
+    def _session(
+        self, row: Any, bounded: Any | None = None, *, cost_amount: Decimal | None
+    ) -> UsageSessionRowView:
         models = _models(row["models"])
         token_row = bounded or row
-        amount = (
-            None
-            if bounded is not None
-            else self.prices.amount(
-                models[0] if len(models) == 1 else None,
-                TokenCounts(
-                    fresh_input=row["fresh_input"],
-                    cache_read=row["cache_read"],
-                    cache_creation=row["cache_creation"],
-                    output=row["output"],
-                ),
-            )
-        )
-        cost = self.prices.money(amount)
+        cost = self.prices.money(cost_amount)
         active_ms = bounded["active_ms"] if bounded is not None else row["active_ms"]
         source = bounded if bounded is not None else row
         execution_ms = source["execution_ms"]
@@ -967,6 +1102,14 @@ class UsageQuery:
             account_id=row["account_id"],
             account_label=row["account_label"],
             source_id=row["source_id"],
+            workspace_id=row["workspace_id"],
+            # Read through `_optional` because the three name columns exist only
+            # when the durable store ATTACHed — a cache serving a page without
+            # them must publish "no name recorded", which is the same answer a
+            # workspace predating the store gets, and the honest one either way.
+            workspace_title=_optional(row, "workspace_title"),
+            workspace_description=_optional(row, "workspace_description"),
+            workspace_deleted_at=_dt(_optional(row, "workspace_deleted_at")),
             models=models,
             started_at=_dt(range_start),
             last_event_at=_dt(range_end),
@@ -1081,7 +1224,7 @@ class UsageQuery:
     def _model_breakdown(self, filters: UsageFilters) -> UsageBreakdownView:
         where, params = self._where(filters, alias="s")
         rows = self.store.query(
-            f"SELECT model.value key, COUNT(*) sessions, {_complete_breakdown_sums('s.')}, SUM(s.tool_calls) tool_calls, SUM(s.tool_failures) tool_failures, CASE WHEN COUNT(s.cost_amount)<COUNT(*) THEN NULL ELSE SUM(CAST(s.cost_amount AS REAL)) END cost_amount FROM sessions s JOIN json_each(s.models) model WHERE {where} AND json_array_length(s.models)=1 GROUP BY model.value ORDER BY sessions DESC LIMIT ?",
+            f"SELECT model.value key, COUNT(*) sessions, {_complete_breakdown_sums('s.')}, SUM(s.tool_calls) tool_calls, SUM(s.tool_failures) tool_failures, CASE WHEN COUNT(s.cost_amount)<COUNT(*) THEN NULL ELSE json_group_array(s.cost_amount) END cost_amount FROM sessions s JOIN json_each(s.models) model WHERE {where} AND json_array_length(s.models)=1 GROUP BY model.value ORDER BY sessions DESC LIMIT ?",
             [*params, self.cfg.usage.max_breakdown_rows + 1],
         )
         return self._breakdown_view("model", rows)
@@ -1173,7 +1316,11 @@ class UsageQuery:
                     tool_calls=row["tool_calls"] or 0,
                     tool_failures=row["tool_failures"] or 0,
                     cost=self.prices.money(
-                        Decimal(str(row["cost_amount"])) if row["cost_amount"] is not None else None
+                        sum(
+                            (Decimal(value) for value in json.loads(row["cost_amount"])), Decimal(0)
+                        )
+                        if row["cost_amount"] is not None
+                        else None
                     ),
                 )
                 for row in rows[:limit]

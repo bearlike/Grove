@@ -1,0 +1,124 @@
+name: Webapp e2e (reusable)
+
+# Playwright, SHARDED from the outset.
+#
+# Sharding is not an optimization here, it is what makes the job viable: the
+# suite was measured at ~1.0 hour on a developer host and the act_runner config
+# sets `timeout: 1h`, so an unsharded run would be killed at the ceiling and
+# report as a failure rather than a timeout. Playwright's own `--shard=i/n`
+# splits by spec file across parallel legs.
+#
+# This is also the single biggest host-load win available: before this file,
+# e2e had no CI home at all and every run competed with the user's own work.
+
+on:
+  workflow_call:
+    inputs:
+      shards:
+        description: "Number of parallel shards"
+        type: number
+        required: false
+        default: 4
+      grep:
+        description: "Playwright --grep filter; empty runs every spec"
+        type: string
+        required: false
+        default: ""
+      ref:
+        description: "Ref to check out; empty uses the triggering ref"
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  # Playwright wants `--shard=i/n` with a literal i, and a matrix cannot be
+  # built from an arithmetic range in an expression — so materialize the index
+  # list as JSON here and fan out over it.
+  plan:
+    name: Plan shards
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - id: plan
+        run: |
+          set -euo pipefail
+          n=${{ inputs.shards }}
+          echo "shards=$(seq -s, 1 "$n" | sed 's/^/[/;s/$/]/')" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: playwright ${{ matrix.shard }}/${{ inputs.shards }}
+    needs: plan
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    strategy:
+      # A failure in shard 2 says nothing about shard 3, and cancelling the rest
+      # would hide how broad a regression is.
+      fail-fast: false
+      # ONE SHARD AT A TIME, because sharding here buys parallelism the runner
+      # cannot supply. Each shard is an `npm ci`, a Chromium install and a Next
+      # server inside a job container capped at `--memory=2560m` (and `/tmp` is
+      # RAM-backed), on a runner whose own `capacity` is 2 — so four at once
+      # starved each other and every spec died on the same 90s `locator.click`
+      # timeout: 38 failed / 3 passed, then 49 failed / 2 passed, with zero
+      # assertion failures among them. A uniform timeout on every click is a
+      # machine that cannot paint, not 49 broken specs.
+      #
+      # Serial shards keep the same total work and the same per-shard verdicts;
+      # they only stop the shards competing. Same argument as chaining the
+      # uv-using gates and chaining e2e behind the webapp gate — this runner
+      # serializes one way or another, and doing it explicitly is the only way
+      # the result describes the code.
+      max-parallel: 1
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+      - name: Install
+        working-directory: webapp
+        run: npm ci
+      # `--with-deps` installs the system libraries the browser needs; the
+      # bare download is not enough on a clean image.
+      - name: Install Playwright browsers
+        working-directory: webapp
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright
+        working-directory: webapp
+        env:
+          E2E_GREP: ${{ inputs.grep }}
+        run: |
+          set -euo pipefail
+          args=(--shard=${{ matrix.shard }}/${{ inputs.shards }})
+          if [ -n "$E2E_GREP" ]; then args+=(--grep "$E2E_GREP"); fi
+          npx playwright test "${args[@]}"
+      # Traces are retained on failure by playwright.config.ts; without this
+      # upload a red shard leaves nothing to debug from.
+      #
+      # NOT `actions/upload-artifact@v4` — it fails on Gitea with
+      # `GHESNotSupportedError: @actions/artifact v2.0.0+ ... are not currently
+      # supported on GHES`, and it fails as a ::warning::, so the step stays
+      # GREEN and the artifact simply never exists. Measured 2026-09-16: every
+      # shard of the first real e2e run logged it and no report was retrievable.
+      # A debugging aid that silently produces nothing is worse than none, since
+      # you only discover it when you already need the trace.
+      #
+      # Summarize into the log instead, which is the one sink Gitea always
+      # keeps. `|| true` because this runs on failure() and must never mask the
+      # test result with an error of its own.
+      - name: Summarize failures
+        if: failure()
+        working-directory: webapp
+        run: |
+          set -uo pipefail
+          echo "── failed specs (shard ${{ matrix.shard }}/${{ inputs.shards }}) ──"
+          # The JSON report is not enabled, so read the trace dirs Playwright
+          # writes per failing test; each directory name is the spec + title.
+          ls -1 test-results 2>/dev/null | head -40 || true
+          echo "── error excerpts ──"
+          grep -rhoE "(Error|expect)[^\\n]{0,160}" test-results --include="*.txt" 2>/dev/null | sort -u | head -40 || true

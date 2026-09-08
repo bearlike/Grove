@@ -205,6 +205,9 @@ class ContainerAgentEntry:
     cli: DevcontainerCli = field(default_factory=DevcontainerCli)
     """The exec boundary, injected so tests supply a scripted stand-in."""
 
+    read_only: bool = False
+    """Enter as a viewer (native workspace) — see :attr:`TmuxEntry.read_only`."""
+
     def argv(self, *, detached: bool) -> list[str]:
         """The full ``devcontainer exec … -- …`` argv.
 
@@ -293,6 +296,8 @@ class ContainerAgentEntry:
             term_fallback=tmux.term_fallback,
             detached=detached,
             conf=self.container.tmux_conf,
+            read_only=self.read_only,
+            size=self.cfg.tmux.detached_size,
         )
 
     @staticmethod

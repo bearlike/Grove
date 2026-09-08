@@ -2,19 +2,26 @@
 
 import { CircleDollarSignIcon } from "lucide-react";
 
-import type { UsageSummaryView } from "@/lib/grove/api";
+import type { MoneyView, UsageSummaryView } from "@/lib/grove/api";
 import { UsageSection } from "./section";
 import { humanize, money } from "./format";
 
-/**
- * Spend for the indexed range — and, on most hosts, the reason there is none.
- *
- * The absence is stated ONCE, here, with its cause. Cost needs both a price
- * table and per-class token evidence; a store missing either reports
- * `cost_available: false`, and repeating "not measured" in every row of every
- * table below is how the old page turned one honest gap into a page-wide
- * shrug.
- */
+/** Renders a row price honestly: a measured money value or an explicit unknown. */
+export function UsageCostFigure({
+  cost,
+}: {
+  cost: MoneyView | null | undefined;
+}): React.ReactNode {
+  if (!cost) return <span className="text-content-tertiary">unknown</span>;
+  return (
+    <span className="tabular-nums">
+      {money(cost.amount, cost.currency)}
+      <span className="ms-1 text-xs text-content-tertiary">{humanize(cost.provenance)}</span>
+    </span>
+  );
+}
+
+/** Spend for the indexed range, including a priced subtotal where coverage is partial. */
 export function UsageCost({
   summary,
   failed,
@@ -28,8 +35,10 @@ export function UsageCost({
   retrying?: boolean;
   className?: string;
 }): React.ReactNode {
-  const coverage = summary?.coverage;
-  const degraded = coverage?.sources.filter((source) => source.health !== "ok") ?? [];
+  const completeCost = summary?.cost;
+  const breakdown = summary?.cost_breakdown;
+  const knownCost = completeCost ? null : breakdown?.known_cost;
+  const totalSessions = breakdown?.total_sessions ?? summary?.sessions ?? 0;
 
   return (
     <UsageSection
@@ -44,32 +53,33 @@ export function UsageCost({
       className={className}
       data-testid="usage-cost"
     >
-      {summary?.cost ? (
+      {completeCost ? (
         <>
           <p className="text-2xl font-semibold text-content-primary">
-            {money(summary.cost.amount, summary.cost.currency)}
+            {money(completeCost.amount, completeCost.currency)}
           </p>
           <p className="text-xs text-content-tertiary">
-            {humanize(summary.cost.provenance)}
+            Complete estimate · {humanize(completeCost.provenance)}
           </p>
+        </>
+      ) : knownCost ? (
+        <>
+          <p className="text-2xl font-semibold text-content-primary">
+            {money(knownCost.amount, knownCost.currency)}
+          </p>
+          <p className="text-xs text-content-tertiary">
+            Known partial · {humanize(knownCost.provenance)} · {breakdown?.priced_sessions ?? 0} of {totalSessions} sessions priced
+          </p>
+        </>
+      ) : totalSessions === 0 ? (
+        <>
+          <p className="text-lg text-content-tertiary">no sessions</p>
+          <p className="text-xs text-content-secondary">No sessions match this selection.</p>
         </>
       ) : (
         <>
-          {/* One size down and one tier down from the figure it stands in for,
-              and never semibold. It used to render at exactly the size and
-              weight of the largest real number on the page, which made the
-              absence of data the loudest thing on the screen — the single most
-              visible instance of that defect in the app. Weight is for things
-              that are there. */}
-          <p className="text-lg text-content-tertiary">not measured</p>
-          <p className="text-xs text-content-secondary">
-            Cost needs a price table and per-class token counts. This store has
-            neither for the indexed range
-            {degraded.length > 0
-              ? `; ${degraded.map((source) => `${source.label} is ${source.health}`).join(", ")}`
-              : ""}
-            .
-          </p>
+          <p className="text-lg text-content-tertiary">unavailable</p>
+          <p className="text-xs text-content-secondary">Cost is unavailable for this selection.</p>
         </>
       )}
     </UsageSection>

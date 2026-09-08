@@ -9,17 +9,15 @@ rather than quietly missing a field.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from grove.core.config import validate_model_id
+from grove.core.contracts.attachments import AttachmentUploadRequest
 from grove.core.contracts.branch_plan import AutoBranch, BranchPlan
 from grove.core.contracts.tickets import TicketSelector
 from grove.core.workspace import Runtime
-
-_MODEL_ID_MAX_LENGTH = 64
-_MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:\[\]-]*\Z")
 
 
 class CreateWorkspaceRequest(BaseModel):
@@ -58,19 +56,10 @@ class CreateWorkspaceRequest(BaseModel):
     @field_validator("model")
     @classmethod
     def _validate_model(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        model = value.strip()
-        if not model:
-            return None
-        if len(model) > _MODEL_ID_MAX_LENGTH:
-            raise ValueError(f"model id {model!r} exceeds {_MODEL_ID_MAX_LENGTH} characters")
-        # This limits argv shape, not model semantics: providers still validate any id we forward.
-        # A separator is admitted unless dangerous, not excluded unless proven necessary.
-        # Brackets occur in real gateway ids; list-form argv with shell=False never expands them.
-        if not _MODEL_ID_PATTERN.fullmatch(model):
-            raise ValueError(f"invalid model id {model!r}")
-        return model
+        # The rule lives beside `WorkspaceDefaults.model`, which the engine now
+        # resolves into this same argv position — one definition, or the saved
+        # default is admitted under a looser rule than the wire's.
+        return validate_model_id(value)
 
     branch_plan: BranchPlan = Field(default_factory=AutoBranch)
     """How the workspace's branch and placement are sourced. See
@@ -78,10 +67,11 @@ class CreateWorkspaceRequest(BaseModel):
     worktree, ``RootBranch`` runs in the repo root."""
 
     runtime: Runtime | None = None
-    """Where this workspace's agent runs: ``"container"`` (the default) or
-    ``"host"``. ``None`` — the default — takes the cascade's answer
-    (``container.enabled``), so a caller that does not care never has to know
-    the field exists.
+    """Where this workspace's agent runs: ``"container"`` or ``"host"``.
+    ``None`` — the default — takes the cascade's answer
+    (``GroveConfig.default_runtime``: the saved ``defaults.runtime`` if there is
+    one, else ``container.enabled``), so a caller that does not care never has
+    to know the field exists.
 
     Explicit ``"host"`` is the escape hatch, and it is a *recorded choice*, not
     a fallback: it is never warned about and a later ``respawn`` never
@@ -95,19 +85,38 @@ class CreateWorkspaceRequest(BaseModel):
     brief: bool | None = None
     """Hand this workspace's agent Grove's first-turn brief — one short note
     pointing it at the ``working-in-grove`` skill. ``None`` — the default —
-    takes the cascade's answer (``brief.enabled``), exactly like ``runtime``.
+    takes the cascade's answer (``GroveConfig.default_brief``), exactly like
+    ``runtime``.
 
     Persisted for the same reason ``runtime`` is: the delivery happens at every
     launch, so a workspace created while the default was on must keep being
     briefed after somebody flips the default off, and vice versa."""
 
-    skip_init: bool = False
+    native: bool | None = None
+    """Run this workspace's agent as a Grove-owned native session (Claude Code
+    stream-json / Codex app-server) rather than its interactive terminal.
+    ``None`` — the default — takes the roster entry's own ``AgentSpec.native``,
+    exactly like ``runtime`` takes the cascade's. ``True`` on an agent kind
+    with no native protocol (``generic``/``mewbo``) is ignored: the kind, not
+    the request, decides whether a control channel exists to own.
+
+    Persisted for the same reason ``runtime`` is: every launch and every steer
+    verb reads the record to know whether a pane or a control channel is
+    there, so a later roster edit must not re-decide for a running workspace."""
+
+    skip_init: bool | None = None
     """Skip the init script for this create only, regardless of
     ``init_script.enabled``. A per-create override of a config default
     (mechanism, not policy): the init script is built for a fresh worktree, so
     it can be unwanted or unsafe in the repo root, and some worktrees simply
     don't need it. Records ``InitStatus.SKIPPED``. Does not persist — it is a
-    create-time decision, never re-applied on resume/respawn."""
+    create-time decision, never re-applied on resume/respawn.
+
+    ``None`` rather than ``False`` because a bool cannot say "unspecified", and
+    without that a saved ``defaults.skip_init`` was unreachable: every omitted
+    field arrived as an explicit ``False`` the engine could not tell from a
+    caller that meant it. ``False`` still parses and still means "run it", so no
+    existing client changes."""
 
     ticket: TicketSelector | None = None
     """Optional ticket to associate at create. When set alongside an
@@ -128,6 +137,24 @@ class CreateWorkspaceRequest(BaseModel):
     ``/message`` API (no boot race). A bare shell (generic) has no prompt concept
     and ignores it. Create-only — never re-applied on resume/respawn, like
     ``skip_init``."""
+
+    attachments: list[AttachmentUploadRequest] = Field(default_factory=list, max_length=20)
+    """Files to store in the new workspace and name in ``initial_prompt``.
+
+    **They ride the CREATE rather than a follow-up upload, and the reason is the
+    race-free delivery above.** A workspace composer can post to
+    ``/workspaces/{id}/attachments`` because its workspace already exists; the
+    landing composer's whole action is *"here is a prompt, make me a workspace"*,
+    so there is no id to upload against until the thing being described has been
+    built. Creating first and steering afterwards would trade the launch-argv
+    delivery for a post-boot type, which is the boot race ``initial_prompt``
+    exists to avoid — and would leave a partial failure as a live workspace whose
+    prompt names files that never arrived.
+
+    The engine stores them once the worktree exists and appends the same
+    Grove-fenced block ``send_message`` uses, so a create and a follow-up message
+    put an agent in front of identical text. Capped at 20 because this is one
+    request body; the per-file ceiling is ``AttachmentStore.MAX_BYTES``."""
 
     resume_session_id: str | None = Field(default=None, max_length=200)
     """Adopt an EXISTING agent session as this workspace's primary instead of

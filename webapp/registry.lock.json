@@ -114,6 +114,11 @@
     "item": "elements-agent-card",
     "source": "assistant-ui"
   },
+  "components/elements/agent-handoff.tsx": {
+    "sha256": "08291b474fe732f217d16e12a49c1ceff11f3c4d41f3f363c5341525cec048a4",
+    "item": "elements-agent-handoff",
+    "source": "assistant-ui"
+  },
   "components/elements/agent-plan.tsx": {
     "sha256": "dbfd5761f4876d06bc77f53e5dcb04eb12f2cdc3456e77897d3f7e364ee07cf8",
     "item": "elements-agent-plan",
@@ -202,6 +207,11 @@
   "components/elements/job-progress.tsx": {
     "sha256": "ac934819b2b5dbbed2e5a181048f3f430dd9269fe55e0bcdfc8daa34dd02e06e",
     "item": "elements-job-progress",
+    "source": "assistant-ui"
+  },
+  "components/elements/loading-state.tsx": {
+    "sha256": "312b86f810f1ef3df45db7495a7e9b6b837fbbf445a151d3aca1ec6cfc69f031",
+    "item": "elements-loading-state",
     "source": "assistant-ui"
   },
   "components/elements/message-actions.tsx": {
@@ -354,6 +364,11 @@
     "item": "input",
     "source": "shadcn"
   },
+  "components/ui/kbd.tsx": {
+    "sha256": "c0c0ae6a7d1adb7749b9b34cab8f4d2f5caf333e819b64c2051e77f918d3661f",
+    "item": "kbd",
+    "source": "shadcn"
+  },
   "components/ui/label.tsx": {
     "sha256": "a476e41f08b9de5bd447de66a33d8bc2ad18f2fa6b96c064778bab4b6f439f4c",
     "item": "label",
@@ -417,6 +432,11 @@
   "components/ui/tabs.tsx": {
     "sha256": "865d0194331b9b2be36723fa79d3575dc83078b4cb941cafee87cb72fc2cff46",
     "item": "tabs",
+    "source": "shadcn"
+  },
+  "components/ui/textarea.tsx": {
+    "sha256": "5cafcfeeee29534f449387a16b585f5923d2faab1a0cdc50a874416b175f59ce",
+    "item": "textarea",
     "source": "shadcn"
   },
   "components/ui/tooltip.tsx": {

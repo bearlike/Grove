@@ -1,20 +1,31 @@
 import { FancyAnsi } from "fancy-ansi";
-import type { VariantProps } from "class-variance-authority";
 import {
+  ArrowDownToLineIcon,
+  ArrowUpFromLineIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotIcon,
+  CodeXmlIcon,
+  DatabaseIcon,
+  FilePenLineIcon,
+  FileTextIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
+  MessageSquareIcon,
+  MinusIcon,
+  PlusIcon,
   type LucideIcon,
 } from "lucide-react";
+
+import { abbreviate } from "@/components/grove/usage/format";
 
 import type {
   CommitSummaryView,
   DurationView,
   GenerationLatencyView,
+  NativeFactsView,
   PhaseView,
   SessionSummaryView,
   TicketRef,
@@ -22,7 +33,6 @@ import type {
   WorkspacePeekView,
   WorkspaceStateView,
 } from "@/lib/grove/api";
-import type { badgeVariants } from "@/components/ui/badge";
 import type { TimelineEvent } from "@/components/elements/timeline";
 import type { GlossaryTerm } from "@/components/grove/glossary";
 // TYPE-ONLY, so it is erased and there is no runtime cycle: `fleet/badges.tsx`
@@ -125,13 +135,54 @@ export type ActivityRead = Pick<WorkspaceActivityView, "sessions" | "phase"> & {
 export const PANEL_TAB_VALUES = [
   "terminal",
   "changes",
+  "diagram",
   "files",
   "info",
   "controls",
 ] as const;
 
+/** The built-in work-panel surfaces. */
+export type BuiltInPanelTab = (typeof PANEL_TAB_VALUES)[number];
+
 /** Which work-panel surface is showing. */
-export type PanelTab = (typeof PANEL_TAB_VALUES)[number];
+export type PanelTab = BuiltInPanelTab | `panel:${string}`;
+
+/** Keep daemon-provided panel names disjoint from the built-in tab census. */
+export function panelTabValue(name: string): PanelTab {
+  return `panel:${name}`;
+}
+
+/**
+ * The tabs a reader with no Grove session may see: what the work IS, and what
+ * it CHANGED. Terminal, Files, Controls and Diagram are absent because each is
+ * either a live handle on the machine or a way to change it.
+ *
+ * A subset of `PANEL_TAB_VALUES` rather than a parallel list, so a name that
+ * does not exist in the census cannot be written here. Withholding a tab is
+ * CHROME, never the boundary: the public surface is safe because the daemon
+ * serves it read-only routes carrying no diagram at all.
+ */
+export const SHARED_TABS: readonly BuiltInPanelTab[] = ["changes", "info"];
+
+/**
+ * Which built-in tabs this render offers, in the census's order.
+ *
+ * Diagram is CONDITIONAL where the other five are not: it exists only while the
+ * workspace carries a diagram descriptor, so an ordinary workspace's strip is
+ * unchanged. A `hasDiagram` flag rather than the descriptor itself, because the
+ * question this answers is presence, and passing the record would invite a
+ * second reading of `mode` here that disagrees with the tab's own.
+ */
+export function offeredPanelTabs(
+  privileged: boolean,
+  hasDiagram: boolean,
+): readonly BuiltInPanelTab[] {
+  return PANEL_TAB_VALUES.filter(
+    (value) =>
+      (privileged || SHARED_TABS.includes(value)) &&
+      (value !== "diagram" || (privileged && hasDiagram)),
+  );
+}
 
 /** The workspace's two panes; `split` shows both at once. */
 export type PaneView = "transcript" | "work" | "split";
@@ -139,11 +190,11 @@ export type PaneView = "transcript" | "work" | "split";
 /**
  * The page's default surface before a reader has chosen one.
  *
- * An unborn transcript has nothing to read, while the terminal is the one live
- * surface during the agent's first moments. Once a turn exists, the conversation
- * and its work belong beside each other. This is a DEFAULT only: `Workspace`
- * keeps an explicit null choice until a reader picks either control, so an async
- * turn arriving later never takes a manually selected pane or tab away.
+ * An unborn transcript has nothing to read, so the page opens on the work pane
+ * alone; once a turn exists, the conversation and its work belong beside each
+ * other. This is a DEFAULT only: `Workspace` keeps an explicit null choice
+ * until a reader picks either control, so an async turn arriving later never
+ * takes a manually selected pane or tab away.
  */
 export interface WorkspaceSelection {
   /** `null` means neither this visit nor a saved choice selected a pane. */
@@ -163,12 +214,15 @@ export function resolvedWorkspaceSelection(
   hasTranscript: boolean,
   selection: WorkspaceSelection,
 ): { view: PaneView; workTab: PanelTab } {
-  const defaults = hasTranscript
-    ? { view: "split" as const, workTab: "info" as const }
-    : { view: "work" as const, workTab: "terminal" as const };
   return {
-    view: selection.view ?? defaults.view,
-    workTab: selection.workTab ?? defaults.workTab,
+    view: selection.view ?? (hasTranscript ? "split" : "work"),
+    // EVERY visit lands on Info, and the work tab is deliberately NOT persisted
+    // (see `Workspace`) — the question a reader has on arriving at a workspace
+    // is what it is, not what its terminal was doing three days ago. Info is
+    // unconditional in the census and offered to both audiences, so this
+    // default is always a tab that exists; `WorkPanel` still falls back for a
+    // *selected* tab that stops being offered.
+    workTab: selection.workTab ?? "info",
   };
 }
 
@@ -222,36 +276,40 @@ export function storedView(stored: unknown): PaneView | null {
     : null;
 }
 
-/**
- * A valid persisted work-tab selection, or no selection at all. Like
- * `storedView`, absence remains absence instead of becoming a magic default so
- * the page can distinguish automatic landing from a reader's deliberate tab.
+/*
+ * There is deliberately no `storedWorkTab`. The work tab is the one piece of
+ * this surface's UI state that is NOT persisted: every visit lands on Info (see
+ * `resolvedWorkspaceSelection`), so a reader restored onto a days-old Terminal
+ * would be the bug. A validator with no reader is how a dead key comes back.
  */
-export function storedWorkTab(stored: unknown): PanelTab | null {
-  return (PANEL_TAB_VALUES as readonly unknown[]).includes(stored)
-    ? (stored as PanelTab)
-    : null;
-}
 
 export type LifecycleAction = "pause" | "resume" | "respawn" | "kill";
+
+/** Native interruption is a live capability, not an inference from transcript activity. */
+export function canInterruptNative(
+  state: Pick<WorkspaceStateView, "native" | "status">,
+): boolean {
+  return state.native && ["running", "active", "idle"].includes(state.status);
+}
 
 /**
  * The lifecycle verbs worth offering for a status.
  *
  * A pure UX mirror of the engine's own gate, never a re-implementation of it:
  * a stale snapshot offering an illegal verb just surfaces the daemon's typed
- * refusal. Root placement drops pause and resume, which the engine refuses
- * anyway, and an unrecognised status falls back to the one verb that always
- * applies.
+ * refusal. Native and root-placement workspaces cannot suspend. A live host
+ * native session permits explicit recovery even if its worker has not exited;
+ * that is distinct from automatic revival after an observed exit.
  */
 export function availableActions(
-  state: Pick<WorkspaceStateView, "status" | "placement">,
+  state: Pick<WorkspaceStateView, "status" | "placement" | "native" | "runtime">,
 ): readonly LifecycleAction[] {
-  const suspendable = state.placement !== "root";
+  const suspendable = state.placement !== "root" && !state.native;
   switch (state.status) {
     case "active":
     case "running":
     case "idle":
+      if (state.native && state.runtime === "host") return ["respawn", "kill"];
       return suspendable ? ["pause", "kill"] : ["kill"];
     case "paused":
       return suspendable ? ["resume", "kill"] : ["kill"];
@@ -273,90 +331,202 @@ export function defaultDeleteBranch(
   return state.branch_provenance === "grove";
 }
 
-/** One labelled figure from the live activity snapshot. */
-export type ActivityStat = { label: string; value: string };
-
 /**
- * The activity readout as separate figures rather than one packed line.
+ * ONE BOUNDED FACT — the shape `CardCell` renders, wherever a surface has a
+ * grid of measurements rather than a term-and-value list.
  *
- * Labelled numbers laid across the card read at a glance and use the width
- * the panel actually has; the same figures joined by interpuncts were a
- * sentence that had to be parsed, and wrapped badly the moment the pane was
- * narrowed. Token counts are abbreviated because their magnitude is the
- * signal — nobody reads the units digit of 1,284,193.
+ * `value: null` is the only way a cell says NOT MEASURED, and it is deliberately
+ * distinct from `"0"`: an absent figure was never reported, a zero was reported
+ * and is zero. Both render; only one of them is a figure.
  *
- * `tokens in` appears here ONLY when `tokenClassStats` has nothing to show —
- * an older daemon that has not shipped the class breakdown yet, or a
- * fleet-entry row `ActivityService` never resolved a message spine for. The
- * two are never shown together: a folded total beside its own unfolding
- * would restate the same magnitude twice, once as a mystery and once
- * explained.
+ * Shared between the Info tab's Activity card and the Changes tab's Divergence
+ * card because they are the same object at two ranges — what this session did,
+ * and what this branch did. A second shape would be a second metric system, and
+ * one of them would drift.
  */
-export function activityStats(
-  activity: ActivityRead | null,
-): ActivityStat[] | null {
-  const session = activity?.sessions[0];
-  const live = session?.activity;
-  if (!live) return null;
-  const stats: ActivityStat[] = [
-    { label: "turns", value: COUNT.format(live.human_turns) },
-    { label: "tool calls", value: COUNT.format(live.tool_calls) },
-  ];
-  if (!session?.tokens) {
-    stats.push({ label: "tokens in", value: COMPACT.format(live.tokens_in) });
-  }
-  stats.push({ label: "tokens out", value: COMPACT.format(live.tokens_out) });
-  return stats;
-}
-
-/** One class of `tokens in`, with the glossary term that explains it (if any). */
-export type TokenClassStat = {
+export type MetricFact = {
+  /** Stable across renders and across a card's conditional fact sets. */
+  key: string;
   label: string;
-  value: string;
+  icon: LucideIcon;
+  /** The formatted figure, or `null` when nothing reported it. */
+  value: string | null;
+  /** Grove computed or summed this figure rather than reading a provider's. */
+  derived: boolean;
+  /** What it was computed from, and — where abbreviated — its exact value. */
+  title: string;
+  /** A glossary definition for the LABEL, where the plain words mislead. */
   term?: GlossaryTerm;
+  /** The figure's semantic tone. Absent means neutral, which is most of them. */
+  tone?: MetricTone;
 };
 
 /**
- * `tokens in` unfolded into the classes that sum to it, so a figure in the
- * hundreds of millions reads as "mostly cache reads" instead of as a bug.
- * `AgentActivityView.tokens_in` folds fresh input, cache read and cache
- * creation together BY DESIGN (see its engine docstring) — cache reads are
- * routinely an order of magnitude cheaper than fresh input and dwarf every
- * other class, so the fold alone cannot explain the number it reports, only
- * produce it.
+ * The tones a figure may take, and the one rule that governs them: **colour is
+ * never the carrier.** Every toned figure here also prints a sign or a unit in
+ * its label, so the cell survives greyscale (§4.7).
  *
- * `null` when the wire carries no breakdown for this session (see
- * `activityStats`'s docstring for when and why) — the caller falls back to
- * the folded total in that case rather than rendering nothing.
- *
- * Each class renders "not measured" rather than a fabricated `0`: an absent
- * count here means this specific class was never reported, not that it was
- * measured at zero. `reasoning` and `provider_total` are left off this
- * surface deliberately — they answer a different question (a provider's
- * informational split, its own stated total) than "why is tokens-in this
- * big", which fresh input / cache read / cache creation already answer
- * completely, since those three are exactly what `tokens_in` sums.
+ * A ZERO IS NEVER TONED, which is `figureTone`'s rule on the fleet card applied
+ * here: `+0` in green claims something happened. The selector decides that,
+ * because only it holds the number.
  */
-export function tokenClassStats(
-  activity: ActivityRead | null,
-): TokenClassStat[] | null {
-  const tokens = activity?.sessions[0]?.tokens;
-  if (!tokens) return null;
-  const format = (n: number | null | undefined) =>
-    n == null ? "not measured" : COMPACT.format(n);
-  return [
-    { label: "fresh input", value: format(tokens.fresh_input) },
+export type MetricTone = "added" | "removed" | "pending";
+
+/** One bounded fact on the Activity card, keyed by the census below. */
+export type ActivityFact = MetricFact & { key: ActivityFactKey };
+
+export type ActivityFactKey =
+  | "turns"
+  | "tool_calls"
+  | "output"
+  | "input_total"
+  | "fresh_input"
+  | "cache_read"
+  | "cache_write";
+
+/**
+ * The session's activity as bounded facts, in reading order.
+ *
+ * SIX FACTS OR FOUR, NEVER SEVEN. `AgentActivityView.tokens_in` folds fresh
+ * input, cache read and cache creation together BY DESIGN (see its engine
+ * docstring), so where the wire carries the breakdown the fold is dropped and
+ * its three classes take its place — a folded total beside its own unfolding
+ * restates one magnitude twice, once as a mystery and once explained. Where the
+ * wire carries no breakdown (an older daemon, or a row `ActivityService` never
+ * resolved a message spine for) the total stands alone and no class is
+ * synthesised: an unmeasured class is not a zero.
+ *
+ * Token counts are abbreviated because their magnitude is the signal — nobody
+ * reads the units digit of 1,284,193 — and §3 requires the exact figure to
+ * survive one hover away, which is what every `title` here carries.
+ *
+ * `reasoning` and `provider_total` are deliberately absent. They answer a
+ * different question (a provider's informational split, its own stated total)
+ * than "why is tokens-in this big", which the three classes summing to it
+ * already answer completely.
+ *
+ * SCOPE IS `sessions[0]` — the same row `sessionClocks` and `sessionLatency`
+ * read, so the whole tab describes one session — and the card labels that scope
+ * rather than implying a sum over every sub-agent the workspace ever ran.
+ */
+/**
+ * Whether the agent is working right now — the fact a live cue is allowed to
+ * move for.
+ *
+ * `sessions[0]`, the same row every other selector on this tab reads, so the
+ * card describes one session throughout. **This is a READ of the engine's
+ * answer, never a second derivation of it**: the engine promotes a session
+ * whose sidechain fleet is active to `working` even when the orchestrator's own
+ * turn has closed, so `active_subagents` must not be consulted beside this —
+ * `working-loader.tsx` records why. `lib/grove/runtime/thread.ts` asks the same
+ * question of the dashboard snapshot because that is the shape it holds; both
+ * read `activity.state === "working"` and neither decides anything more.
+ *
+ * Absent activity is NOT working: a workspace nobody has reported on has not
+ * claimed to be busy, and a cue that pulses on silence says the opposite.
+ */
+export function agentIsWorking(activity: ActivityRead | null): boolean {
+  return activity?.sessions[0]?.activity.state === "working";
+}
+
+/**
+ * The primary native session's recorded exit reason, if it has ended.
+ *
+ * `current_task` is the engine's recorded reason only in the error state. A
+ * stale reason beside a subsequent working session must not announce a death
+ * that the engine has already recovered from.
+ */
+export function agentExited(activity: ActivityRead | null): string | null {
+  const live = activity?.sessions[0]?.activity;
+  const reason = live?.current_task?.trim();
+  return live?.state === "error" && reason ? reason : null;
+}
+
+export function activityFacts(activity: ActivityRead | null): ActivityFact[] | null {
+  const session = activity?.sessions[0];
+  const live = session?.activity;
+  if (!live) return null;
+
+  const facts: ActivityFact[] = [
     {
-      label: "cache read",
-      value: format(tokens.cache_read),
+      key: "turns",
+      label: "Turns",
+      icon: MessageSquareIcon,
+      value: COUNT.format(live.human_turns),
+      derived: false,
+      title: `${COUNT.format(live.human_turns)} human turns recorded in this session.`,
+    },
+    {
+      key: "tool_calls",
+      label: "Tool calls",
+      icon: CodeXmlIcon,
+      value: COUNT.format(live.tool_calls),
+      derived: false,
+      title: `${COUNT.format(live.tool_calls)} tool invocations recorded in this session.`,
+    },
+    {
+      key: "output",
+      label: "Output tokens",
+      icon: ArrowUpFromLineIcon,
+      value: COMPACT.format(live.tokens_out),
+      derived: false,
+      title: `${COUNT.format(live.tokens_out)} output tokens, as reported for this session.`,
+    },
+  ];
+
+  const tokens = session?.tokens;
+  if (!tokens) {
+    facts.push({
+      key: "input_total",
+      label: "Input tokens",
+      icon: ArrowDownToLineIcon,
+      value: COMPACT.format(live.tokens_in),
+      derived: false,
+      title: `${COUNT.format(live.tokens_in)} input tokens — fresh input, cache reads and cache writes folded together, which this session did not report separately.`,
+    });
+    return facts;
+  }
+
+  facts.push(
+    tokenFact("fresh_input", "Fresh input", ArrowDownToLineIcon, tokens.fresh_input),
+    {
+      ...tokenFact("cache_read", "Cache read", DatabaseIcon, tokens.cache_read),
       term: "cache_read_tokens",
     },
     {
-      label: "cache write",
-      value: format(tokens.cache_creation),
+      ...tokenFact("cache_write", "Cache write", FileTextIcon, tokens.cache_creation),
       term: "cache_creation_tokens",
     },
-  ];
+  );
+  return facts;
+}
+
+/**
+ * One input class, summed by Grove and marked as such.
+ *
+ * DERIVED, because it is: the provider reports a class per message and Grove
+ * adds them up across the session. Calling that a provider total would claim an
+ * authority the number does not have — and marking every dynamic figure derived
+ * would carry no information at all, which is why turns, tool calls and the
+ * session's own output count are not marked.
+ */
+function tokenFact(
+  key: ActivityFactKey,
+  label: string,
+  icon: LucideIcon,
+  count: number | null | undefined,
+): ActivityFact {
+  return {
+    key,
+    label,
+    icon,
+    value: count == null ? null : COMPACT.format(count),
+    derived: count != null,
+    title:
+      count == null
+        ? `This session reported no ${label.toLowerCase()} count.`
+        : `${COUNT.format(count)} tokens — Grove's sum of the per-message ${label.toLowerCase()} counts this session's provider reported.`,
+  };
 }
 
 /**
@@ -391,6 +561,105 @@ export function sessionLatency(
   activity: ActivityRead | null,
 ): GenerationLatencyView | null {
   return activity?.sessions[0]?.latency ?? null;
+}
+
+/**
+ * The owned stream's own facts for `sessions[0]`, or `null` for a terminal
+ * session and for an older daemon that never sends the field — the same
+ * `!= null` rule the context meter follows, since both absences mean "nobody
+ * said" and neither is a zero.
+ */
+export function nativeFacts(activity: ActivityRead | null): NativeFactsView | null {
+  return activity?.sessions[0]?.activity.native ?? null;
+}
+
+/**
+ * What this branch has done, as the same bounded facts the Activity card uses.
+ *
+ * THREE FACTS OR FIVE, AND THE TWO EXTRA ARE WITHHELD RATHER THAN ZEROED.
+ * `base_ahead`/`base_behind` are the only figures the daemon derives from the
+ * base NAME — deliberately, because "behind" asks how far the base has moved
+ * and a frozen commit can only ever answer zero — so with no separate base the
+ * range is `HEAD..branch`, structurally empty however much work has been done.
+ * **A zero that cannot be anything else is not a measurement.** The other three
+ * are anchored on `base_commit` and stay true either way.
+ *
+ * THE UNITS ARE IN THE LABELS BECAUSE THE SCOPES DIFFER AND NOTHING ELSE SAYS
+ * SO. `dirty_files` counts uncommitted paths in the worktree right now;
+ * `diff_added`/`diff_removed` count lines on the branch since its diff base,
+ * which is NOT the agent's cumulative edits; ahead/behind count commits against
+ * the base branch, not against a remote upstream. Three different questions that
+ * would otherwise read as one row of numbers — the same reason the fleet card's
+ * labels spell them out, and the `title` sentences here are that card's,
+ * verbatim, so the two surfaces teach one vocabulary.
+ *
+ * `abbreviate`, NOT this file's `COMPACT`: the rail already renders these exact
+ * five numbers that way, and one figure rendered two ways across two surfaces is
+ * the drift a shared metric system exists to prevent.
+ */
+export function divergenceFacts(
+  peek: Pick<
+    WorkspaceRead,
+    "base_ahead" | "base_behind" | "diff_added" | "diff_removed" | "dirty_files"
+  >,
+  hasBase: boolean,
+): MetricFact[] {
+  const facts: MetricFact[] = [];
+  if (hasBase) {
+    facts.push(
+      gitFact("ahead", "Commits ahead", ArrowUpFromLineIcon, peek.base_ahead, {
+        detail: "commits ahead of the base branch (not unpushed commits)",
+        tone: "added",
+      }),
+      gitFact("behind", "Commits behind", ArrowDownToLineIcon, peek.base_behind, {
+        detail: "commits behind the base branch",
+        tone: "pending",
+      }),
+    );
+  }
+  facts.push(
+    gitFact("dirty", "Dirty files", FilePenLineIcon, peek.dirty_files, {
+      detail: "uncommitted files in the worktree",
+      tone: "pending",
+    }),
+    gitFact("added", "Lines added", PlusIcon, peek.diff_added, {
+      detail: "lines added on the branch since its diff base",
+      tone: "added",
+      sign: "+",
+    }),
+    gitFact("removed", "Lines removed", MinusIcon, peek.diff_removed, {
+      detail: "lines removed on the branch since its diff base",
+      tone: "removed",
+      sign: "−",
+    }),
+  );
+  return facts;
+}
+
+/**
+ * One git counter. The sign rides the FIGURE rather than arriving as a second
+ * glyph, so `+12` reads as one value — and it is what makes the tone redundant
+ * rather than load-bearing.
+ *
+ * A ZERO IS QUIET. `+0` in green would claim a change that did not happen, which
+ * is the same fabricated-signal mistake as a fabricated zero one step on.
+ */
+function gitFact(
+  key: string,
+  label: string,
+  icon: LucideIcon,
+  count: number,
+  options: { detail: string; tone: MetricTone; sign?: string },
+): MetricFact {
+  return {
+    key,
+    label,
+    icon,
+    value: `${options.sign ?? ""}${abbreviate(count)}`,
+    derived: false,
+    title: `${COUNT.format(count)} ${options.detail}`,
+    tone: count === 0 ? undefined : options.tone,
+  };
 }
 
 const COUNT = new Intl.NumberFormat("en-US");
@@ -556,6 +825,42 @@ export function ticketRollup(
 }
 
 /**
+ * What the average-phase bar says about its own coverage, under the bar.
+ *
+ * **THE COMPLETION COUNT AND THE PHASE AVERAGE ARE BOTH TRUE AT ONCE, and this
+ * line is what stops a reader collapsing them.** Two tickets both at
+ * `delivering` — index 4 of six phases — average 80% phase progress while
+ * `0 / 2 done` is equally correct, because one is a position along the work and
+ * the other is a count of finished work. Replacing the 80% with 0% would be a
+ * different, worse number: it would throw away every measurement the agents
+ * actually reported.
+ *
+ * Coverage is stated in the direction that matters. Where every ref carries a
+ * claim the line says so; where some do not, it names the SILENCE rather than
+ * the measurement, because `ticketRollup` scores an unclaimed ref as zero and a
+ * reader has no other way to tell an understated average from a real one.
+ */
+export function rollupCoverage(rollup: TicketRollup): string {
+  const parts = [`${rollup.done} / ${rollup.total} done`];
+  parts.push(
+    rollup.unreported > 0
+      ? `${rollup.unreported} claim${rollup.unreported === 1 ? "" : "s"} not reported`
+      : `${rollup.reported} claim${rollup.reported === 1 ? "" : "s"} reported`,
+  );
+  if (rollup.blocked > 0) parts.push(`${rollup.blocked} blocked`);
+  return parts.join(" · ");
+}
+
+/**
+ * The arithmetic behind the percentage, as §3's provenance `title` — this figure
+ * is Grove's, not a tracker's, and a reader reconciling it needs the formula
+ * rather than a claim that it is derived.
+ */
+export function rollupFormula(rollup: TicketRollup): string {
+  return `Grove's mean of index / (total − 1) across all ${rollup.total} attached ${rollup.total === 1 ? "ref" : "refs"}; a ref with no claim counts as 0. Phase progress, not completion.`;
+}
+
+/**
  * Rank attached tickets in the same order as
  * `core/contracts/ticket_order.py::ticket_sort_key`: PRs, then issues; live
  * tracker state; the furthest non-terminal claim; and finally the numeric or
@@ -566,7 +871,7 @@ export function ticketSortKey(
   ticket: Pick<TicketRef, "kind" | "status" | "id"> & { draft?: boolean },
   phase: Pick<TicketPhaseMark, "index" | "phase"> | null,
 ): [number, number, number, number] {
-  const state = ticketState(ticket.status, ticket.draft);
+  const state = ticketState(ticket.status, ticket.draft, ticket.kind);
   const stateRank: Record<TicketState, number> = {
     open: 0,
     draft: 1,
@@ -614,9 +919,6 @@ export function sortTicketRefs(refs: readonly TicketRef[]): TicketRef[] {
 
 type TicketProvider = TicketRef["provider"];
 type TicketKind = TicketRef["kind"];
-type UiBadgeVariant = NonNullable<
-  VariantProps<typeof badgeVariants>["variant"]
->;
 
 /**
  * How each tracker writes its own name. A provider is an IDENTITY, not a state,
@@ -675,33 +977,34 @@ const STATE_BY_WORD: Record<string, TicketState> = {
   draft: "draft",
 };
 
-export function ticketState(status: string | null | undefined, draft = false): TicketState {
+/**
+ * `kind` NARROWS ONE CELL AND NOTHING ELSE: an issue is never `merged`.
+ *
+ * MERGED WINS OVER CLOSED wherever both could apply, because a merged pull
+ * request is also a closed one and "closed" is the weaker of the two true
+ * statements — `STATE_BY_WORD` gets there by reading the tracker's own word, so
+ * the precedence is the tracker's rather than an inference of ours. What must
+ * never be inferred is the other direction: a forge numbers issues and pull
+ * requests in one space, so a mis-typed or mid-correction ref can arrive as an
+ * issue carrying a pull request's word, and drawing that issue purple would
+ * assert a branch was landed. It degrades to `closed` — the truest thing left —
+ * which is the same answer `TICKET_GLYPH`'s `issue.merged` cell already gives.
+ *
+ * Optional, because two of the four call sites genuinely do not know the kind: a
+ * status tone is a property of the word alone, and a phase tooltip quotes the
+ * tracker rather than colouring anything. Omitting it can only ever leave the
+ * old, wider reading.
+ */
+export function ticketState(
+  status: string | null | undefined,
+  draft = false,
+  kind?: TicketKind,
+): TicketState {
   if (draft) return "draft";
   if (!status) return "unknown";
-  return STATE_BY_WORD[status.trim().toLowerCase()] ?? "unknown";
+  const state = STATE_BY_WORD[status.trim().toLowerCase()] ?? "unknown";
+  return state === "merged" && kind === "issue" ? "closed" : state;
 }
-
-/**
- * A ticket's state → how loud its badge is.
- *
- * NOTHING HERE IS `default`, AND THAT CHANGED WHEN THE GLYPH GAINED ITS COLOUR.
- * `open` used to be the loudest variant, which was right while the badge was the
- * only mark on the row; now the glyph beside it is a green open-circle, so a
- * solid black pill made three tickets shout the same fact twice — the identical
- * defect the fleet card had when `active` and `working` were both `default`.
- * The glyph is the state mark and the badge is the WORD that makes it survive
- * greyscale, so the word stays quiet.
- *
- * `unknown` is `outline` for a different reason: still marked, still spelled
- * out, just not claimed to mean something.
- */
-const STATUS_TONE: Record<TicketState, UiBadgeVariant> = {
-  open: "outline",
-  merged: "secondary",
-  closed: "secondary",
-  draft: "outline",
-  unknown: "outline",
-};
 
 export function providerLabel(provider: TicketProvider): string {
   return PROVIDER_LABEL[provider];
@@ -722,10 +1025,6 @@ export function ticketKindLabel(kind: TicketKind): string {
  */
 export function ticketIdLabel(ref: Pick<TicketRef, "id">): string {
   return /^\d+$/.test(ref.id) ? `#${ref.id}` : ref.id;
-}
-
-export function ticketStatusTone(status: string): UiBadgeVariant {
-  return STATUS_TONE[ticketState(status)];
 }
 
 /**
@@ -753,6 +1052,29 @@ const STATE_COLOUR: Record<TicketState, string> = {
 
 export function ticketStateColour(state: TicketState): string {
   return STATE_COLOUR[state];
+}
+
+/**
+ * Grove's word for a normalized state — and the TRACKER'S own word where Grove
+ * could not normalize it.
+ *
+ * §4.7's second carrier: the state hue only ever agrees with a word that is
+ * always printed, so `open` green, `closed` red and `merged` purple all survive
+ * greyscale. `unknown` has no controlled word to assert, so it quotes whatever
+ * the tracker actually wrote rather than inventing one — marked, not
+ * interpreted, exactly as `TicketState`'s own docstring requires. A tracker that
+ * has said nothing at all yields `null` and the row prints no state.
+ */
+const STATE_LABEL: Record<TicketState, string | null> = {
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+  draft: "Draft",
+  unknown: null,
+};
+
+export function ticketStateLabel(state: TicketState, status?: string | null): string | null {
+  return STATE_LABEL[state] ?? status?.trim() ?? null;
 }
 
 /**
@@ -925,7 +1247,8 @@ export function phaseTooltip(
 function trackerClaim(ticket: PhaseTooltipTicket): string | null {
   const raw = ticket.status?.trim();
   const said =
-    TRACKER_WORD[ticketState(ticket.status, ticket.draft)] ?? (raw ? `“${raw}”` : null);
+    TRACKER_WORD[ticketState(ticket.status, ticket.draft, ticket.kind)] ??
+    (raw ? `“${raw}”` : null);
   if (!said) return null;
   return `${providerLabel(ticket.provider)} says this ${ticketKindLabel(ticket.kind)} is ${said}.`;
 }

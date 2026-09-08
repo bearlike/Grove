@@ -79,10 +79,13 @@ def _build_app(store: JsonWorkspaceStore, channel: _CapturingChannel) -> FastAPI
     )
     broker = NotificationBroker(
         channels=[channel],
+        notify_questions=cfg.notifications.on_question,
+        notify_lifecycle=frozenset(cfg.notifications.on_lifecycle),
         deep_link_base_url=cfg.notifications.deep_link_base_url,
-        # These tests are about the wiring (activity → broker → channel), not the
-        # quiet-window policy — see tests/core/test_notifications.py for that.
+        # These tests are about the wiring (activity → broker → channel), not
+        # timing policy — see tests/core/test_notifications.py for that.
         waiting_quiet=timedelta(0),
+        warmup=timedelta(0),
     )
     return build_app(cfg=cfg, store=store, notification_broker=broker)
 
@@ -131,8 +134,9 @@ def test_agent_finishing_turn_pushes_to_channel(
         activity.poll_once()  # STARTING → WAITING: rising edge → fire
         _await_push(channel)
 
-    assert len(channel.received) == 1
-    n = channel.received[0]
+    agent_state = [n for n in channel.received if n.trigger == "agent_state"]
+    assert len(agent_state) == 1
+    n = agent_state[0]
     assert n.trigger == "agent_state"
     assert n.workspace_id == state.id
     assert n.state is AgentActivityState.WAITING
@@ -193,8 +197,9 @@ def test_pending_question_pushes_the_question_notification(
         activity.poll_once()  # the ask appears → question edge → fire
         _await_push(channel)
 
-    assert len(channel.received) == 1
-    n = channel.received[0]
+    questions = [n for n in channel.received if n.trigger == "question"]
+    assert len(questions) == 1
+    n = questions[0]
     assert n.trigger == "question"
     assert n.severity == "high"
     assert n.workspace_id == state.id

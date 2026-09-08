@@ -4,37 +4,35 @@ import { useEffect, type ReactNode } from "react";
 
 import { BranchPill } from "./branch-pill";
 import { AgentPill } from "./agent-pill";
-import { ModelPill } from "./model-pill";
 import { ProjectPill } from "./project-pill";
 import { RuntimePill } from "./runtime-pill";
 import { WorkingDirectoryPill } from "./working-directory-pill";
-import { LaunchPillGroup } from "../control-pill";
 import { LAUNCH_TESTIDS, useLaunchControls } from "../launch-state";
 import { useWorkspaceDefaults } from "@/lib/grove/hooks/launch";
 
 /**
- * Every compact answer that defines a launch, in the row's fixed order.
+ * What the workspace will BE, on one shelf under the writing surface.
  *
- * Six pills and no overflow. The overflow control held brief, base ref,
- * skip-init and save-as-defaults — four things nobody sets per create — and
- * charged the composer permanent width for them. They live in `More options`,
- * which opens the full form; a row that carries every knob is the 9-field
- * modal again, wearing a different shape.
+ * The split this row now sits on either side of is between writing and
+ * configuring. Project, directory, branch and runtime describe the workspace
+ * the brief will run in and belong together, away from the editor; the model
+ * pill left for the composer's own toolbar, beside send, because it configures
+ * the agent that reads the message rather than the workspace that holds it.
  *
- * TWO ROWS, SPLIT BY MEANING RATHER THAN BY WIDTH. Six spelled-out values do
- * not fit one line, and the alternative this replaced was hiding three of them
- * behind bare glyphs. Free wrapping fixed the legibility and left the break
- * wherever the text happened to run out — on one project that orphaned a single
- * pill on line two, which is the awkwardness a wrap always eventually produces.
+ * ONE ROW, NOT THE TWO AUTHORED ONES THIS REPLACED. The previous split (where
+ * the work happens, then who does it) existed because six spelled-out values
+ * could not fit a line inside the composer bar. Outside it, and one pill
+ * lighter, four fit — and the shelf is free to wrap on a narrow window without
+ * orphaning anything, because there is no second row for a pill to fall out of.
  *
- * So the break is authored: WHERE the work happens (project, directory,
- * branch), then WHO does it (agent, model, runtime). The rows keep those roles
- * whatever the labels are, so the composer's shape does not change when a
- * project's names get longer or its `agent_cwds` disappear. Each row still
- * wraps internally as a last resort on a narrow window.
+ * `RuntimePill` is pushed to the far end: host-versus-container is the answer
+ * that changes what every pill beside it MEANS — a directory inside a container
+ * is not the same place as the same path on the host — so it reads as the
+ * shelf's qualifier rather than as a fifth peer.
  *
- * `ComposerToolbar`'s `items-end` keeps Send on the last line, so the corner it
- * lives in does not move.
+ * The seed effect stays here, and it is the reason this file is not just
+ * markup: it is the single caller of `seed`, and its dependency list is the
+ * fix for the render loop `launchReducer` documents.
  */
 export function LaunchControlRow(): ReactNode {
   const { values, seed } = useLaunchControls();
@@ -43,6 +41,10 @@ export function LaunchControlRow(): ReactNode {
   useEffect(() => {
     const resolved = defaults.data;
     if (!resolved) return;
+    // `model` is seeded from here even though its pill moved: the default is
+    // per-agent (`resolve_models`) and arrives in this one response, so
+    // trimming the seed to "the fields this file still draws" would leave the
+    // toolbar's pill permanently empty.
     seed({
       agentName: resolved.agent,
       runtime: resolved.runtime,
@@ -55,22 +57,17 @@ export function LaunchControlRow(): ReactNode {
   }, [defaults.data, seed]);
 
   return (
-    <LaunchPillGroup>
-      <div
-        className="flex min-w-0 flex-1 flex-col gap-1"
-        data-testid={LAUNCH_TESTIDS.controls}
-      >
-        <div className="flex min-w-0 flex-wrap items-center gap-x-0.5 gap-y-1">
-          <ProjectPill />
-          <WorkingDirectoryPill />
-          <BranchPill />
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-0.5 gap-y-1">
-          <AgentPill />
-          <ModelPill />
-          <RuntimePill />
-        </div>
+    <div
+      className="flex min-w-0 flex-1 flex-wrap items-center gap-x-0.5 gap-y-1"
+      data-testid={LAUNCH_TESTIDS.controls}
+    >
+      <ProjectPill />
+      <WorkingDirectoryPill />
+      <AgentPill />
+      <BranchPill />
+      <div className="ms-auto flex min-w-0 items-center">
+        <RuntimePill />
       </div>
-    </LaunchPillGroup>
+    </div>
   );
 }

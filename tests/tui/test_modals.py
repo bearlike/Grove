@@ -910,3 +910,48 @@ async def test_every_modal_renders_grove_dialog_container() -> None:
         assert len(list(app2.screen.query(".grove-dialog"))) >= 1
         await pilot.press("escape")
         await pilot.pause()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("native_roster")
+async def test_session_mode_checkbox_follows_the_entry_and_rides_the_request(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The box seeds from the selected entry's own default (native for
+    `claude`, terminal for `claude-terminal`), hides for a kind with no
+    protocol, and a flipped box reaches `CreateWorkspaceRequest.native`."""
+    from textual.widgets import Checkbox, Select  # noqa: PLC0415
+
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    captured: dict[str, CreateWorkspaceRequest] = {}
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        modal.dismiss = lambda result=None: captured.__setitem__("req", result)  # type: ignore[assignment,method-assign]
+        box = modal.query_one("#native", Checkbox)
+        agent = modal.query_one("#agent", Select)
+
+        agent.value = "claude"
+        await pilot.pause()
+        assert box.display is True and box.value is True
+        agent.value = "claude-terminal"
+        await pilot.pause()
+        assert box.display is True and box.value is False
+        agent.value = "shell"
+        await pilot.pause()
+        assert box.display is False
+
+        agent.value = "claude"
+        await pilot.pause()
+        box.value = False  # this create runs the terminal; the entry stays native
+        for ch in "mode":
+            await pilot.press(ch)
+        await pilot.pause()
+        modal._submit()
+        await pilot.pause()
+
+    req = captured["req"]
+    assert isinstance(req, CreateWorkspaceRequest)
+    assert req.native is False

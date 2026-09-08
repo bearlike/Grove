@@ -211,6 +211,30 @@ class MoneyView(BaseModel):
     Grove estimate from configured prices, or genuinely unknown."""
 
 
+class UsageCostBreakdownView(BaseModel):
+    """The priced portion of a selected session population.
+
+    ``known_cost`` is deliberately a sum of whole priceable sessions only. A
+    switched-model session with incomplete generation evidence contributes
+    nothing here: showing its one priced generation would turn a subtotal into
+    a partial-session charge. ``UsageSummaryView.cost`` stays the stricter
+    all-or-nothing total; this companion explains why it is unavailable without
+    recasting unknown cost as zero.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    known_cost: MoneyView | None = None
+    """The subtotal supported by fully priceable selected sessions, or ``None``
+    when none of them can be priced. Never a partial-session amount."""
+
+    priced_sessions: int = 0
+    """How many selected sessions contributed their complete estimated cost."""
+
+    total_sessions: int = 0
+    """How many sessions the same filter selected, including unpriceable ones."""
+
+
 class DurationView(BaseModel):
     """Several durations and a confidence, because one number would be a lie.
 
@@ -439,8 +463,13 @@ class UsageSummaryView(BaseModel):
     tools: UsageToolStatsView = UsageToolStatsView()
     files_changed: int = 0
     cost: MoneyView | None = None
-    """``None`` when no price is configured for any model in range — a named
-    unknown, never a zero."""
+    """The complete selected population's estimated cost, or ``None`` when any
+    selected session lacks complete price evidence. Never a partial sum."""
+
+    cost_breakdown: UsageCostBreakdownView | None = None
+    """The whole-session priceability accounting behind ``cost``. ``None`` only
+    where cost accounting itself is unavailable; a non-null zero-total view
+    distinguishes an empty selection from a missing calculation."""
 
     accounts: int = 0
     projects: int = 0
@@ -516,6 +545,35 @@ class UsageSessionRowView(BaseModel):
     account_id: str | None = None
     account_label: str | None = None
     source_id: str | None = None
+
+    workspace_id: str | None = None
+    """The Grove workspace that owned this session, when one did.
+
+    Null for a hand-started session, and for any session whose workspace could
+    not be resolved. Most sessions on a host have no workspace at all, so null
+    is the ordinary case rather than a gap."""
+
+    workspace_title: str | None = None
+    """What that workspace was CALLED, read from the durable name store.
+
+    The reason this is not simply looked up live: ``kill`` deletes the workspace
+    record, which is the normal end of a task, so a live lookup answers nothing
+    for exactly the finished work an audit is about. Null means no name was ever
+    recorded — every workspace predating the store, since recording is
+    forward-only — and a client must render that as the bare id, never as a
+    placeholder name."""
+
+    workspace_description: str | None = None
+    """The workspace's description at its last recording. Null is ordinary: a
+    description is optional and most workspaces never get one."""
+
+    workspace_deleted_at: datetime | None = None
+    """When the workspace's record was deleted, if it was.
+
+    A tombstone rather than an absence — the name survives precisely so this
+    row stays identifiable. Null means the workspace still exists, so a client
+    can distinguish "finished and torn down" from "still running" instead of
+    implying either."""
 
     models: tuple[str, ...] = ()
     """Every model the session used, in first-seen order. A session that

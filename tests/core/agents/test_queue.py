@@ -277,6 +277,57 @@ def test_enqueue_then_nothing_leaves_the_message_pending() -> None:
     )
 
 
+def test_peer_delivery_ignores_only_transport_hop_chain() -> None:
+    sent = (
+        '<cross-session-message from="uds:/tmp/peer.sock" hop-chain="route-a" '
+        'from-name="peer">\nBody</cross-session-message>'
+    )
+    delivered = sent.replace(' hop-chain="route-a"', "")
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z", content=sent),
+            _op("enqueue", at="2026-08-01T10:00:01Z", content="still waiting"),
+            _op("remove", at="2026-08-01T10:00:02Z", content=delivered),
+            _queued(delivered, at="2026-08-01T10:00:00Z", origin="peer"),
+        ]
+    ).pending_queue()
+    assert [message.text for message in queued] == ["still waiting"]
+
+
+def test_peer_remove_and_delivery_witness_consume_only_one_duplicate() -> None:
+    sent = (
+        '<cross-session-message from="uds:/tmp/a.sock" hop-chain="route">'
+        "same</cross-session-message>"
+    )
+    delivered = sent.replace(' hop-chain="route"', "")
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z", content=sent),
+            _op("enqueue", at="2026-08-01T10:00:01Z", content=sent),
+            _op("remove", at="2026-08-01T10:00:02Z", content=delivered),
+            _queued(delivered, at="2026-08-01T10:00:00Z", origin="peer"),
+        ]
+    ).pending_queue()
+    assert [message.text for message in queued] == [sent]
+
+
+def test_peer_queue_identity_preserves_body_and_sender() -> None:
+    first = (
+        '<cross-session-message from="uds:/tmp/a.sock" hop-chain="route">'
+        'Body hop-chain="literal"</cross-session-message>'
+    )
+    other = first.replace("a.sock", "b.sock")
+    changed_body = first.replace('Body hop-chain="literal"', "Body")
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z", content=first),
+            _op("remove", at="2026-08-01T10:00:01Z", content=other),
+            _op("remove", at="2026-08-01T10:00:02Z", content=changed_body),
+        ]
+    ).pending_queue()
+    assert [message.text for message in queued] == [first]
+
+
 def test_a_delivered_message_leaves_the_queue() -> None:
     queued = _parse(
         [

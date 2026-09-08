@@ -35,12 +35,13 @@ only tmux. See [root workspaces](features-workspace-lifecycle.md#root-workspaces
 suspended Textual plus `tmux attach` outside it, landing in the `agent`
 window with its command already running.
 
-Detach with `Ctrl-B d` without stopping anything. The activity rail flips
+Detach with ++ctrl+b++ then ++d++ without stopping anything. The activity rail flips
 ACTIVE to IDLE after `tmux.activity_threshold_seconds` of quiet (default
 `30`).
 
-The `shell` window is one tmux switch away (`Ctrl-B 0/1` or `Ctrl-B w`),
-for `git commit`, `git push`, `lazygit`, or anything else. Grove never
+Switch to the `shell` window with ++ctrl+b++ then ++0++ or ++1++.
+Use ++ctrl+b++ then ++w++ to choose from the window list.
+Run `git commit`, `git push`, `lazygit`, or anything else there. Grove never
 runs commits or pushes for you.
 
 ## Steer without attaching

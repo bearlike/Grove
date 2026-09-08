@@ -1084,6 +1084,29 @@ exit 0
         """
         return [docker_bin, "ps", "-a", "-q", "--no-trunc", *self.filters()]
 
+    def compose_service_argv(self, service: str, *, docker_bin: str = "docker") -> list[str]:
+        """List the exact service container inside this workspace's owned stack.
+
+        Panel resolution needs membership evidence, not Docker's service-name
+        DNS: the latter says nothing about which project a same-named service
+        belongs to. The project label is safe to name only after
+        :attr:`compose_owned` establishes it from the Grove-labelled container
+        ``up`` produced, so this reuses that proof rather than inventing another
+        ownership test. A service is a lookup inside the owned project, never a
+        free-form container selector.
+        """
+        self._require_owned_project()
+        return [
+            docker_bin,
+            "ps",
+            "--filter",
+            f"label={self.COMPOSE_PROJECT_LABEL}={self.compose_project}",
+            "--filter",
+            "label=com.docker.compose.service=" + service,
+            "--format",
+            "{{.ID}}",
+        ]
+
     def exec_argv(self, command: Sequence[str], *, docker_bin: str = "docker") -> list[str]:
         """Run *command* inside this container AS THE AGENT'S OWN USER.
 

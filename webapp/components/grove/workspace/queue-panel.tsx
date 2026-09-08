@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MessagesSquareIcon } from "lucide-react";
+import { ListOrderedIcon } from "lucide-react";
 
 import { CardDisclosure, CardShell } from "@/components/grove/card";
 import { RelativeTime } from "@/components/grove/relative-time";
@@ -67,7 +67,11 @@ export function QueuePanel({
   const count = queue.messages.length;
 
   return (
-    <CardShell className="surface-raised" data-testid="queue-card" data-collapsed={!open}>
+    <CardShell
+      className="surface-raised"
+      data-testid="queue-card"
+      data-collapsed={!open}
+    >
       <CardDisclosure
         open={open}
         onOpenChange={setOpen}
@@ -75,7 +79,10 @@ export function QueuePanel({
         header
         summary={
           <>
-            <MessagesSquareIcon aria-hidden className="size-4 shrink-0 text-content-tertiary" />
+            <ListOrderedIcon
+              aria-hidden
+              className="size-4 shrink-0 text-content-tertiary"
+            />
             <span className="shrink-0 text-sm font-medium">Queued</span>
             <span className="ms-auto shrink-0 text-xs text-content-tertiary tabular-nums">
               {count} {count === 1 ? "message" : "messages"} waiting
@@ -85,20 +92,29 @@ export function QueuePanel({
       >
         {/* Capped rather than free, same reasoning as the plan card: an
             expanded card that eats the viewport pushes the composer off-screen. */}
-        <ul className="max-h-56 overflow-y-auto px-3 pt-1 pb-3" data-testid="queue-list">
+        <ul
+          className="max-h-56 divide-y divide-border overflow-y-auto"
+          data-testid="queue-list"
+        >
           {queue.messages.map((message) => (
             <li
               key={message.position}
-              className="flex min-w-0 items-baseline gap-3 py-1.5 first:pt-0 last:pb-0"
+              className="flex min-w-0 items-baseline gap-2 px-3 py-2"
               data-testid="queue-message"
             >
+              <span className="shrink-0 text-xs tabular-nums text-content-tertiary">
+                {message.position + 1}
+              </span>
               {/* A SENTENCE wraps rather than truncates: this is the reader's
                   own instruction, and clipping it would lose the part it was
                   sent for. */}
-              <span className="min-w-0 flex-1 text-sm break-words text-content-secondary">
+              <span className="min-w-0 flex-1 break-words text-sm text-content-secondary">
                 {message.text}
               </span>
-              <RelativeTime iso={message.sent_at} className="shrink-0 text-xs text-content-tertiary" />
+              <RelativeTime
+                iso={message.sent_at}
+                className="w-16 shrink-0 truncate text-end text-xs text-content-tertiary"
+              />
             </li>
           ))}
         </ul>

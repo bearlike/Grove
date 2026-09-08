@@ -1,0 +1,130 @@
+name: Dispatch (on-demand)
+
+# The on-demand console: run any gate, at any scope, on a CI worker instead of
+# a developer host.
+#
+# WHY THIS EXISTS. Grove's host routinely runs an agent fleet plus the user's
+# own work, and a full local suite competes with both — measured 2026-09-15, the
+# webapp Playwright suite took ~1.0 hour locally and pytest ~13 minutes, most of
+# it wall-clock contention. A saturated host also corrupts results: a
+# memory-killed worker exits 144, which is not a test failure, and load-
+# sensitive timing tests fail for reasons unrelated to the code. Before this
+# file, ci.yml had no workflow_dispatch trigger at all, so there was no way to
+# ask CI for anything less than a whole push-triggered run.
+#
+# Every job below delegates to the same reusable workflow ci.yml uses, so a
+# dispatched gate is the identical gate — not a lookalike that can drift.
+#
+# GITEA CONSTRAINTS, both load-bearing:
+#   1. Dispatch inputs arrive as STRINGS. Gitea 1.26 stores a `type: boolean`
+#      as "true"/"false", and on a `needs`-gated job `if: inputs.x == true`
+#      coerces to NaN == 1 and silently never fires — while the same input
+#      works on an ungated job, which makes it look intermittent. Fixed
+#      upstream in 1.27.1. Every condition here compares against a string,
+#      which is also correct on GitHub.
+#   2. Gitea only dispatches a workflow present on the DEFAULT BRANCH. This
+#      file is untriggerable until it lands on main; `ref` then selects which
+#      branch's code to actually check out and test.
+#
+# FROM THE CLI (tea 0.14+):
+#   tea actions workflows list --repo bearlike/Grove
+#   tea actions workflows dispatch dispatch.yml --repo bearlike/Grove \
+#     -i suite=python-tests -i paths=tests/core -i keyword=phase
+#   tea actions runs list --repo bearlike/Grove
+# `--ref` selects the branch to run against (defaults to the current branch).
+#
+# `tea -i` CANNOT CARRY A COMMA. It splits every -i value on commas before
+# parsing key=value, so `-i quality_gates=ruff,mypy` dies with
+# `invalid input format "mypy", expected key=value` — and QUOTING DOES NOT
+# HELP, because the split happens long after the shell is done. Measured with
+# tea 0.14.0 on 2026-09-15. The limit is tea's parser, not this workflow and
+# not Gitea: the same comma value is accepted verbatim over the API. For a
+# multi-gate subset use the API form —
+#   tea api --repo bearlike/Grove -X POST \
+#     /repos/bearlike/Grove/actions/workflows/dispatch.yml/dispatches \
+#     -d '{"ref":"main","inputs":{"suite":"python-quality","quality_gates":"ruff,mypy"}}'
+# — or the web UI. A single-value subset (`-i quality_gates=mypy`) is fine
+# through `-i`, and every other input here is comma-free by design: `paths` is
+# SPACE separated precisely so the common scoping case stays CLI-native.
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which suite to run"
+        type: choice
+        required: true
+        default: python-tests
+        options:
+          - python-tests
+          - python-quality
+          - webapp-gate
+          - webapp-e2e
+          - everything
+      paths:
+        description: "[python-tests] paths, space separated (e.g. 'tests/core tests/daemon')"
+        type: string
+        required: false
+        default: "tests"
+      keyword:
+        description: "[python-tests] pytest -k expression (spot tests)"
+        type: string
+        required: false
+        default: ""
+      markers:
+        description: "[python-tests] pytest -m expression"
+        type: string
+        required: false
+        default: "not integration"
+      quality_gates:
+        description: "[python-quality] all | subset of ruff,ruff-format,mypy,imports"
+        type: string
+        required: false
+        default: "all"
+      webapp_gates:
+        description: "[webapp-gate] all | subset of typecheck,vitest,styling,codegen,registry,ignored"
+        type: string
+        required: false
+        default: "all"
+      e2e_grep:
+        description: "[webapp-e2e] Playwright --grep filter"
+        type: string
+        required: false
+        default: ""
+      e2e_shards:
+        description: "[webapp-e2e] parallel shards"
+        type: number
+        required: false
+        default: 4
+
+jobs:
+  python-tests:
+    name: Python tests
+    if: inputs.suite == 'python-tests' || inputs.suite == 'everything'
+    uses: ./.github/workflows/_py-tests.yml
+    with:
+      paths: ${{ inputs.paths }}
+      keyword: ${{ inputs.keyword }}
+      markers: ${{ inputs.markers }}
+
+  python-quality:
+    name: Python quality
+    if: inputs.suite == 'python-quality' || inputs.suite == 'everything'
+    uses: ./.github/workflows/_py-quality.yml
+    with:
+      gates: ${{ inputs.quality_gates }}
+
+  webapp-gate:
+    name: Webapp gate
+    if: inputs.suite == 'webapp-gate' || inputs.suite == 'everything'
+    uses: ./.github/workflows/_webapp-gate.yml
+    with:
+      gates: ${{ inputs.webapp_gates }}
+
+  webapp-e2e:
+    name: Webapp e2e
+    if: inputs.suite == 'webapp-e2e' || inputs.suite == 'everything'
+    uses: ./.github/workflows/_webapp-e2e.yml
+    with:
+      grep: ${{ inputs.e2e_grep }}
+      shards: ${{ inputs.e2e_shards }}

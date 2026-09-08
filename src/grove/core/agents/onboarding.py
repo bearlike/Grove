@@ -11,13 +11,13 @@ so a relocated `CLAUDE_CONFIG_DIR`/`CODEX_HOME` is honoured for free.
 
 from __future__ import annotations
 
-import importlib.resources
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Final, Literal, Protocol
 
+from grove._skills import SkillLibrary
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.agents.codex import _CodexHome
 from grove.core.errors import OnboardError
@@ -168,12 +168,12 @@ class BundledSkills:
     @classmethod
     def root(cls) -> Path:
         """The packaged skills directory inside the installed `grove` package."""
-        return Path(str(importlib.resources.files("grove") / cls.PACKAGE_DIR))
+        return SkillLibrary.root()
 
     @classmethod
     def dirs(cls) -> tuple[Path, ...]:
         """Every packaged skill source directory, name-sorted for stable output."""
-        return tuple(sorted((d for d in cls.root().iterdir() if d.is_dir()), key=lambda d: d.name))
+        return SkillLibrary.dirs()
 
     @classmethod
     def install_into(cls, base: Path) -> tuple[str, ...]:

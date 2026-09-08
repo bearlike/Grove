@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ticketRollup } from "@/components/grove/workspace/selectors";
+import { rollupCoverage, rollupFormula, ticketRollup } from "@/components/grove/workspace/selectors";
 import type { PhaseView, TicketRef } from "@/lib/grove/api";
 
 /**
@@ -142,5 +142,45 @@ describe("ticketRollup", () => {
     // nothing — the tickets are real work whether or not anyone described it.
     const r = ticketRollup([ref("1"), ref("2")], null);
     expect(r).toMatchObject({ total: 2, reported: 0, unreported: 2, fraction: 0 });
+  });
+});
+
+describe("the rollup's explanation", () => {
+  it("keeps phase progress separate from completion", () => {
+    // Delivering is index 4 of six, so 80% phase progress and no completed
+    // tickets are both true. Collapsing either into the other loses the fact
+    // this aggregate exists to make scannable.
+    const rollup = ticketRollup(
+      [ref("1"), ref("2")],
+      view([claim("gitea:1", "delivering", 4), claim("gitea:2", "delivering", 4)]),
+    );
+
+    expect(rollup?.fraction).toBeCloseTo(0.8);
+    expect(rollup && rollupCoverage(rollup)).toBe("0 / 2 done · 2 claims reported");
+  });
+
+  it("names a missing claim without excluding its ref from the average", () => {
+    const rollup = ticketRollup([ref("1"), ref("2")], view([claim("gitea:1", "delivering", 4)]));
+
+    expect(rollup?.fraction).toBeCloseTo(0.4);
+    expect(rollup && rollupCoverage(rollup)).toBe("0 / 2 done · 1 claim not reported");
+  });
+
+  it("writes singular and plural coverage honestly, including the blocked suffix", () => {
+    const oneReported = ticketRollup([ref("1")], view([claim("gitea:1", "done", 5)]));
+    const blocked = ticketRollup(
+      [ref("1"), ref("2")],
+      view([claim("gitea:1", "verifying", 3, true), claim("gitea:2", "scoping", 0, true)]),
+    );
+
+    expect(oneReported && rollupCoverage(oneReported)).toBe("1 / 1 done · 1 claim reported");
+    expect(blocked && rollupCoverage(blocked)).toBe("0 / 2 done · 2 claims reported · 2 blocked");
+  });
+
+  it("makes the calculation and its unreported-zero rule available on hover", () => {
+    const rollup = ticketRollup([ref("1"), ref("2")], view([claim("gitea:1", "delivering", 4)]));
+
+    expect(rollup && rollupFormula(rollup)).toContain("index / (total − 1)");
+    expect(rollup && rollupFormula(rollup)).toContain("a ref with no claim counts as 0");
   });
 });

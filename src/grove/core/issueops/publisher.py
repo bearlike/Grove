@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import quote, urlencode
 
 from loguru import logger
@@ -115,6 +115,8 @@ HolderResolver = Callable[[str, "Sequence[TicketRef]"], bool]
 # spends the reader's click. ``False`` renders the id as plain text plus a
 # statement that it is out of reach.
 TranscriptProbe = Callable[[str, str, str], bool]
+
+
 # Assign the Grove account to one ticket NOW — ``(repo_root, provider, id)``.
 # Injected rather than imported for the reason every other resolver here is: the
 # publisher must not learn about the poller, and the poller owns the ONE
@@ -123,7 +125,23 @@ TranscriptProbe = Callable[[str, str, str], bool]
 # release sweep only releases what it holds — so the ticket would stay assigned
 # forever, which is exactly the leak the release was built to close. ``None``
 # (no assigner wired) means assignment stays the poll's job alone.
-TicketAssigner = Callable[[str, TicketProviderName, str, TicketKind], bool]
+#
+# A Protocol rather than a `Callable[...]` alias solely because the holder id is
+# keyword-only: it is the one argument a caller could plausibly omit by accident,
+# and omitting it silently under-counts the pickup ceiling rather than failing.
+class TicketAssigner(Protocol):
+    """Assign the Grove account to one ticket NOW, naming the workspace holding it."""
+
+    def __call__(
+        self,
+        repo_root: str,
+        provider_name: TicketProviderName,
+        ticket_id: str,
+        kind: TicketKind = "issue",
+        *,
+        workspace_id: str | None = None,
+    ) -> bool: ...
+
 
 # One publish target's stable identity — (provider name, ticket id). The sticky
 # comment id is remembered under this, so a workspace mirroring onto an issue and
@@ -861,7 +879,7 @@ class TicketStatusPublisher:
             # reader of the description a way back to both. They ride one
             # dispatch because they answer one question and share one trigger —
             # a workspace deterministically holding this ticket right now.
-            self._mark_owned(ws.repo_root, target)
+            self._mark_owned(ws.repo_root, target, ws.id)
             self._sync_footer(job.row, target, comment_id)
 
     def set_assigner(self, assigner: TicketAssigner) -> None:
@@ -945,7 +963,7 @@ class TicketStatusPublisher:
         authority = root.split("//", 1)[-1]  # already protocol-relative, or has no scheme at all
         return f"//{authority}/{context}/{segment}/{target.ticket_id}#issuecomment-{comment_id}"
 
-    def _mark_owned(self, repo_root: str, target: _Target) -> None:
+    def _mark_owned(self, repo_root: str, target: _Target, workspace_id: str) -> None:
         """Assign the Grove account to this target, best-effort and edge-triggered.
 
         Routed through the injected assigner rather than ``provider.assign_self``
@@ -957,11 +975,23 @@ class TicketStatusPublisher:
         The target's ``kind`` is passed rather than filtered here: which kinds
         are assignable is the assignee queue's rule, and a second copy of it at
         this call site is how the two came to disagree in the first place.
+
+        The holder's id travels with it for the same reason: the queue counts
+        live work by workspace, and an assignment recorded with no holder is
+        uncounted work — so the ceiling that exists to bound the fleet would
+        under-count for as long as it took an unrelated lifecycle edge to
+        resolve the identity this caller already has.
         """
         if self._assigner is None:
             return
         try:
-            self._assigner(repo_root, target.provider.name, target.ticket_id, target.kind)
+            self._assigner(
+                repo_root,
+                target.provider.name,
+                target.ticket_id,
+                target.kind,
+                workspace_id=workspace_id,
+            )
         except Exception as exc:  # best-effort, exactly like the publish above
             logger.debug("issueops assign-on-publish failed for {}: {}", target.key, exc)
 

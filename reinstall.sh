@@ -18,6 +18,11 @@
 #   ./reinstall.sh --extras '.[daemon,mcp]'   # override the install extras (default '.[all]')
 #   ./reinstall.sh -h | --help
 #
+# Env:
+#   WEBAPP_NPM_BIN=<path>  pin the npm used for the webapp build. Otherwise it is
+#                          discovered: the webapp unit's own npm, the shell's, then
+#                          any nvm install — first one whose Node is >= 22 wins.
+#
 # Surfaces it refreshes (see the reinstalling-grove skill for the full model):
 #   • Package (CLI + TUI)  — `uv tool install --reinstall --editable`
 #   • Webapp               — `make webapp-build` THEN restart the webapp service
@@ -43,8 +48,10 @@ DO_MCP=1
 DO_VERIFY=1
 EXTRAS=".[all]"
 
+# Derived from the header block, not a hard-coded line range: a line number in a
+# sed script silently truncates the help text the moment the header grows.
 usage() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"
   exit "${1:-0}"
 }
 
@@ -128,6 +135,50 @@ restart_service() {  # $1 = unit name, $2 = human label
   ok "$label restarted ($unit)"
 }
 
+# The webapp needs Node >= 22 (Next 16) and this host's default `node` is often
+# older, so `make webapp-build` — which inherits whatever npm is on PATH — would
+# build it on the wrong toolchain. That is not cosmetic: npm prints a wall of
+# EBADENGINE warnings and the resulting .next is then SERVED by the unit's own
+# (newer) Node, so build and runtime disagree while every step reports success.
+# Resolve it the same way the ports and unit names above are resolved: ask the
+# host, never assume the shell.
+npm_node_major() {  # $1 = path to an npm bin → echoes its sibling node's major
+  local node_bin
+  node_bin="$(dirname "$1")/node"
+  [ -x "$node_bin" ] || return 0
+  "$node_bin" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true
+}
+
+# Candidates in trust order: an explicit override, the Node the webapp unit
+# already runs (the strongest signal — it is what will execute the build's
+# output), the shell's npm, then any nvm-managed install, newest first.
+webapp_npm_candidates() {
+  [ -n "${WEBAPP_NPM_BIN:-}" ] && echo "$WEBAPP_NPM_BIN"
+  [ "$HAVE_SYSTEMCTL" = 1 ] && [ -n "$WEBAPP_SVC" ] && \
+    systemctl --user cat "$WEBAPP_SVC" 2>/dev/null \
+      | sed -n 's|^ExecStart=\([^ ]*/npm\) .*|\1|p' | head -1
+  command -v npm 2>/dev/null || true
+  local nvm_dir
+  for nvm_dir in "${NVM_DIR:-}" "$HOME/.nvm" "$HOME/.config/nvm"; do
+    [ -n "$nvm_dir" ] && [ -d "$nvm_dir/versions/node" ] || continue
+    find "$nvm_dir/versions/node" -mindepth 3 -maxdepth 3 -name npm -type f 2>/dev/null | sort -V -r
+  done
+}
+
+# Echoes an npm whose Node is >= 22, or empty when the host has none.
+resolve_webapp_npm() {
+  local cand major
+  while read -r cand; do
+    [ -n "$cand" ] && [ -x "$cand" ] || continue
+    major="$(npm_node_major "$cand")"
+    [ -n "$major" ] && [ "$major" -ge 22 ] 2>/dev/null || continue
+    echo "$cand"
+    return 0
+  done <<EOF
+$(webapp_npm_candidates)
+EOF
+}
+
 # Resolve the daemon URL from grove's own config, falling back to the default.
 daemon_url() {
   local url
@@ -168,8 +219,21 @@ fi
 # ─── 2. webapp (rebuild THEN restart) ─────────────────────────────────────────
 if [ "$DO_WEBAPP" = 1 ]; then
   step "Rebuild webapp (.next) + restart"
+  WEBAPP_NPM="$(resolve_webapp_npm)"
+  if [ -z "$WEBAPP_NPM" ]; then
+    die "$(printf '%s\n      %s' \
+      "no Node >= 22 npm found — the webapp (Next 16) cannot be built on this host" \
+      "fix:   install Node 22+ (e.g. 'nvm install 22'), or set WEBAPP_NPM_BIN=<path to its npm>")"
+  fi
+  # Report the node the SIBLING resolves to, which is the one Make will put on
+  # PATH — not `node -v` off the ambient shell, which is the mismatch this whole
+  # resolution exists to avoid.
+  info "npm: ${WEBAPP_NPM} (node $("$(dirname "$WEBAPP_NPM")/node" -p 'process.versions.node'))"
   info "make webapp-build  (npm ci + npm run build)"
-  make webapp-build 2>&1 | sed 's/^/    /' || die "webapp build failed"
+  # Pass the resolved npm through Make's own override rather than mutating PATH:
+  # WEBAPP_NPM_BIN is the documented seam (see webapp/CLAUDE.md), and its recipes
+  # derive the sibling node dir from it.
+  make webapp-build WEBAPP_NPM_BIN="$WEBAPP_NPM" 2>&1 | sed 's/^/    /' || die "webapp build failed"
   if [ -f webapp/.next/BUILD_ID ]; then
     ok "build complete — BUILD_ID $(cat webapp/.next/BUILD_ID)"
   fi

@@ -9,12 +9,16 @@
 export { groveClient, POLL_MS } from "./client";
 export { usePublicDiff, usePublicTurns, usePublicWorkspace } from "./public";
 export { groveKeys } from "./keys";
+export { useGallery, useGalleryDocument, useGalleryPreview, useSaveGalleryPreview } from "./gallery";
 
 export {
   useAgents,
   useBranches,
   useCatalogTurns,
+  useDiagramWriter,
+  useWorkspaceDiagram,
   useHealth,
+  useModels,
   useProvisionProgress,
   useSessionCatalog,
   useSessionControls,
@@ -26,10 +30,12 @@ export {
   useWorkspace,
   useWorkspaceCommits,
   useWorkspaceDiff,
+  useWorkspacePanels,
   useWorkspacePeek,
   useWorkspaceQueue,
   useWorkspaceSessionCandidates,
   useWorkspaceSessions,
+  useWorkspaceHistory,
   useWorkspaceTodo,
   ticketKey,
 } from "./queries";
@@ -56,12 +62,13 @@ export {
   useRemapSession,
   useSendMessage,
   useSaveSharePolicy,
+  useSendKey,
   useSwitchModel,
   useUpdateWorkspace,
   useWorkspaceActions,
   withOptimisticSend,
 } from "./mutations";
-export type { AnswerQuestionInput, WorkspaceActions } from "./mutations";
+export type { AnswerQuestionInput, SendMessageInput, WorkspaceActions } from "./mutations";
 
 export {
   backstopInterval,

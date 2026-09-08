@@ -2,8 +2,10 @@ import type { VariantProps } from "class-variance-authority";
 import {
   BotIcon,
   BoxIcon,
-  CircleAlertIcon,
+  CircleCheckBigIcon,
+  CircleCheckIcon,
   CircleDashedIcon,
+  CircleDotIcon,
   CirclePauseIcon,
   CirclePlayIcon,
   CircleXIcon,
@@ -11,7 +13,9 @@ import {
   HammerIcon,
   LoaderCircleIcon,
   MessageCircleQuestionIcon,
+  OctagonAlertIcon,
   RadioTowerIcon,
+  SendIcon,
   ServerIcon,
   UnplugIcon,
   type LucideIcon,
@@ -32,16 +36,12 @@ type BadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
  * say how loud each state should be. `destructive` is spent on the states that
  * want a human; everything else stays quiet so a fleet of twenty reads as calm.
  *
- * ONE `default` PER OBJECT, ACROSS ALL ITS AXES — and the workspace status axis
- * is the one that gets it. `active`/`running` and `working` both used to render
- * `default`, so a card put two maximally loud marks side by side to encode one
- * fact: an active workspace is active *because* its agent is working. The agent
- * axis therefore never claims the loudest tone; it is the axis with the finer
- * word, not the louder mark.
+ * Ordinary live states stay neutral. Attention earns the filled signal;
+ * progress is shape and text, never a field of yellow pills.
  */
 const STATUS_TONE: Record<WorkspaceStatus, BadgeVariant> = {
-  active: "default",
-  running: "default",
+  active: "secondary",
+  running: "secondary",
   provisioning: "outline",
   idle: "secondary",
   paused: "secondary",
@@ -100,13 +100,28 @@ const STATUS_PRESENTATION: Record<WorkspaceStatus, { label: string; Icon: Lucide
   error: { label: "Error", Icon: CircleXIcon },
 };
 
-const AGENT_PRESENTATION: Record<AgentState, { label: string; Icon: LucideIcon }> = {
+const AGENT_PRESENTATION: Record<
+  AgentState,
+  { label: string; Icon: LucideIcon; attentionLabel?: string }
+> = {
   starting: { label: "Starting", Icon: LoaderCircleIcon },
   working: { label: "Working", Icon: CirclePlayIcon },
-  waiting: { label: "Waiting for you", Icon: MessageCircleQuestionIcon },
-  blocked: { label: "Blocked", Icon: CircleAlertIcon },
+  waiting: {
+    label: "Waiting for you",
+    Icon: MessageCircleQuestionIcon,
+    attentionLabel: "Waiting for you — the agent asked a question",
+  },
+  blocked: {
+    label: "Blocked",
+    Icon: OctagonAlertIcon,
+    attentionLabel: "Blocked — waiting on a permission or an external dependency",
+  },
   idle: { label: "Idle", Icon: CircleDashedIcon },
-  error: { label: "Error", Icon: CircleXIcon },
+  error: {
+    label: "Error",
+    Icon: CircleXIcon,
+    attentionLabel: "Error — the session hit a failure",
+  },
   unknown: { label: "No session", Icon: BotIcon },
 };
 
@@ -142,18 +157,17 @@ const AGENT_GLOSSARY: Partial<Record<AgentState, GlossaryTerm>> = {
 };
 
 /**
- * A task phase is a named position, not merely a fraction. The web preserves
- * its established grayscale-safe ramp while stating the phase in sentence case
- * beside it; the TUI uses its own terminal-safe rendering of the same ordered
- * phases.
+ * A task phase is a named position, not merely a fraction. Each position owns a
+ * distinct Lucide silhouette so the ramp survives greyscale and every web
+ * surface speaks the same vocabulary; the TUI retains its terminal-safe form.
  */
-const PHASE_PRESENTATION: Record<TaskPhase, { label: string; glyph: string }> = {
-  scoping: { label: "Scoping", glyph: "○" },
-  planning: { label: "Planning", glyph: "◔" },
-  implementing: { label: "Implementing", glyph: "◑" },
-  verifying: { label: "Verifying", glyph: "◕" },
-  delivering: { label: "Delivering", glyph: "●" },
-  done: { label: "Done", glyph: "✓" },
+const PHASE_PRESENTATION: Record<TaskPhase, { label: string; Icon: LucideIcon }> = {
+  scoping: { label: "Scoping", Icon: CircleDashedIcon },
+  planning: { label: "Planning", Icon: CircleDotIcon },
+  implementing: { label: "Implementing", Icon: CirclePlayIcon },
+  verifying: { label: "Verifying", Icon: CircleCheckBigIcon },
+  delivering: { label: "Delivering", Icon: SendIcon },
+  done: { label: "Done", Icon: CircleCheckIcon },
 };
 
 /**
@@ -198,33 +212,13 @@ export function agentBrand(agentName: string): AgentBrand {
   return AGENT_BRAND_PATTERNS.find(([pattern]) => pattern.test(agentName))?.[1] ?? "generic";
 }
 
-/**
- * The two hues `Badge`'s own variants cannot say, as semantic-token classes.
- *
- * `ui/badge` is vendored, so its variant table is not ours to extend, and the
- * two states the fleet most needs to distinguish are exactly the two it omits:
- * work that is UNDER WAY and work that is DONE. `destructive` covers failure and
- * `default`/`secondary` cover loud/quiet, which leaves "in flight" and "finished"
- * sharing a grey.
- *
- * These are tokens, never palette classes, so `lint:styling` passes them and the
- * theme still owns what they resolve to — the same standing the vendored
- * variants have. They ride `className` because that is the only seam a vendored
- * component leaves; §6's "never restyled at a call site" still holds, because a
- * call site reads one of the tables below and never writes a class itself.
- */
+/** Progress stays neutral; only completion earns a positive text accent. */
 const ACCENT = {
-  progress: "bg-warning text-warning-foreground",
-  done: "bg-success text-success-foreground",
+  progress: "text-content-secondary",
+  done: "text-success",
 } as const;
 
-/**
- * Which states earn one, and the gate is the same on every axis: an accent is
- * spent only where the object is MID-FLIGHT or FINISHED, never on identity and
- * never on a resting state. `provisioning` and `starting`/`working` are the
- * in-flight cases; nothing on these two axes is ever "finished", because a
- * workspace that finished is simply idle again.
- */
+/** Resting states have no accent; the phase glyph still carries position. */
 const STATUS_ACCENT: Partial<Record<WorkspaceStatus, string>> = {
   provisioning: ACCENT.progress,
 };
@@ -232,6 +226,21 @@ const STATUS_ACCENT: Partial<Record<WorkspaceStatus, string>> = {
 const AGENT_ACCENT: Partial<Record<AgentState, string>> = {
   starting: ACCENT.progress,
   working: ACCENT.progress,
+};
+
+/**
+ * Preserve wire state before AgentStatus folds idle into its `done` glyph.
+ * Idle is not reported completion, so it stays tertiary rather than success.
+ * The header consumes these semantic fills instead of the vendor's palette.
+ */
+const AGENT_PILL_ACCENT: Record<AgentState, string> = {
+  starting: "bg-primary",
+  working: "bg-primary",
+  waiting: "bg-destructive",
+  blocked: "bg-destructive",
+  error: "bg-destructive",
+  idle: "bg-content-tertiary",
+  unknown: "bg-content-tertiary",
 };
 
 export function statusTone(status: WorkspaceStatus): BadgeVariant {
@@ -248,6 +257,11 @@ export function agentTone(state: AgentState): BadgeVariant {
 
 export function agentAccent(state: AgentState): string | undefined {
   return AGENT_ACCENT[state];
+}
+
+/** The header pill dot's fill, from the same table the sidebar marks read. */
+export function agentPillAccent(state: AgentState): string {
+  return AGENT_PILL_ACCENT[state];
 }
 
 /**
@@ -279,6 +293,11 @@ export function agentGlyph(state: AgentState): LucideIcon {
   return AGENT_PRESENTATION[state].Icon;
 }
 
+/** The rail's attention label is only defined for states that need a human. */
+export function attentionLabel(state: AgentState): string | undefined {
+  return AGENT_PRESENTATION[state].attentionLabel;
+}
+
 export function statusGlossaryTerm(status: WorkspaceStatus): GlossaryTerm | undefined {
   return STATUS_GLOSSARY[status];
 }
@@ -287,29 +306,15 @@ export function agentGlossaryTerm(state: AgentState): GlossaryTerm | undefined {
   return AGENT_GLOSSARY[state];
 }
 
-/**
- * BLOCKED IS A FLAG ACROSS THE RAMP, NOT A SEVENTH STEP, so it takes the glyph
- * slot and leaves the position to be reported by the number beside it.
- *
- * The two facts are independent — how far the agent got, and whether it is
- * still moving — and the ramp above can only express the first. Replacing the
- * fill stage therefore loses nothing on `PhaseBadge`, whose `n/total` fraction
- * carries the position anyway; it buys a mark a reader can find on a wall of
- * twenty cards without reading a single word.
- *
- * `⊘` stays inside the ramp's own circle family deliberately, so it reads as
- * "this ramp, halted" rather than as a glyph borrowed from some other
- * vocabulary — and, like every character above, it survives greyscale, which
- * is the whole reason this axis is drawn in shapes (§4.7).
- */
-const BLOCKED_GLYPH = "⊘";
+/** A phase block is a flag on a position, never a seventh step. */
+export const PHASE_BLOCKED_ICON = OctagonAlertIcon;
 
 export function phaseLabel(phase: TaskPhase): string {
   return PHASE_PRESENTATION[phase].label;
 }
 
-export function phaseGlyph(phase: TaskPhase, blocked = false): string {
-  return blocked ? BLOCKED_GLYPH : PHASE_PRESENTATION[phase].glyph;
+export function phaseGlyph(phase: TaskPhase): LucideIcon {
+  return PHASE_PRESENTATION[phase].Icon;
 }
 
 export function runtimeLabel(runtime: Runtime): string {

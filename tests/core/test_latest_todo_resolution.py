@@ -356,7 +356,7 @@ def test_the_activity_tick_hands_over_the_session_it_adopted(
     state = mgr.create(CreateWorkspaceRequest(agent_name="codex", title="carded"))
     _write_codex_plan(codex_home, Path(state.agent_cwd), "019dd888-33cc-7461-bd07-eeeeeeeeeeee")
 
-    snapshot = ActivityService(registry=registry).snapshot()
+    snapshot = ActivityService(registry=registry).bootstrap()
 
     rows = [w for group in snapshot.projects for w in group.workspaces]
     (row,) = [w for w in rows if w.state.id == state.id]

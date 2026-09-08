@@ -1,6 +1,6 @@
 ---
 name: configuring-grove
-description: Use when a user wants to set up or change Grove's configuration, for a host/user or for a project. Covers the global user config, the committed project config, machine-local overrides, agents, init scripts, containers, tmux and peek tuning, the TUI theme, the daemon auth, notifications, and ticket providers (Gitea, GitHub, Linear) with their credential resolution and the issue-ops status mirror and assignee queue, plus the layered cascade, the exact file locations, the schema with defaults, and a required verification step against the user's installed version.
+description: Use when configuring Grove for a user or project, including agent rosters, init scripts, containers, private credentials, daemon or MCP setup, or the native-versus-terminal launch of a Claude Code or Codex agent. Also use when resolving config layers, validating a config schema, or explaining why a workspace starts with unexpected runtime behavior. For fleet operation use using-grove. For an agent inside a workspace use working-in-grove.
 ---
 
 # Configuring Grove
@@ -147,8 +147,45 @@ Each entry is one selectable agent in the create-workspace picker:
 - `description` (string, default `""`).
 
 Built-in defaults: `claude` (command `claude`, `kind` `claude_code`), `codex`
-(command `codex`, `kind` `codex`) and `shell` (command `$SHELL`, `kind`
-`generic`).
+(command `codex`, `kind` `codex`), their interactive twins `claude-terminal`
+and `codex-terminal`, and `shell` (command `$SHELL`, `kind` `generic`).
+
+### `native` on an `agents[]` entry
+
+Claude Code and Codex agents are **native by default**: Grove launches its own
+stream-json / app-server worker, holds the session's control channel
+(interrupt, model switch, peer mail) and prints the agent's output in the pane.
+Set `native: false` for the interactive terminal UI instead — the built-in
+`claude-terminal` and `codex-terminal` entries are exactly that, so both
+launch modes are always in the picker. The entry value is only a default:
+every create surface offers a per-workspace **Session mode** override (the
+web composer's agent panel, the create dialog, the TUI checkbox,
+`grove create --native/--terminal`, `grove_create_workspace(native=…)`).
+`mailbox` is the deprecated name. It is
+not an attach mechanism for a running interactive TUI, a raw socket retrofit,
+or a resumable existing session.
+
+```json
+{
+  "agents": [
+    {"name": "claude-tui", "command": "claude", "kind": "claude_code", "native": false}
+  ]
+}
+```
+
+The worker receives a launch-bound `GROVE_MAILBOX_TOKEN`; optional
+`GROVE_MAILBOX_URL` and `GROVE_MAILBOX_SOCKET` select its coordinator transport.
+It must have the Grove package and an authenticated private coordinator
+connection in its runtime. The primary agent alone can receive mailbox traffic.
+A native session cannot pause or resume, so respawn or recreate it.
+
+For containers, Grove mounts only the private mailbox socket. The image needs
+Grove and a reachable private agent config root. Linux runs covered host and
+container workers, a mixed host and container Claude pair, and separate Claude
+and Codex host cases. They do not prove every cross-provider container pairing,
+other operating systems, or federation. Configure the worker here, supervise it
+with `using-grove`, and give the agent the peer-message workflow in
+`working-in-grove`.
 
 ### `init_script`
 Optional setup run in its own tmux window before the agent starts:
@@ -474,6 +511,20 @@ Project config (`<repo>/.grove/config.json`): a shared standard, committed.
   }
 }
 ```
+
+## Mailbox MCP scope
+
+A normal `grove-mcp` process does not register mailbox tools without a bound
+`GROVE_MAILBOX_TOKEN`. Grove launches the native worker's server with
+`--mailbox-only`, or `GROVE_MCP_MAILBOX_ONLY=true`. That mode requires the
+worker token and registers mailbox tools plus `grove_get_skill` only. It does
+not expose fleet lifecycle or workspace control. Do not distribute a mailbox
+token in shared client configuration.
+
+Read `grove-mcp --help` for installed options and MCP tool schemas for inputs.
+`grove skills list --details` and `grove_get_skill(details=True)` list richer
+skill metadata without a mailbox token. A mailbox message never grants a default
+native tool permission.
 
 ## 7. Verify before you finish (required)
 

@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { ListTodoIcon } from "lucide-react";
+import { CheckIcon, CircleIcon, ListTodoIcon, Loader2Icon } from "lucide-react";
 
-import { TodoList } from "@/components/elements/todo-list";
 import { CardDisclosure, CardShell } from "@/components/grove/card";
 import { Progress } from "@/components/ui/progress";
-import { todoListProps } from "@/lib/grove/adapters";
 import type { TodoListView } from "@/lib/grove/api";
 
 /**
@@ -26,19 +24,23 @@ import type { TodoListView } from "@/lib/grove/api";
  * shared elevation token, which is also the composer's own shadow: the two sit
  * against each other and have to be lit the same way or they read as two
  * systems stacked by accident.
+ *
+ * A VENDORED ELEMENT THAT DRAWS ITS OWN SURFACE IS STANDALONE OR ABSENT. TodoList
+ * owns its own heading and type scale, so this Grove card composes its rows rather
+ * than nesting a second surface inside its disclosure.
  */
 export function TodoPanel({ todo }: { todo: TodoListView }) {
   const [open, setOpen] = useState(false);
-  const { items } = todoListProps(todo);
-  const done = items.filter((item) => item.status === "done").length;
-  const percent = items.length === 0 ? 0 : Math.round((done / items.length) * 100);
+  const done = todo.items.filter((item) => item.status === "completed").length;
+  const percent =
+    todo.items.length === 0 ? 0 : Math.round((done / todo.items.length) * 100);
 
   return (
     <CardShell
       className="surface-raised"
       data-testid="todo-card"
       data-collapsed={!open}
-      data-progress={`${done}/${items.length}`}
+      data-progress={`${done}/${todo.items.length}`}
     >
       <CardDisclosure
         open={open}
@@ -47,31 +49,67 @@ export function TodoPanel({ todo }: { todo: TodoListView }) {
         header
         summary={
           <>
-            <ListTodoIcon aria-hidden className="size-4 shrink-0 text-content-tertiary" />
+            <ListTodoIcon
+              aria-hidden
+              className="size-4 shrink-0 text-content-tertiary"
+            />
             <span className="shrink-0 text-sm font-medium">Plan</span>
             {/* Capped, and pushed to the count it belongs to: a bar spanning
                 the whole row reads as a rule between two labels, not a meter. */}
             <Progress
               value={percent}
               className="ms-auto h-1.5 w-24 shrink-0"
-              aria-label={`Plan progress: ${done} of ${items.length} done`}
+              aria-label={`Plan progress: ${done} of ${todo.items.length} done`}
             />
-            {/* Collapse hides the DETAIL, never the SIGNAL — but expanded, the
-                vendored list prints the same count in its own header, so
-                showing it twice is noise rather than reassurance. */}
-            {!open && (
-              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                {done}/{items.length}
-              </span>
-            )}
+            <span className="shrink-0 text-xs text-content-tertiary tabular-nums">
+              {done}/{todo.items.length}
+            </span>
           </>
         }
       >
-        {/* Capped rather than free: a 25-step plan is normal, and an expanded
-            card that eats the viewport pushes the composer off-screen. */}
-        <div className="max-h-56 overflow-y-auto px-3 pt-1 pb-3">
-          <TodoList items={items} className="max-w-none" />
-        </div>
+        {/* A vendored element that draws its own surface is standalone or absent:
+            nesting TodoList put a second heading and pre-density type inside this
+            card. These are rows in this card's list instead. */}
+        <ul
+          className="max-h-56 divide-y divide-border overflow-y-auto"
+          data-testid="todo-list"
+        >
+          {todo.items.map((item, index) => {
+            const active = item.status === "in_progress";
+            const complete = item.status === "completed";
+            const ItemIcon = complete
+              ? CheckIcon
+              : active
+                ? Loader2Icon
+                : CircleIcon;
+            const label = (active && item.active_form) || item.content;
+            return (
+              <li
+                key={index}
+                className="flex min-w-0 items-start gap-2 px-3 py-2 text-sm"
+                data-testid="todo-item"
+              >
+                <ItemIcon
+                  aria-hidden
+                  className={
+                    active
+                      ? "mt-0.5 size-4 shrink-0 animate-spin text-content-secondary motion-reduce:animate-none"
+                      : "mt-0.5 size-4 shrink-0 text-content-tertiary"
+                  }
+                />
+                <span
+                  className={
+                    complete
+                      ? "min-w-0 break-words text-content-tertiary line-through"
+                      : "min-w-0 break-words text-content-secondary"
+                  }
+                >
+                  {label}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
       </CardDisclosure>
     </CardShell>
   );

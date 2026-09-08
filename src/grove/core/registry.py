@@ -23,8 +23,9 @@ from pathlib import Path
 from grove.core.config import GroveConfig
 from grove.core.git import detect_root
 from grove.core.manager import WorkspaceManager
+from grove.core.native import NativeSteerClient
 from grove.core.store import JsonWorkspaceStore
-from grove.core.workspace import ShareToken, WorkspaceState
+from grove.core.workspace import ShareToken, WorkspaceRef, WorkspaceState
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,9 +53,16 @@ class RepoRegistry:
         store: JsonWorkspaceStore,
         config_loader: Callable[[Path], GroveConfig] | None = None,
         on_project_registered: Callable[[Path], None] | None = None,
+        native_steer: NativeSteerClient | None = None,
     ) -> None:
         self._cfg = cfg
         self._store = store
+        # How a native workspace's owner is reached. The daemon holds the
+        # coordinator the owner workers connect to, so it injects an in-process
+        # client here and every Manager it mints steers without a network hop;
+        # ``None`` leaves each Manager its out-of-process default (the daemon's
+        # own steer routes), which is what a CLI or TUI process needs.
+        self._native_steer = native_steer
         # Fired exactly once per repo, the moment its Manager is first cached —
         # the engine's definition of "project registration". A caller wires
         # this to `ProjectInfra.ensure` (best-effort, never blocking `get()`)
@@ -75,6 +83,21 @@ class RepoRegistry:
         # ``cfg`` build_app holds, never off a registry Manager.
         self._config_loader = config_loader
         self._cache: dict[Path, WorkspaceManager] = {}
+        self._manager_subscribers: list[Callable[[Path, WorkspaceManager], None]] = []
+
+    def subscribe_managers(
+        self, callback: Callable[[Path, WorkspaceManager], None]
+    ) -> Callable[[], None]:
+        """Observe existing and newly materialized managers without rescanning readers."""
+        self._manager_subscribers.append(callback)
+        for root, manager in tuple(self._cache.items()):
+            callback(root, manager)
+
+        def unsubscribe() -> None:
+            if callback in self._manager_subscribers:
+                self._manager_subscribers.remove(callback)
+
+        return unsubscribe
 
     def get(self, repo_root: Path) -> WorkspaceManager:
         """Return (or create) a Manager for ``repo_root``.
@@ -88,11 +111,39 @@ class RepoRegistry:
         mgr = self._cache.get(key)
         if mgr is None:
             cfg = self._config_loader(key) if self._config_loader is not None else self._cfg
-            mgr = WorkspaceManager(repo_root=key, cfg=cfg, store=self._store)
+            mgr = WorkspaceManager(
+                repo_root=key, cfg=cfg, store=self._store, native_steer=self._native_steer
+            )
             self._cache[key] = mgr
+            for callback in tuple(self._manager_subscribers):
+                callback(key, mgr)
             if self._on_project_registered is not None:
                 self._on_project_registered(key)
         return mgr
+
+    def resolve_workspace(self, ref: str) -> tuple[WorkspaceManager, WorkspaceState]:
+        """The workspace ``ref`` names, and a Manager bound to ITS repo.
+
+        A workspace id is unique across the host, and the repo a workspace
+        belongs to is recorded on the workspace — so naming one is enough to
+        reach it, and asking the caller to also be standing in the right
+        directory is a precondition the operation never had. Every id-addressed
+        verb (attach, message, pause, kill, …) resolves here, which is why they
+        work from anywhere: the record supplies the repo the Manager binds to.
+
+        Same shape and same reason as :meth:`resolve_share` — one store read
+        answers for every repo, and only the single matching repo's Manager is
+        materialized, through the ordinary cache. Walking ``known_roots()``
+        instead would resolve every project's whole config cascade to answer a
+        question one record already answers.
+
+        Raises ``GroveError`` naming the candidates when the ref matches
+        nothing or several. Ambiguity is judged HOST-wide, so a prefix that was
+        unique inside one repo can now be ambiguous — which is the honest
+        answer for a ref that no longer carries a repo to disambiguate it.
+        """
+        state = WorkspaceRef.resolve(self._store.load_all(), ref)
+        return self.get(Path(state.repo_root)), state
 
     def resolve_share(self, token: str) -> tuple[WorkspaceManager, WorkspaceState] | None:
         """The workspace a public share token names, or ``None``.
@@ -141,6 +192,17 @@ class RepoRegistry:
         target = str(Path(repo_root).resolve())
         shared = [s for s in self._store.load_all() if s.share_token and s.repo_root == target]
         return sorted(shared, key=lambda s: s.updated_at, reverse=True)
+
+    def workspace_states(self) -> list[WorkspaceState]:
+        """Every persisted workspace without status reconciliation or Manager setup.
+
+        Host-wide read indexes use this when they need workspace identity to
+        annotate one filesystem edge. ``WorkspaceManager.list()`` additionally
+        reaches tmux and lifecycle state, which is neither needed nor affordable
+        for a path-local catalog update. The store supplies independent values
+        from its signature-indexed snapshot.
+        """
+        return self._store.load_all()
 
     def known_roots(self) -> list[Path]:
         """Repos that exist, by union of two sources.

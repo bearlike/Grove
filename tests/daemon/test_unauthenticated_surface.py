@@ -40,7 +40,16 @@ from grove.daemon import build_app
 #:   ``require_hook_token`` dependency, because the agent posting to it is not a
 #:   browser session;
 #: - the three ``/public`` routes are the share namespace, authorized by the
-#:   capability token in their own path.
+#:   capability token in their own path;
+#: - the ``/panel`` methods are the workspace-panel proxy, authorized the same
+#:   way and for a reason the other routes do not have: a panel is rendered in an
+#:   ``<iframe>`` and then upgraded to a WebSocket by the service behind it, and
+#:   a browser attaches no ``Authorization`` header to either. The credential can
+#:   therefore only live in the path. The token is HMAC-signed, expires, and
+#:   names one workspace AND one panel, so it authorizes strictly less than a
+#:   session: the route it guards can reach nothing but a compose service that
+#:   workspace already declared. Like ``/public`` it sits under its own prefix so
+#:   nothing beneath ``/workspaces`` can drift into being world-readable.
 EXPECTED_UNAUTHENTICATED: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", "/auth/pair"),
@@ -50,6 +59,14 @@ EXPECTED_UNAUTHENTICATED: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/public/{token}"),
         ("GET", "/public/{token}/turns"),
         ("GET", "/public/{token}/diff"),
+        # Capability-scoped invalidations only; never the private fleet payload.
+        ("GET", "/public/{token}/events"),
+        ("GET", "/panel/{token}/{rest:path}"),
+        ("POST", "/panel/{token}/{rest:path}"),
+        ("PUT", "/panel/{token}/{rest:path}"),
+        ("PATCH", "/panel/{token}/{rest:path}"),
+        ("DELETE", "/panel/{token}/{rest:path}"),
+        ("OPTIONS", "/panel/{token}/{rest:path}"),
     }
 )
 
@@ -68,6 +85,11 @@ def _unauthenticated_routes(app: object) -> set[tuple[str, str]]:
             continue
         names = {getattr(dep.call, "__name__", "") for dep in route.dependant.dependencies}
         if any("require_session" in name for name in names):
+            continue
+        # Mailboxes use a separate session dependency so scoped credentials
+        # never gain the ordinary owner's authority. Keep this exception local
+        # to their namespace; an ordinary route using it is a security defect.
+        if route.path.startswith("/mailboxes/") and "require_mailbox_session" in names:
             continue
         for method in route.methods:
             # HEAD is synthesized alongside GET by Starlette and is not a

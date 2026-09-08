@@ -44,6 +44,7 @@ from tests.conftest import (
     FakeCli,
     FakePreflight,
     FakeTmux,
+    tmux_argv_without_size,
 )
 
 FULL_ID = "c" * 64
@@ -250,6 +251,9 @@ def test_a_detached_start_passes_minus_d_and_drops_the_term_fallback() -> None:
     )
 
     assert entry.tokens(("claude",)) == ["/t", "new-session", "-A", "-d", "-s", "agent-2", "claude"]
+    # No geometry, because none was configured: an unset `size` must leave the
+    # argv byte-identical to what it was before the option existed.
+    assert "-x" not in entry.tokens(("claude",))
 
 
 def test_an_attached_entry_still_wraps_in_the_measured_fallback_script() -> None:
@@ -325,11 +329,18 @@ def test_adding_an_agent_starts_it_detached_in_its_own_session(
 
     assert added.name == "agent-3"  # agent + agent-2 are already running
     argv = cli.execs[-1]["argv"]
-    assert argv[:6] == [IN_CONTAINER_TMUX, "new-session", "-A", "-d", "-s", "agent-3"]
-    assert argv[6:8] == ["sh", "-c"]
+    assert tmux_argv_without_size(argv)[:6] == [
+        IN_CONTAINER_TMUX,
+        "new-session",
+        "-A",
+        "-d",
+        "-s",
+        "agent-3",
+    ]
+    assert argv[argv.index("sh") : argv.index("sh") + 2] == ["sh", "-c"]
     # The launch script, behind the `remain-on-exit` prefix every in-container
     # session start now carries (see the test on that below).
-    assert argv[8].endswith('exec claude "$@"')
+    assert argv[argv.index("-c", argv.index("sh")) + 1].endswith('exec claude "$@"')
 
 
 def test_an_added_agent_carries_the_same_launch_decoration_as_the_workspaces_own(
@@ -391,7 +402,8 @@ def test_an_added_agents_death_is_as_inspectable_as_the_primary_ones(
 
     manager.add_container_agent(state.id)
 
-    script = cli.execs[-1]["argv"][8]
+    argv = list(cli.execs[-1]["argv"])
+    script = argv[argv.index("-c", argv.index("sh")) + 1]
     assert f"{IN_CONTAINER_TMUX} set-option -w remain-on-exit on" in script
     assert script.index("remain-on-exit") < script.index("exec claude")
 

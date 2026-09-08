@@ -309,6 +309,34 @@ class GitRepo:
             return ()
         return tuple(entry for entry in result.stdout.split("\0") if entry)
 
+    def list_files(self, worktree_path: Path, *pathspecs: str) -> tuple[str, ...]:
+        """Worktree-relative paths git can see — tracked AND untracked, honouring
+        ignores — narrowed to *pathspecs* (glob patterns such as ``*.drawio``).
+
+        The read the gallery census is built on: it asks git rather than
+        walking the tree so a worktree's ``node_modules`` or build output is
+        never visited, at the cost of NOT seeing anything git excludes (the
+        caller walks ``.grove/attachments`` itself for that reason). Best
+        effort — a failure is ``()``.
+        """
+        result = self._run(
+            [
+                "git",
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                *pathspecs,
+            ],
+            cwd=worktree_path,
+            check=False,
+        )
+        if result.returncode != 0:
+            return ()
+        return tuple(entry for entry in result.stdout.split("\0") if entry)
+
     def untracked_patch(self, worktree_path: Path, rel_path: str) -> str:
         """Unified diff for ONE untracked file, as an all-additions patch.
 

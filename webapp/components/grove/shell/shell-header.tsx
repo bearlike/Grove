@@ -11,11 +11,9 @@ import { useSidebarUi } from "@/components/grove/shell/sidebar-state";
 /**
  * The page header: the rail toggle, a title, and whatever the page pins right.
  *
- * It is deliberately NOT a navigation bar — no border, no breadcrumb, no
- * separator, and `h-12` rather than `h-14`. A bar with a rule under it reads as
- * a second piece of chrome sitting on the page; assistant-ui's shell puts the
- * page's own surface right up against the rail and lets the header float in it,
- * and that is the whole difference in feel.
+ * It is deliberately NOT a navigation bar — no breadcrumb or separator — and
+ * its 32px band ends at one quiet rule. The rule closes the band without turning
+ * the header into a second navigation system.
  *
  * The title falls back to the route's label, so a page that has nothing more
  * specific to say passes nothing. Only ONE toggle exists, and it lives here
@@ -36,11 +34,14 @@ export function ShellHeader({
   const setMobileOpen = useSidebarUi((state) => state.setMobileOpen);
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 px-4" data-testid="shell-header">
+    <header
+      className="workspace-header flex min-w-0 shrink-0 items-center gap-2 border-b border-border px-4 [@media(pointer:coarse)]:h-14"
+      data-testid="shell-header"
+    >
       <Button
-        variant="ghost"
+        variant="outline"
         size="icon"
-        className="size-8 shrink-0 md:hidden"
+        className="bg-transparent dark:bg-transparent border-edge-control size-6 min-h-[24px] min-w-[24px] shrink-0 md:hidden [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11"
         onClick={() => setMobileOpen(true)}
         data-testid="shell-sidebar-sheet"
       >
@@ -49,22 +50,36 @@ export function ShellHeader({
       </Button>
 
       <TooltipIconButton
-        variant="ghost"
+        variant="outline"
         size="icon"
         tooltip={collapsed ? "Show sidebar" : "Hide sidebar"}
         side="bottom"
         onClick={toggleCollapsed}
-        className="hidden size-8 shrink-0 md:flex"
+        className="bg-transparent dark:bg-transparent border-edge-control hidden size-6 min-h-[24px] min-w-[24px] shrink-0 md:flex [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11"
         data-testid="shell-sidebar-toggle"
       >
         <PanelLeftIcon className="size-4" />
       </TooltipIconButton>
 
-      <span className="min-w-0 truncate text-sm font-medium">
+      {/*
+        ONE STEP ABOVE THE NAVIGATION BESIDE IT, and that step is the whole
+        hierarchy this band has. It used to be `text-sm` under a `max(12px, …)`
+        floor, which rendered it at exactly the same 12px as the pane tabs to
+        its right — a title indistinguishable from the controls it titles. Off
+        the floor, the three surfaces rank: this at `text-base`, nav at
+        `text-sm`, the terminal and diagram sub-bars' metadata at `text-xs`.
+
+        NOT the `text-xl` design-system §1's ramp table assigns to "the page
+        title in ShellHeader": that row was written for a masthead, and this is
+        a 32px chrome strip whose own rule closes it. An 18px title would be the
+        largest thing on a workspace page, above the transcript prose it frames.
+        The table is reconciled where it is written rather than here.
+      */}
+      <span className="min-w-0 truncate text-base font-medium">
         {title ?? sectionFor(pathname).label}
       </span>
 
-      {actions ? <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div> : null}
+      {actions ? <div className="workspace-header-actions ml-auto flex min-w-0 items-center gap-2 self-stretch">{actions}</div> : null}
     </header>
   );
 }

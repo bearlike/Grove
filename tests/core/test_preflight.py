@@ -313,3 +313,34 @@ def test_disabling_the_feature_is_not_a_failure(monkeypatch: pytest.MonkeyPatch)
 
     assert check.ok is True
     assert "disabled" in check.detail
+
+
+def test_doctor_reports_a_mewbo_agent_whose_key_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The check exists because nothing else says it before a create fails.
+
+    A mewbo roster entry plus an unset `api_key_env` is a config that reads
+    fine everywhere — the agent lists, the picker offers it — and fails 401 at
+    create, after the worktree exists.
+    """
+    monkeypatch.delenv("GROVE_TEST_MEWBO_DOCTOR", raising=False)
+    cfg = GroveConfig.model_validate(
+        {
+            "mewbo": {"api_key_env": "GROVE_TEST_MEWBO_DOCTOR"},
+            "agents": [{"name": "remote", "command": "mewbo", "kind": "mewbo"}],
+        }
+    )
+    row = next(c for c in HostPreflight(cfg).all_checks() if c.name == "mewbo")
+    assert not row.ok
+    assert "GROVE_TEST_MEWBO_DOCTOR" in row.detail
+    # Scoped optional: a missing remote key must never strip a container
+    # workspace of its isolation by demoting it to the host runtime.
+    assert row.required_for == "optional"
+
+
+def test_doctor_says_nothing_about_mewbo_when_no_agent_uses_it() -> None:
+    """A check that fires for everybody is a check nobody reads: the default
+    roster has no mewbo entry, so the row passes silently."""
+    row = next(c for c in HostPreflight(GroveConfig()).all_checks() if c.name == "mewbo")
+    assert row.ok and "no mewbo agent" in row.detail

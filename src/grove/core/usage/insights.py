@@ -15,6 +15,7 @@ from typing import Any, Final
 from loguru import logger
 
 from grove.core.agents.registry import all_adapters
+from grove.core.agents.shell import SHELL_TOOL_NAMES
 from grove.core.config import GroveConfig
 from grove.core.contracts.usage import (
     FindingKind,
@@ -25,7 +26,6 @@ from grove.core.contracts.usage import (
     UsageFindingsView,
     UsageFindingView,
 )
-from grove.core.usage._command import SHELL_TOOL_NAMES
 from grove.core.usage._store import UsageStore
 from grove.core.usage.query import session_filter_sql
 

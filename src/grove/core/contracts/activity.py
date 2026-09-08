@@ -37,7 +37,7 @@ if TYPE_CHECKING:
         TodoProgress,
         WorkspaceActivity,
     )
-    from grove.core.agents import AgentActivity, AgentSession
+    from grove.core.agents import AgentActivity, AgentSession, ContextWindow, NativeFacts
     from grove.core.agents.hook import SubagentHookRecord
 
 
@@ -71,6 +71,64 @@ class AgentSessionView(BaseModel):
             tmux_window=s.tmux_window,
             parent_session_id=s.parent_session_id,
         )
+
+
+class NativeFactsView(BaseModel):
+    """Wire mirror of ``grove.core.agents.NativeFacts``.
+
+    Present only on a native session (``None`` on ``AgentActivityView.native``
+    for every terminal one), and each field ``None`` until the owned stream has
+    stated it — a cost of ``0`` and "no cost reported yet" are different facts.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    cost_usd: float | None = None
+    ttft_ms: int | None = None
+    turn_duration_ms: int | None = None
+    last_exit_code: int | None = None
+    permission_denials: int = 0
+    subagents_spawned: int | None = None
+    """The harness's own sub-agent census for this SESSION, from its terminal
+    ``result`` frame. Distinct from ``AgentActivityView.active_subagents``,
+    which is how many are running right now: a session that spawned ten and
+    finished them all reads ``10`` here and ``0`` there, and both are correct."""
+    subagents_completed: int | None = None
+    subagents_failed: int | None = None
+
+    @classmethod
+    def from_facts(cls, f: NativeFacts) -> NativeFactsView:
+        return cls(
+            cost_usd=f.cost_usd,
+            ttft_ms=f.ttft_ms,
+            turn_duration_ms=f.turn_duration_ms,
+            last_exit_code=f.last_exit_code,
+            permission_denials=f.permission_denials,
+            subagents_spawned=f.subagents_spawned,
+            subagents_completed=f.subagents_completed,
+            subagents_failed=f.subagents_failed,
+        )
+
+
+class ContextWindowView(BaseModel):
+    """Wire mirror of ``grove.core.agents.ContextWindow``.
+
+    A block, absent as a whole when the harness reported nothing (``None`` on
+    ``AgentActivityView.context``): a client draws a meter or nothing, never a
+    meter at zero for a session that simply has not said. ``used_fraction`` is
+    carried rather than left to the client so every surface rounds the same
+    way; ``size``/``used`` stay beside it for the tooltip.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    size: int
+    used: int
+    used_fraction: float
+
+    @classmethod
+    def from_context(cls, c: ContextWindow) -> ContextWindowView:
+        return cls(size=c.size, used=c.used, used_fraction=c.used_fraction)
 
 
 class LiveCountersView(BaseModel):
@@ -119,6 +177,12 @@ class AgentActivityView(BaseModel):
     model: str | None
     tokens_in: int
     tokens_out: int
+    # Context-window pressure. Defaults so a pre-existing client deserializes
+    # unchanged; ``None`` is "this harness did not say", never a zero.
+    context: ContextWindowView | None = None
+    # Owned-stream facts (cost, TTFT, last exit code); ``None`` on a terminal
+    # session and on an older daemon, so a client renders nothing rather than 0.
+    native: NativeFactsView | None = None
     last_event_at: datetime | None
     needs_attention: bool
     error_detail: str | None
@@ -157,6 +221,8 @@ class AgentActivityView(BaseModel):
             model=a.model,
             tokens_in=a.tokens_in,
             tokens_out=a.tokens_out,
+            context=ContextWindowView.from_context(a.context) if a.context is not None else None,
+            native=NativeFactsView.from_facts(a.native) if a.native is not None else None,
             last_event_at=a.last_event_at,
             needs_attention=a.needs_attention,
             error_detail=a.error_detail,
@@ -464,7 +530,15 @@ class DashboardEvent(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["snapshot", "workspace_changed", "session_activity", "pane_snapshot", "heartbeat"]
+    kind: Literal[
+        "snapshot",
+        "workspace_changed",
+        "session_activity",
+        "pane_snapshot",
+        "heartbeat",
+        "catalog_changed",
+        "workspace_source_changed",
+    ]
     seq: int
     workspace_id: str | None = None
     repo_root: str | None = None

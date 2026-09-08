@@ -1,5 +1,6 @@
 import { FolderGit2Icon, GitBranchIcon, MapPinIcon } from "lucide-react";
 
+import { LoopingText } from "@/components/grove/overflow-text";
 import { cn } from "@/lib/utils";
 
 /**
@@ -66,10 +67,30 @@ function EntityLabel({
     >
       <Icon aria-hidden className="size-[1em] shrink-0 text-muted-foreground" />
       <span className="sr-only">{kind}: </span>
-      <span className={cn("truncate", mono && "font-mono")}>{value}</span>
+      {/* `LoopingText` rather than a bare `truncate`: inside a
+          `ScannedTextScope` — the sidebar, and only the sidebar — an
+          overflowing name loops instead of clipping, and everywhere else it
+          renders exactly the clipped line it always did. Putting the seam here
+          rather than a `marquee` prop on each label is what stops two callers
+          disagreeing about it, the same argument that keeps `icon` off these
+          components. */}
+      <LoopingText className={cn(mono && "font-mono")}>{value}</LoopingText>
     </span>
   );
 }
+
+/**
+ * The marks §7 of the design system fixes per entity, exported so a surface
+ * whose GEOMETRY forbids `EntityLabel`'s anatomy still cannot choose a
+ * different glyph.
+ *
+ * The rail's session row is that surface: its metadata sits on a fixed 16px
+ * line with fixed 12px icons in equal grid tracks, where these labels size
+ * their mark in `em` and let it grow with the type. One mark per entity is the
+ * rule; `EntityLabel` is only its most common carrier.
+ */
+export const PROJECT_GLYPH = FolderGit2Icon;
+export const BRANCH_GLYPH = GitBranchIcon;
 
 /**
  * The floor a project name keeps before a branch sharing its row may crowd it

@@ -49,9 +49,16 @@ class UrlTransport:
     """
 
     def __init__(self, config: BackendConfig) -> None:
-        if config.daemon_url is None:
-            raise ValueError("UrlTransport requires daemon_url set")
-        self._url = config.daemon_url.rstrip("/")
+        if config.daemon_url is None and config.daemon_socket is None:
+            raise ValueError("UrlTransport requires daemon_url or daemon_socket set")
+        # HTTP still needs an absolute base URL to construct requests; socket
+        # routing below replaces its network hop, so localhost is only a URI
+        # authority and never a TCP destination in that configuration.
+        if config.daemon_socket is not None:
+            self._url = "http://localhost"
+        else:
+            assert config.daemon_url is not None
+            self._url = config.daemon_url.rstrip("/")
 
     @property
     def http_url(self) -> str:

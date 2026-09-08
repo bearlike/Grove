@@ -37,6 +37,29 @@ from grove.core.tmux import HostAttach
 #: rule is resolved against it, so tests assert offsets from it.
 FAKE_REMOTE_FOLDER = "/workspaces/repo"
 
+
+def tmux_argv_without_size(argv: Sequence[str]) -> list[str]:
+    """*argv* with any ``-x <n> -y <n>`` pair removed.
+
+    A test asserting the ``new-session -A -d -s <name>`` prefix is about the
+    reattach semantics, not about the geometry a detached session starts at, and
+    a positional prefix comparison cannot express "these flags may be anywhere".
+    Stripping them keeps each assertion about the thing it names; the geometry
+    has its own tests.
+    """
+    out: list[str] = []
+    skip = 0
+    for i, token in enumerate(argv):
+        if skip:
+            skip -= 1
+            continue
+        if token in {"-x", "-y"} and i + 1 < len(argv):
+            skip = 1
+            continue
+        out.append(token)
+    return out
+
+
 #: What ``ContainerRuntimeState.inspect_argv`` really prints, captured verbatim
 #: against a live, an exited and a restarted container — only the image name is
 #: substituted for the fixtures' own. Shared by every test that fakes the
@@ -256,6 +279,62 @@ def _fresh_transcript_caches() -> None:
     CodexAdapter.clear_caches()
 
 
+@pytest.fixture(autouse=True)
+def _terminal_agents_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Every roster entry a test does not pin is a TERMINAL agent, not a native one.
+
+    ``AgentSpec.native`` defaults ``True`` for Claude Code and Codex, so an
+    unpinned ``GroveConfig()`` now launches a Grove-owned worker on every
+    ``create()`` — minting mailbox credentials and rendering a worker command
+    where hundreds of tests written against the tmux pane expect ``claude``.
+    Same shape as ``_offline_container_runtime`` one level up: a flipped
+    default silently re-arms every test that never pinned it, so the suite pins
+    the OLD default centrally and a test that means the native path says
+    ``"native": True`` (or uses the built-in ``claude``/``codex`` entries
+    through ``native_roster``). The field default is patched on the shared
+    ``AgentSpec`` and the nested ``GroveConfig`` schema rebuilt, because a
+    Pydantic default is baked into the validator at class build time.
+    """
+    from grove.core.config import AgentRoster, AgentSpec, GroveConfig  # noqa: PLC0415
+
+    monkeypatch.setattr(AgentSpec.model_fields["native"], "default", False)
+    monkeypatch.setattr(
+        AgentRoster,
+        "BUILTINS",
+        tuple(spec.model_copy(update={"native": False}) for spec in AgentRoster.BUILTINS),
+    )
+    AgentSpec.model_rebuild(force=True)
+    GroveConfig.model_rebuild(force=True)
+    yield
+    monkeypatch.undo()
+    AgentSpec.model_rebuild(force=True)
+    GroveConfig.model_rebuild(force=True)
+
+
+@pytest.fixture
+def native_roster(tmp_state_dir: Path) -> None:
+    """Opt back into the shipped default: built-in ``claude``/``codex`` are native.
+
+    Requested by the tests that pin the native launch path itself; everything
+    else keeps the terminal roster ``_terminal_agents_by_default`` installs.
+    Depends on ``tmp_state_dir`` because a native launch mints two mailbox
+    sessions in the auth store and writes the worker's config beside it —
+    the one host path a terminal launch never touches, so the autouse
+    redirect above does not cover it (and must not: a test that spawns a real
+    daemon shares `auth.json` with it through the XDG env, not this patch).
+    """
+    del tmp_state_dir
+    from grove.core.config import AgentRoster, AgentSpec, GroveConfig  # noqa: PLC0415
+
+    AgentSpec.model_fields["native"].default = True
+    AgentRoster.BUILTINS = tuple(
+        spec.model_copy(update={"native": not spec.name.endswith("-terminal")})
+        for spec in AgentRoster.BUILTINS
+    )
+    AgentSpec.model_rebuild(force=True)
+    GroveConfig.model_rebuild(force=True)
+
+
 # ─── on-disk paths redirected to a tmpdir ───────────────────────────────────
 
 
@@ -277,6 +356,10 @@ def _isolated_agent_hook_paths(
     attribute just overwrites, last call wins.
     """
     base = tmp_path_factory.mktemp("agent-hook-state")
+    # Diagram file locks and per-workspace operation locks live beside state,
+    # so redirect the root as well as its individually named siblings. Tests
+    # requesting `tmp_state_dir` override this accessor with their own state.
+    monkeypatch.setattr("grove.core.paths.user_state_path", lambda: base / "state.json")
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: base / "agent-sidecars")
     monkeypatch.setattr(
         "grove.core.paths.agent_hooks_settings_path",
@@ -338,6 +421,17 @@ def _isolated_agent_hook_paths(
     # developer's real transcripts into their live state dir, and a fixture
     # session id counted there would then answer a later real scan.
     monkeypatch.setattr("grove.core.paths.session_turns_path", lambda: base / "session-turns.json")
+    # The workspace-history store is reached by every `JsonWorkspaceStore.save`
+    # and every `ActivityService` tick built without an injected path — i.e. most
+    # of this suite — and it is the DURABLE half of the pair, so the quota
+    # ledger's argument applies with more force than the usage cache's: a
+    # fixture's title and phase note recorded into the developer's live store
+    # cannot be recovered by deleting a cache, and would then answer a real
+    # usage query about a workspace that never existed.
+    monkeypatch.setattr(
+        "grove.core.paths.workspace_history_path",
+        lambda: base / "workspace-history.sqlite3",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -726,6 +820,10 @@ class FakeTmux:
         # session starts in the project subdir while the worktree/branch anchor
         # at the repo root.
         self.session_cwds: dict[str, Path] = {}
+        # session_name → the geometry it was created at, so a test can assert
+        # the configured `detached_size` reached the creation rather than only
+        # that the parameter exists.
+        self.session_sizes: dict[str, str] = {}
         self.layout_worktrees: dict[str, Path] = {}
         # (session_name, launch_decoration) — lets correlation tests assert the
         # `--session-id <uuid>` argv the manager threaded in from the adapter.
@@ -772,6 +870,10 @@ class FakeTmux:
         # keystroke op list the Claude adapter built landed at the resolved pane,
         # and that refusal paths never reach the injection seam at all.
         self.sent_keys: list[tuple[str, list[Any]]] = []
+        # Targets that received an Escape via press_escape — the claude_code
+        # interrupt path, kept separate from sent_keys because it never goes
+        # through the send_keys grammar builder.
+        self.escapes: list[str] = []
         # Which tmux SERVER each read/steer addressed: `("tmux",)` for this
         # host, a `docker exec … <tmux>` prefix for a container workspace
         # whose agent pane lives inside its container. Recorded rather than
@@ -786,9 +888,10 @@ class FakeTmux:
         text: str,
         *,
         settle_ms: int = 200,
+        settle_before: bool = False,
         command: Sequence[str] = tmux_mod.DEFAULT_TMUX_COMMAND,
     ) -> None:
-        del settle_ms  # the fake has no paste-window race to guard against
+        del settle_ms, settle_before  # the fake has no paste-window race to guard against
         self.sent_texts.append((target, text))
         self.commands.append((target, tuple(command)))
 
@@ -798,26 +901,37 @@ class FakeTmux:
         ops: Any,
         *,
         settle_ms: int = 200,
+        settle_before: bool = False,
         command: Sequence[str] = tmux_mod.DEFAULT_TMUX_COMMAND,
     ) -> None:
-        del settle_ms
+        del settle_ms, settle_before
         self.sent_keys.append((target, list(ops)))
+        self.commands.append((target, tuple(command)))
+
+    def press_escape(
+        self, target: str, *, command: Sequence[str] = tmux_mod.DEFAULT_TMUX_COMMAND
+    ) -> None:
+        self.escapes.append(target)
         self.commands.append((target, tuple(command)))
 
     def has_session(self, name: str) -> bool:
         return name in self.sessions
 
-    def create_session(self, name: str, cwd: Path, *, history_limit: int = 50_000) -> None:
+    def create_session(
+        self, name: str, cwd: Path, *, history_limit: int = 50_000, size: str = ""
+    ) -> None:
         del history_limit
         if name in self.sessions:
             raise TmuxError(f"session already exists: {name}")
+        self.session_sizes[name] = size
         self.session_cwds[name] = cwd
         self.sessions.add(name)
         # Real tmux always creates one initial window. build_workspace_layout
         # below renames it; until then the placeholder mirrors that state.
         self.windows[name] = ["0"]
 
-    def kill_session(self, name: str) -> None:
+    def kill_session(self, name: str, *, wait_for_exit: bool = False) -> None:
+        del wait_for_exit
         self.sessions.discard(name)
         self.windows.pop(name, None)
 
@@ -896,8 +1010,8 @@ class FakeTmux:
             return self.activity_seconds_ago[target]
         return self.default_activity_seconds_ago
 
-    def attach_instruction(self, session_name: str) -> HostAttach:
-        return HostAttach(tmux_session=session_name, inside_outer_tmux=False)
+    def attach_instruction(self, session_name: str, *, read_only: bool = False) -> HostAttach:
+        return HostAttach(tmux_session=session_name, inside_outer_tmux=False, read_only=read_only)
 
 
 @pytest.fixture
@@ -912,6 +1026,7 @@ def fake_tmux(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTmux]:
     monkeypatch.setattr(tmux_mod, "capture_pane_snapshot", fake.capture_pane_snapshot)
     monkeypatch.setattr(tmux_mod, "send_text", fake.send_text)
     monkeypatch.setattr(tmux_mod, "send_keys", fake.send_keys)
+    monkeypatch.setattr(tmux_mod, "press_escape", fake.press_escape)
     monkeypatch.setattr(tmux_mod, "list_windows", fake.list_windows)
     monkeypatch.setattr(tmux_mod, "pane_activity_seconds_ago", fake.pane_activity_seconds_ago)
     monkeypatch.setattr(tmux_mod, "attach_instruction", fake.attach_instruction)

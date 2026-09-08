@@ -129,12 +129,48 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
         <TooltipProvider>
           {children}
-          {/* One balloon layer for the app, beside the one query client — the
-              same "exactly once" rule `GroveStreamProvider` follows. A manual
-              close button because the user must be able to dismiss any toast,
-              not only wait it out; sonner's own prop, never a styled call
-              site. */}
-          <Toaster closeButton />
+          {/*
+            THE ONE balloon layer for the app, beside the one query client — the
+            same "exactly once" rule `GroveStreamProvider` follows. `app/
+            layout.tsx` mounted a second one, so every toast rendered and was
+            announced twice; the position it carried moved here with it. A
+            manual close button because the user must be able to dismiss any
+            toast, not only wait it out; sonner's own prop, never a styled call
+            site.
+
+            WHY `toastOptions.style` AND NOT `classNames`. Sonner injects its
+            stylesheet UNLAYERED at runtime, and an unlayered rule outranks
+            every Tailwind utility regardless of specificity — so a class on
+            `[data-title]` here is silently inert, which looks exactly like a
+            class that works. Inline style is the one declaration that beats it,
+            and the toast root is the right element for it: sonner sets a font
+            size only there and lets the title, description and content inherit,
+            so one declaration retypes the whole balloon.
+
+            The values are the app's own ramp read as tokens rather than px
+            literals, which is what makes them scale with the density root, with
+            a reader's browser font size and with zoom. Sonner's defaults are
+            absolute — a flat 13px on a 16px assumption, plus 16px of padding —
+            so at this app's 80% root the notification rendered LARGER than
+            every surface behind it, which is the whole report.
+
+            WIDTH IS DELIBERATELY UNTOUCHED. Sonner drives the container and the
+            balloon from one `--width`, so overriding it here (the only reachable
+            half) would leave a narrow toast sitting inside a wider container,
+            adrift from the corner it is anchored to. Size was the complaint;
+            width was not.
+
+            Title weight (500) and the icon's box are left to sonner: medium is
+            already what §1 asks of a title, and the icon is sized by the
+            vendored host.
+          */}
+          <Toaster
+            position="bottom-right"
+            closeButton
+            toastOptions={{
+              style: { fontSize: "var(--text-sm)", padding: "0.75rem" },
+            }}
+          />
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

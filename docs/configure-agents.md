@@ -1,34 +1,136 @@
 # Agents
 
-## Add and override agents
+## Choose what runs in each workspace
 
-An *agent* in Grove is a named command. The TUI's create modal lists
-every agent the cascade has resolved, and sends your pick to the `agent`
-tmux window via `send-keys`. Anything terminal-based works: Claude Code,
-Aider, Cursor's CLI, Gemini, or a plain shell.
+Grove runs your existing coding agents in isolated workspaces. Claude Code and Codex have native adapters that let you send messages, interrupt work and answer questions from Grove without attaching to their terminal UI.
+
+- **Native session.** Grove starts the agent's protocol process and keeps its control connection open between turns.
+- **Headless command.** A standalone command such as `claude -p` runs without an interactive UI, but Grove does not own its control protocol.
+- **Interactive terminal.** Grove launches the agent's usual UI in tmux. Other terminal tools, including Aider, Cursor, Gemini and a shell, use this path.
+
+## Native sessions and terminal twins
+
+Choose native mode when you want to control Claude Code or Codex from Grove. Choose a headed terminal when you need the agent's own interactive UI. A standalone headless command suits a scripted task that can finish without further input.
+
+| Decision | Native session | Headed terminal | Standalone headless command |
+|---|---|---|---|
+| Best for | Managing agents from Grove | Working directly in the agent UI | Running a predefined task |
+| Select | `claude` or `codex` | `claude-terminal` or `codex-terminal` | A command such as `claude -p …` with `native: false` |
+| Messages and controls | Agent protocol calls | Terminal input and agent shortcuts | No persistent Grove control channel |
+| Questions and approvals | Depends on the adapter below | Respond in the agent UI | Requires the command's own input or approval policy |
+| Attach | Read the protocol log | Use the interactive terminal | Read command output |
+| Pause and resume | Not supported. Use Respawn for recovery | Supported by workspace lifecycle | Restarts the configured command |
+| Main limitation | No interactive agent UI | Terminal steering is not a native protocol | Not a substitute for an interactive session |
+
+- **Native does not mean unattended permission.** The agent's approval and sandbox policy still applies. A pending approval can stop progress until you respond.
+- **The Stream tab is a log.** Grove's worker records protocol frames in the tmux pane. Attaching does not open a second agent UI.
+- **Recovery is separate from pause.** The worker reconnects after a daemon restart without replacing its running agent. Respawn may recover history when a session ID and transcript were saved. Do not assume every native Codex restart continues its thread. Creating a native workspace with a transcript ID remains unsupported.
+- **Choose per workspace.** Use **Session mode** in the web composer, the TUI checkbox, `grove create --native/--terminal`, or `native` on `grove_create_workspace`. The choice is saved with the workspace.
+- **Containers need the control connection.** Native mode requires the daemon's mailbox socket to be available inside the container.
+
+```json title=".grove/config.json"
+{
+  "agents": [
+    {"name": "claude-tui", "command": "claude", "kind": "claude_code", "native": false}
+  ]
+}
+```
+
+Peer mail reaches a native session through a private coordinator connection, and mailbox text is untrusted agent data that cannot authorize a tool, a config change, or a bypass of native permissions.
+
+## Native adapters
+
+Only Claude Code and Codex have first party native adapters. Both run without the agent's interactive UI, but their protocols and approval support differ.
+
+### Claude Code
+
+- Grove starts `claude -p` with JSON streaming on stdin and stdout. The worker stays connected so later messages can continue the conversation.
+- A sent message carries an ID. Grove waits for Claude Code to replay that ID before marking it delivered.
+- Interrupt and model changes use control requests. A successful model change validates the model through the provider and applies to the next turn.
+- Grove answers structured `AskUserQuestion` requests. Ordinary tool permissions and plan approvals cannot be approved through this native adapter. Choose `claude-terminal` when your workflow needs those interactive dialogs.
+
+### Codex
+
+- Grove starts `codex app-server --stdio`, initializes its JSON RPC connection and creates a thread. The app server owns turns within that thread.
+- A message starts a turn when idle or steers the current turn when busy. Steering names the expected turn, so a changed turn can reject the request instead of receiving stale input.
+- Interrupt targets the current turn. A model change updates thread settings, but its acknowledgement does not prove the provider accepts that model.
+- Grove answers supported user input requests and command or file change approvals. Approval choices are accept or decline. Session wide grants, cancellation and separate permission grant requests are not supported.
+
+| Capability | Native Claude Code | Native Codex |
+|---|---|---|
+| Protocol | JSON streaming through `claude -p` | JSON RPC through `codex app-server` |
+| Message acknowledgement | Matching replay confirms delivery | Submission is queued, not proof of delivery |
+| Model change | Provider validates before success | App server records the setting |
+| Questions | Structured `AskUserQuestion` | `request_user_input` requires Codex plan collaboration mode |
+| Tool approvals | Not answered by this adapter | Accept or decline supported command and file changes |
+| Plan approval | Requires the interactive terminal | No general plan approval control |
+
+Codex app server policy comes from its configuration. Do not assume a terminal shortcut such as `--yolo` configures thread approvals. Set `approval_policy` and `sandbox_mode` deliberately through Codex configuration, keeping the permissions your task requires.
 
 ## Agent spec fields
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name`        | string | yes | Picker identifier, and merge key across cascade layers. |
-| `command`     | string | yes | Shell command sent to the agent window. Quoted args and env expansion work. |
-| `kind`        | string | no  | Session adapter: `claude_code`, `codex`, `mewbo`, or `generic` (default). See [below](#telling-grove-what-kind-of-agent-it-is). |
-| `description` | string | no  | One-line picker label. |
-| `env`         | object | no  | Extra environment variables for the tmux window. |
-| `env_unset`   | `array<string>` | no  | Variable names cleared before `env` is applied, so an ambient value (like a `CLAUDE_CONFIG_DIR` inherited from the daemon) cannot leak into the agent's window. |
-| `models`      | `array<string>` | no  | Curated model ids for the create-form picker, overriding auto-discovery. |
-| `tools_offline` | boolean | no | Launch with network-facing tools disallowed (Claude Code drops `WebFetch`/`WebSearch`, Codex disables sandbox networking). No effect on `generic`/`mewbo`. |
+| `name` | string | yes | Picker name and merge key across configuration layers. |
+| `command` | string | yes | Agent command. Grove adapts it for native mode or launches it in the terminal. |
+| `kind` | string | no | Adapter selection. Use `claude_code`, `codex`, `mewbo` or `generic`. See [below](#telling-grove-what-kind-of-agent-it-is). |
+| `description` | string | no | Short label in the picker. |
+| `env` | object | no | Environment variables supplied to the agent. |
+| `env_unset` | `array<string>` | no | Variables removed before applying `env`. |
+| `models` | `array<string>` | no | Model ids to add, reorder or pin in the picker. |
+| `tools_offline` | boolean | no | Disallow network tools for Claude Code and Codex. |
+| `native` | boolean | no | Default to a Grove controlled native session. Supported for Claude Code and Codex. |
+
+## Defaults
+
+Grove ships five agents, and they always merge into your roster, listed or not. See [Hiding the built-ins](#hiding-the-built-ins) to run a closed set instead.
+
+| Name | Command | Kind | Notes |
+|---|---|---|---|
+| `claude` | `claude` | `claude_code` | Native Claude Code by default. |
+| `claude-terminal` | `claude` | `claude_code` | Headed Claude Code terminal twin. |
+| `codex` | `codex` | `codex` | Native Codex by default. |
+| `codex-terminal` | `codex` | `codex` | Headed Codex terminal twin. |
+| `shell` | `$SHELL` | `generic` | A plain interactive shell for testing or agent-free work. |
+
+## Adding a custom agent
+
+Drop the entry into your project config. Grove merges it by `name`, so the list extends without redefining `claude` or `shell`.
+
+```json title=".grove/config.json"
+{
+  "agents": [
+    { "name": "aider",  "command": "aider --model sonnet" },
+    { "name": "cursor", "command": "cursor-agent",         "description": "Cursor's CLI agent" },
+    { "name": "gpt",    "command": "openai-agent --model gpt-4o-mini", "env": { "OPENAI_API_KEY": "${OPENAI_API_KEY}" } }
+  ]
+}
+```
+
+- New names append, matching names merge field by field, so overriding only `claude`'s `command` keeps its `kind`. See [Configuration cascade](features-cascade.md).
+- A teammate drops `cursor` into `config.local.json` without disturbing the team's list. Restart `grove` to see it.
+- Pick `shell` to run without an agent. Grove still creates the worktree, runs the init script and opens tmux.
+
+## Telling Grove what kind of agent it is
+
+`kind` tells Grove whether it can look inside a session for the [Activity Dashboard](features-activity.md).
+
+- `claude_code` and `codex` support native control and read transcripts for live state, turns, tokens and title.
+- `mewbo` reads a remote session over REST, configured in the `mewbo` section. It is a remote adapter, not a local native process.
+- `generic`, the default, launches the command without session introspection or native control. Use it for other terminal agents.
+- A custom named Claude agent such as `code-agent` must declare `kind: "claude_code"` itself. An omitted `kind` silently defaults to `generic` with no transcript for the dashboard.
+
+```json
+{
+  "agents": [
+    { "name": "code-agent", "command": "claude --model claude-opus-4-5", "kind": "claude_code" }
+  ]
+}
+```
 
 ## Models in the create form
 
-The model field is a picker for the agent you selected. It offers that
-agent's discovered models, plus **Agent default** and **Custom**. Pick
-**Custom** to enter any model id yourself.
-
-Operators curate the picker with `AgentSpec.models`. This is a convenience
-list for people opening the form, never a validated allowlist. Grove forwards
-any selected or custom id verbatim to the provider.
+The model field offers the selected agent's discovered models, plus **Agent default** and **Custom** for any id you type.
 
 ```json title=".grove/config.json"
 {
@@ -41,112 +143,11 @@ any selected or custom id verbatim to the provider.
 }
 ```
 
-An empty `models` list keeps the agent's normal discovery. A configured list
-can pin, reorder, or add the ids your team wants to see, but it cannot prevent
-a custom id from being sent.
-
-## Defaults
-
-Grove ships three agents:
-
-| Name | Command | Kind | Notes |
-|---|---|---|---|
-| `claude` | `claude` | `claude_code` | Claude Code, when on `$PATH`. |
-| `codex`  | `codex`  | `codex` | OpenAI Codex CLI, when on `$PATH`. |
-| `shell`  | `$SHELL` | `generic` | A plain interactive shell, for testing or agent-free work. |
-
-These always merge into your roster, listed or not. See [Hiding the
-built-ins](#hiding-the-built-ins) to run a closed set instead.
-
-## Adding a custom agent
-
-Drop the entry into your project config. Grove merges it by `name`, so
-the list extends without redefining `claude` or `shell`. The most common
-addition is Aider:
-
-```json title=".grove/config.json"
-{
-  "agents": [
-    { "name": "aider",  "command": "aider --model sonnet" },
-    { "name": "cursor", "command": "cursor-agent",         "description": "Cursor's CLI agent" },
-    { "name": "gpt",    "command": "openai-agent --model gpt-4o-mini", "env": { "OPENAI_API_KEY": "${OPENAI_API_KEY}" } }
-  ]
-}
-```
-
-After saving, restart `grove`. The new agents show up in the create
-modal and run in the workspace's `agent` window.
-
-## Telling Grove what kind of agent it is
-
-`kind` tells Grove whether it can look inside a session for the
-[Activity Dashboard](features-activity.md):
-
-- `claude_code`: Claude Code or a compatible format. Grove reads the
-  transcript for live state (working, waiting, blocked), turns, tokens,
-  and title, and hands it a session id at launch to track what it started.
-- `codex`: OpenAI Codex CLI. Grove reads its rollout files
-  (`~/.codex/sessions`, or `$CODEX_HOME`) for the same state, turns, and
-  tokens. Codex mints its own id with no flag to set one, so Grove finds
-  it on disk by working directory instead.
-- `mewbo`: a remote Mewbo session over its REST API, created at launch,
-  anchored to the worktree, status read from the API, not a local file.
-  `command` still runs in the agent window, but typically just `$SHELL`,
-  since the session lives server side. The `mewbo` section holds
-  `base_url`, `api_key_env` (NAME of the env var holding your key), and
-  `timeout_seconds`.
-- `generic` (default): Grove launches the command and tracks nothing.
-
-`kind` cascades like any field: an agent declared in one repo's
-`.grove/config.json` stays scoped there, still resolving its adapter, but
-absent elsewhere.
-
-## Custom-named Claude agents: declare `kind` explicitly
-
-Give a Claude Code agent a custom name (`"claude-opus"`, `"code-agent"`)
-and declare `kind: "claude_code"` in that entry. Merge-by-name does NOT
-inherit the built-in `claude` agent's kind. A name-only match inherits
-only what the overlay provides. Omit `kind` and it silently defaults to
-`generic`: no session id, no transcript for the Activity Dashboard.
-
-```json
-{
-  "agents": [
-    { "name": "code-agent", "command": "claude --model claude-opus-4-5", "kind": "claude_code" }
-  ]
-}
-```
-
-Overriding only `command` on `claude` is safe: `kind` carries over. The
-risk is a new name never in the base list.
-
-## Why `agents` merges by `name`
-
-Most config lists *replace* across cascade layers: a user-layer list wins
-wholesale. Agents differ: a project config pins the agreed registry, and
-an individual should still add a personal entry unforked.
-
-- New names append in overlay order.
-- Matching names merge **field by field**: the overlay's fields win, the
-  base fills every gap. Override just `claude`'s `command` and its
-  `kind` stays intact.
-
-That lets the user drop `cursor` into `config.local.json` without
-disturbing `claude` or `aider`:
-
-```json title=".grove/config.local.json"
-{
-  "agents": [
-    { "name": "cursor", "command": "cursor-agent" }
-  ]
-}
-```
+`models` pins, reorders or adds the ids your team wants to see. It is never a validated allowlist, and Grove forwards any id verbatim to the provider.
 
 ## Hiding the built-ins
 
-Merge-by-name is why leaving `claude`, `codex`, or `shell` out of your
-`agents` list does not drop them. Set `builtin_agents: false` (default
-`true`) and your config becomes the whole roster, an allowlist:
+Set `builtin_agents: false` and your `agents` list becomes the whole roster, an allowlist.
 
 ```json
 {
@@ -158,57 +159,20 @@ Merge-by-name is why leaving `claude`, `codex`, or `shell` out of your
 }
 ```
 
-The picker now shows only `aider` and `cursor`. `claude`, `codex` and `shell`
-went unnamed, with nothing left to merge into. Want Claude Code back?
-Name it bare, `{ "name": "claude" }`: merge-by-name fills in `command`
-and `kind` from the built-in. A future fourth stays hidden until named
-too, unlike a per-agent "disabled" flag, which would need a new entry
-every release.
-
-Hiding an agent is a real gate: it cannot create a workspace from the
-CLI, MCP, or web UI. Consequences worth knowing:
-
-- **Existing workspaces are not grandfathered in.** Hide the agent a
-  workspace was created with and it can no longer resume or respawn. Add
-  it back or kill the workspace. Dashboard tracking is unaffected.
-- **An empty roster is not an error.** No agents of your own gets an
-  empty picker, not a block.
-- **A project config can put the built-ins back**, since `builtin_agents`
-  cascades: a committed `.grove/config.json` setting it `true` restores
-  the roster even where you turned it off elsewhere. Not a security
-  boundary: a project config can already run any command it wants.
-- **`grove config init` writes a `claude` entry**, opting Claude Code
-  back in. Remove it for a closed roster.
-- **Issue ops looks for an agent named `claude` by default.** Without one,
-  issue-ops-created workspaces fail loudly, Grove replying on the ticket
-  that the agent is unknown. Point [issue ops](issue-ops.md)'s `agent` at
-  your own instead.
-
-`builtin_agents` cascades: user config for everywhere, project config for
-one repo, or `GROVE_BUILTIN_AGENTS=false grove` for one shell.
-
-## Running without an agent
-
-Pick `shell` from the create modal. Grove still creates the worktree,
-runs the init script, and opens the tmux session, just with a shell in
-the agent window instead of an LLM client.
+- Name a built in bare, `{ "name": "claude" }`, and merge by name fills in its `command` and `kind`.
+- Hiding is a real gate. A hidden agent cannot create a workspace anywhere, and an existing workspace created with it cannot resume or respawn until you add it back.
+- `builtin_agents` cascades, so a committed config can restore the roster for one repo. It is not a security boundary.
+- Issue ops looks for an agent named `claude`. Without one, point [issue ops](issue-ops.md)'s `agent` at your own.
 
 ## Exact status with hooks
 
-By default Grove derives Claude Code state from its transcript: accurate,
-but slightly behind. For exact, push-based status, opt in to Grove's
-managed hooks:
+By default Grove derives Claude Code state from its transcript, accurate but slightly behind. Opt in to managed hooks for exact, push based status.
 
 ```json
 { "hooks": { "enabled": true } }
 ```
 
-With hooks on, Grove launches `claude_code` agents with an extra
-`--settings` file, and a hook reports each lifecycle change (working,
-waiting, blocked, idle) as it happens: polling can only tell you the
-agent went quiet, the hook can tell you it is blocked on a permission
-prompt. Your `.claude/settings.json` stays untouched, and turning it off
-just flips the flag back.
+Grove launches `claude_code` agents with an extra `--settings` file and a hook reports each lifecycle change as it happens, so a permission prompt reads as blocked rather than quiet. Your `.claude/settings.json` stays untouched.
 
 ## See also
 

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SHARE_PASSCODE_HEADER } from "@/lib/grove/api/share-passcode";
 
 const daemonUrl = process.env.GROVE_DAEMON_URL ?? "http://127.0.0.1:7421";
+const SHARE_PASSCODE_COOKIE = "grove_share_passcode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,29 +37,14 @@ export async function GET(
       // The token is the daemon path capability. There is intentionally no
       // `Authorization` header on this road: attaching a browser session would
       // make a share request an authenticated request by accident.
-      //
-      // The share passcode is forwarded VERBATIM and is the one header this
-      // road relays. It is the reader's own secret, not the host's — this
-      // proxy never holds, stores or substitutes it, so a caller with no
-      // passcode simply gets the daemon's 401 rather than a silently
-      // privileged read. Forwarded ONLY when present, so a project with no
-      // passcode is byte-identical to before.
       headers: {
-        accept: "application/json",
+        accept: acceptsEventStream(path) ? "text/event-stream" : "application/json",
         ...passcodeHeader(request),
       },
       cache: "no-store",
+      signal: request.signal,
     });
-    return new NextResponse(
-      [204, 205, 304].includes(response.status) ? null : await response.text(),
-      {
-        status: response.status,
-        headers: {
-          "content-type":
-            response.headers.get("content-type") ?? "application/json",
-        },
-      },
-    );
+    return upstreamResponse(response, request, token, path);
   } catch (error: unknown) {
     return daemonUnreachable(error);
   }
@@ -78,14 +64,79 @@ function isPublicPath(path: string[] | undefined): boolean {
   return (
     segments.length === 0 ||
     (segments.length === 1 &&
-      (segments[0] === "turns" || segments[0] === "diff"))
+      (segments[0] === "turns" || segments[0] === "diff" || segments[0] === "events"))
   );
 }
 
-/** The share passcode as the daemon expects it, or nothing at all. */
+function acceptsEventStream(path: string[] | undefined): boolean {
+  return path?.length === 1 && path[0] === "events";
+}
+
+/**
+ * The request header wins because an ordinary public read is the only place a
+ * browser can introduce a passcode. The BFF then scopes it to this token's
+ * EventSource endpoint, whose API has no header parameter.
+ */
 function passcodeHeader(request: NextRequest): Record<string, string> {
-  const passcode = request.headers.get(SHARE_PASSCODE_HEADER);
+  const supplied = request.headers.get(SHARE_PASSCODE_HEADER);
+  if (supplied) return { [SHARE_PASSCODE_HEADER]: supplied };
+
+  const stored = request.cookies.get(SHARE_PASSCODE_COOKIE)?.value;
+  const passcode = stored ? decodePasscode(stored) : null;
   return passcode ? { [SHARE_PASSCODE_HEADER]: passcode } : {};
+}
+
+function decodePasscode(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    // A malformed local cookie is equivalent to no usable credential. Sending
+    // it verbatim would convert a client-side corruption into an auth bypass
+    // candidate at a boundary that must only relay a reader-supplied passcode.
+    return null;
+  }
+}
+
+function upstreamResponse(
+  response: Response,
+  request: NextRequest,
+  token: string,
+  path: string[] | undefined,
+): NextResponse {
+  const result = new NextResponse(response.body, {
+    status: response.status,
+    headers: {
+      "content-type": response.headers.get("content-type") ?? "application/json",
+      ...(acceptsEventStream(path)
+        ? {
+            "cache-control": response.headers.get("cache-control") ?? "no-cache, no-transform",
+            "x-accel-buffering": response.headers.get("x-accel-buffering") ?? "no",
+          }
+        : {}),
+    },
+  });
+
+  const supplied = request.headers.get(SHARE_PASSCODE_HEADER);
+  if (response.ok && supplied && !acceptsEventStream(path)) {
+    setEventStreamPasscode(result, request, token, supplied);
+  }
+  return result;
+}
+
+function setEventStreamPasscode(
+  response: NextResponse,
+  request: NextRequest,
+  token: string,
+  passcode: string,
+): void {
+  response.cookies.set({
+    name: SHARE_PASSCODE_COOKIE,
+    value: encodeURIComponent(passcode),
+    httpOnly: true,
+    sameSite: "lax",
+    secure: request.nextUrl.protocol === "https:",
+    path: `/api/public/${encodeURIComponent(token)}/events`,
+  });
 }
 
 function upstreamUrl(

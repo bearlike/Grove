@@ -1136,21 +1136,46 @@ def test_a_provider_that_cannot_edit_bodies_still_publishes_its_comment() -> Non
 
 
 def test_publishing_assigns_the_bot_through_the_injected_assigner() -> None:
-    """Assignment rides the same edge as the comment — the moment work is known."""
+    """Assignment rides the same edge as the comment — the moment work is known.
+
+    The HOLDER travels with it. The queue counts live pickups by workspace, so an
+    assignment recorded with no holder is uncounted work and the ceiling silently
+    under-counts until an unrelated lifecycle edge resolves the identity. The
+    publisher is publishing FOR a workspace, so it always knows the answer.
+    """
     provider = _FakeProvider()
-    seen: list[tuple[str, str, str, str]] = []
+    seen: list[tuple[str, str, str, str, str | None]] = []
     pub = _publisher(provider, window=5.0)
-    pub._assigner = lambda root, name, tid, kind: bool(seen.append((root, name, tid, kind))) or True
+
+    def _assign(
+        repo_root: str,
+        provider_name: str,
+        ticket_id: str,
+        kind: str = "issue",
+        *,
+        workspace_id: str | None = None,
+    ) -> bool:
+        seen.append((repo_root, provider_name, ticket_id, kind, workspace_id))
+        return True
+
+    pub._assigner = _assign
     pub.observe(_delta(_row(task="working")))
     pub.flush_pending(now=T0 + timedelta(seconds=5))
-    assert seen == [("/home/u/proj", "gitea", "42", "issue")]
+    assert seen == [("/home/u/proj", "gitea", "42", "issue", "ws1")]
 
 
 def test_a_failing_assigner_never_breaks_the_publish() -> None:
     provider = _FakeProvider()
     pub = _publisher(provider, window=5.0)
 
-    def _boom(root: str, name: str, tid: str, kind: str) -> bool:
+    def _boom(
+        repo_root: str,
+        provider_name: str,
+        ticket_id: str,
+        kind: str = "issue",
+        *,
+        workspace_id: str | None = None,
+    ) -> bool:
         raise RuntimeError("forge said no")
 
     pub._assigner = _boom

@@ -2,8 +2,8 @@
 
 ## From install to first agent
 
-Grove pairs one git worktree with one tmux session per agent, scoped to
-the repository it launches from.
+Grove gives each agent an isolated workspace, one git worktree, one branch, one tmux session, by
+default in a container, scoped to the repository it launches from.
 
 ## Prerequisites
 
@@ -72,7 +72,7 @@ exec $SHELL                   # start a new shell to pick it up
 
 It writes one file where your shell already looks and never edits your
 rc file. See [tab completion](use-cli.md#tab-completion) for what
-completes where, and what to do if nothing happens when you press TAB.
+completes where, and what to do if nothing happens when you press ++tab++.
 
 ## Configure it
 
@@ -126,8 +126,8 @@ sends in the agent's command.
   <figcaption class="ms-shot__body">Create modal. Picking a branch source activates only that variant's inputs.</figcaption>
 </figure>
 
-Press ++enter++ (or ++a++) to attach, `Ctrl-B d` to detach. The workspace
-keeps running, and the activity rail flips ACTIVE/IDLE on its own.
+Press ++enter++ or ++a++ to attach. Press ++ctrl+b++ then ++d++ to detach.
+The workspace keeps running, and the activity rail flips ACTIVE/IDLE on its own.
 
 ## Verify
 

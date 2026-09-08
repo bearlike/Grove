@@ -65,6 +65,36 @@ failure this repo keeps re-learning: a truncated list is indistinguishable from
 a complete one, so it reads as Grove ignoring its own config."""
 
 
+CONTEXT_VARIANT_SUFFIX = "[1m]"
+"""The long-context marker a gateway appends to a SECOND id for the same model.
+
+Both ids exist because Claude Code needs them distinct — the marked one is how a
+caller asks for the extended window explicitly — so neither can be renamed or
+dropped from what Grove will launch. To a person choosing a model they are one
+choice twice: measured on the reference gateway, all 7 pairs report identical
+input/output rates and an identical ``max_input_tokens``.
+"""
+
+
+def _collapse_context_variants(ids: Sequence[str]) -> tuple[str, ...]:
+    """Drop ``x`` where ``x[1m]`` is also offered, keeping the MARKED id.
+
+    Structural, like the clients' namespace fold: the catalog itself says
+    whether it has redundant pairs, so there is no vendor table and a catalog
+    with no pairs is returned untouched. The marked id is the survivor because
+    it is the one that names the capability — dropping it would silently take
+    the extended window away from anyone picking from a list.
+
+    Relative order is otherwise untouched — nothing is re-sorted, so a curated
+    list still reads in the order somebody typed it. This narrows what is
+    OFFERED and never what is accepted: ``create`` forwards any id verbatim, so
+    the plain variant stays launchable by hand, by config, and by every
+    workspace already pinned to one.
+    """
+    present = set(ids)
+    return tuple(i for i in ids if i + CONTEXT_VARIANT_SUFFIX not in present)
+
+
 def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tuple[str, ...]:
     """The single per-agent model catalog a picker offers: configured override,
     else the adapter's live discovery — de-duped, order-preserving, capped.
@@ -82,7 +112,11 @@ def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tup
     for model in raw:
         if model and model not in seen:
             seen[model] = None
+    # Both halves of a `[1m]` pair are one choice to a reader, so the redundant
+    # one is folded out BEFORE the cap — otherwise a catalog of pairs spends
+    # half its allowance showing each model twice.
+    models = _collapse_context_variants(tuple(seen))
     # A curated list is returned WHOLE; only discovery is capped. See
     # MODEL_CATALOG_CAP for why silently trimming an explicit answer is worse
     # than a long picker.
-    return tuple(seen) if curated else tuple(seen)[:MODEL_CATALOG_CAP]
+    return models if curated else models[:MODEL_CATALOG_CAP]

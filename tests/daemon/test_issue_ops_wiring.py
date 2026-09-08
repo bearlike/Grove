@@ -1,13 +1,10 @@
 """Daemon ↔ issue-ops lifespan wiring: the status publisher and the assignee poll.
 
-The publisher is the activity bus's third subscriber (alongside the SSE hub and
-the notification broker). This pins the daemon's job — that ``build_app`` binds
-the injected publisher to the live ``ActivityService`` bus on startup and closes
-it on shutdown — via the same ``build_app(status_publisher=...)`` injection seam
-the broker uses (``test_notifications_wiring.py``). The publisher's own
-coalescing/render behavior is covered in ``tests/core/issueops/test_publisher.py``;
-here we only assert the wiring, with a capturing fake standing in for the real
-publisher.
+The publisher binds to the live ``ActivityService`` bus and closes at daemon
+shutdown. The assignee poller instead receives the registry's manager-materialization
+subscription; it drives its own tracker timer and consumes no activity deltas.
+Publisher coalescing/render behavior is covered in
+``tests/core/issueops/test_publisher.py``; these tests pin only daemon wiring.
 """
 
 from __future__ import annotations
@@ -88,40 +85,48 @@ def test_lifespan_binds_and_closes_the_injected_status_publisher(
     with TestClient(app) as client:
         del client
         registry = app.state.registry
-        activity = app.state.activity
         repo = _init_repo(tmp_path / "repo")
         registry.get(repo).create(CreateWorkspaceRequest(agent_name="shell", title="mirror"))
-        activity.poll_once()  # a fresh workspace is a change → a delta the publisher observes
 
         assert pub.bound  # the lifespan bound it to the live activity bus
-        assert pub.deltas  # …and a real delta reached its observe callback
+        # The manager event crosses the ActivityService bridge immediately;
+        # publication does not wait for the removed periodic poll trigger.
+        assert pub.deltas and pub.deltas[-1].kind == "workspace_changed"
+        assert pub.deltas[-1].detail["event"] == "created"
         assert app.state.status_publisher is pub
 
     assert pub.closed  # closed on shutdown
 
 
 class _CapturingPoller:
-    """Records the assignee poller's own lifecycle wiring.
-
-    Deliberately NOT a bus subscriber: the poller drives its own timer against
-    the trackers and consumes no deltas, which is why the lifespan does not
-    ``audience.join()`` for it.
-    """
+    """Records registry-subscription and lifecycle wiring for the own-timer poller."""
 
     def __init__(self) -> None:
         self.bound = False
         self.closed = False
+        self.managers: list[tuple[Path, object]] = []
+        self._unsub: Callable[[], None] | None = None
 
-    def bind(self) -> None:
+    def bind(
+        self, subscribe: Callable[[Callable[[Path, object], None]], Callable[[], None]]
+    ) -> None:
         self.bound = True
+        self._unsub = subscribe(self._observe_manager)
+
+    def _observe_manager(self, root: Path, manager: object) -> None:
+        self.managers.append((root, manager))
 
     def close(self) -> None:
         self.closed = True
+        if self._unsub is not None:
+            self._unsub()
+            self._unsub = None
 
 
 def test_lifespan_binds_and_closes_the_injected_assignee_poller(
     fake_tmux: FakeTmux,
     tmp_state_dir: Path,
+    tmp_path: Path,
 ) -> None:
     del fake_tmux, tmp_state_dir
     poller = _CapturingPoller()
@@ -132,7 +137,11 @@ def test_lifespan_binds_and_closes_the_injected_assignee_poller(
     )
     with TestClient(app) as client:
         del client
+        repo = _init_repo(tmp_path / "repo")
+        manager = app.state.registry.get(repo)
+
         assert poller.bound
+        assert poller.managers == [(repo, manager)]
         assert app.state.assignee_poller is poller
     assert poller.closed
 

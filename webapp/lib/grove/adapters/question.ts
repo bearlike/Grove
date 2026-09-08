@@ -7,13 +7,16 @@ import type { AgentQuestionView } from "@/lib/grove/api";
 /**
  * An agent's question → props for the vendored question surfaces.
  *
- * Grove's wire carries four question kinds off two Claude tools: `ExitPlanMode`
- * yields one `confirm` (the plan IS the prompt, no options) and `AskUserQuestion`
- * yields a BATCH of select/free-text questions sharing one `group_id`, answered
- * atomically in one POST. So the unit of presentation is the group, not the
- * question, and the two vendored elements split along exactly that line: a lone
- * plan approval is an `ApprovalCard`, everything else is one `ElicitationForm`
- * whose fields are the batch.
+ * `AskUserQuestion` yields a BATCH of select/free-text questions sharing one
+ * `group_id`, answered atomically in one POST. So the unit of presentation is
+ * the group, not the question, and it renders as one `ElicitationForm` whose
+ * fields are the batch.
+ *
+ * `plan_approval` is deliberately NOT handled here. A plan is a Markdown
+ * document plus the agent dialog's own rows, which `ApprovalCard` cannot show —
+ * it renders its `command` in a `font-mono text-xs` block with no whitespace
+ * handling, capped `max-w-sm`, and offers no slot for per-option consequences.
+ * `components/grove/workspace/plan-approval.tsx` owns that surface instead.
  *
  * Pure: the caller supplies the callbacks and owns the submit.
  */
@@ -50,9 +53,10 @@ export function questionPresentation(
   const first = questions[0];
   if (!first) return null;
 
-  // A lone confirm is a plan approval: no options to render, a body worth
-  // showing verbatim. Anything else — including a confirm batched alongside
-  // real questions — is a form, because the batch answers as one.
+  // A lone optionless confirm still has no form fields worth drawing, so it
+  // keeps the approval shape. `plan_approval` never reaches here — it has its
+  // own surface (see the module docstring) — which is exactly why it is a
+  // separate kind rather than a `confirm` a reader has to disambiguate by tool.
   if (questions.length === 1 && first.kind === "confirm") {
     return {
       kind: "approval",

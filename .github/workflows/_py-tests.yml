@@ -1,0 +1,81 @@
+name: Python tests (reusable)
+
+# pytest, addressable at the granularity pytest itself already offers.
+#
+# The inputs are deliberately pytest's OWN selectors rather than a bespoke
+# preset menu: `paths` (positional), `keyword` (-k), `markers` (-m). Nothing
+# here needs maintenance as tests move between directories, and anyone who
+# knows pytest can already drive it. A preset list would have to be re-derived
+# every time the suite is reorganized, and could not express a novel spot check.
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: "Test paths, space separated (e.g. 'tests/core tests/daemon')"
+        type: string
+        required: false
+        default: "tests"
+      keyword:
+        description: "pytest -k expression; empty runs every collected test"
+        type: string
+        required: false
+        default: ""
+      markers:
+        description: "pytest -m expression (e.g. 'not integration', 'integration')"
+        type: string
+        required: false
+        default: "not integration"
+      ref:
+        description: "Ref to check out; empty uses the triggering ref"
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  pytest:
+    # Surfaces the actual selection in the run list, so a dispatched run is
+    # identifiable without opening it.
+    name: pytest ${{ inputs.paths }} ${{ inputs.markers && format('-m "{0}"', inputs.markers) }} ${{ inputs.keyword && format('-k "{0}"', inputs.keyword) }}
+    # Linux-only by design: tmux is the runtime dependency and native packaging
+    # was retired, so an OS matrix cost minutes for no signal. The Windows/macOS
+    # defensive code stays but is CI-unverified (tests/CLAUDE.md).
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      # Pillow rides `dev` (not `docs`) so tests/tools/screenshots/ resolves:
+      # group placement follows which job needs the package.
+      - name: Install
+        run: uv sync --frozen --group dev
+      # Installed unconditionally, including for `not integration` runs: the
+      # `requires_tmux` marker skips on hosts without it, so omitting tmux here
+      # would silently turn real coverage into skips that still report green.
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Run pytest
+        env:
+          # Via env, not direct interpolation: a `-k` expression carries quotes
+          # and parentheses that would otherwise be pasted into the script text
+          # and reparsed by bash.
+          PYTEST_PATHS: ${{ inputs.paths }}
+          PYTEST_KEYWORD: ${{ inputs.keyword }}
+          PYTEST_MARKERS: ${{ inputs.markers }}
+        run: |
+          set -euo pipefail
+          args=()
+          # `if`, never `[ -n … ] && args+=(…)`: under `set -e` that compound
+          # returns 1 when the test is false and exits the whole step.
+          if [ -n "$PYTEST_MARKERS" ]; then args+=(-m "$PYTEST_MARKERS"); fi
+          if [ -n "$PYTEST_KEYWORD" ]; then args+=(-k "$PYTEST_KEYWORD"); fi
+          # $PYTEST_PATHS is unquoted on purpose — it is a space-separated list
+          # and must word-split. "${args[@]}" is safe on an empty array under
+          # `set -u` in bash 4.4+; the `${args[@]-}` form would pass a spurious
+          # empty argument, which pytest reads as an empty path.
+          echo "+ pytest $PYTEST_PATHS ${args[*]}"
+          uv run pytest $PYTEST_PATHS "${args[@]}"

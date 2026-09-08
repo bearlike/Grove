@@ -186,8 +186,14 @@ class RuntimeResolver:
 
     def resolve(self, *, requested: Runtime | None, repo_root: Path) -> RuntimeDecision:
         """Walk the D5 tree for one create. Raises only on arm 2 (the refusal)."""
+        # `default_runtime`, never `container.enabled`: the saved
+        # `defaults.runtime` outranks the section default, and reading the
+        # section directly is what let a create silently contradict the runtime
+        # every create form displayed.
         wants_container = (
-            self._cfg.container.enabled if requested is None else requested is Runtime.CONTAINER
+            self._cfg.default_runtime == "container"
+            if requested is None
+            else requested is Runtime.CONTAINER
         )
         config_path = self.project_config(repo_root)
 
@@ -458,6 +464,7 @@ class ContainerProvisioner:
         remote_urls: Iterable[str] = (),
         base: ContainerRuntimeState | None = None,
         container_env: EnvSource | None = None,
+        mailbox_socket: Path | None = None,
     ) -> ContainerRuntimeState:
         """Provision the workspace's container; report what came up.
 
@@ -542,7 +549,17 @@ class ContainerProvisioner:
             netfilter_detail = netfilter.detail if netfilter is not None else "not needed"
             log.line(f"egress: {egress.mode} (netfilter payload: {netfilter_detail})")
             log.line(f"decor: {'mounted' if decor.enabled else 'none'}")
-            complete = self._overlay(share, egress, tmux, netfilter, decor).apply(
+            overlay = self._overlay(share, egress, tmux, netfilter, decor)
+            if mailbox_socket is not None:
+                # Mount only the explicitly configured private mailbox socket,
+                # never the daemon's auth/config directory or a Docker socket.
+                if not mailbox_socket.is_socket():
+                    raise ContainerError("mailbox socket is unavailable before container provision")
+                mailbox_mount = (
+                    f"type=bind,source={mailbox_socket},target={mailbox_socket},readonly"
+                )
+                overlay = overlay.model_copy(update={"mounts": (*overlay.mounts, mailbox_mount)})
+            complete = overlay.apply(
                 resolved.effective,
                 git_common_dir=GroveOverlay.worktree_common_dir(worktree),
             )

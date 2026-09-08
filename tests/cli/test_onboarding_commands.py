@@ -109,6 +109,28 @@ def test_skills_install_prompts_when_target_omitted(runner: CliRunner, project: 
     assert not dest.exists()  # answered 'y' to user (skipped: not detected), 'n' to project
 
 
+# ─── grove skills list / show ─────────────────────────────────────────────────
+
+
+def test_skills_list_and_show_emit_packaged_skill_text(runner: CliRunner, project: Path) -> None:
+    del project
+    listed = runner.invoke(app, ["skills", "list"])
+    shown = runner.invoke(app, ["skills", "show", "collaborating-on-diagrams"])
+
+    assert listed.exit_code == 0, listed.output
+    assert "collaborating-on-diagrams" in listed.output.splitlines()
+    assert shown.exit_code == 0, shown.output
+    assert shown.output.startswith("---\nname: collaborating-on-diagrams\n")
+
+
+def test_skills_show_rejects_unadvertised_names(runner: CliRunner, project: Path) -> None:
+    del project
+    result = runner.invoke(app, ["skills", "show", "../working-in-grove"])
+
+    assert result.exit_code == 1
+    assert "unknown bundled skill" in result.output
+
+
 # ─── grove mcp install ────────────────────────────────────────────────────────
 
 

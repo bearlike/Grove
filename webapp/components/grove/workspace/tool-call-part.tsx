@@ -1,125 +1,100 @@
 "use client";
 
-import { useState, type PropsWithChildren, type ReactNode } from "react";
+import { useMemo, useState, type PropsWithChildren, type ReactNode } from "react";
 import { useAuiState, type ToolCallMessagePartProps } from "@assistant-ui/react";
 import { LoaderIcon } from "lucide-react";
 
 import {
   ToolFallbackArgs,
-  ToolFallbackContent,
-  ToolFallbackRoot,
-  ToolFallbackTrigger,
 } from "@/components/assistant-ui/tool-fallback";
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/assistant-ui/tool-group";
-import { CardScroll } from "@/components/grove/card";
 import {
   asToolCall,
   formatToolDuration,
   toolCallFields,
-  toolCallStatus,
   toolCallStatusLabel,
   type ToolCallView,
 } from "@/lib/grove/adapters";
 import { cn } from "@/lib/utils";
 import { CodeBlock } from "./code-block";
-import { NestLevel, nestedTriggerClass, useNestDepth } from "./nesting";
+import { AgentMessage } from "./agent-message";
+import { outgoingAgentMessage, type AgentMessageData } from "@/lib/grove/adapters/agent-message";
+import { NestLevel } from "./nesting";
+import { FileEditDiff, fileEditCounts } from "./file-edit-part";
+import type { FileEditPartData } from "@/lib/grove/adapters";
+import { ToolTimeline, ToolTimelineStep } from "./tool-timeline";
+import { compactToolTarget, toolPresentation, toolTimelineStats, toolTimelineSummary } from "@/lib/grove/adapters/tool-catalog";
+import { useToolIcons } from "@/lib/grove/tool-icons";
 import { toolCommandLanguage } from "./selectors";
 import type { ThreadComponents, ThreadGroupPart } from "./thread";
 
 /**
- * A tool call, with the request, the response, the clock and the running state
- * the wire has been carrying all along.
+ * The incoming-delivery envelope the adapter attached to this part, if any.
  *
- * WHAT THIS REPLACES. The transcript rendered the vendored `ToolFallback` on a
- * part whose only content was a digest line — so a Bash call read as
- * "Used tool: Bash" with the command as its entire body, no arguments, no
- * output, no duration, and a check mark whether or not the call had finished.
- * Every one of those facts was already on `DigestEntryView.tool`; none of them
- * had a home in assistant-ui's native part, and the adapter carries them across
- * on `artifact` (see `adapters/transcript.ts` for why that slot).
- *
- * THE STATE FORK IS THREE-WAY, NOT TWO. `artifact` absent means this agent
- * reports no per-call detail; `status === "running"` means in flight; a settled
- * call with `result === null` ran and returned nothing. They render as three
- * different things on purpose — collapsing the last two is the bug this
- * component exists to avoid, and it is invisible in a screenshot.
- *
- * WHY IT COMPOSES `ToolFallback.*` RATHER THAN THE WHOLE `ToolFallback`. The
- * default reads its status from the message part, and assistant-ui derives a
- * tool part's status from its owning MESSAGE — which every Grove transcript
- * message pins to `complete` so a working agent still has a composer. The
- * compound sub-components take that status as a plain prop, which is the seam.
- * Nothing here restyles them.
+ * Read defensively rather than by widening `ToolCallMessagePartProps`: the prop
+ * type is assistant-ui's, and `groveMailbox` is a key Grove adds on its own
+ * parts (see `mailboxPart`). A narrow local read keeps that coupling in one
+ * place instead of asserting a vendored type is something it is not.
  */
+function incomingMailbox(props: ToolCallMessagePartProps): AgentMessageData | null {
+  const carried = (props as { groveMailbox?: AgentMessageData }).groveMailbox;
+  return carried && typeof carried.body === "string" ? carried : null;
+}
+
+/** The diff the adapter attached to an edit call, read the same defensive way. */
+function carriedFileEdit(props: ToolCallMessagePartProps): FileEditPartData | null {
+  const carried = (props as { groveFileEdit?: FileEditPartData }).groveFileEdit;
+  return carried && typeof carried.displayPath === "string" ? carried : null;
+}
+
+/** Cataloged actions retain the provider request/response and native per-call identity. */
 export function ToolCallPart(props: ToolCallMessagePartProps): ReactNode {
   const call = asToolCall(props.artifact);
-  const status = toolCallStatus(call?.status ?? "ok");
-  const duration = formatToolDuration(call?.duration_ms);
   const running = call?.status === "running";
-  const failed = call?.status === "error";
-  // Nesting depth is read, not passed in — see `./nesting` for why a context
-  // is the only seam that reaches a component assistant-ui mounts for us.
-  const depth = useNestDepth();
+  const serverIcons = useToolIcons();
+  const presentation = toolPresentation(call?.name || props.toolName, call?.input, props.argsText, serverIcons);
+  // An INCOMING delivery the adapter folded into this run. It is not a tool
+  // call, so it draws the card alone — there is no invocation to report a
+  // delivery response for, and inventing that section would claim this session
+  // sent something it received.
+  const incoming = incomingMailbox(props);
+  if (incoming) return <AgentMessage message={incoming} />;
+
+  const message = call ? outgoingAgentMessage(call) : null;
+  if (message && call) return (
+    <AgentMessage message={message}>
+      <section className="mt-3 flex min-w-0 flex-col gap-1.5 border-t border-border pt-2" data-testid="mailbox-delivery">
+        <SectionLabel>Delivery response</SectionLabel>
+        {call.result ? <ToolBody text={call.result} /> : <Absent>{running ? "Sending — no response yet." : "No response recorded."}</Absent>}
+      </section>
+    </AgentMessage>
+  );
+
+  // An EDIT step names its file and expands into the native split diff — the
+  // artifact a reader opening an edit came for. Its request/response detail
+  // would be the same diff restated as two text blobs, so the diff replaces it.
+  const edit = carriedFileEdit(props);
 
   return (
-    <ToolFallbackRoot
-      data-testid="tool-call"
-      data-tool-status={call?.status ?? "unknown"}
-      {...(call ? { "data-tool-use-id": call.tool_use_id } : {})}
+    <ToolTimelineStep
+      {...presentation}
+      summary={edit ? edit.displayPath.split(/[\\/]/).filter(Boolean).at(-1) ?? edit.displayPath : compactToolTarget(presentation)}
+      name={call?.name || props.toolName}
+      running={running}
+      status={call?.status ?? "unknown"}
+      callId={call?.tool_use_id}
+      metadata={
+        <>
+          {edit ? <FileEditCounts data={edit} /> : null}
+          <ToolInvocationMeta tool={call} />
+        </>
+      }
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <ToolFallbackTrigger
-          toolName={call?.name || props.toolName}
-          status={status}
-          className={cn(nestedTriggerClass(depth), "shrink-0")}
-        />
-        {/* The digest line's remainder: the target, which is the one thing worth
-            reading without opening anything. Mono because it is a literal — a
-            path, a command, a pattern (design-system §3) — and truncated with
-            the full value in `title`, never clipped without a way back. */}
-        {props.argsText ? (
-          <span
-            className="text-content-tertiary min-w-0 flex-1 truncate font-mono text-xs"
-            title={props.argsText}
-          >
-            {props.argsText}
-          </span>
-        ) : (
-          <span className="min-w-0 flex-1" />
-        )}
-        {/* A word, then the colour — never colour alone (design-system §4.7).
-            A settled OK call says nothing here: the vendored check already did,
-            and the duration beside it is the fact worth the pixels. */}
-        {running || failed ? (
-          <span
-            className={cn(
-              "shrink-0 text-xs",
-              failed ? "text-destructive" : "text-content-tertiary",
-            )}
-            data-testid="tool-call-state"
-          >
-            {toolCallStatusLabel(call?.status ?? "ok")}
-          </span>
-        ) : null}
-        {duration ? (
-          <span
-            className="text-content-tertiary shrink-0 text-xs tabular-nums"
-            data-testid="tool-call-duration"
-          >
-            {duration}
-          </span>
-        ) : null}
-      </div>
-      <ToolFallbackContent>
-        {/* The call's own request/response is one level deeper than the
-            trigger it hangs off — the third rung the task names explicitly. */}
+      {edit ? (
+        <FileEditDiff data={edit} />
+      ) : (
         <NestLevel>{call ? <ToolCallDetail call={call} /> : <NoDetail />}</NestLevel>
-      </ToolFallbackContent>
-    </ToolFallbackRoot>
+      )}
+    </ToolTimelineStep>
   );
 }
 
@@ -153,7 +128,6 @@ export function ToolCallDetail({ call }: { call: ToolCallView }): ReactNode {
             </div>
           ))
         )}
-        {call.input_truncated ? <Truncated>Arguments were capped by the daemon.</Truncated> : null}
       </section>
       <section className="flex min-w-0 flex-col gap-1.5" data-testid="tool-call-response">
         <SectionLabel>Response</SectionLabel>
@@ -165,7 +139,6 @@ export function ToolCallDetail({ call }: { call: ToolCallView }): ReactNode {
         ) : (
           <ToolBody text={call.result} />
         )}
-        {call.result_truncated ? <Truncated>Response was capped by the daemon.</Truncated> : null}
       </section>
       <p className="text-content-tertiary font-mono text-xs" data-testid="tool-call-id">
         {call.tool_use_id}
@@ -175,40 +148,59 @@ export function ToolCallDetail({ call }: { call: ToolCallView }): ReactNode {
 }
 
 /**
- * A body of provider text, bounded.
+ * A body of provider text, WHOLE.
  *
  * `ToolFallbackArgs` is the vendored code well — a `<pre>` with the surface,
- * radius and type already decided — and it takes the wrapper's `className`,
- * which is the only place a bound can land. `ToolFallbackResult` was the
- * obvious alternative and was rejected: it prints its own "Result:" heading
- * with no way to turn it off, which would have made the two halves of this body
- * asymmetric and duplicated the label above it.
+ * radius and type already decided — and it takes the wrapper's `className`.
+ * `ToolFallbackResult` was the obvious alternative and was rejected: it prints
+ * its own "Result:" heading with no way to turn it off, which would have made
+ * the two halves of this body asymmetric and duplicated the label above it.
  *
- * `max-h-*`, never `h-*` — the app has exactly one bounding idiom, and the
- * other one is how a silent clip shipped once already (webapp/CLAUDE.md).
+ * **No height bound, deliberately — this is the one place `CardScroll` is the
+ * wrong answer.** That idiom bounds a LIST, where the reader scans rows and
+ * the tenth is worth no more than the first. A tool response is one artifact
+ * read end to end (the tail of a build log, a diff, a test summary), and it
+ * only renders at all inside a disclosure that is closed by default — so the
+ * reader has already said they want it. A 16rem porthole onto a 20 KB body,
+ * nested inside the transcript's own scroller, hides content exactly the way
+ * the daemon's old character cap did, and costs a scroll trap on top.
+ *
  * `wrap-break-word` INHERITS into the `<pre>`, which is what stops a 4 KB
  * single-line command from bleeding the column the transcript shares with
- * everything else.
- *
- * `language` forks the well: a recognised command (`toolCommandLanguage`)
- * renders through `CodeBlock` instead, bounded the same `max-h-64` way via
- * `CardScroll` — one bounding idiom either branch takes, never a second one
- * invented for the highlighted case.
+ * everything else. `min-w-0` on the highlighted branch does the same job for
+ * `CodeBlock`, whose own `<pre>` wraps rather than scrolls.
  */
 function ToolBody({ text, language }: { text: string; language?: string }): ReactNode {
   if (language) {
     return (
-      <CardScroll data-testid="tool-call-body">
+      <div className="min-w-0" data-testid="tool-call-body">
         <CodeBlock code={text} language={language} />
-      </CardScroll>
+      </div>
     );
   }
   return (
     <ToolFallbackArgs
       argsText={text}
-      className="max-h-64 overflow-y-auto wrap-break-word"
+      className="wrap-break-word"
       data-testid="tool-call-body"
     />
+  );
+}
+
+/**
+ * One edit's `+n −n`, on the step's own row.
+ *
+ * The same `FileRowSummary` vocabulary the standalone card uses, minus the
+ * path — the step already names the file, and repeating it would put the same
+ * word twice on one line.
+ */
+function FileEditCounts({ data }: { data: FileEditPartData }): ReactNode {
+  const { added, removed } = fileEditCounts(data);
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums" data-testid="file-edit-counts">
+      <span className="text-success">+{added}</span>
+      <span className="text-destructive">−{removed}</span>
+    </span>
   );
 }
 
@@ -221,21 +213,6 @@ function Absent({ children }: PropsWithChildren): ReactNode {
   return <p className="text-content-tertiary text-xs">{children}</p>;
 }
 
-/**
- * Truncation is STATED, never implied.
- *
- * `input_truncated` / `result_truncated` exist as explicit flags precisely
- * because an ellipsis inside a command's own stdout is indistinguishable from
- * output the tool actually produced — so a trailing "…" cannot be the signal.
- */
-function Truncated({ children }: PropsWithChildren): ReactNode {
-  return (
-    <p className="text-content-tertiary text-xs" data-testid="tool-call-truncated">
-      {children}
-    </p>
-  );
-}
-
 /** The provider reports no per-call detail. Distinct from "returned nothing",
  * and the difference is the user's: one is a gap in Grove's reporting, the
  * other is a fact about the call. */
@@ -243,70 +220,64 @@ function NoDetail(): ReactNode {
   return <Absent>This agent reports no request or response detail for its tool calls.</Absent>;
 }
 
-/**
- * A run of tool calls, with the live ones counted at the collapsed header.
- *
- * An agent issues several calls in one turn and the vendored grouping folds
- * them behind "3 tool calls" — which is the right shape, and would otherwise
- * hide the very state a user is watching for. The count of running and failed
- * calls rides the header, and a group follows its own liveness: it opens when a
- * call starts, so a spinner is never buried one click deep, and folds back up
- * when the last one settles.
- *
- * That is what makes "only the newest group is open" true without any group
- * needing to know its position. Running is a property one group has at a time
- * on a live workspace, so tracking it locally gives the same result an explicit
- * latest-index would, with no cross-group state to keep correct — and a
- * finished transcript opens nothing at all.
- *
- * The counts are read as NUMBERS from the store rather than as a summary
- * object: a selector returning a fresh object re-renders this on every frame of
- * an unrelated fleet tick, which is the cost model `transcript.tsx` documents.
- */
+/** Native tool grouping keeps identity and chronological boundaries owned by assistant-ui. */
 export function ToolCallGroup({
   group,
   children,
 }: PropsWithChildren<{ group: ThreadGroupPart }>): ReactNode {
   const { indices } = group;
-  const running = useAuiState((state) => countStatus(state.message.parts, indices, "running"));
-  const failed = useAuiState((state) => countStatus(state.message.parts, indices, "error"));
-
-  // The vendored `ToolFallback` uses exactly this shape to open itself when a
-  // call starts requiring action: track the previous value, act on the edge.
-  // BOTH edges, symmetrically — a rising edge that opens with no falling edge
-  // that closes is not a disclosure, it is an append-only list of everything
-  // the agent has ever done, and on a live workspace that is the whole
-  // transcript held open until someone reloads the page. Following the edge
-  // rather than the value is also what keeps the user in charge: a manual
-  // toggle changes `open` without moving `live`, so nothing fires and their
-  // choice stands until the group's own state actually changes.
+  const parts = useAuiState(state => state.message.parts);
+  const serverIcons = useToolIcons();
+  const { summary, stats } = useMemo(() => {
+    const steps = indices.flatMap(index => {
+      const part = parts[index];
+      if (part?.type !== "tool-call") return [];
+      const call = asToolCall(part.artifact);
+      const step = toolPresentation(call?.name || part.toolName, call?.input, part.argsText, serverIcons);
+      // The diff is the only honest source for a change count — the tool name
+      // says an edit happened, never how much of the file moved. An edit whose
+      // payload the provider did not report contributes a step and no chip.
+      const edit = (part as { groveFileEdit?: FileEditPartData }).groveFileEdit;
+      if (!edit) return [step];
+      return [{ ...step, fileStat: { file: edit.path, ...fileEditCounts(edit) } }];
+    });
+    return { summary: toolTimelineSummary(steps), stats: toolTimelineStats(steps) };
+  }, [parts, indices, serverIcons]);
+  const running = countStatus(parts, indices, "running");
+  const failed = countStatus(parts, indices, "error");
   const live = running > 0;
-  const [open, setOpen] = useState(live);
-  const [wasLive, setWasLive] = useState(live);
-  if (live !== wasLive) {
-    setWasLive(live);
-    setOpen(live);
+  // Tool runs flush into their own assistant message. `parts.length` therefore
+  // says only whether another PART follows, while `message.isLast` says whether
+  // another MESSAGE has objectively arrived. A call that just completed is still
+  // live until that boundary, so it stays open across the gap before the next
+  // call; a historical tail stays closed because it never went live here.
+  const isLast = useAuiState(state => state.message.isLast);
+  const [observedLive, setObservedLive] = useState(live);
+  if (live && !observedLive) setObservedLive(true);
+  const active = isLast && (live || observedLive);
+  const [wasActive, setWasActive] = useState(active);
+  const [open, setOpen] = useState(active);
+  // Manual toggles survive additional calls; only the run's boundary closes it.
+  if (active !== wasActive) {
+    setWasActive(active);
+    setOpen(active);
   }
 
   return (
-    <ToolGroupRoot variant="ghost" open={open} onOpenChange={setOpen} data-testid="tool-call-group">
-      <div className="flex min-w-0 items-center gap-2">
-        <ToolGroupTrigger count={indices.length} active={live} className="shrink-0" />
-        {running > 0 ? (
-          <span className="text-content-tertiary shrink-0 text-xs tabular-nums">
-            {running} running
-          </span>
-        ) : null}
-        {failed > 0 ? (
-          <span className="text-destructive shrink-0 text-xs tabular-nums">{failed} failed</span>
-        ) : null}
-      </div>
-      <ToolGroupContent>
-        {/* Each call in the group is one level deeper than the group's own
-            trigger — the first of the two boundaries the task names. */}
-        <NestLevel>{children}</NestLevel>
-      </ToolGroupContent>
-    </ToolGroupRoot>
+    <ToolTimeline
+      open={open}
+      onOpenChange={setOpen}
+      streaming={live}
+      label={summary.label}
+      icons={summary.icons}
+      stats={stats}
+      status={<>
+        {running > 0 ? <span className="text-content-tertiary shrink-0 text-xs tabular-nums">{running} running</span> : null}
+        {failed > 0 ? <span className="text-destructive shrink-0 text-xs tabular-nums">{failed} failed</span> : null}
+      </>}
+    >
+      <NestLevel>{children}</NestLevel>
+    </ToolTimeline>
   );
 }
 
@@ -330,7 +301,7 @@ function countStatus(
  * A `file_edit` entry carries `tool` too — the diff is the PAYLOAD and the
  * invocation is a separate fact about it — but that card already expands into
  * its diff, so a second expander would be two disclosures on one row. It gets
- * the header line instead: spinner or duration, and any truncation stated.
+ * the header line instead: spinner or duration.
  *
  * The spinner is lucide's `LoaderIcon` with `animate-spin`, which is the exact
  * pair both `ToolFallbackTrigger` and `ToolGroupTrigger` draw; the registry
@@ -341,7 +312,6 @@ export function ToolInvocationMeta({ tool }: { tool: ToolCallView | null }): Rea
   const duration = formatToolDuration(tool.duration_ms);
   const running = tool.status === "running";
   const failed = tool.status === "error";
-  const truncated = tool.input_truncated || tool.result_truncated;
 
   return (
     <span
@@ -359,7 +329,6 @@ export function ToolInvocationMeta({ tool }: { tool: ToolCallView | null }): Rea
         <span className={cn(failed && "text-destructive")}>{toolCallStatusLabel(tool.status)}</span>
       ) : null}
       {duration ? <span className="tabular-nums">{duration}</span> : null}
-      {truncated ? <span>capped</span> : null}
     </span>
   );
 }

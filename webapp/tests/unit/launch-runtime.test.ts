@@ -13,6 +13,7 @@ const values: LaunchValues = {
   customModel: false,
   runtime: "container",
   brief: true,
+  native: null,
   branchMode: "auto",
   branchName: "",
   existingBranch: "",
@@ -33,8 +34,18 @@ describe("submitLaunch", () => {
     const navigate = vi.fn<(href: string) => void>();
 
     const restore = vi.fn<(prompt: string) => void>();
+    const clear = vi.fn();
 
-    await submitLaunch(state, "Create the composer\nwith defaults", create, navigate, restore);
+    await submitLaunch(
+      state,
+      "Create the composer\nwith defaults",
+      [],
+      create,
+      navigate,
+      restore,
+      undefined,
+      clear,
+    );
 
     expect(create).toHaveBeenCalledWith({
       repo_root: "/repos/grove",
@@ -49,6 +60,7 @@ describe("submitLaunch", () => {
     });
     expect(navigate).toHaveBeenCalledWith("/w/workspace-1");
     expect(restore).not.toHaveBeenCalled();
+    expect(clear).toHaveBeenCalledWith();
   });
 
   it("restores the prompt and preserves a rejected create without navigating", async () => {
@@ -56,10 +68,47 @@ describe("submitLaunch", () => {
     const create = vi.fn<(request: CreateWorkspaceRequest) => Promise<WorkspaceStateView>>().mockRejectedValue(refusal);
     const navigate = vi.fn<(href: string) => void>();
     const restore = vi.fn<(prompt: string) => void>();
+    const restoreDraft = vi.fn();
+    const clear = vi.fn();
+    const reject = vi.fn();
 
-    await expect(submitLaunch(state, "Retry this task", create, navigate, restore)).rejects.toBe(refusal);
+    await expect(
+      submitLaunch(
+        state,
+        "Retry this task",
+        [],
+        create,
+        navigate,
+        restore,
+        restoreDraft,
+        clear,
+        reject,
+      ),
+    ).rejects.toBe(refusal);
 
     expect(restore).toHaveBeenCalledWith("Retry this task");
+    expect(restoreDraft).toHaveBeenCalledWith("Retry this task", []);
+    expect(reject).toHaveBeenCalledOnce();
+    expect(clear).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("carries staged files through to the request", async () => {
+    const create = vi
+      .fn<(request: CreateWorkspaceRequest) => Promise<WorkspaceStateView>>()
+      .mockResolvedValue({ id: "workspace-2" } as WorkspaceStateView);
+
+    await submitLaunch(
+      state,
+      "Read the spec",
+      [{ name: "spec.md", size: 12, content_base64: "Zm9v" }],
+      create,
+      vi.fn<(href: string) => void>(),
+      vi.fn<(prompt: string) => void>(),
+    );
+
+    expect(create.mock.calls[0]![0].attachments).toEqual([
+      { name: "spec.md", content_base64: "Zm9v" },
+    ]);
   });
 });

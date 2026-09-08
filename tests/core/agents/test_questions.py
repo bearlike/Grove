@@ -85,19 +85,39 @@ def test_question_without_options_is_free_text() -> None:
     assert empty[0].multiselect is False
 
 
-def test_exit_plan_mode_is_a_confirm_with_the_plan_as_prompt() -> None:
-    """ExitPlanMode is an approval gate: one ``confirm`` question, plan as prompt,
-    no options."""
+def test_exit_plan_mode_carries_the_dialogs_real_options() -> None:
+    """ExitPlanMode is a MODE choice, so it normalizes to the dialog's own rows.
+
+    It used to be an optionless ``confirm``, which made a plan look answerable
+    in prose. It is not: approving runs inside the tool's own body and the
+    destination mode is whichever row the human lands on, so the options must
+    reach the client or it cannot offer the choice the agent actually asked.
+    """
     questions = AgentQuestion.from_tool_call("ExitPlanMode", {"plan": "1. do x\n2. do y"}, "call_2")
 
     assert len(questions) == 1
     q = questions[0]
-    assert q.kind == "confirm"
+    assert q.kind == "plan_approval"
+    assert q.selects_a_mode is True
     assert q.prompt == "1. do x\n2. do y"
-    assert q.options == ()
     assert q.group_id == "call_2"
     assert q.id == "call_2#0"
     assert q.source_tool == "ExitPlanMode"
+    # Three rows, in the order the dialog paints them — the index IS the answer,
+    # so their count and order are the contract, not their wording.
+    assert len(q.options) == 3
+    assert all(option.description for option in q.options)
+
+
+def test_only_a_plan_approval_selects_a_mode() -> None:
+    """The discriminator is per question, so no client branches on ``kind``."""
+    batch = AgentQuestion.from_tool_call(
+        "AskUserQuestion",
+        {"questions": [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}]}]},
+        "call_b",
+    )
+
+    assert [q.selects_a_mode for q in batch] == [False]
 
 
 def test_non_question_tool_yields_nothing() -> None:

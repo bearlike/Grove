@@ -21,6 +21,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -43,9 +44,26 @@ from grove.core.errors import ContainerError
 from grove.core.launch import DevcontainerLaunchBackend, LaunchSpec
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
-from grove.core.tmux import PaneReport
+from grove.core.tmux import PaneReport, SendKey
 from grove.core.workspace import Runtime, WorkspaceState
-from tests.conftest import FAKE_REMOTE_FOLDER, FakeCli, FakePreflight, FakeTmux
+from tests.conftest import (
+    FAKE_REMOTE_FOLDER,
+    FakeCli,
+    FakePreflight,
+    FakeTmux,
+    tmux_argv_without_size,
+)
+
+
+def _sh_payload(argv: list[str]) -> str:
+    """The script tmux is asked to run: the token after the trailing ``sh -c``.
+
+    Found by SEARCH rather than by index, because the ``new-session`` flags in
+    front of it are not fixed in number — a detached start carries a geometry
+    and an attached one does not — and an index-based read of this position
+    silently asserts against a flag whenever that changes.
+    """
+    return argv[argv.index("-c", argv.index("sh")) + 1]
 
 
 def _bundle(root: Path, *arches: str) -> Path:
@@ -463,10 +481,17 @@ def test_the_agent_launches_under_new_session_dash_a(tmp_path: Path) -> None:
     # identity they are resolved against, and disagreeing on the identity would
     # reach a different container entirely.
     assert start["id_labels"] == {"grove.workspace": "ws1"}
-    assert argv[:6] == [_AMD64_TMUX, "new-session", "-A", "-d", "-s", "agent"]
+    assert tmux_argv_without_size(argv)[:6] == [
+        _AMD64_TMUX,
+        "new-session",
+        "-A",
+        "-d",
+        "-s",
+        "agent",
+    ]
     # The agent command rides INSIDE an `sh -c` so the decoration can reach it
     # as argv — tmux execvp's a multi-argument command rather than re-parsing.
-    assert "exec claude --dangerously-skip-permissions" in argv[8]
+    assert "exec claude --dangerously-skip-permissions" in _sh_payload(argv)
     # And a decoration value with a space survives as ONE element, which is
     # exactly what the `"$@"` forwarding after the `grove` placeholder buys.
     assert argv[-3:] == ["grove", "--session-id", "abc 123"]
@@ -479,7 +504,7 @@ def test_the_in_container_session_name_comes_from_config(tmp_path: Path) -> None
     )
     argv = _agent_argv(_spec(tmp_path, tmux_command="tmux", cfg=cfg))
 
-    assert argv[:6] == ["tmux", "new-session", "-A", "-d", "-s", "codex-2"]
+    assert tmux_argv_without_size(argv)[:6] == ["tmux", "new-session", "-A", "-d", "-s", "codex-2"]
 
 
 def test_an_unknown_client_TERM_retries_once_and_says_so(tmp_path: Path) -> None:
@@ -525,8 +550,8 @@ def test_a_nested_project_cds_inside_the_tmux_command(tmp_path: Path) -> None:
     """The `cd` has to land in the agent's own shell, not the tmux client's."""
     argv = _agent_argv(_spec(tmp_path, tmux_command="tmux", subpath="services/api"))
 
-    assert argv[:4] == ["tmux", "new-session", "-A", "-d"]
-    assert f"cd {FAKE_REMOTE_FOLDER}/services/api && exec claude" in argv[8]
+    assert tmux_argv_without_size(argv)[:4] == ["tmux", "new-session", "-A", "-d"]
+    assert f"cd {FAKE_REMOTE_FOLDER}/services/api && exec claude" in _sh_payload(argv)
 
 
 def test_a_container_with_no_tmux_keeps_the_bare_form(
@@ -570,6 +595,42 @@ def _create(manager: WorkspaceManager, title: str = "ws") -> WorkspaceState:
 def _override(state: WorkspaceState) -> DevcontainerConfig:
     raw = (Path(state.worktree_path) / OVERRIDE_CONFIG_RELPATH).read_text(encoding="utf-8")
     return DevcontainerConfig.model_validate_json(raw)
+
+
+def test_manager_send_keys_targets_container_tmux_with_remote_user_and_never_host_falls_back(
+    tmp_repo: Path, tmp_path: Path, fake_tmux: FakeTmux
+) -> None:
+    """Named input uses the persisted container identity, not its host viewport."""
+    cli = FakeCli()
+    manager = _manager(tmp_repo, tmp_path, cli)
+    state = _create(manager)
+    assert state.container is not None
+    assert state.container.remote_user
+    state = replace(
+        state,
+        container=state.container.model_copy(
+            update={"container_id": "c" * 64, "tmux_command": "tmux"}
+        ),
+    )
+    manager.store.save(state)
+    fake_tmux.sessions.add(state.tmux_session)
+    fake_tmux.windows[state.tmux_session] = ["shell", "agent"]
+
+    manager.send_keys(state.id, SendKey.RIGHT)
+
+    assert fake_tmux.sent_keys == [("agent", [SendKey.RIGHT])]
+    assert fake_tmux.commands[-1] == (
+        "agent",
+        (
+            "docker",
+            "exec",
+            "-u",
+            state.container.remote_user,
+            state.container.container_id,
+            state.container.tmux_command,
+        ),
+    )
+    assert fake_tmux.sent_keys[0][0] != f"{state.tmux_session}:agent"
 
 
 def test_the_payload_mount_and_terminfo_reach_the_generated_override_config(
@@ -910,7 +971,7 @@ def test_the_launch_asks_tmux_to_keep_the_dead_pane(tmp_path: Path) -> None:
     signal a container workspace has.
     """
     argv = _agent_argv(_spec(tmp_path, tmux_command=_AMD64_TMUX, cfg=_NO_FALLBACK))
-    script = argv[8]
+    script = _sh_payload(argv)
 
     assert f"{_AMD64_TMUX} set-option -w remain-on-exit on" in script
     # Still ahead of the agent, and the decoration still lands as its argv.

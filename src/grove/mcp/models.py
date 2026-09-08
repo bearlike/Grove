@@ -62,6 +62,11 @@ class AttachInstructionResult(BaseModel):
     ``tmux_session`` is null for a containerized workspace and that is the
     honest answer rather than a gap: the session it would name lives on the
     container's tmux server, so a name pasted at a host shell addresses nothing.
+
+    ``read_only`` says the command attaches as a viewer: a native workspace's
+    pane is Grove's own worker printing the session's protocol frames, so the
+    person can watch the wire but never type into it, and steering goes through
+    the message/interrupt/model tools instead.
     """
 
     model_config = _FROZEN
@@ -70,6 +75,7 @@ class AttachInstructionResult(BaseModel):
     tmux_session: str | None
     command: str
     inside_outer_tmux: bool
+    read_only: bool = False
 
 
 __all__ = [

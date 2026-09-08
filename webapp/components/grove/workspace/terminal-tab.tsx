@@ -35,6 +35,10 @@ export function TerminalTab({ peek, active }: { peek: WorkspacePeekView; active:
   const live = streamed !== undefined;
   const ansi = live ? streamed.ansi : peek.agent_snapshot;
   const html = useMemo(() => paneHtml(ansi), [ansi]);
+  // A native workspace's pane is the worker's protocol log, not a terminal a
+  // person could type into: the same capture, read the same way, named for
+  // what it is so nobody reaches for `grove attach` expecting a prompt.
+  const native = peek.state.native;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Follow the tail as frames arrive, but yield the moment the reader scrolls
@@ -56,13 +60,19 @@ export function TerminalTab({ peek, active }: { peek: WorkspacePeekView; active:
         JetBrainsMonoNerd.variable,
       )}
       data-testid="terminal-tab"
+      data-native={native ? "true" : undefined}
     >
-      <div className="flex shrink-0 items-center gap-2 bg-muted/40 px-3 py-1.5">
+      <div className="flex h-[32px] shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-3">
         <span
           className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
-          title={peek.state.tmux_session}
+          title={
+            native
+              ? `${peek.state.tmux_session} · protocol frames, → sent / ← received; read-only`
+              : peek.state.tmux_session
+          }
         >
           {peek.state.tmux_session}
+          {native ? " · event stream (read-only)" : null}
         </span>
         <span
           className={cn(
@@ -70,6 +80,9 @@ export function TerminalTab({ peek, active }: { peek: WorkspacePeekView; active:
             live ? "text-success" : "text-muted-foreground",
           )}
           data-testid="terminal-capture-source"
+          title={native
+            ? "Pane updates from Grove; this does not confirm agent responsiveness. Use Controls → Respawn to recover a stuck host agent."
+            : "Source of the terminal pane capture."}
         >
           <span
             aria-hidden
@@ -78,7 +91,7 @@ export function TerminalTab({ peek, active }: { peek: WorkspacePeekView; active:
               live ? "bg-success motion-safe:animate-pulse" : "bg-muted-foreground",
             )}
           />
-          {live ? "live" : "capture"}
+          {live ? (native ? "pane feed" : "live") : "capture"}
         </span>
       </div>
       <div
@@ -90,12 +103,16 @@ export function TerminalTab({ peek, active }: { peek: WorkspacePeekView; active:
         className="min-h-0 flex-1 overflow-auto"
       >
         <pre
-          aria-label="Live terminal output"
+          aria-label={native ? "Live session event stream" : "Live terminal output"}
           data-testid="terminal-output"
           className="w-max min-w-full p-3 font-terminal text-xs leading-relaxed whitespace-pre text-foreground"
           {...(html ? { dangerouslySetInnerHTML: { __html: html } } : {})}
         >
-          {html ? undefined : "No terminal output captured yet."}
+          {html
+            ? undefined
+            : native
+              ? "No protocol frames captured yet."
+              : "No terminal output captured yet."}
         </pre>
       </div>
     </div>

@@ -79,6 +79,16 @@ export const GLOSSARY = {
     summary:
       "The agent runs directly on this machine with the same access you have, rather than inside a container.",
   },
+  native_session: {
+    label: "Native session",
+    summary:
+      "Grove launched the agent on its own protocol and holds the control channel, so interrupt, a model switch and answers reach the agent directly rather than as keystrokes; the pane shows the session's output.",
+  },
+  terminal_session: {
+    label: "Terminal",
+    summary:
+      "The agent's own interactive UI runs in the pane; Grove steers it by typing, and attach shows the real terminal.",
+  },
   runtime_fallback: {
     label: "Fell back to host",
     summary:
@@ -128,6 +138,21 @@ export const GLOSSARY = {
     label: "Cache write",
     summary:
       "Context the model wrote into cache for a later turn to re-read; it is billed at a premium, once, rather than every turn that reuses it.",
+  },
+  native_ttft: {
+    label: "Time to first token",
+    summary:
+      "How long the last request waited before the model's first token arrived, as the agent's own protocol reported it — a fact no transcript records, so it exists only for a native session.",
+  },
+  native_cost: {
+    label: "Session cost",
+    summary:
+      "The harness's own running price for this session, cumulative across its turns, as its protocol reported it — carried as stated, never recomputed from Grove's price book.",
+  },
+  native_exit_code: {
+    label: "Last exit code",
+    summary:
+      "The exit status of the most recent shell command, as the agent's protocol reported it. A non-zero here is a failed command the transcript alone may read as fine.",
   },
   model_latency: {
     label: "Avg model latency",

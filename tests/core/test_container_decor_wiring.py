@@ -88,11 +88,16 @@ def test_a_container_launch_is_handed_the_merged_settings_file(
         str(CONTAINER_DECOR_ROOT / DecorPayload.STATUSLINE_NAME)
         in (container_file["statusLine"]["command"])
     )
-    # The shared file is what a HOST launch is handed, so a statusline here
-    # would follow the user into every session Grove did not containerize.
-    assert "statusLine" not in hook_file
+    # The host file carries Grove's OWN statusline — the reader arm that folds
+    # the context window into the sidecar — and never a container path: a
+    # `/grove/...` command is meaningless on the host and would replace the
+    # user's statusline with a broken one. The container keeps the decor
+    # script, which draws; the host arm draws nothing.
+    assert hook_file["statusLine"]["type"] == "command"
+    assert "--statusline" in hook_file["statusLine"]["command"]
+    assert str(CONTAINER_DECOR_ROOT) not in hook_file["statusLine"]["command"]
     # Everything else is the same payload — the container file is the hook file
-    # plus one key, never a second declaration of the hooks themselves.
+    # with one key swapped, never a second declaration of the hooks themselves.
     assert container_file["hooks"] == hook_file["hooks"]
 
 
@@ -106,7 +111,9 @@ def test_a_host_launch_is_handed_the_plain_hook_file(
     passed = _settings_flag(decoration)
     assert passed is not None
     assert passed == str(paths.agent_hooks_settings_path())
-    assert "statusLine" not in json.loads(Path(passed).read_text(encoding="utf-8"))
+    statusline = json.loads(Path(passed).read_text(encoding="utf-8"))["statusLine"]["command"]
+    assert "--statusline" in statusline
+    assert str(CONTAINER_DECOR_ROOT) not in statusline
 
 
 def test_the_agent_launch_names_the_decor_config_it_provisioned(

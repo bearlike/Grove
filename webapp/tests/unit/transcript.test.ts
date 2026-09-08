@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { GROVE_DATA_PART, messagesFromTurns } from "@/lib/grove/adapters";
-import { TRANSCRIPT_TURNS } from "../fixtures/turns";
+import { QUESTION_BATCH, TRANSCRIPT_TURNS } from "../fixtures/turns";
 
 /** The `data-*` part type of a single-part message, for terse assertions. */
 function partTypes(messages: ReturnType<typeof messagesFromTurns>): string[] {
@@ -30,7 +30,9 @@ describe("messagesFromTurns", () => {
       (m) => Array.isArray(m.content) && m.content.every((p) => p.type === "tool-call"),
     );
     expect(toolMessages).toHaveLength(1);
-    expect(toolMessages[0].content).toHaveLength(2);
+    // Three parts, not two: the fixture's file edit now rides the same run
+    // rather than flushing it — see the file-edit test below.
+    expect(toolMessages[0].content).toHaveLength(3);
   });
 
   it("splits a tool digest line into name and args", () => {
@@ -50,19 +52,73 @@ describe("messagesFromTurns", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("maps a file edit to a diff part carrying both paths", () => {
-    const edit = messages.find(
-      (m) => Array.isArray(m.content) && m.content[0]?.type === GROVE_DATA_PART.fileEdit,
-    );
-    expect(edit?.content[0]).toMatchObject({
-      data: { displayPath: "src/api/health.py", oldText: "" },
+  it("carries a file edit's diff on the tool part, so the edit rides its run", () => {
+    // An edit IS a tool call: it belongs to the timeline group around it rather
+    // than splitting that run into two groups with a card between them. The
+    // diff travels on the part; nothing about it is lost.
+    const edit = messages
+      .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+      .find((p) => p.type === "tool-call" && "groveFileEdit" in p);
+    expect(edit).toMatchObject({
+      groveFileEdit: { displayPath: "src/api/health.py", oldText: "" },
     });
+    // And it is no longer a standalone message between the groups.
+    expect(
+      messages.some(
+        (m) => Array.isArray(m.content) && m.content[0]?.type === GROVE_DATA_PART.fileEdit,
+      ),
+    ).toBe(false);
   });
 
   it("keeps todo entries OUT of the stream — the list is a pinned sibling", () => {
     // Two todo writes in the fixture. Either leaking in would stack near
     // duplicate cards down the transcript.
     expect(JSON.stringify(messages)).not.toContain("Mapping the router module");
+  });
+
+  it("withholds an open question from historical messages", () => {
+    const [question] = QUESTION_BATCH;
+    const result = messagesFromTurns([
+      {
+        user_text: "Choose a target",
+        started_at: null,
+        entries: [{ role: "question", text: question.prompt, question, file_edit: null, todo: null }],
+      },
+    ]);
+
+    expect(partTypes(result)).not.toContain(GROVE_DATA_PART.question);
+  });
+
+  it("adds a resolved question to historical messages with its answer", () => {
+    const [question] = QUESTION_BATCH;
+    const resolved = { ...question, answered: true, answer: "Primary only" };
+    const result = messagesFromTurns([
+      {
+        user_text: "Choose a target",
+        started_at: null,
+        entries: [{ role: "question", text: resolved.prompt, question: resolved, file_edit: null, todo: null }],
+      },
+    ]);
+
+    expect(partTypes(result)).toContain(GROVE_DATA_PART.question);
+    expect(JSON.stringify(result)).toContain("Primary only");
+  });
+
+  it("does not leave an empty assistant message when an open question follows tools", () => {
+    const [question] = QUESTION_BATCH;
+    const result = messagesFromTurns([
+      {
+        user_text: "Choose a target",
+        started_at: null,
+        entries: [
+          { role: "tool", text: "Read config", question: null, file_edit: null, todo: null },
+          { role: "question", text: question.prompt, question, file_edit: null, todo: null },
+        ],
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(partTypes(result)).toEqual(["text", "tool-call"]);
   });
 
   it("drops blank-text entries rather than emitting empty bubbles", () => {

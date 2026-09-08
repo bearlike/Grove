@@ -9,9 +9,7 @@ function tool(tool_use_id: string): ToolCallView {
     tool_use_id,
     status: "ok",
     input: null,
-    input_truncated: false,
     result: null,
-    result_truncated: false,
     duration_ms: null,
   };
 }

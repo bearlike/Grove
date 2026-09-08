@@ -2,7 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { TicketRefsCard, TicketRow } from "@/components/grove/workspace/ticket-refs";
+import {
+  TicketRefsCard,
+  TicketRow,
+} from "@/components/grove/workspace/ticket-refs";
 import {
   mergeTicket,
   providerLabel,
@@ -10,7 +13,6 @@ import {
   compareTicketRefs,
   ticketIdLabel,
   ticketKindLabel,
-  ticketStatusTone,
 } from "@/components/grove/workspace/selectors";
 import type { TicketProviderView, TicketRef } from "@/lib/grove/api";
 import { groveKeys } from "@/lib/grove/hooks";
@@ -47,8 +49,16 @@ function ref(overrides: Partial<TicketRef> = {}): TicketRef {
   };
 }
 
-function provider(overrides: Partial<TicketProviderView> = {}): TicketProviderView {
-  return { provider: "gitea", label: "Gitea", configured: true, context: "acme/api", ...overrides };
+function provider(
+  overrides: Partial<TicketProviderView> = {},
+): TicketProviderView {
+  return {
+    provider: "gitea",
+    label: "Gitea",
+    configured: true,
+    context: "acme/api",
+    ...overrides,
+  };
 }
 
 /**
@@ -67,8 +77,11 @@ function card({
   providers?: TicketProviderView[];
   resolved?: TicketRef[];
 }): string {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  if (providers) client.setQueryData(groveKeys.ticketProviders(REPO), providers);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  if (providers)
+    client.setQueryData(groveKeys.ticketProviders(REPO), providers);
   for (const live of resolved) {
     client.setQueryData(groveKeys.ticket(REPO, live.provider, live.id), live);
   }
@@ -83,27 +96,34 @@ function card({
 }
 
 function row(ticket: TicketRef, resolving = false): string {
-  return renderToStaticMarkup(<TicketRow ticket={ticket} resolving={resolving} />);
+  return renderToStaticMarkup(
+    <TicketRow ticket={ticket} resolving={resolving} />,
+  );
 }
 
 describe("the card with nothing attached", () => {
   it("still renders — the state the user was actually seeing", () => {
     const html = card({ refs: [], providers: [provider()] });
 
-    expect(html).toContain('data-testid="tickets-card"');
     expect(html).toContain('data-testid="tickets-empty"');
-    expect(html).toContain("Tickets");
+    expect(html).toContain('data-slot="alert"');
+    expect(html).toContain("No tickets are linked");
+    expect(html).not.toContain('data-testid="tickets-card"');
   });
 
-  it("says how to get one, with the command that does it", () => {
+  it("uses the measured-empty alert to say how to get one", () => {
     const html = card({ refs: [], providers: [provider()] });
 
-    expect(html).toContain("No issue or pull request is linked");
+    expect(html).toContain('data-slot="alert"');
+    expect(html).toContain("No tickets are linked");
     expect(html).toContain("grove tickets attach");
   });
 
   it("names the trackers this project can talk to", () => {
-    const html = card({ refs: [], providers: [provider({ context: "acme/api" })] });
+    const html = card({
+      refs: [],
+      providers: [provider({ context: "acme/api" })],
+    });
 
     expect(html).toContain('data-testid="tickets-providers"');
     expect(html).toContain("Gitea");
@@ -111,7 +131,9 @@ describe("the card with nothing attached", () => {
   });
 
   it("distinguishes a project with no provider from one that has not linked yet", () => {
-    expect(card({ refs: [], providers: [] })).toContain("No ticket provider is enabled");
+    expect(card({ refs: [], providers: [] })).toContain(
+      "No ticket provider is enabled",
+    );
   });
 
   it("shows a skeleton, not a claim, while the provider list is unknown", () => {
@@ -121,8 +143,10 @@ describe("the card with nothing attached", () => {
     expect(html).not.toContain("No ticket provider is enabled");
   });
 
-  it("carries no count badge when there is nothing to count", () => {
-    expect(card({ refs: [], providers: [provider()] })).not.toContain('data-testid="ticket-count"');
+  it("renders outside a card so the alert does not nest a second surface", () => {
+    const html = card({ refs: [], providers: [provider()] });
+
+    expect(html).not.toContain('data-slot="card"');
   });
 });
 
@@ -141,8 +165,12 @@ describe("a row", () => {
   });
 
   it("says which provider and which kind, in words", () => {
-    expect(row(ref({ provider: "github", kind: "pull_request" }))).toContain("GitHub");
-    expect(row(ref({ provider: "github", kind: "pull_request" }))).toContain("pull request");
+    expect(row(ref({ provider: "github", kind: "pull_request" }))).toContain(
+      "GitHub",
+    );
+    expect(row(ref({ provider: "github", kind: "pull_request" }))).toContain(
+      "pull request",
+    );
   });
 
   it("spells the state out beside its colour", () => {
@@ -166,10 +194,14 @@ describe("a row", () => {
   });
 
   it("shows a skeleton only where there is no title to show", () => {
-    expect(row(ref({ title: null }), true)).toContain('data-testid="ticket-title-loading"');
+    expect(row(ref({ title: null }), true)).toContain(
+      'data-testid="ticket-title-loading"',
+    );
     // The rule that matters: a title Grove already holds is never replaced by a
     // loading shape, however stale it is.
-    expect(row(ref(), true)).not.toContain('data-testid="ticket-title-loading"');
+    expect(row(ref(), true)).not.toContain(
+      'data-testid="ticket-title-loading"',
+    );
   });
 
   it("says what is missing rather than rendering an empty line", () => {
@@ -177,14 +209,19 @@ describe("a row", () => {
   });
 
   it("prints no status badge when the tracker reported no state", () => {
-    expect(row(ref({ status: null }))).not.toContain('data-testid="ticket-status"');
+    expect(row(ref({ status: null }))).not.toContain(
+      'data-testid="ticket-status"',
+    );
   });
 });
 
 describe("the list", () => {
   it("renders every attached ref, pull requests before issues", () => {
     const html = card({
-      refs: [ref({ id: "9", kind: "pull_request", title: "Fix it" }), ref({ id: "42" })],
+      refs: [
+        ref({ id: "9", kind: "pull_request", title: "Fix it" }),
+        ref({ id: "42" }),
+      ],
       providers: [provider()],
     });
 
@@ -193,7 +230,10 @@ describe("the list", () => {
   });
 
   it("warns once, and says how to resolve it, when any link is uncertain", () => {
-    const html = card({ refs: [ref({ ambiguous: true })], providers: [provider()] });
+    const html = card({
+      refs: [ref({ ambiguous: true })],
+      providers: [provider()],
+    });
 
     expect(html).toContain('data-testid="tickets-ambiguous-note"');
     expect(html).toContain("grove tickets detach");
@@ -243,7 +283,10 @@ describe("the list", () => {
   });
 
   it("degrades the same way for a provider the repo does not list at all", () => {
-    const html = card({ refs: [ref({ provider: "linear", id: "ENG-7" })], providers: [] });
+    const html = card({
+      refs: [ref({ provider: "linear", id: "ENG-7" })],
+      providers: [],
+    });
 
     expect(html).toContain("ENG-7");
     expect(html).toContain('data-testid="tickets-degraded"');
@@ -292,9 +335,15 @@ describe("presentation rules", () => {
   });
 
   it("orders numeric ids before lexical ids, each ascending", () => {
-    expect(compareTicketRefs(ref({ id: "9" }), null, ref({ id: "42" }), null)).toBeLessThan(0);
-    expect(compareTicketRefs(ref({ id: "42" }), null, ref({ id: "ENG-7" }), null)).toBeLessThan(0);
-    expect(compareTicketRefs(ref({ id: "ENG-7" }), null, ref({ id: "ENG-9" }), null)).toBeLessThan(0);
+    expect(
+      compareTicketRefs(ref({ id: "9" }), null, ref({ id: "42" }), null),
+    ).toBeLessThan(0);
+    expect(
+      compareTicketRefs(ref({ id: "42" }), null, ref({ id: "ENG-7" }), null),
+    ).toBeLessThan(0);
+    expect(
+      compareTicketRefs(ref({ id: "ENG-7" }), null, ref({ id: "ENG-9" }), null),
+    ).toBeLessThan(0);
   });
 
   it("writes an id the way its tracker does", () => {
@@ -308,23 +357,6 @@ describe("presentation rules", () => {
     expect(providerLabel("linear")).toBe("Linear");
     expect(ticketKindLabel("pull_request")).toBe("pull request");
   });
-
-  // SUPERSEDED CONTRACT, updated deliberately rather than worked around: `open`
-  // used to be `default`, the loudest variant, and that was right while the
-  // badge was the only mark on the row. The glyph now carries the state in
-  // shape AND colour, so a solid pill beside it made three tickets shout one
-  // fact twice — the same defect the fleet card had with `active` + `working`.
-  // The badge is now the redundant WORD that survives greyscale, and it is
-  // quiet; nothing on this card claims `default`.
-  it("never spends the loudest variant, and never guesses", () => {
-    expect(ticketStatusTone("open")).toBe("outline");
-    expect(ticketStatusTone("OPEN")).toBe("outline");
-    expect(ticketStatusTone("merged")).toBe("secondary");
-    expect(ticketStatusTone("closed")).toBe("secondary");
-    // A tracker's own vocabulary is open-ended; an unknown word is still marked
-    // and still spelled, just not claimed to mean something.
-    expect(ticketStatusTone("in review")).toBe("outline");
-  });
 });
 
 describe("merging a live read onto a stored ref", () => {
@@ -335,7 +367,10 @@ describe("merging a live read onto a stored ref", () => {
   });
 
   it("never blanks a cached field with a live null", () => {
-    const merged = mergeTicket(ref(), ref({ title: null, url: null, status: null }));
+    const merged = mergeTicket(
+      ref(),
+      ref({ title: null, url: null, status: null }),
+    );
 
     expect(merged.title).toBe("Widgets render twice on resize");
     expect(merged.url).toBe("https://tracker.example/acme/api/issues/42");
@@ -346,11 +381,17 @@ describe("merging a live read onto a stored ref", () => {
     // The resolve route fetches by id, so it reports `ambiguous: false` for
     // everything. Taking that answer would silently erase the one signal asking
     // the user to confirm the link.
-    expect(mergeTicket(ref({ ambiguous: true }), ref({ ambiguous: false })).ambiguous).toBe(true);
+    expect(
+      mergeTicket(ref({ ambiguous: true }), ref({ ambiguous: false }))
+        .ambiguous,
+    ).toBe(true);
   });
 
   it("takes the tracker's answer for everything else", () => {
-    const merged = mergeTicket(ref({ status: "open" }), ref({ status: "closed", assignee: "kim" }));
+    const merged = mergeTicket(
+      ref({ status: "open" }),
+      ref({ status: "closed", assignee: "kim" }),
+    );
 
     expect(merged.status).toBe("closed");
     expect(merged.assignee).toBe("kim");

@@ -161,6 +161,10 @@ class NotificationBroker:
         self._last_state: dict[str, AgentActivityState] = {}
         self._open_questions: dict[str, frozenset[str]] = {}
         self._last_fired: dict[str, datetime] = {}
+        # The lifecycle arm's OWN storm guard. Separate from `_last_fired`
+        # because the two triggers guard against unrelated storms and a shared
+        # stamp makes them suppress each other — see `_evaluate_lifecycle`.
+        self._last_lifecycle: dict[str, datetime] = {}
         self._identity: dict[str, WorkspaceIdentity] = {}
         # Per-workspace WAITING push held back for the quiet window — see
         # "The quiet-window push" above. Same unbounded-but-small contract as
@@ -502,17 +506,25 @@ class NotificationBroker:
         the activity arm keeps — falling back to the detail itself for a workspace
         that broke before it ever reported activity.
 
-        Debounced per workspace like a state edge: a failing ``create`` rolls back
-        through several phases and emits an error per phase; the human needs the
-        first one, not all of them.
+        Debounced per workspace on its OWN stamp, not the state edge's. The
+        storm each guard defends against is different — a failing ``create``
+        emitting an error per rollback phase, versus a WAITING→WORKING→WAITING
+        tool round-trip — so one shared stamp makes them silence each other.
+        That is how a lifecycle event swallowed the agent-state push behind it:
+        `create` itself bridges a lifecycle delta, so the very first attention
+        episode of a brand-new workspace was suppressed by its own creation,
+        which is exactly the push the human most wants. The question edge still
+        deliberately stamps the state edge (same attention episode, richer
+        push); these two are unrelated episodes and must not interact.
         """
         event = delta.detail.get("event", "")
         if event not in self._notify_lifecycle:
             return []
-        if self._debounced(delta.workspace_id, now):
+        last = self._last_lifecycle.get(delta.workspace_id)
+        if last is not None and (now - last) < self._debounce:
             logger.debug("notify debounced workspace={} event={}", delta.workspace_id, event)
             return []
-        self._last_fired[delta.workspace_id] = now
+        self._last_lifecycle[delta.workspace_id] = now
         identity = self._identity.get(delta.workspace_id) or WorkspaceIdentity.unresolved(
             delta.workspace_id, repo_root=delta.repo_root, detail=delta.detail
         )

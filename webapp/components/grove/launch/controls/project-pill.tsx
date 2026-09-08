@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { LaunchPill, type LaunchPillOption } from "../control-pill";
 import { useLaunchControls, type LaunchValues } from "../launch-state";
@@ -15,6 +16,28 @@ type ProjectChoice = {
 };
 
 type ProjectSelection = Pick<ProjectChoice, "repoRoot" | "cwd">;
+
+interface LaunchProjectResolution {
+  readonly choices: readonly ProjectChoice[];
+  readonly requestedCwd: string | null;
+  readonly remembered: ProjectChoice | null;
+}
+
+/** Resolves a live launch project without turning an unavailable URL into a display value. */
+export function resolveLaunchProject({
+  choices,
+  requestedCwd,
+  remembered,
+}: LaunchProjectResolution): ProjectChoice | null {
+  if (choices.length === 0) return null;
+  return choices.find((choice) => choice.cwd === requestedCwd)
+    ?? choices.find(
+      (choice) =>
+        choice.repoRoot === remembered?.repoRoot && choice.cwd === remembered?.cwd,
+    )
+    ?? choices[0]
+    ?? null;
+}
 
 /**
  * A project switch clears a prior directory choice from another repo.
@@ -75,9 +98,11 @@ function rememberProject(project: ProjectChoice): void {
 
 /** The repository and working directory control at the start of the launch row. */
 export function ProjectPill(): ReactNode {
-  const { values, set } = useLaunchControls();
+  const { values, seed, set } = useLaunchControls();
   const stream = useFleetStream();
+  const search = useSearchParams();
   const restoredProject = useRef<ProjectChoice | null | undefined>(undefined);
+  const seededProject = useRef<string | null | undefined>(undefined);
   const projects = stream.snapshot?.projects ?? [];
   const options = useMemo<readonly LaunchPillOption[]>(
     () =>
@@ -104,22 +129,29 @@ export function ProjectPill(): ReactNode {
     : choices.length === 0
       ? "No projects registered"
       : undefined;
-  const fallbackLabel = choices[0]?.label ?? "Project";
+  useEffect(() => {
+    const requestedCwd = search.get("project");
+    if (seededProject.current === requestedCwd || choices.length === 0) return;
+    seededProject.current = requestedCwd;
+    const selected = choices.find((choice) => choice.cwd === requestedCwd);
+    // Seeding preserves a draft and explicit controls; an unknown URL value is
+    // deliberately ignored instead of selecting the first project.
+    if (selected) seed(projectSelectionValues(selected));
+  }, [choices, search, seed]);
 
   useEffect(() => {
     if (restoredProject.current === undefined) restoredProject.current = rememberedProject();
-    if (values.repoRoot !== null || choices.length === 0) return;
+    const requestedCwd = search.get("project");
+    const requestedProject = choices.find((choice) => choice.cwd === requestedCwd);
+    if (values.repoRoot !== null || choices.length === 0 || requestedProject) return;
 
-    const selected =
-      choices.find(
-        (choice) =>
-          choice.repoRoot === restoredProject.current?.repoRoot &&
-          choice.cwd === restoredProject.current?.cwd,
-      ) ?? choices[0];
-    if (selected) {
-      set(projectSelectionValues(selected));
-    }
-  }, [choices, set, values.repoRoot]);
+    const selected = resolveLaunchProject({
+      choices,
+      requestedCwd,
+      remembered: restoredProject.current,
+    });
+    if (selected) set(projectSelectionValues(selected));
+  }, [choices, search, set, values.repoRoot]);
 
   return (
     <LaunchPill
@@ -135,8 +167,11 @@ export function ProjectPill(): ReactNode {
       // the project's own cwd, which is what `selectedProjectCwd` carries.
       value={values.selectedProjectCwd}
       options={options}
-      searchable
-      fallbackLabel={fallbackLabel}
+      // The noun is the list's, not the vendored default's: filtering to
+      // nothing said "No models found." in the Project picker, and the search
+      // box called itself "Search models...".
+      searchNoun="projects"
+      fallbackLabel="Project"
       disabledReason={disabledReason}
       onSelect={(cwd) => {
         const selected = choices.find((choice) => choice.cwd === cwd);

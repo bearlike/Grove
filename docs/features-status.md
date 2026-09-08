@@ -1,23 +1,8 @@
 # Status semantics
 
-## The three status axes
+## Read the state of your fleet
 
-Grove tracks three signals.
-
-- **Workspace status**. Worktree on disk, tmux up, pane output.
-- **Agent activity**. Tool loop, turn handed back, blocked.
-- **Task phase**. How far through, scoping through done.
-
-A workspace can be ACTIVE while its agent is WAITING while it reports
-`verifying`, all three at once, and an orchestrator watching twenty
-workspaces needs all three. Status is a persisted intent (what Grove
-was last told to make true) plus a computed view (what is actually
-true), reconciled at one site, named below.
-
-## The spectrum
-
-Colors and glyphs match the running TUI, sourced from
-[`src/grove/tui/theme.py`](https://github.com/bearlike/Grove/blob/current/src/grove/tui/theme.py).
+Grove shows workspace status, agent activity, and task phase so you can see what needs attention.
 
 <div class="grove-status-grid" markdown>
 
@@ -71,74 +56,39 @@ Colors and glyphs match the running TUI, sourced from
 
 </div>
 
-## Two domains, one enum
+## The three status axes
 
-`WorkspaceStatus` is a single enum that carries both kinds of values:
+- Workspace status tells you whether the worktree and session are ready.
+- Agent activity tells you whether the agent is working, waiting, blocked, idle, or in error.
+- Task phase tells you how far the agent has reached in the job.
+- A workspace can be ACTIVE while its agent is WAITING and its task phase is `verifying`.
 
-- **Persisted**, survives restarts. `RUNNING`, `PAUSED`, `ERROR`.
-  `create()`/`resume()` write `RUNNING`, `pause()` writes `PAUSED`, init
-  failure with `fail_fast: false` writes `ERROR`.
-- **Computed**, derived from intent plus world state. `ACTIVE`, `IDLE`,
-  `OFFLINE`, `ORPHANED`, `PROVISIONING`. `JsonWorkspaceStore.save`
-  rejects any other value, a defense in depth.
+## The spectrum
+
+- The chips use the running TUI palette from [`src/grove/tui/theme.py`](https://github.com/bearlike/Grove/blob/current/src/grove/tui/theme.py).
+- ACTIVE and IDLE mean the session is up, with recent output deciding which one you see.
+- PAUSED keeps the branch and removes the worktree, while OFFLINE keeps the worktree and needs a respawn.
+- ORPHANED has no worktree to recover, and ERROR needs log review before you remove it.
 
 ## What each status means
 
 | Status | Domain | Meaning |
 |---|---|---|
-| **`RUNNING`** | persisted | Last write said "should be running". |
+| **`RUNNING`** | persisted | Grove last recorded that the workspace should run. |
 | **`ACTIVE`**  | computed  | RUNNING, activity within `activity_threshold_seconds`. |
 | **`IDLE`**    | computed  | RUNNING, no recent activity. |
 | **`OFFLINE`** | computed  | RUNNING, tmux gone. Respawn recovers it. |
 | **`ORPHANED`**| computed  | RUNNING, worktree gone. Not recoverable, kill only. |
-| **`PROVISIONING`** | computed | Container mid build. Wait, don't respawn or kill. |
-| **`PAUSED`**  | persisted | Worktree removed, branch kept. Resume re-creates it. |
+| **`PROVISIONING`** | computed | Container mid build. Wait, do not respawn or kill. |
+| **`PAUSED`**  | persisted | Worktree removed, branch kept. Resume recreates it. |
 | **`ERROR`**   | persisted | Init failed with `fail_fast: false`. Review the log, then kill. |
 
-## The single reconcile site
-
-`WorkspaceManager._reconcile_status` is the only site promoting a
-persisted intent into a computed view. Every consumer (`list()`,
-`peek()`, `peek_pane()`, `attach()`, `respawn()`) calls it, so a new
-computed status extends this method, never call sites.
-
-Order matters. A gone session always reports `OFFLINE`, even worktree
-gone too, since ORPHANED is more severe and runs first.
-
-1. `PAUSED`/`ERROR` persisted, return as is.
-2. Worktree missing, `ORPHANED`.
-3. tmux missing, `OFFLINE`.
-4. Activity below threshold, `ACTIVE`.
-5. Otherwise, `IDLE`.
-
-## Recovery decision tree
-
-```mermaid
-flowchart TD
-    Q{"Status?"}
-    Q -->|ACTIVE / IDLE| A["Running.<br/>Attach, pause or kill."]
-    Q -->|PAUSED| P["Resume recreates<br/>the worktree.<br/>Or kill to remove."]
-    Q -->|OFFLINE| O["Respawn rebuilds tmux<br/>from the existing worktree."]
-    Q -->|ORPHANED| R["Kill is the only path.<br/>The worktree dir is gone."]
-    Q -->|ERROR| E["Review the init log,<br/>then kill.<br/>Init will not re-run."]
-```
-
-The footer enforces this mapping, dimming keys that do not apply to the
-current row. The rule is data, not branches, in `screens/list.py`.
-
-## Legacy values
-
-Older state files sometimes carry a `stale` value no longer in the
-enum. The decoder coerces it back to the intent that produced it,
-usually `RUNNING`, so old files load with no migration.
+- RUNNING, PAUSED, and ERROR record the last lifecycle action.
+- ACTIVE, IDLE, OFFLINE, ORPHANED, and PROVISIONING describe the workspace now.
+- Wait while a container is PROVISIONING instead of respawning or killing it.
+- Older saved `stale` values load as the intent that produced them, usually RUNNING.
 
 ## The other axis: agent activity
-
-Workspace status answers "is this container running", nothing about
-the agent inside. That axis is read agent-agnostically from the agent's
-own transcript, not tmux output, as `AgentActivityState` in
-`grove.core.agents`, rendered by every client from
-`grove.core.contracts.agent_palette`.
 
 | Agent state | Meaning |
 |---|---|
@@ -150,18 +100,14 @@ own transcript, not tmux output, as `AgentActivityState` in
 | **`ERROR`** | Parse error, process error, or a failed run. |
 | **`UNKNOWN`** | Unreadable or suppressed, for example a generic agent with no adapter. |
 
-The two axes are orthogonal and happen together constantly. An agent
-prints its final message (ACTIVE) then waits for you (WAITING). The
-[Activity Dashboard](features-activity.md) shows both at once.
-[Agents](configure-agents.md) covers each kind's adapter.
+- Agent activity is independent of workspace status.
+- An agent can finish output while the workspace remains ACTIVE and the agent becomes WAITING.
+- The [Activity Dashboard](features-activity.md) shows workspace status and agent activity together.
+- [Agents](configure-agents.md) explains the activity states for each agent kind.
 
 ## The third axis: task phase
 
-Neither status nor activity state says how far through the *job* the
-agent is. Task phase is its own report, telling "still reading the
-ticket" from "opening the PR" with no transcript.
-
-Six ordered, converging phases, not a one-way bar:
+Task phase reports job progress without requiring you to read the transcript.
 
 | Phase | Meaning |
 |---|---|
@@ -172,68 +118,42 @@ Six ordered, converging phases, not a one-way bar:
 | `delivering` | Committing, pushing, opening or updating the PR. |
 | `done` | Handed off. |
 
-Moving backwards is a correct report, not an error. If `verifying`
-shows the design was wrong, the honest next report is `planning` again.
-No phase reported is its own distinct state, not "step zero" of
-`scoping`, just that the agent has said nothing yet.
-
-### How an agent reports
-
-An agent reports its phase by writing the file Grove names in the
-launch environment as `GROVE_PHASE_FILE`.
+- An agent can return from `verifying` to `planning` when verification changes the approach.
+- No reported phase is distinct from `scoping` and means the agent has not reported yet.
+- An agent writes its phase to the file named by `GROVE_PHASE_FILE`.
 
 ```json
 {"phase": "implementing", "note": "wiring the parser"}
 ```
 
-- Grove composes the path, since a worktree can host several agents.
-  Each gets a distinct file under `.grove/phase/`, never overwritten.
-- No variable set falls back to `.grove/phase.json` at the worktree top.
-- `note` is optional, under 200 characters, no timestamp. Grove reads
-  the file's mtime.
-- Excluded from git automatically, and a malformed file is ignored
-  silently, never surfaced as an error.
-- Working several attached tickets at once? Add a `tickets` map keyed
-  `provider:id`; each entry is that ticket's own claim, published to
-  that ticket's own comment, independent of the workspace's.
-- `blocked` is a flag beside a phase, at either level, never a seventh
-  phase: it says the agent is stuck on the step, not which step.
+- Each agent gets a separate phase file, while a missing variable uses `.grove/phase.json`.
+- The file works for container workspaces, and a host workspace can also use [CLI: `grove phase`](use-cli.md#grove-phase) or [MCP tools](use-mcp.md#tools).
+- The TUI, web dashboard, and ticket comment from [issue-ops](issue-ops.md) show the latest phase and note.
+- A `blocked` flag marks the current phase as stuck without adding another phase.
 
-Writing a file, not calling an API, is deliberate. A containerized
-agent reaches neither the loopback bound daemon nor the absent `grove`
-CLI. The bind mounted worktree makes a written file visible on the host
-at once, for any harness, with no workspace id to know.
+## Recovery decision tree
 
-### Convenience surfaces
+Use the action named for the status you see.
 
-The file is the only channel guaranteed everywhere. A host workspace
-gets three more optional surfaces.
-
-- **CLI**: `grove phase <phase> --note "..."`, inferring the workspace
-  from your directory like `grove show`. Add `--ticket provider:id` to
-  scope the claim to one attached ticket, or `--blocked` to flag the
-  current step as stuck.
-  [CLI: `grove phase`](use-cli.md#grove-phase).
-- **MCP**: `grove_set_workspace_phase` and `grove_get_workspace_phase`.
-  [MCP tools](use-mcp.md#tools).
-- **Daemon**: `POST`/`GET /workspaces/{id}/phase`, called by the web
-  dashboard and MCP server.
-
-### Where it shows up
-
-The phase renders wherever Grove shows workspace state, the TUI card,
-the web dashboard's workspace card, and, for a ticket-linked workspace,
-the sticky comment ([issue-ops](issue-ops.md)), as dot progress with
-the latest note:
-
+```mermaid
+flowchart TD
+    Q{"Status?"}
+    Q -->|ACTIVE / IDLE| A["Running.<br/>Attach, pause or kill."]
+    Q -->|PAUSED| P["Resume recreates<br/>the worktree.<br/>Or kill to remove."]
+    Q -->|OFFLINE| O["Respawn rebuilds tmux<br/>from the existing worktree."]
+    Q -->|ORPHANED| R["Kill is the only path.<br/>The worktree dir is gone."]
+    Q -->|ERROR| E["Review the init log,<br/>then kill.<br/>Init will not re-run."]
 ```
-●●●○○○ Verifying (4/6) — running make lint
-```
+
+- Attach, pause, or kill an ACTIVE or IDLE workspace.
+- Resume a PAUSED workspace to recreate its worktree.
+- Respawn an OFFLINE workspace from its existing worktree.
+- Kill an ORPHANED workspace or an ERROR workspace after reviewing its log.
 
 ## See also
 
-- [Workspace lifecycle](features-workspace-lifecycle.md): each op's writes.
-- [The peek rail](features-peek.md): activity feeding ACTIVE, IDLE.
-- [Agent activity and sessions](features-activity.md): the other axis.
-- [Issue ops](issue-ops.md): the sticky comment's dot progress.
-- [Daily workflow](use-workflow.md): a vanished session.
+- [Workspace lifecycle](features-workspace-lifecycle.md) explains each lifecycle action.
+- [The peek rail](features-activity.md#the-peek-rail) explains the activity behind ACTIVE and IDLE.
+- [Agent activity and sessions](features-activity.md) covers the agent axis.
+- [Issue ops](issue-ops.md) explains task phase in ticket comments.
+- [Daily workflow](use-workflow.md) helps when a session vanishes.

@@ -191,19 +191,18 @@ def test_summary_view_primary_false_for_a_discovered_session() -> None:
     assert SessionSummaryView.from_listing(listing).primary is False
 
 
-def test_turn_view_caps_entry_text() -> None:
+def test_turn_view_carries_the_prompt_and_the_reply_whole() -> None:
+    """The headline of this route: a long assistant reply and a long pasted
+    prompt are the two things a reader opened the transcript FOR, and a
+    character cap cut exactly them. Neither is trimmed, and no ellipsis is
+    appended — an ellipsis the model itself wrote must stay the model's."""
     turn = SessionTurn(
         user_text="u" * 10_000,
         entries=(DigestEntry(role="assistant", text="a" * 10_000),),
     )
     view = SessionTurnView.from_turn(turn)
-    assert len(view.user_text) <= 4_000
-    assert view.user_text.endswith("…")
-    assert len(view.entries[0].text) <= 4_000
-    assert view.entries[0].text.endswith("…")
-    # Short text passes through untouched — the ellipsis is the only trim signal.
-    short = SessionTurnView.from_turn(SessionTurn(user_text="hi"))
-    assert short.user_text == "hi"
+    assert view.user_text == "u" * 10_000
+    assert view.entries[0].text == "a" * 10_000
 
 
 def test_question_entry_serializes_its_structured_payload() -> None:
@@ -470,7 +469,6 @@ def test_tool_view_carries_request_response_duration_and_status() -> None:
     assert (view.name, view.tool_use_id, view.status) == ("Bash", "t1", "ok")
     assert view.input == {"command": "pytest -q"}
     assert (view.result, view.duration_ms) == ("2 passed", 3500)
-    assert (view.input_truncated, view.result_truncated) == (False, False)
 
 
 def test_a_running_call_is_a_status_not_a_missing_result() -> None:
@@ -496,10 +494,11 @@ def test_a_running_call_is_a_status_not_a_missing_result() -> None:
     assert (settled.status, settled.result) == ("ok", None)
 
 
-def test_a_capped_body_says_so_rather_than_relying_on_the_ellipsis() -> None:
-    """A tool result is a chat line's size class only by accident, and an
-    ellipsis inside a command's own output is indistinguishable from output the
-    tool produced — so this is the one payload whose bound is an explicit flag."""
+def test_a_large_body_crosses_whole_in_both_directions() -> None:
+    """The bodies a cap used to cut are exactly the ones worth reading: the tail
+    of a build log, a diff, a long command. This route is where those bytes live,
+    so nothing here trims them — a client bounds by TURNS (``last=``), which it
+    asks for explicitly, never by a character ceiling it cannot see."""
     entry = DigestEntry(
         role="tool",
         text="Bash",
@@ -513,14 +512,12 @@ def test_a_capped_body_says_so_rather_than_relying_on_the_ellipsis() -> None:
     )
     view = _tool_detail(entry).turns[0].entries[0].tool
     assert view is not None
-    assert view.result_truncated is True
-    assert view.result is not None and len(view.result) == 16_000
-    assert view.input_truncated is True
+    assert view.result == "z" * 20_000
     assert view.input is not None
-    # The bound is applied THROUGH the structure — a client still reads fields,
-    # and a non-string value is never rewritten.
-    assert len(view.input["script"]) == 16_000
-    assert len(view.input["argv"][0]) == 16_000
+    # The request is arbitrary provider JSON and survives shape-for-shape — a
+    # client reads it as fields, and a non-string value is never rewritten.
+    assert view.input["script"] == "x" * 20_000
+    assert view.input["argv"] == ["y" * 20_000]
     assert view.input["quiet"] is True
 
 

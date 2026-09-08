@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  MessageNotSentError,
   useExternalStoreRuntime,
   type AppendMessage,
   type AssistantRuntime,
+  type AttachmentAdapter,
   type ExternalStoreThreadListAdapter,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
@@ -33,6 +35,12 @@ import {
   useWorkspaceQueue,
   useWorkspaceTodo,
 } from "@/lib/grove/hooks";
+import { attachmentIds, groveAttachmentAdapter } from "./attachments";
+import {
+  acknowledgeComposerDraft,
+  beginComposerDraftSubmission,
+  rejectComposerDraftSubmission,
+} from "./draft";
 import { refusalNotice } from "./notice";
 import { echoLanded, type SendEcho } from "./sending";
 import { sessionThreadList } from "./thread-list";
@@ -84,6 +92,16 @@ export interface TranscriptRuntimeOptions {
    */
   readOnly?: boolean;
   threadList?: ExternalStoreThreadListAdapter;
+  /**
+   * Omit to leave the composer's attach button inert.
+   *
+   * assistant-ui THROWS "Attachments are not supported" on any file add when
+   * this is absent, so a surface that renders `ComposerAddAttachment` — the
+   * port does, unconditionally — must supply one or hide nothing and break.
+   * The read-only transcript renders no composer at all, which is why it can
+   * honestly pass none.
+   */
+  attachments?: AttachmentAdapter;
 }
 
 /**
@@ -103,8 +121,19 @@ export function useTranscriptRuntime({
   onCancel,
   readOnly = false,
   threadList,
+  attachments,
 }: TranscriptRuntimeOptions): { runtime: AssistantRuntime; messageCount: number } {
   const messages = useMemo(() => messagesFromTurns(turns ?? []), [turns]);
+
+  // One object, memoised, for the same reason `convertMessage` is a module
+  // constant: the store compares adapter identity across updates.
+  const adapters = useMemo(
+    () =>
+      threadList || attachments
+        ? { ...(threadList ? { threadList } : {}), ...(attachments ? { attachments } : {}) }
+        : undefined,
+    [threadList, attachments],
+  );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
     messages,
@@ -116,7 +145,7 @@ export function useTranscriptRuntime({
     ...(onCancel ? { onCancel } : {}),
     isDisabled: readOnly,
     setMessages: NO_SET_MESSAGES,
-    ...(threadList ? { adapters: { threadList } } : {}),
+    ...(adapters ? { adapters } : {}),
   });
 
   return { runtime, messageCount: messages.length };
@@ -150,8 +179,21 @@ export interface GroveThreadState {
   todo: TodoListView | null;
   /** A steering refusal, for a quiet inline notice. */
   notice: string | null;
-  /** The agent is working — interrupting an idle one is a 409. */
-  canInterrupt: boolean;
+  /**
+   * The agent is working right now.
+   *
+   * Named for the FACT, not for either consumer: it gates the interrupt
+   * (interrupting an idle agent is a 409) and it is what puts the working
+   * loader on the transcript. It was `canInterrupt` while the verb was the only
+   * reader, which made the second reader look like it was asking about a
+   * capability rather than about the agent.
+   *
+   * Sub-agents are already folded in upstream — the engine promotes a session
+   * whose sidechain fleet is active to `working` even when the orchestrator's
+   * own turn has closed, so a chat working only through its sub-agents reports
+   * `working` here with no second read. See `core/agents/claude_code.py`.
+   */
+  working: boolean;
   interrupt: () => void;
   /** Submit one batch's answers. */
   answer: (groupId: string, answers: QuestionAnswerItem[]) => void;
@@ -255,24 +297,31 @@ export function useGroveThread({
   // exactly the flicker it exists to prevent.
   if (echo && sending === null) setEcho(null);
 
-  const { mutate: sendMutate } = send;
+  const { mutateAsync: sendMessage } = send;
   const onNew = useCallback(
     async (message: AppendMessage): Promise<void> => {
       const text = composerText(message);
-      if (!text) return;
+      const attachments = attachmentIds(message.attachments);
+      if (!text && attachments.length === 0) return;
       setNotice(null);
-      setEcho({ text, sentAt: new Date().toISOString() });
-      sendMutate(text, {
-        onError: (error) => {
-          // The daemon refused it, so it is not in flight and never will be —
-          // the notice below is the honest surface, not a row still claiming
-          // to be on its way.
-          setEcho(null);
-          setNotice(refusalNotice(error, "send"));
-        },
-      });
+      // No echo for an attachment-only send: the echo clears by matching the
+      // text that comes back, so an empty one could never land and would pin
+      // itself above the composer forever.
+      if (text) setEcho({ text, sentAt: new Date().toISOString() });
+      beginComposerDraftSubmission(workspaceId);
+      try {
+        await sendMessage({ text, attachments });
+        acknowledgeComposerDraft(workspaceId);
+      } catch (error) {
+        rejectComposerDraftSubmission(workspaceId);
+        setEcho(null);
+        setNotice(refusalNotice(error, "send"));
+        // This tells assistant-ui to restore precisely the draft it cleared at
+        // dispatch, but leaves a newer edit untouched.
+        throw new MessageNotSentError();
+      }
     },
-    [sendMutate],
+    [sendMessage, workspaceId],
   );
 
   const { mutate: interruptMutate } = interruptMutation;
@@ -302,10 +351,18 @@ export function useGroveThread({
     [sessions, sessionId, onSwitchSession],
   );
 
+  // Bound to the workspace, not to a render: the adapter is compared by
+  // identity by the store, and it holds nothing else that changes.
+  const attachments = useMemo(
+    () => groveAttachmentAdapter(workspaceId, setNotice),
+    [workspaceId],
+  );
+
   const { runtime, messageCount } = useTranscriptRuntime({
     turns,
     onNew,
     onCancel,
+    attachments,
     ...(threadList ? { threadList } : {}),
   });
 
@@ -315,7 +372,7 @@ export function useGroveThread({
     pending,
     todo,
     notice,
-    canInterrupt: agentIsWorking(snapshot, workspaceId, sessionId),
+    working: agentIsWorking(snapshot, workspaceId, sessionId),
     interrupt: useCallback(() => void onCancel(), [onCancel]),
     answer,
     answering: answerMutation.isPending || answerMutation.isSuccess,

@@ -2,6 +2,11 @@ import { Md5 } from "ts-md5";
 
 import type { BranchPlan, CreateWorkspaceRequest, TicketSelector } from "@/lib/grove/api";
 import type { LaunchState, LaunchTicket, LaunchValues } from "@/components/grove/launch/launch-state";
+import {
+  attachmentCountError,
+  attachmentError,
+  type StagedAttachment,
+} from "./attachments";
 
 const MAX_TITLE_LENGTH = 120;
 const MAX_PROMPT_LENGTH = 10_000;
@@ -91,8 +96,16 @@ export function branchPlanFor(values: Pick<LaunchValues, "branchMode" | "branchN
  * Values seeded from the defaults read describe the cascade's current answer, not a
  * user override. Only a touched field belongs in this request, so create resolves
  * untouched fields at the moment it runs.
+ *
+ * `attachments` is the composer's staged file list, and it is the ONE input here
+ * that is not a control value — it rides the create because the workspace it
+ * would otherwise be uploaded to does not exist yet.
  */
-export function buildCreateRequest(state: LaunchState, prompt: string): CreateWorkspaceRequest {
+export function buildCreateRequest(
+  state: LaunchState,
+  prompt: string,
+  attachments: readonly StagedAttachment[] = [],
+): CreateWorkspaceRequest {
   const { values, touched } = state;
   const title = values.titleOverride ?? deriveTitle(prompt);
   if (!values.agentName) throw new RangeError("Choose an agent before creating a workspace");
@@ -108,6 +121,15 @@ export function buildCreateRequest(state: LaunchState, prompt: string): CreateWo
   if (values.customModel) {
     const error = customModelError(values.model ?? "");
     if (error) throw new RangeError(error);
+  }
+  // Both checks also run at the picker, where they cost nothing and answer
+  // immediately. They are repeated here because this is the single request
+  // builder: a file list assembled any other way still cannot get past it.
+  const tooMany = attachmentCountError(attachments.length);
+  if (tooMany) throw new RangeError(tooMany);
+  for (const file of attachments) {
+    const refusal = attachmentError(file);
+    if (refusal) throw new RangeError(refusal);
   }
 
   const request: Partial<CreateWorkspaceRequest> = {
@@ -130,19 +152,35 @@ export function buildCreateRequest(state: LaunchState, prompt: string): CreateWo
   }
   if (touched.has("runtime")) request.runtime = values.runtime;
   if (touched.has("brief")) request.brief = values.brief;
+  if (touched.has("native")) request.native = values.native;
   if (touched.has("skipInit")) request.skip_init = values.skipInit;
   // branch_plan is the ONE field that does not follow the touched rule, and it
-  // has to break it to stay honest. For model/runtime/brief, omitting the field
-  // means "resolve it from the cascade at create time", so an untouched pill
-  // showing the cascade's answer and sending nothing agree with each other.
-  // branch_plan has no such symmetry: the request defaults it to AutoBranch()
-  // and nothing engine-side ever consults defaults.branch_mode — the TUI
-  // applies that itself, client-side. So omitting it does not mean "decide
-  // later", it means "force auto", and a user whose saved default is `root`
-  // would watch the pill say Repo root while Grove quietly cut a branch.
-  // Send what the pill displays.
+  // has to break it to stay honest. For model/runtime/brief/skip_init, omitting
+  // the field means "resolve it from the cascade at create time" — which the
+  // ENGINE now does, reading the same saved `defaults` that `GET /defaults`
+  // reports, so an untouched pill showing the cascade's answer and sending
+  // nothing agree with each other. (They did not until then: the engine read
+  // `container.enabled` while this surface displayed `defaults.runtime`, so a
+  // saved `host` default produced a container on every project that had not
+  // turned containers off.)
+  //
+  // branch_plan still has no such symmetry: the request defaults it to
+  // AutoBranch(), so an omitted plan is indistinguishable from an explicit auto
+  // one and there is no "unspecified" for the engine to resolve. Omitting it
+  // means "force auto", and a user whose saved default is `root` would watch
+  // the pill say Work in place while Grove quietly cut a branch. Send what the
+  // pill displays.
   request.branch_plan = branchPlanFor(values);
   if (values.ticket) request.ticket = ticketFor(values.ticket);
+  // An empty list is OMITTED rather than sent as `[]`, so a create with nothing
+  // staged is byte-identical to the one this surface has always built. `size` is
+  // dropped with it: the create contract forbids fields it does not declare.
+  if (attachments.length > 0) {
+    request.attachments = attachments.map(({ name, content_base64 }) => ({
+      name,
+      content_base64,
+    }));
+  }
 
   return request as CreateWorkspaceRequest;
 }

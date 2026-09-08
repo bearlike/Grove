@@ -5,51 +5,39 @@ workspace across *every* repo as a wall of agent-activity tiles grouped by
 project. It answers "what is every agent doing right now" at a glance: which
 sessions are working, which are waiting for the human, which have stalled.
 
-The data hub is the engine's ``ActivityService`` (consumed in-process, exactly
-as the daemon consumes it over SSE). The screen owns the tick — the same
-discipline as the list screen's peek rail — and never invents a new timer
-pattern:
-
-* **slow tick** (``cfg.peek_stats_refresh_seconds``, 3 s default) drives
-  ``ActivityService.poll_once()``, which recomputes activity and emits a
-  ``session_activity`` delta per changed workspace. Lifecycle changes
-  (create/kill/pause/…) arrive promptly via the service's bridged manager bus —
-  no waiting for the next poll.
-* **fast tick** (``cfg.peek_pane_refresh_seconds``, 0.25 s default) advances the
-  WORKING heartbeat pulse AND captures the *focused* tile's live pane. Only the
-  focused live tile streams a pane — idle and unfocused tiles never do (epic
-  acceptance: "idle panes don't stream").
-
-Both ticks freeze while a modal sits on top (``app.screen is not self``), same
-convention as the list screen.
+The data hub is the daemon's shared ``/events`` projection. The screen only
+subscribes and renders its contract views; it never independently polls or
+recomputes agent activity. Its pulse timer advances local chrome and captures
+the focused live pane, while activity changes arrive as daemon events.
 
 Opened from the list screen on ``d``; ``escape`` / ``d`` / ``q`` pop back.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from pathlib import Path
+import asyncio
 from typing import ClassVar, Final
 
-from loguru import logger
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
+from textual.message import Message
 from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Header, Static
 
-from grove.core import RepoRegistry, WorkspaceManager, load_config
-from grove.core.activity import (
-    ActivityService,
-    DashboardDelta,
-    DashboardSnapshot,
-    WorkspaceActivity,
-)
+from grove.client import BackendConfig, GroveClient, GroveClientError
+from grove.core import WorkspaceManager
+from grove.core.activity import ActivityService
 from grove.core.agents import AgentActivityState
+from grove.core.agents.hook import DEFAULT_DAEMON_LOOPBACK_URL
+from grove.core.contracts.activity import (
+    DashboardEvent,
+    DashboardSnapshotView,
+    WorkspaceActivityView,
+)
 from grove.tui._status import chrome_color
 from grove.tui.widgets.dashboard_grid import DashboardCard, DashboardGrid, is_promoted
 from grove.tui.widgets.footer import ContextualFooter, FooterKey
@@ -90,13 +78,15 @@ _FOOTER_KEYS: Final[tuple[tuple[str, str], ...]] = (
 
 # Pulse cadence — reuse the list screen's 4 Hz live-signal budget.
 _PULSE_TICK_SECONDS: Final = 0.25
+_STREAM_RETRY_SECONDS: Final = 1.0
 
-# Live-pane capture budget per slow tick. Every promoted tile shows a fit-to-cell
-# tmux tail; this caps how many tmux subprocesses one tick may spawn so a huge
-# fleet can't stall the UI in a capture burst. The focused tile always wins a
-# slot (it also re-captures on the fast tick); the rest are first-come and the
-# overflow is logged, never silently dropped.
-_MAX_LIVE_CAPTURES: Final = 12
+
+class DashboardEventReceived(Message):
+    """A daemon event marshalled from the stream worker onto the UI thread."""
+
+    def __init__(self, event: DashboardEvent) -> None:
+        super().__init__()
+        self.event = event
 
 
 class DashboardScreen(Screen[None]):
@@ -141,28 +131,24 @@ class DashboardScreen(Screen[None]):
         manager: WorkspaceManager,
         *,
         service: ActivityService | None = None,
-        registry: RepoRegistry | None = None,
+        client: GroveClient | None = None,
     ) -> None:
         super().__init__()
-        # The dashboard is cross-project: it reads through a RepoRegistry over
-        # EVERY known repo, not just the manager's own repo. The manager only
-        # supplies config + the shared store (and is the registry's cache for
-        # its own repo). The screen keeps its OWN reference to the registry so
-        # the focused-tile pane capture can resolve any repo's manager — the
-        # service keeps its registry private. Tests inject a pre-built service +
-        # registry over an in-memory store so the screen never touches the real
-        # filesystem.
+        # The manager supplies config for the daemon endpoint and an optional
+        # in-process projection only for isolated TUI tests.
         self._manager = manager
-        if registry is None:
-            registry = RepoRegistry(
-                cfg=manager.config, store=manager.store, config_loader=load_config
-            )
-        self._registry = registry
-        if service is None:
-            service = ActivityService(registry=registry)
         self._service = service
-        self._unsub: Callable[[], None] | None = None
-        self._poll_timer: Timer | None = None
+        # Tests and standalone callers may inject an in-process projection, but
+        # normal TUI construction always consumes the daemon's shared stream.
+        daemon_config = BackendConfig(
+            label="TUI",
+            daemon_url=manager.config.hooks.daemon_url or DEFAULT_DAEMON_LOOPBACK_URL,
+        )
+        self._client = client or GroveClient(daemon_config)
+        self._pane_client = GroveClient(daemon_config)
+        self._snapshot: DashboardSnapshotView | None = None
+        self._activity_cursor: int | None = None
+        self._pane_workspace_id: str | None = None
         self._pulse_timer: Timer | None = None
         self._pulse_frame: int = 0
         self._lens_index: int = 0
@@ -187,19 +173,15 @@ class DashboardScreen(Screen[None]):
         self.title = "Grove — Activity"
         self.sub_title = self._lens_subtitle()
         self._refresh_footer()
-        self._render_snapshot(self._service.snapshot())
-        # Stream changes: lifecycle events bridge in immediately; poll catches
-        # in-place activity drift on the slow tick.
-        self._unsub = self._service.subscribe(self._on_delta)
-        cfg = self._manager.config.tmux
-        self._poll_timer = self.set_interval(cfg.peek_stats_refresh_seconds, self._tick_poll)
+        if self._service is not None:
+            self._snapshot = DashboardSnapshotView.from_snapshot(self._service.snapshot())
+        if self._snapshot is not None:
+            self._render_snapshot(self._snapshot)
+        self.run_worker(self._consume_events(), group="activity-stream", exclusive=True)
         self._pulse_timer = self.set_interval(_PULSE_TICK_SECONDS, self._tick_pulse)
 
     def on_unmount(self) -> None:
-        if self._unsub is not None:
-            self._unsub()
-            self._unsub = None
-        for attr in ("_poll_timer", "_pulse_timer"):
+        for attr in ("_pulse_timer",):
             timer: Timer | None = getattr(self, attr)
             if timer is not None:
                 timer.stop()
@@ -211,44 +193,79 @@ class DashboardScreen(Screen[None]):
         self.app.pop_screen()
 
     def action_refresh(self) -> None:
-        self._render_snapshot(self._service.snapshot())
+        if self._snapshot is not None:
+            self._render_snapshot(self._snapshot)
 
     def action_cycle_lens(self) -> None:
         self._lens_index = (self._lens_index + 1) % len(_LENSES)
         self.sub_title = self._lens_subtitle()
-        self._render_snapshot(self._service.snapshot())
+        if self._snapshot is not None:
+            self._render_snapshot(self._snapshot)
 
     def action_toggle_group(self) -> None:
         self._group_by_project = not self._group_by_project
-        self._render_snapshot(self._service.snapshot())
+        if self._snapshot is not None:
+            self._render_snapshot(self._snapshot)
 
-    # ─── delta bus + ticks ────────────────────────────────────────────────
+    # ─── shared daemon stream + pulse ──────────────────────────────────────
 
-    def _on_delta(self, delta: DashboardDelta) -> None:
-        # A lifecycle wake-up (create/kill/…) or an in-place activity change.
-        # ``workspace_changed`` carries no payload (re-fetch); ``session_activity``
-        # carries the one changed row, but re-snapshotting is simplest and N is
-        # small — the diff guard on each tile means an unchanged tile won't
-        # repaint anyway.
-        del delta
-        if self.app.screen is not self:
-            # Still re-render so the wall is fresh when the modal closes; just
-            # don't fight the modal for focus.
-            self._render_snapshot(self._service.snapshot())
+    async def _consume_events(self) -> None:
+        """Keep one bounded reconnecting subscription to the daemon projection."""
+        while self.is_mounted:
+            try:
+                await self._client.connect()
+                async for event in self._client.activity_events(
+                    last_event_id=self._activity_cursor
+                ):
+                    self.post_message(DashboardEventReceived(event))
+            except asyncio.CancelledError:
+                raise
+            except GroveClientError:
+                await asyncio.sleep(_STREAM_RETRY_SECONDS)
+            else:
+                await asyncio.sleep(_STREAM_RETRY_SECONDS)
+            finally:
+                await self._client.close()
+
+    async def _consume_pane_events(self, workspace_id: str) -> None:
+        """Forward one focused workspace's daemon pane stream to the UI."""
+        try:
+            await self._pane_client.connect()
+            async for event in self._pane_client.pane_events(workspace_id):
+                if event.kind == "pane_snapshot":
+                    self.post_message(DashboardEventReceived(event))
+        except asyncio.CancelledError:
+            raise
+        except GroveClientError:
             return
-        self._render_snapshot(self._service.snapshot())
+        finally:
+            await self._pane_client.close()
 
-    def _tick_poll(self) -> None:
-        if self.app.screen is not self:
+    def on_dashboard_event_received(self, message: DashboardEventReceived) -> None:
+        event = message.event
+        if event.kind == "snapshot" and event.snapshot is not None:
+            self._snapshot = event.snapshot
+        elif event.kind == "session_activity" and event.workspace is not None:
+            self._snapshot = _replace_workspace(self._snapshot, event.workspace)
+        elif (
+            event.kind == "workspace_changed"
+            and event.workspace_id is not None
+            and event.detail.get("event") == "killed"
+        ):
+            self._snapshot = _remove_workspace(self._snapshot, event.workspace_id)
+        elif event.kind == "pane_snapshot" and event.pane is not None:
+            workspace_id = event.workspace_id
+            if workspace_id is not None and workspace_id == self._pane_workspace_id:
+                self._pane_cache[workspace_id] = event.pane.ansi
+                focused = self._focused_card()
+                if focused is not None and focused.workspace_id == workspace_id:
+                    focused.set_pane_snapshot(event.pane.ansi)
             return
-        # Refresh every promoted tile's live pane tail against the SETTLED card
-        # set before poll_once — poll may emit a delta that rebuilds the wall,
-        # after which _apply_pane_cache re-applies these snapshots to the new
-        # cards (the cache is keyed by id, so it survives the rebuild).
-        self._capture_promoted_panes()
-        # poll_once emits deltas for changed workspaces; _on_delta re-renders.
-        # No-op when nothing changed (fingerprint guard inside the service).
-        self._service.poll_once()
+        else:
+            return
+        self._activity_cursor = event.seq
+        if self._snapshot is not None:
+            self._render_snapshot(self._snapshot)
 
     def _tick_pulse(self) -> None:
         """Advance the WORKING heartbeat and capture the focused tile's pane.
@@ -263,54 +280,24 @@ class DashboardScreen(Screen[None]):
             self._pulse_frame = (self._pulse_frame + 1) % 2
             for grid in self._grids():
                 grid.set_pulse_frame(self._pulse_frame)
-        self._capture_focused_pane()
+        self._stream_focused_pane()
 
-    def _capture_focused_pane(self) -> None:
-        """Re-capture the focused tile's live pane on the fast tick.
-
-        Every promoted tile gets a pane on the slow tick; the focused tile also
-        re-captures here (4 Hz) so the tile the user is watching is the most live
-        thing on the wall. Best-effort and cached so a rebuild re-applies it. A
-        focused *compact* tile (idle) clears its unused snapshot.
-        """
+    def _stream_focused_pane(self) -> None:
+        """Keep the daemon's one focused-pane stream aligned with card focus."""
         focused = self._focused_card()
-        if focused is None:
+        workspace_id = (
+            focused.workspace_id if focused is not None and is_promoted(focused.activity) else None
+        )
+        if workspace_id == self._pane_workspace_id:
             return
-        if not is_promoted(focused.activity):
-            self._pane_cache.pop(focused.workspace_id, None)
-            focused.set_pane_snapshot(None)
+        self._pane_workspace_id = workspace_id
+        if workspace_id is None:
             return
-        snap = self._safe_capture(focused.activity)
-        self._pane_cache[focused.workspace_id] = snap
-        focused.set_pane_snapshot(snap)
-
-    def _capture_promoted_panes(self) -> None:
-        """Refresh the live pane tail of every promoted tile (bounded, best-effort).
-
-        Caps at ``_MAX_LIVE_CAPTURES`` captures per tick (focused tile first) so a
-        large fleet never spawns an unbounded tmux burst; the overflow is logged,
-        not silently dropped. Snapshots cache by id for the next rebuild; the
-        cache is pruned to the tiles still promoted so a finished agent's pane
-        doesn't linger.
-        """
-        promoted = [c for c in self._all_cards() if is_promoted(c.activity)]
-        keep = {c.workspace_id for c in promoted}
-        self._pane_cache = {k: v for k, v in self._pane_cache.items() if k in keep}
-        if not promoted:
-            return
-        focused = self._focused_card()
-        ordered = sorted(promoted, key=lambda c: c is not focused)  # focused wins a slot
-        for idx, card in enumerate(ordered):
-            if idx >= _MAX_LIVE_CAPTURES:
-                logger.debug(
-                    "dashboard: live-pane capture capped at {} of {} promoted tiles",
-                    _MAX_LIVE_CAPTURES,
-                    len(ordered),
-                )
-                break
-            snap = self._safe_capture(card.activity)
-            self._pane_cache[card.workspace_id] = snap
-            card.set_pane_snapshot(snap)
+        self.run_worker(
+            self._consume_pane_events(workspace_id),
+            group="activity-pane-stream",
+            exclusive=True,
+        )
 
     def _apply_pane_cache(self) -> None:
         """Re-push cached pane snapshots after a wall rebuild (no new tmux calls)."""
@@ -318,24 +305,9 @@ class DashboardScreen(Screen[None]):
             if is_promoted(card.activity):
                 card.set_pane_snapshot(self._pane_cache.get(card.workspace_id))
 
-    def _safe_capture(self, activity: WorkspaceActivity) -> str | None:
-        """Capture one workspace's agent pane, best-effort (never raises).
-
-        Resolves the owning repo's manager and runs the cheap tmux-only peek the
-        rail uses; any failure (dead session, missing target) degrades to None.
-        """
-        if activity.pane_target is None:
-            return None
-        mgr = self._manager_for(activity.state.repo_root)
-        try:
-            snap, _ = mgr.peek_pane(activity.state.id)
-        except Exception:
-            return None
-        return snap
-
     # ─── rendering ────────────────────────────────────────────────────────
 
-    def _render_snapshot(self, snapshot: DashboardSnapshot) -> None:
+    def _render_snapshot(self, snapshot: DashboardSnapshotView) -> None:
         body = self.query_one("#dashboard-body", VerticalScroll)
         focused = self._focused_card()
         self._focused_id = focused.workspace_id if focused is not None else None
@@ -366,8 +338,8 @@ class DashboardScreen(Screen[None]):
         self.call_after_refresh(self._apply_pane_cache)
 
     def _filtered_groups(
-        self, snapshot: DashboardSnapshot
-    ) -> list[tuple[str, list[WorkspaceActivity]]]:
+        self, snapshot: DashboardSnapshotView
+    ) -> list[tuple[str, list[WorkspaceActivityView]]]:
         """Project groups after applying the current lens.
 
         When grouping is off, everything collapses into one synthetic "all"
@@ -375,14 +347,19 @@ class DashboardScreen(Screen[None]):
         lens that filters a whole project out doesn't leave a bare header.
         """
         lens = _LENSES[self._lens_index]
-        out: list[tuple[str, list[WorkspaceActivity]]] = []
+        out: list[tuple[str, list[WorkspaceActivityView]]] = []
         if self._group_by_project:
             for group in snapshot.projects:
                 rows = [w for w in group.workspaces if _passes_lens(w, lens)]
                 if rows:
                     out.append((group.repo_name, rows))
             return out
-        flat = [w for w in snapshot.iter_workspaces() if _passes_lens(w, lens)]
+        flat = [
+            workspace
+            for project in snapshot.projects
+            for workspace in project.workspaces
+            if _passes_lens(workspace, lens)
+        ]
         if flat:
             out.append(("all workspaces", flat))
         return out
@@ -424,11 +401,11 @@ class DashboardScreen(Screen[None]):
     # ─── internal ─────────────────────────────────────────────────────────
 
     def _any_working(self) -> bool:
-        for card in self._all_cards():
-            primary = card.activity.primary
-            if primary is not None and primary.state == AgentActivityState.WORKING:
-                return True
-        return False
+        return any(
+            card.activity.sessions
+            and card.activity.sessions[0].activity.state == AgentActivityState.WORKING
+            for card in self._all_cards()
+        )
 
     def _grids(self) -> list[DashboardGrid]:
         return list(self.query(DashboardGrid))
@@ -442,11 +419,6 @@ class DashboardScreen(Screen[None]):
                 return card
         return None
 
-    def _manager_for(self, repo_root: str) -> WorkspaceManager:
-        # RepoRegistry already caches one Manager per resolved repo_root, so a
-        # bare get() is the right call — no second cache needed here.
-        return self._registry.get(Path(repo_root))
-
     def _lens_subtitle(self) -> str:
         return f"lens: {_LENS_LABEL[_LENSES[self._lens_index]]}"
 
@@ -458,14 +430,43 @@ class DashboardScreen(Screen[None]):
         return f"no workspaces match the [bold]{label}[/] lens — press [bold]l[/] to widen"
 
 
-def _passes_lens(activity: WorkspaceActivity, lens: _Lens) -> bool:
+def _passes_lens(activity: WorkspaceActivityView, lens: _Lens) -> bool:
     if lens == "all":
         return True
     if lens == "attention":
         return activity.needs_attention
     # "active": any session in a live/pending agent state.
-    primary = activity.primary
-    return primary is not None and primary.state in _ACTIVE_STATES
+    return bool(activity.sessions) and activity.sessions[0].activity.state in _ACTIVE_STATES
+
+
+def _remove_workspace(
+    snapshot: DashboardSnapshotView | None, workspace_id: str
+) -> DashboardSnapshotView | None:
+    """Drop a lifecycle-deleted row from the daemon projection."""
+    if snapshot is None:
+        return None
+    data = snapshot.model_dump(mode="json")
+    for project in data["projects"]:
+        project["workspaces"] = [
+            row for row in project["workspaces"] if row["state"]["id"] != workspace_id
+        ]
+    return DashboardSnapshotView.model_validate(data)
+
+
+def _replace_workspace(
+    snapshot: DashboardSnapshotView | None, workspace: WorkspaceActivityView
+) -> DashboardSnapshotView | None:
+    """Replace one daemon-projected row without re-reading activity in the TUI."""
+    if snapshot is None:
+        return None
+    data = snapshot.model_dump(mode="json")
+    for project in data["projects"]:
+        rows = project["workspaces"]
+        for index, row in enumerate(rows):
+            if row["state"]["id"] == workspace.state.id:
+                rows[index] = workspace.model_dump(mode="json")
+                return DashboardSnapshotView.model_validate(data)
+    return snapshot
 
 
 def _project_header(repo_name: str, count: int, *, dark: bool) -> Text:

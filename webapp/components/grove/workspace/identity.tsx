@@ -3,10 +3,12 @@
 import { FingerprintIcon, TriangleAlertIcon } from "lucide-react";
 
 import { AgentMark } from "@/components/grove/agent-mark";
+import { LangfuseMark } from "@/components/grove/icons/langfuse-mark";
 import { CardField, CardFields, SectionCard } from "@/components/grove/card";
 import { Explain } from "@/components/grove/glossary";
 import { Badge } from "@/components/ui/badge";
 import { baseBranchOf } from "@/lib/grove/adapters";
+import { useWhoami } from "@/lib/grove/hooks";
 import {
   runtimeGlossaryTerm,
   runtimeGlyph,
@@ -14,7 +16,7 @@ import {
   statusTone,
 } from "@/components/grove/fleet/tokens";
 
-import type { WorkspaceIdentity } from "./selectors";
+import type { WorkspaceStateView } from "@/lib/grove/api";
 
 /**
  * One card for the workspace's durable identity: how and where it runs, who
@@ -25,13 +27,27 @@ import type { WorkspaceIdentity } from "./selectors";
  * facts but made the reader reconstruct their relationships from two headings.
  * A term/value list makes each fact answerable in one scan while retaining the
  * status mark and every conditionally visible detail from both old cards.
+ *
+ * Takes the FULL record on purpose: this card is owner-only (see `InfoTab`'s
+ * `identity` prop), and `native` — which channel Grove's controls take — is a
+ * fact the public payload deliberately does not carry, so widening the shared
+ * `WorkspaceIdentity` pick for it would push it onto a surface that must not
+ * have it.
  */
-export function WorkspaceIdentityCard({ state }: { state: WorkspaceIdentity }) {
+export function WorkspaceIdentityCard({ state }: { state: WorkspaceStateView }) {
   const RuntimeIcon = runtimeGlyph(state.runtime);
   const runtimeDefault =
     state.runtime === "container" && state.runtime_default_config;
   const statusTerm = statusGlossaryTerm(state.status);
   const base = baseBranchOf(state);
+  const whoami = useWhoami();
+  const langfuseHost = whoami.data?.langfuse_host;
+  const langfuseProjectId = whoami.data?.langfuse_project_id;
+  const telemetrySessionId = state.telemetry_session_id;
+  const traceHref =
+    langfuseHost && langfuseProjectId && telemetrySessionId
+      ? `${langfuseHost}/project/${langfuseProjectId}/sessions/${telemetrySessionId}`
+      : null;
 
   return (
     <SectionCard
@@ -95,6 +111,27 @@ export function WorkspaceIdentityCard({ state }: { state: WorkspaceIdentity }) {
             <span className="truncate">{state.agent_name}</span>
           </span>
         </CardField>
+        <CardField label="Session">
+          {/* Which channel Grove's controls take is a fixed property of the
+              workspace, decided at create — so it renders beside runtime and
+              placement as a fact, not as a live state that could change. */}
+          <Badge variant="outline" data-testid="workspace-session-mode">
+            <Explain term={state.native ? "native_session" : "terminal_session"} />
+          </Badge>
+        </CardField>
+        {traceHref && (
+          <CardField label="Traces">
+            <a
+              href={traceHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 underline decoration-dashed underline-offset-2"
+            >
+              <LangfuseMark className="size-4" />
+              Langfuse
+            </a>
+          </CardField>
+        )}
         <CardField label="Branch" mono>
           {state.branch}
         </CardField>

@@ -986,7 +986,11 @@ def test_provisioned_is_bound_to_the_id_the_run_produced() -> None:
 #:   meaningless in half its call sites.
 #: * `preflight.py` — `docker compose version`, a read-only capability probe
 #:   that names no object at all.
-_IDENTITY_OWNING_MODULES = frozenset({"container_runtime.py", "container_infra.py", "preflight.py"})
+# `runtime_events.py` observes read-only events and filters them against its
+# explicit persisted full-ID scope; it never enumerates or tears down objects.
+_IDENTITY_OWNING_MODULES = frozenset(
+    {"container_runtime.py", "container_infra.py", "preflight.py", "runtime_events.py"}
+)
 _FORBIDDEN = re.compile(r"docker\s+ps\b|[\"']compose[\"']|[\"']--filter[\"']")
 
 

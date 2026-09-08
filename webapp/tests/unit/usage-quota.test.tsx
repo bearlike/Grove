@@ -570,7 +570,7 @@ describe("UsageQuota", () => {
     it("draws it between the tracks and the facet insights", () => {
       const html = render(LIVE);
       expect(html).toMatch(
-        /class="[^"]*\bborder-t\b[^"]*\bborder-border\b[^"]*" data-testid="usage-quota-facets"/,
+        /class="[^"]*\bborder-t\b[^"]*\bborder-border\b[^"]*" aria-label="Window metrics" data-testid="usage-quota-facets"/,
       );
     });
 
@@ -781,7 +781,7 @@ describe("UsageQuota", () => {
     // the same line.
     const html = projectedFor(LIVE, "over");
     expect(html).toMatch(
-      /<span class="ml-auto flex shrink-0 items-center gap-1\.5">[\s\S]*?data-slot="badge"[\s\S]*?data-testid="usage-quota-detail"[\s\S]*?<\/span>/,
+      /<span class="flex shrink-0 items-center gap-1\.5">[\s\S]*?data-slot="badge"[\s\S]*?data-testid="usage-quota-detail"[\s\S]*?<\/span>/,
     );
   });
 });

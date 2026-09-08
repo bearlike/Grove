@@ -2,16 +2,12 @@
 
 import { useMemo, type ReactNode } from "react";
 import {
-  FolderRootIcon,
   GitBranchIcon,
+  GitCommitHorizontalIcon,
   GitForkIcon,
   type LucideIcon,
 } from "lucide-react";
 
-import {
-  ModelSelectorList,
-  ModelSelectorSearch,
-} from "@/components/assistant-ui/model-selector";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -30,6 +26,14 @@ type BranchModeDefinition = {
   readonly label: string;
   readonly glyph: LucideIcon;
   readonly description?: string;
+  /**
+   * Choosing this mode reveals fields, so the menu must stay open.
+   *
+   * `auto` is the only complete answer in the table — every other mode needs a
+   * name, a ref or a decision typed underneath it, and those fields live in the
+   * popover the selection would otherwise dismiss.
+   */
+  readonly opensPanel?: true;
 };
 
 type BranchFieldProps = {
@@ -64,8 +68,11 @@ function BranchField({
 }
 
 /**
- * The five answers are one vocabulary. Root deliberately wears a placement mark:
- * it changes where work runs rather than choosing a git ref.
+ * The five answers are one vocabulary, and every glyph in it is git-family.
+ *
+ * That is the rule, not an aesthetic: this row sits beside a project control and
+ * a working-directory control, both of which are legitimately about folders, so
+ * a folder mark HERE reads as one of them rather than as a branch choice.
  */
 const BRANCH_MODES: Readonly<Record<BranchMode, BranchModeDefinition>> = {
   // "Auto" named the mechanism, not the outcome — it told you Grove would
@@ -76,13 +83,32 @@ const BRANCH_MODES: Readonly<Record<BranchMode, BranchModeDefinition>> = {
     glyph: GitBranchIcon,
     description: "named after your task",
   },
-  new: { label: "New branch…", glyph: GitBranchIcon, description: "you choose the name" },
-  existing: { label: "Existing local branch", glyph: GitBranchIcon },
-  remote: { label: "Track a remote branch", glyph: GitForkIcon },
+  new: {
+    label: "New branch…",
+    glyph: GitBranchIcon,
+    description: "you choose the name",
+    opensPanel: true,
+  },
+  existing: { label: "Existing local branch", glyph: GitBranchIcon, opensPanel: true },
+  remote: { label: "Track a remote branch", glyph: GitForkIcon, opensPanel: true },
+  // NOT "Repo root", and NOT a folder glyph — both collided with a neighbour in
+  // the same row. The label collided with the working-directory pill's
+  // "Repository root", which is a genuinely different question (WHERE the agent
+  // starts, versus WHETHER Grove cuts a worktree at all), and the two read as
+  // the same setting stated twice. `FolderRootIcon` collided with the project
+  // mark (`FolderGit2Icon`), so the one folder in an otherwise git-family list
+  // was the one that looked like the control above it.
+  //
+  // "Work in place" is `RootBranch`'s own words for itself, so the engine, the
+  // docs and the pill now say the same thing. The glyph is a commit on an
+  // unbranched line, which is literally the outcome. Deliberately not the fork:
+  // `remote` already owns it, and reusing it would trade a collision with
+  // another control for a collision inside this one.
   root: {
-    label: "Repo root",
-    glyph: FolderRootIcon,
+    label: "Work in place",
+    glyph: GitCommitHorizontalIcon,
     description: "no worktree · no isolation · no pause/resume",
+    opensPanel: true,
   },
 };
 
@@ -135,6 +161,7 @@ export function BranchPill(): ReactNode {
           id,
           label: definition.label,
           icon: <Glyph aria-hidden />,
+          opensPanel: definition.opensPanel,
           ...(definition.description === undefined
             ? {}
             : { description: definition.description }),
@@ -160,12 +187,14 @@ export function BranchPill(): ReactNode {
       value={values.branchMode}
       options={options}
       onSelect={(branchMode) => set({ branchMode: branchMode as BranchMode })}
-      searchable
+      searchNoun="branch choices"
       leading={<ActiveGlyph aria-hidden />}
       disabledReason={values.repoRoot === null ? "Choose a project first" : undefined}
+      // The name is typed inside the popover, so its error goes with it when
+      // the menu closes — and Send is disabled for a reason the user can no
+      // longer see. The trigger keeps the sentence.
+      error={newNameError ?? localNameError}
     >
-      <ModelSelectorSearch placeholder="Search branch choices…" />
-      <ModelSelectorList />
       {values.branchMode === "root" ? (
         // The overflow control used to carry this checkbox. With the overflow
         // gone the decision still has to be DISCLOSED where it is made —
@@ -234,7 +263,10 @@ export function BranchPill(): ReactNode {
         </BranchField>
       ) : null}
       {values.branchMode === "remote" ? (
-        <div className="flex flex-col gap-2 p-3">
+        // No wrapper of its own: `LaunchPill` supplies the panel's frame and
+        // stacking for every pill, so a second one here was the extra padding
+        // that made this the one mode whose fields sat lower than the rest.
+        <>
           <BranchField
             label="Remote branch"
             htmlFor="launch-remote-branch"
@@ -273,7 +305,7 @@ export function BranchPill(): ReactNode {
               aria-invalid={localNameError !== null}
             />
           </BranchField>
-        </div>
+        </>
       ) : null}
     </LaunchPill>
   );

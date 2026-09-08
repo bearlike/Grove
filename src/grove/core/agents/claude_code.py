@@ -32,11 +32,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -48,13 +49,13 @@ from grove.core.agents.model import (
     AgentMessage,
     AgentQuestion,
     AgentSession,
-    AnswerSelection,
     CompactionBoundary,
     ContentBlock,
     ControlScope,
     DigestEntry,
     FileEdit,
     FinalResult,
+    MailboxMessage,
     MessageRole,
     OrderedDigest,
     QueuedMessage,
@@ -73,7 +74,8 @@ from grove.core.agents.model import (
     tool_outcomes,
 )
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
-from grove.core.tmux import SendKey, SendOp
+from grove.core.agents.transcript_scope import config_dir_override
+from grove.core.mailboxes import MailboxEnvelope
 
 # Markers that flag a ``type:"user"`` line as machinery, not a human turn:
 # slash-command echoes, bash tool I/O, the post-compaction caveat banner, and
@@ -104,10 +106,20 @@ _PEER_MESSAGE_MARKER = "<agent-message"
 # Both spellings, one reader each. The backreference keeps the closing tag
 # honest, so a body quoting the other tag name cannot split one relay in two.
 _PEER_ENVELOPE_RE = re.compile(
-    r"<(teammate-message|agent-message)\b[^>]*>(.*?)</\1>",
+    r"<(teammate-message|agent-message|cross-session-message)\b[^>]*>(.*?)</\1>",
     re.DOTALL,
 )
 _PEER_SENDER_RE = re.compile(r'(?:teammate_id|from)="([^"]*)"')
+
+# Grove's own mailbox fence. The grammar lives on ``MailboxEnvelope`` beside the
+# renderer; only the opening marker is needed here, for the cheap substring
+# classification every ``_Record`` predicate does before any parse.
+_MAILBOX_MARKER = f"<{MailboxEnvelope.TAG} "
+
+# The pre-fence banner. Both markers are classified, because 71 transcripts on
+# the reference host carry the old shape and a reader that only knew the fence
+# would leave every one of them rendering as a raw human turn.
+_MAILBOX_MARKERS: tuple[str, ...] = (_MAILBOX_MARKER, MailboxEnvelope.LEGACY_BANNER)
 
 _NON_HUMAN_MARKERS: tuple[str, ...] = (
     "<command-name>",
@@ -121,6 +133,13 @@ _NON_HUMAN_MARKERS: tuple[str, ...] = (
     "This session is being continued from a previous",
     _NOTIFICATION_MARKER,
     _TEAMMATE_MESSAGE_MARKER,
+    "<cross-session-message",
+    # Grove's OWN peer mail, both the fence and the banner it replaced.
+    # Measured absent here until 2026-09-15, which made every delivered mailbox
+    # message count as a human turn — the exact inflation the two markers above
+    # exist to prevent, arriving through the one envelope Grove writes itself
+    # rather than merely reads.
+    *_MAILBOX_MARKERS,
 )
 
 # The harness tools that spawn a sub-agent. ``Task`` is the pre-2.1 name of the
@@ -213,31 +232,43 @@ def _parse_timestamp(value: Any) -> datetime | None:
 class _ClaudeHome:
     """Resolves *where* Claude Code keeps its transcripts.
 
-    Pure path logic + read-only globbing. Reads the environment live on each
-    call (not at construction) so a test can redirect ``CLAUDE_CONFIG_DIR`` per
-    case and production picks up a relocated config dir without a restart.
+    Pure path logic + read-only globbing. Reads the task-local config-dir
+    override before the process environment on every call, so one workspace's
+    pinned profile never leaks to another concurrent reader.
     """
+
+    @classmethod
+    def config_signature(cls) -> tuple[str, ...]:
+        """The resolved config-dir cascade, as a cache key component.
+
+        A session id is unique per PROFILE, not globally, and the cascade is
+        resolved from a task-local override or the ambient environment — so any
+        memo of a located path set has to carry which roots produced it, or a
+        workspace pinned to one profile serves another's answer.
+        """
+        return tuple(str(base) for base in cls.config_dirs())
 
     @staticmethod
     def config_dirs() -> list[Path]:
-        """Every config-dir BASE in the cascade, de-duplicated (existence NOT
-        required — a caller globs and a missing dir just yields nothing).
+        """Every config-dir BASE appropriate to this read, de-duplicated.
 
-        Order: ``CLAUDE_CONFIG_DIR`` (comma-separated, like ccusage) → the XDG
-        ``~/.config/claude`` → the legacy ``~/.claude``. This is the one place the
-        cascade is defined; ``projects_dirs`` (transcripts) and the controls scan
-        (commands/skills live directly under a config dir) both project off
-        it, so a relocated profile is honoured by both without drift.
+        An explicit task-local override is strict source identity: only the
+        listed root(s) are searched, never this process's ambient or fallback
+        roots.  With no override, preserve Claude's normal environment → XDG →
+        legacy cascade.  The distinction stops a workspace pinned to one
+        profile from attributing an identically named session in another.
         """
+        override = config_dir_override("CLAUDE_CONFIG_DIR")
+        raw = override if override is not None else os.environ.get("CLAUDE_CONFIG_DIR", "")
         candidates: list[Path] = []
-        raw = os.environ.get("CLAUDE_CONFIG_DIR", "")
         for part in raw.split(","):
             cleaned = part.strip()
             if cleaned:
                 candidates.append(Path(cleaned).expanduser())
-        home = Path.home()
-        candidates.append(home / ".config" / "claude")
-        candidates.append(home / ".claude")
+        if override is None or not raw.strip():
+            home = Path.home()
+            candidates.append(home / ".config" / "claude")
+            candidates.append(home / ".claude")
 
         seen: set[Path] = set()
         out: list[Path] = []
@@ -728,13 +759,15 @@ class _ClaudeControls:
                 if ctrl.name not in seen_skill:
                     seen_skill.add(ctrl.name)
                     skills.append(ctrl)
-        # MCP servers: the project ``.mcp.json`` (worktree-inherited, the
-        # documented shared shape) then the user-global ``~/.claude.json`` — both
-        # carry a top-level ``mcpServers`` object keyed by server name.
-        mcp_files: list[tuple[Path, ControlScope]] = [
-            (cwd / cls.PROJECT_MCP_FILENAME, "project"),
-            (Path.home() / ".claude.json", "user"),
-        ]
+        # MCP servers: the project registry followed by the user registry. An
+        # explicit profile is strict here too; falling back to the ambient home
+        # would display controls belonging to a different launch identity.
+        mcp_files: list[tuple[Path, ControlScope]] = [(cwd / cls.PROJECT_MCP_FILENAME, "project")]
+        override = config_dir_override("CLAUDE_CONFIG_DIR")
+        if override is None:
+            mcp_files.append((Path.home() / ".claude.json", "user"))
+        else:
+            mcp_files.extend((base / ".claude.json", "user") for base in _ClaudeHome.config_dirs())
         for path, scope in mcp_files:
             for ctrl in cls._scan_mcp(path, scope):
                 if ctrl.name not in seen_mcp:
@@ -1188,17 +1221,26 @@ class _Record:
             self.type == "user"
             and not self.is_sidechain
             and not self._has_block("tool_result")
-            and _TEAMMATE_MESSAGE_MARKER in self.text()
+            and any(
+                marker in self.text()
+                for marker in (_TEAMMATE_MESSAGE_MARKER, "<cross-session-message")
+            )
         )
 
     @property
     def is_agent_notice(self) -> bool:
         """Either received-notice shape that advances the tail without being
-        a human turn: a ``<task-notification>`` or a peer
-        ``<teammate-message>``. One combined predicate so the tail-loop
-        dispatch (:meth:`_TranscriptParser.activity`) stays a single branch —
-        ``_SubagentFleet.on_notice`` does the actual routing."""
-        return self.is_task_notification or self.is_teammate_message
+        a human turn: a ``<task-notification>``, a peer ``<teammate-message>``,
+        or Grove's own ``<grove-mailbox>``. One combined predicate so the
+        tail-loop dispatch (:meth:`_TranscriptParser.activity`) stays a single
+        branch — ``_SubagentFleet.on_notice`` does the actual routing.
+
+        **Excluding the mailbox here would have cost the whole payload, not
+        just the classification**: ``_spine_role`` reads this to reach
+        ``"notification"``, and only that role calls :meth:`mailbox_message`.
+        A marker added to ``_NON_HUMAN_MARKERS`` alone stops the turn being
+        counted as human and then drops the record on the floor."""
+        return self.is_task_notification or self.is_teammate_message or self.is_grove_mailbox
 
     def teammate_message_text(self) -> str:
         """The relayed notice, human-readable — never the raw
@@ -1231,6 +1273,75 @@ class _Record:
         if isinstance(kind, str) and kind:
             return f"{sender}: {kind}"
         return inner or f"message from {sender}"
+
+    @property
+    def is_grove_mailbox(self) -> bool:
+        """A peer message Grove itself delivered, fenced by ``MailboxEnvelope``.
+
+        Separate from :attr:`is_teammate_message` because the two have different
+        AUTHORS: that one is Claude Code's own relay between its in-process
+        teammates, this one is Grove carrying bytes between two independent
+        workspaces. They agree on being machine traffic rather than a human
+        turn, which is why both sit in ``_NON_HUMAN_MARKERS``.
+        """
+        return any(marker in self.text() for marker in _MAILBOX_MARKERS)
+
+    def mailbox_text(self) -> str:
+        """The peer's own words, for the short display digest — never the fence.
+
+        The digest is a ~200-char line on the ~1 Hz activity path; rendering the
+        raw envelope there would spend all of it on JSON and show the reader
+        none of the message. The full structured payload rides
+        :meth:`mailbox_message` onto the fetched turn view, which is where a
+        client draws the handoff card.
+        """
+        facts = MailboxEnvelope.parse(self.text())
+        if facts is None:
+            return self.text().strip()
+        body = facts.body.strip()
+        sender = facts.sender or "a peer agent"
+        return f"{sender}: {body}" if body else f"message from {sender}"
+
+    def mailbox_message(self) -> MailboxMessage | None:
+        """Keep identity and full body before the display digest discards them."""
+        # Grove's own fence first: it is the only envelope whose grammar Grove
+        # controls at both ends, so it is parsed structurally rather than by
+        # regex over prose. `MailboxEnvelope.parse` owns that grammar — a second
+        # copy here is precisely how the prose-era reader came to recognise
+        # every OTHER provider's envelope and not this one.
+        facts = MailboxEnvelope.parse(self.text())
+        if facts is not None:
+            return MailboxMessage(
+                kind="peer",
+                sender=facts.sender,
+                recipient=facts.recipient,
+                # A peer message has no subject line; the intent ("request" /
+                # "information") is the nearest honest thing, and inventing one
+                # from the body's first line would be summarising a stranger's
+                # words in Grove's voice.
+                subject=facts.intent,
+                body=facts.body,
+            )
+        envelope = _PEER_ENVELOPE_RE.search(self.text())
+        if envelope:
+            opening = envelope.group(0).split(">", 1)[0]
+            attributes = dict(re.findall(r'([\w-]+)="([^"]*)"', opening))
+            return MailboxMessage(
+                sender=attributes.get("from-name")
+                or attributes.get("teammate_id")
+                or attributes.get("from"),
+                recipient=attributes.get("to") or attributes.get("recipient"),
+                subject=attributes.get("summary") or attributes.get("subject"),
+                body=envelope.group(2).strip(),
+            )
+        if self.is_task_notification:
+            return MailboxMessage(
+                sender=self._xml_field(self.text(), "task-id"),
+                recipient=None,
+                subject=self._xml_field(self.text(), "summary"),
+                body=self._xml_field(self.text(), "result") or self.notification_text(),
+            )
+        return None
 
     def teammate_message_sender(self) -> str | None:
         """The sending teammate's name — the embedded JSON's ``from``, else
@@ -1344,7 +1455,9 @@ class _Record:
             content = (ContentBlock(type="text", text=text),) if text.strip() else ()
         elif role == "notification":
             note = (
-                self.teammate_message_text()
+                self.mailbox_text()
+                if self.is_grove_mailbox
+                else self.teammate_message_text()
                 if self.is_teammate_message
                 else self.notification_text()
             )
@@ -1365,6 +1478,7 @@ class _Record:
             sent_at=self.timestamp if self.is_queued else None,
             is_sidechain=self.is_sidechain,
             thread_id=self._agent_id,
+            mailbox=self.mailbox_message() if role == "notification" else None,
         )
 
     def _spine_role(self) -> MessageRole | None:
@@ -1909,6 +2023,19 @@ class _TranscriptParser:
                 previous_total = total
         return out
 
+    @staticmethod
+    def _queue_identity(content: str) -> str:
+        """Ignore hop routing metadata removed by the harness before delivery.
+
+        Only the opening peer envelope is normalized. Sender attributes and the
+        full body remain identity-bearing, including similar text inside the body.
+        """
+        opening = re.match(r"<cross-session-message\b[^>]*>", content)
+        if opening is None:
+            return content
+        header = re.sub(r'\s+hop-chain="[^"]*"', "", opening.group(), count=1)
+        return header + content[opening.end() :]
+
     def pending_queue(self) -> tuple[QueuedMessage, ...]:
         """What the harness is still holding, folded from its own ops — the
         SAME records :meth:`messages` walks, so this costs no extra I/O.
@@ -1950,10 +2077,12 @@ class _TranscriptParser:
         queued: list[tuple[str, datetime | None]] = []
         # A contentless dequeue awaiting either its witness or its FIFO fallback.
         deferred_pop = False
+        removed_identity: str | None = None
 
         def _drop(content: str) -> bool:
+            identity = self._queue_identity(content)
             for i, (text, _) in enumerate(queued):
-                if text == content:
+                if self._queue_identity(text) == identity:
                     del queued[i]
                     return True
             return False
@@ -1967,6 +2096,10 @@ class _TranscriptParser:
 
         for rec in self._records:
             if rec.is_queued:
+                if removed_identity == self._queue_identity(rec.queued_prompt):
+                    removed_identity = None
+                    continue
+                removed_identity = None
                 # The delivery this record witnesses is the one a preceding
                 # dequeue popped, so the witness ANSWERS that pop rather than
                 # adding to it. It answers nothing when the message is already
@@ -1980,13 +2113,15 @@ class _TranscriptParser:
             if operation is None:
                 continue
             _settle_pop()
+            removed_identity = None
             name, content = operation
             if name == "enqueue":
                 queued.append((content, rec.timestamp))
             elif name == "popAll":
                 queued.clear()
             elif content:
-                _drop(content)
+                if _drop(content):
+                    removed_identity = self._queue_identity(content)
             else:
                 deferred_pop = True
         _settle_pop()
@@ -2091,7 +2226,7 @@ class _TranscriptParser:
             elif message.role == "notification":
                 # A notice the agent received mid-turn — an entry inside the
                 # current turn, never a new turn of its own.
-                entries.append(DigestEntry("notification", message.text()))
+                entries.append(DigestEntry("notification", message.text(), mailbox=message.mailbox))
             elif message.role == "compaction" and message.compaction is not None:
                 # Same placement rule as a notification: the harness cut the
                 # context mid-turn, so the marker belongs inside the turn it
@@ -2329,20 +2464,6 @@ def _truncate(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[: cap - 1].rstrip() + "…"
 
 
-def _digit_for(index: int, q: AgentQuestion) -> str:
-    """The option digit (1-based) for a 0-based option ``index``, range-checked.
-
-    The TUI numbers predefined options from 1; ``build_answer_keys`` types these.
-    Raises ``ValueError`` for an index outside the question's real options so a
-    bad plan is rejected (422) rather than driving a wrong or out-of-bounds key.
-    """
-    if not 0 <= index < len(q.options):
-        raise ValueError(
-            f"option index {index} out of range for a question with {len(q.options)} option(s)"
-        )
-    return str(index + 1)
-
-
 class ClaudeCodeAdapter:
     """Introspect Claude Code sessions (the first concrete :class:`AgentAdapter`).
 
@@ -2350,6 +2471,23 @@ class ClaudeCodeAdapter:
     shared instance serves every workspace. Filesystem reads are funnelled
     through :class:`_ClaudeHome`; all parsing through :class:`_TranscriptParser`.
     """
+
+    #: session id -> (holding-dir mtimes, located paths). CLASS-level because
+    #: callers construct throwaway adapter instances per read, exactly like the
+    #: module-level parse caches; bounded because a host accumulates sessions
+    #: forever and this must not become a second unbounded index.
+    _LOCATED: ClassVar[
+        dict[tuple[str, str, tuple[str, ...]], tuple[tuple[int, ...] | None, tuple[Path, ...]]]
+    ] = {}
+    _LOCATED_MAX: ClassVar[int] = 512
+    #: How long a holding directory must have been still before its mtime is
+    #: trusted as a cache key. A directory mtime is coarse — measured 1 ms on
+    #: ext4 — and a scan is far faster than that, so a file created in the same
+    #: millisecond as the scan is invisible to the result AND indistinguishable
+    #: from it by mtime. Memoizing only a directory that was already quiet
+    #: closes the window: a fleet growing right now simply rescans next tick,
+    #: which is the cost this memo exists to avoid paying only when it is idle.
+    _QUIESCENT_NS: ClassVar[int] = 50_000_000
 
     kind = "claude_code"
     remote = False
@@ -2430,11 +2568,67 @@ class ClaudeCodeAdapter:
         return AgentVersionProbe.version(command, "--version")
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
+        """Every transcript file for this session, memoized on the dirs that hold them.
+
+        THIS IS THE ACTIVITY PROJECTION'S DOMINANT COST AND NO CACHE ABOVE IT
+        CAN HELP, because the read memos key on the paths this returns — a memo
+        hit still pays the scan first. Profiled over 10 warm `read_messages`
+        calls on the reference host: **96% of the time** was here, in 610
+        `glob` and 3,290 `scandir` calls, at **7.7 ms per call** against
+        **0.0 ms** for the fast-path stat that had usually already answered.
+
+        The memo key is the mtime of each directory that CONTAINS a located
+        file — the project dir for a main transcript, the `subagents/` dir for
+        each worker. Those move exactly when a file is added to or removed from
+        them, which is exactly when this answer can change; an APPEND to an
+        existing transcript does not move them and must not, since the path set
+        is unchanged and the byte-level cursors below already handle growth.
+
+        The parent dirs are knowable only from a previous result, so the first
+        call always scans and a session whose set is still empty keeps scanning
+        — correct, because "no transcript yet" is precisely the answer that a
+        new file must be allowed to change.
+
+        A RESULT IS ONLY MEMOIZED ONCE ITS HOLDING DIRECTORIES HAVE GONE QUIET
+        (``_QUIESCENT_NS``), because the mtime cannot resolve a change that
+        happened in the same millisecond as the scan that missed it. Without
+        that the memo caches its own race: the freshly spawned sub-agent is
+        absent from the answer and already accounted for by the stamp, so the
+        fleet count freezes at its pre-spawn value for the life of the entry.
+        """
+        # Keyed by (cwd, session id): a session id is unique per PROFILE, not
+        # globally, and the config-dir cascade is read from the ambient
+        # environment — so keying on the id alone lets one cwd's answer serve
+        # another's. Caught by the suite, where tmp dirs legitimately reuse ids.
+        key = (str(cwd), session_id, _ClaudeHome.config_signature())
+        cached = self._LOCATED.get(key)
+        if cached is not None and cached[0] == self._located_signature(cached[1]):
+            return list(cached[1])
+        started = time.time_ns()
         try:
-            return _ClaudeHome.locate(cwd, session_id)
+            located = _ClaudeHome.locate(cwd, session_id)
         except OSError as exc:  # best-effort: a glob failure must not break peek
             logger.debug("locate_transcripts({}, {}) failed: {}", cwd, session_id, exc)
             return []
+        if located:
+            paths = tuple(located)
+            signature = self._located_signature(paths)
+            if signature is not None and max(signature) < started - self._QUIESCENT_NS:
+                self._LOCATED[key] = (signature, paths)
+                if len(self._LOCATED) > self._LOCATED_MAX:
+                    self._LOCATED.pop(next(iter(self._LOCATED)))
+        return located
+
+    @staticmethod
+    def _located_signature(paths: Sequence[Path]) -> tuple[int, ...] | None:
+        """Holding-directory mtimes; ``None`` (never equal) forces a rescan."""
+        stamps: list[int] = []
+        for parent in dict.fromkeys(p.parent for p in paths):
+            try:
+                stamps.append(parent.stat().st_mtime_ns)
+            except OSError:
+                return None
+        return tuple(stamps)
 
     def discover_sessions(self, cwd: Path, *, exclude_id: str | None = None) -> list[str]:
         """Session ids of transcripts whose recorded cwd is ``cwd`` but that Grove
@@ -2496,6 +2690,26 @@ class ClaudeCodeAdapter:
             logger.debug("list_sessions({}) failed: {}", cwd, exc)
             return []
         return [self._summarize(sid, path, mtime) for sid, path, mtime, _ in scanned]
+
+    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+        """One known session's row, found by UUID even after Claude Code has
+        RE-HOMED its transcript — the relocation-tolerant read.
+
+        Reuses :meth:`locate_transcripts` (the UUID glob), so it costs one glob
+        per config dir and never walks the store the way ``discover_all`` does.
+        The main transcript leads that list, and it is the only file a summary
+        describes — sub-agent files are sidechain detail, the same scope
+        ``list_sessions`` keeps. Best-effort: ``None`` when nothing is on disk.
+        """
+        paths = self.locate_transcripts(cwd, session_id)
+        main = next((p for p in paths if p.stem == session_id), None)
+        if main is None:
+            return None
+        try:
+            mtime = main.stat().st_mtime
+        except OSError:  # vanished between the glob and the stat
+            return None
+        return self._summarize(session_id, main, mtime)
 
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None
@@ -2819,69 +3033,6 @@ class ClaudeCodeAdapter:
         operational escape hatch; never needed on the hot path."""
         _TRANSCRIPTS.clear()
         _MEMO.clear()
-
-    # ── answer driver ─────────────────────────────────────────────────────────
-    @staticmethod
-    def build_answer_keys(
-        questions: Sequence[AgentQuestion],
-        answers: Sequence[AnswerSelection],
-    ) -> list[SendOp]:
-        """Translate a validated answer plan into ``AskUserQuestion`` keystrokes.
-
-        Pure and deterministic — the verified TUI grammar (on-host, Claude Code
-        2.1.x) encoded exactly once. Raises ``ValueError`` for any plan that
-        doesn't fit these questions (the manager maps that to a 422); it never
-        invents keystrokes for an unverified UI (the provider-boundary rule).
-
-        Grammar, per question in captured order:
-
-        * single-select, predefined option ``i`` chosen → the digit ``i+1`` (the
-          TUI selects it and auto-advances);
-        * single-select, free-text answer → the digit ``len(options)+1`` (the
-          synthetic "Type something." option), the text typed verbatim, Enter;
-        * multiSelect → one digit per chosen option (each toggles), then Tab.
-
-        A trailing Enter is appended IFF a review ("Submit answers") step exists
-        — more than one question OR any multiSelect. A lone single-select question
-        submits on its own digit, so it gets no trailing Enter.
-
-        v1 answers only the option-bearing kinds (``single_select`` /
-        ``multi_select``). A free-text answer is single-select only (the
-        multiSelect toggle-vs-edit interaction is unverified); ``confirm`` and
-        optionless ``free_text`` questions are rejected — their keystrokes were
-        never verified.
-        """
-        if len(answers) != len(questions):
-            raise ValueError(f"expected {len(questions)} answer(s), got {len(answers)}")
-        ops: list[SendOp] = []
-        for q, a in zip(questions, answers, strict=True):
-            ops.extend(ClaudeCodeAdapter._answer_ops(q, a))
-        # The review tab ("1. Submit answers" preselected) exists for any batch
-        # with more than one question or any multiSelect; a lone single-select
-        # already submitted on its digit.
-        if len(questions) > 1 or any(q.multiselect for q in questions):
-            ops.append(SendKey.ENTER)
-        return ops
-
-    @staticmethod
-    def _answer_ops(q: AgentQuestion, a: AnswerSelection) -> list[SendOp]:
-        """The keystrokes for one (question, answer) pair — see build_answer_keys."""
-        if a.text is not None:
-            if q.kind != "single_select":
-                raise ValueError(
-                    f"free-text answer is supported only on single-select questions, not {q.kind!r}"
-                )
-            # The synthetic "Type something." option sits at position len+1.
-            return [str(len(q.options) + 1), a.text, SendKey.ENTER]
-        if q.kind == "single_select":
-            if len(a.indexes) != 1:
-                raise ValueError("a single-select question takes exactly one option index")
-            return [_digit_for(a.indexes[0], q)]
-        if q.kind == "multi_select":
-            if not a.indexes:
-                raise ValueError("a multiSelect question needs at least one option index")
-            return [*(_digit_for(i, q) for i in a.indexes), SendKey.TAB]
-        raise ValueError(f"question kind {q.kind!r} cannot be answered by keystroke")
 
     # ── internal ──────────────────────────────────────────────────────────
     def _summarize(self, session_id: str, path: Path, mtime: float) -> SessionSummary:

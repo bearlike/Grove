@@ -33,7 +33,9 @@ describe("QueuePanel", () => {
     // but the guard must not rely on that — it checks `supported` on its own.
     expect(
       render({
-        messages: [{ text: "should never happen", sent_at: SENT_AT, position: 0 }],
+        messages: [
+          { text: "should never happen", sent_at: SENT_AT, position: 0 },
+        ],
         supported: false,
       }),
     ).toBe("");
@@ -65,10 +67,14 @@ describe("QueuePanel", () => {
       messages: [{ text: "keep going", sent_at: SENT_AT, position: 0 }],
       supported: true,
     });
-    const trigger = html.match(/<button[^>]*data-slot="collapsible-trigger"[^>]*>/)?.[0];
+    const trigger = html.match(
+      /<button[^>]*data-slot="collapsible-trigger"[^>]*>/,
+    )?.[0];
 
-    expect(html).toContain("lucide-messages-square");
-    expect(html).toMatch(/<svg[^>]*class="[^"]*lucide-messages-square[^"]*"[^>]*aria-hidden="true"/);
+    expect(html).toContain("lucide-list-ordered");
+    expect(html).toMatch(
+      /<svg[^>]*class="[^"]*lucide-list-ordered[^"]*"[^>]*aria-hidden="true"/,
+    );
     expect(trigger).toBeTruthy();
     expect(trigger).toContain("bg-muted/40");
     // The rule only has something to divide once the list is open.
@@ -89,7 +95,9 @@ describe("QueuePanel", () => {
 
   it("carries every message's text and a relative wait time once opened", () => {
     const html = renderOpen({
-      messages: [{ text: "run the migration next", sent_at: SENT_AT, position: 0 }],
+      messages: [
+        { text: "run the migration next", sent_at: SENT_AT, position: 0 },
+      ],
       supported: true,
     });
 
@@ -102,16 +110,25 @@ describe("QueuePanel", () => {
   it("wraps a long message rather than truncating it — it is a sentence, not a name", () => {
     const long =
       "This is a much longer steering instruction that a reader typed while the agent was busy, and clipping it would discard the half it was sent for.";
-    const html = renderOpen({ messages: [{ text: long, sent_at: SENT_AT, position: 0 }], supported: true });
+    const html = renderOpen({
+      messages: [{ text: long, sent_at: SENT_AT, position: 0 }],
+      supported: true,
+    });
 
     expect(html).toContain(long);
-    expect(html).not.toContain("truncate");
-    expect(html).toContain("break-words");
+    const text = html.match(
+      /<span class="([^"]*)">This is a much longer steering instruction/,
+    )?.[1];
+    expect(text).toBeTruthy();
+    expect(text).not.toContain("truncate");
+    expect(text).toContain("break-words");
   });
 
   it("renders 'unknown' rather than a timestamp when the harness reports no send time", () => {
     const html = renderOpen({
-      messages: [{ text: "typed straight into the pane", sent_at: null, position: 0 }],
+      messages: [
+        { text: "typed straight into the pane", sent_at: null, position: 0 },
+      ],
       supported: true,
     });
 

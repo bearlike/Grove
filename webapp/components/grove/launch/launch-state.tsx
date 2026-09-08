@@ -48,6 +48,13 @@ export interface LaunchValues {
   readonly customModel: boolean;
   readonly runtime: RuntimeChoice | null;
   readonly brief: boolean | null;
+  /**
+   * Whether this create runs the agent as a Grove-owned native session. `null`
+   * means the roster entry's own default, which the agent pill displays; a
+   * touched value rides the request as `native`. Reset with the agent, the
+   * way `model` is, because the default belongs to the entry.
+   */
+  readonly native: boolean | null;
   readonly branchMode: BranchMode;
   /** `new` — the branch to create. */
   readonly branchName: string;
@@ -90,6 +97,7 @@ export const LAUNCH_INITIAL_VALUES: LaunchValues = {
   customModel: false,
   runtime: null,
   brief: null,
+  native: null,
   branchMode: "auto",
   branchName: "",
   existingBranch: "",
@@ -190,6 +198,14 @@ export function launchReducer(state: LaunchState, action: LaunchAction): LaunchS
         values = { ...values, model: null, customModel: false };
         touched = withoutTouched(withoutTouched(touched, "model"), "customModel");
       }
+      // RULE 1b — the launch mode belongs to the agent too. Its default is
+      // the roster entry's `native`, so a choice made against one entry is
+      // not an answer about the next; forgetting it lets the new entry's own
+      // default show, and an untouched pill says what will actually happen.
+      if (changed.includes("agentName") && !changed.includes("native")) {
+        values = { ...values, native: null };
+        touched = withoutTouched(touched, "native");
+      }
 
       // RULE 2 — root placement carries `skip_init`, visibly.
       // The TUI does this too (`tui/screens/create.py:676-680`): an init script
@@ -267,6 +283,8 @@ export const LAUNCH_TESTIDS = {
   composer: "launch-composer",
   input: "launch-input",
   controls: "launch-controls",
+  attach: "launch-attach",
+  attachments: "launch-attachments",
   overflow: "launch-overflow",
   expand: "launch-expand",
   expanded: "launch-expanded",
@@ -274,6 +292,8 @@ export const LAUNCH_TESTIDS = {
   suggestions: "launch-suggestions",
   footerLinks: "launch-footer-links",
   error: "launch-error",
+  refusal: "launch-refusal",
   customModel: "launch-custom-model",
   customModelError: "launch-custom-model-error",
+  sessionMode: "launch-session-mode",
 } as const;

@@ -81,13 +81,19 @@ class ContextWindow:
     size: int = 12_000
 
     def request(self) -> dict[str, int]:
+        # Measured against a real 8-turn, ~180-call Claude Code session: fresh
+        # input stays near zero (the cache carries the conversation, so a
+        # request pays only for the new user text), cache writes are the new
+        # slice per request, and output per request is a few hundred tokens.
+        # The earlier ranges paid 160-3200 fresh per request, which summed to
+        # a fresh figure larger than the cache-write one on the Activity card.
         written = self.rng.randint(900, 14_000)
         self.size = min(self.cap, self.size + written)
         usage = {
-            "input_tokens": self.rng.randint(160, 3_200),
+            "input_tokens": self.rng.randint(1, 24),
             "cache_read_input_tokens": self.size,
             "cache_creation_input_tokens": written,
-            "output_tokens": self.rng.randint(90, 2_600),
+            "output_tokens": self.rng.randint(90, 1_400),
         }
         if self.size >= self.cap:
             # Compaction: the harness summarizes and the replayed prompt

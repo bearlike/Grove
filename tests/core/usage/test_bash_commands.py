@@ -20,11 +20,12 @@ import pytest
 from grove.core.agents import AgentActivity, AgentActivityState, AgentMessage, ContentBlock
 from grove.core.agents.model import SessionRef
 from grove.core.agents.registry import all_adapters
+from grove.core.agents.shell import SHELL_TOOL_NAMES, ShellCall
 from grove.core.config import GroveConfig, UsageCommandsConfig
 from grove.core.contracts.usage import UsageFilters
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
-from grove.core.usage._command import SHELL_TOOL_NAMES, LeadingCommand
+from grove.core.usage._command import LeadingCommand
 from grove.core.usage._schema import SCHEMA_VERSION
 from grove.core.usage._store import UsageStore
 from grove.core.usage.insights import ERROR_REPORTING_PROVIDERS, BashCommandRanking
@@ -218,14 +219,20 @@ def test_an_over_long_command_skips_bashlex_entirely(leading: LeadingCommand) ->
     assert leading.of(command) == "git"
 
 
-def test_background_and_command_extraction_read_both_harness_shapes() -> None:
-    assert LeadingCommand.command_text({"command": "ls -la"}) == "ls -la"
-    assert LeadingCommand.command_text({"cmd": "git status"}) == "git status"
-    assert LeadingCommand.command_text({"command": ["bash", "-lc", "ls"]}) == "bash -lc ls"
-    assert LeadingCommand.command_text({"file_path": "/x"}) is None
-    assert LeadingCommand.command_text(None) is None
-    assert LeadingCommand.in_background({"command": "sleep 100", "run_in_background": True})
-    assert not LeadingCommand.in_background({"command": "sleep 100"})
+def test_the_leading_executable_survives_argv_being_quoted_rather_than_space_joined() -> None:
+    """`ShellCall` renders argv with `shlex.join`, and `target` must not move.
+
+    The attribution column is the LEADING word, and an argv's first element is
+    that word under either rendering — so this is the assertion that lets the
+    shared normalizer replace the old space join without a `SCHEMA_VERSION`
+    bump, since no stored `target` can change.
+    """
+    leading = LeadingCommand(UsageCommandsConfig())
+    argv = ShellCall.of("exec_command", {"cmd": ["bash", "-lc", "a && b"]})
+    assert argv is not None
+    assert argv.command == "bash -lc 'a && b'"
+    assert leading.of(argv.command) == "bash"
+    assert leading.of("bash -lc a && b") == "bash"
 
 
 def test_normalization_is_configuration_not_a_table() -> None:

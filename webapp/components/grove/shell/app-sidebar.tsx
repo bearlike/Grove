@@ -1,138 +1,117 @@
 "use client";
 
+import type { MouseEvent as ReactMouseEvent } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SearchIcon } from "lucide-react";
 
-import { BrandMark } from "@/components/grove/brand-mark";
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { ScannedTextScope } from "@/components/grove/overflow-text";
 import { RAIL_ITEMS, type NavItem } from "@/components/grove/shell/nav";
 import { DaemonStatus } from "@/components/grove/shell/daemon-status";
 import { FleetTree, type FleetStream } from "@/components/grove/fleet";
+import { activeFilterCount } from "@/components/grove/fleet/filter";
+import type { ProjectContextController } from "@/components/grove/fleet/project-context";
+import type { FleetSearchController } from "@/components/grove/fleet/fleet-palette";
 import { AccountMenu } from "@/components/grove/account";
+import { BrandMark } from "@/components/grove/brand-mark";
 
-/**
- * What sits inside the rail: brand, the flat workspace list, then the
- * destinations and the account.
- *
- * The base demo's rail carries a brand block and a list and nothing else,
- * because a chat app has one surface. Grove has three, and a collapsed rail is
- * still visible, so the destinations live at the FOOT as icon rows — reachable
- * in both states, and out of the way of the list, which is what the rail is
- * actually for.
- *
- * TWO SPACING RULES GOVERN THE WHOLE RAIL, and both are repeated as literals
- * here and in `fleet-tree.tsx` rather than centralized — the same call the
- * `mt-2` note below makes, and `app-shell.test.ts` asserts the agreement, which
- * is the part that actually stops drift.
- *
- *   gutter   `px-2` collapsed, `p-3` expanded. The expanded value is not a new
- *            number: the footer already used `p-3` and it is the one band of
- *            the rail nobody complained was tight, so it became the measure for
- *            all of them. Collapsed stays `px-2` because it is not a gutter at
- *            all but an arithmetic fit — 8 + a 32px icon + 8 = the 48px rail.
- *   rhythm   `gap-1.5` (6px) between every row, everywhere, replacing `gap-0.5`
- *            (2px). One value across the brand-to-footer column is what lets
- *            the eye read the rail as ranked groups instead of one dense stack;
- *            a group BREAK is then simply a bigger step (see the footer).
- */
+/** The rail's two renderings share shell-owned search state but keep their own scanned-text scope. */
 export function AppSidebar({
   collapsed,
   stream,
+  project,
+  search,
+  onOpenSearch,
+  headerAction,
 }: {
   collapsed: boolean;
   stream: FleetStream;
+  project: ProjectContextController;
+  search: FleetSearchController;
+  onOpenSearch(event: ReactMouseEvent<HTMLButtonElement>): void;
+  /** The mobile sheet's native close control belongs in this band, not a full-height gutter. */
+  headerAction?: React.ReactNode;
 }): React.ReactNode {
   const pathname = usePathname();
+  const activeFilters = activeFilterCount(search.filter);
+  const searchTooltip = activeFilters > 0
+    ? `Search workspaces (${activeFilters} filters active)`
+    : "Search workspaces";
 
   return (
-    <>
-      {/* `mt-2` is the gutter's own `p-2` in `app-shell.tsx`, repeated here on
-          purpose. The panel — and `ShellHeader`'s toggle row inside it — sits
-          8px down from the viewport top because THAT gutter pads it; this
-          row has no such ancestor (the aside carries none), so without the
-          offset the brand sat flush in the window's corner while the header
-          row it should share a line with started a visible 8px lower. The
-          two are on different DOM branches with no parent to align them
-          from, so the number is repeated rather than centralized — the one
-          thing it has to keep agreeing with is `p-2`, not a derived constant.
-
-          The horizontal gutter is the rail's, so it follows the rail: `px-3`
-          expanded, `px-2` collapsed. Collapsed is the constrained one — 8 + the
-          mark's own 32px + 8 is exactly the 48px rail, so `px-3` there would
-          overflow the mark by 8px and push it off centre. */}
+    <ScannedTextScope>
       <div
+        data-testid="sidebar-brand-header"
         className={cn(
-          "mt-2 flex h-12 shrink-0 items-center gap-2",
-          collapsed ? "px-2" : "px-3",
+          "workspace-header flex shrink-0 items-center gap-2 [@media(pointer:coarse)]:h-14",
+          collapsed ? "px-2 [@media(pointer:coarse)]:px-0.5" : "border-b border-border px-3",
         )}
       >
-        <Link href="/" className="flex min-w-0 items-center gap-2" aria-label="Grove">
-          {/* The mark stands FREE — no `Avatar`, reversing the earlier decision
-              that let it supply the shape. That was right for a placeholder: a
-              generic lucide glyph drawn in `currentColor` has no silhouette of
-              its own, so it needed a disc to look deliberate. A real mark has
-              one, and the disc it was sitting on is `bg-sidebar-primary` —
-              near-black in light mode — which would put brand terracotta on a
-              dark circle and mute the one colour in this app that must never
-              be muted. Dropping `Avatar` also removes the radius this tree was
-              borrowing it for, so the styling gate is satisfied by there being
-              no shape decision here at all rather than by delegating one.
-
-              No `label`: the enclosing Link is already `aria-label="Grove"` in
-              BOTH rail states, so a labelled mark would be a second name inside
-              an element whose name is already fixed. */}
-          <BrandMark className="size-8 shrink-0" />
-          {collapsed ? null : <span className="truncate text-sm font-medium">Grove</span>}
-        </Link>
+        {collapsed ? null : (
+          <Link
+            href="/"
+            className="flex min-w-0 flex-1 items-center gap-2"
+            aria-label="Grove"
+          >
+            <BrandMark className="size-7 shrink-0" />
+            <span className="truncate text-sm font-medium">Grove</span>
+          </Link>
+        )}
+        <TooltipIconButton
+          variant="outline"
+          tooltip={searchTooltip}
+          aria-label="Search workspaces"
+          onClick={onOpenSearch}
+          className={cn(
+            "bg-transparent dark:bg-transparent border-edge-control size-6 min-h-[24px] min-w-[24px] [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11",
+            collapsed && "mx-auto",
+          )}
+          data-active={activeFilters > 0}
+          data-testid="sidebar-search-trigger"
+        >
+          <SearchIcon />
+        </TooltipIconButton>
+        {headerAction}
       </div>
 
-      <FleetTree collapsed={collapsed} stream={stream} />
+      <div className={cn("relative isolate flex min-h-0 flex-1 overflow-hidden", !collapsed && "rail-scroll-depth")}>
+        <FleetTree collapsed={collapsed} stream={stream} project={project} search={search} />
+      </div>
 
-      {/* The footer reads top-down as: where you can GO, who you ARE, and what
-          is RUNNING. The service line sits UNDER the identity deliberately —
-          you are signed in as someone, ON a daemon, so version and uptime read
-          as properties of the thing you are connected to rather than as a
-          fourth destination. It is also the least-consulted row, and the bottom
-          is where least-consulted belongs. */}
-      <div className={cn("flex shrink-0 flex-col gap-1.5 border-t", collapsed ? "p-2" : "p-3")}>
-        {RAIL_ITEMS.map((item) => (
-          <NavRow
-            key={item.href}
-            item={item}
-            collapsed={collapsed}
-            active={pathname.startsWith(item.href)}
-          />
-        ))}
+      <div
+        className={cn(
+          "flex shrink-0 flex-col gap-1.5 border-t",
+          collapsed ? "p-2 [@media(pointer:coarse)]:px-0.5" : "p-3",
+        )}
+      >
+        <div
+          className={
+            collapsed ? "flex flex-col gap-1.5" : "grid grid-cols-2 gap-1.5"
+          }
+        >
+          {RAIL_ITEMS.map((item) => (
+            <NavRow
+              key={item.href}
+              item={item}
+              collapsed={collapsed}
+              active={pathname.startsWith(item.href)}
+            />
+          ))}
+        </div>
         <AccountMenu collapsed={collapsed} />
-        {/* THE ONE DELIBERATE BREAK IN THE RHYTHM, and it is what makes the
-            rest of it read. Version and uptime are not a fifth row of the
-            footer's list — they describe the daemon the four rows above are
-            served by — so the step to them is DOUBLE the rhythm (6px gap +
-            12px margin = 18px, against 6px between peers). Ranked spacing is
-            the whole mechanism here: rows that are siblings sit one step
-            apart, and the one that is a different KIND of thing sits two.
-
-            `empty:hidden` because `DaemonStatus` renders NOTHING in two real
-            states — collapsed, and daemon unreachable — and a wrapper is a flex
-            item whether or not it has content, so without it those states would
-            pay the gap and the margin for a row that is not there. The
-            component itself returned a bare fragment before, which is why the
-            problem did not exist until it acquired a wrapper. The `collapsed`
-            gate then covers the one case `empty:hidden` cannot: an update hint
-            in the icon rail, which is actionable chrome and not a service
-            description, so it stays with its peers. */}
         <div className={cn("flex flex-col gap-1.5 empty:hidden", collapsed ? null : "mt-3")}>
           <DaemonStatus collapsed={collapsed} />
         </div>
       </div>
-    </>
+    </ScannedTextScope>
   );
 }
 
@@ -153,11 +132,13 @@ function NavRow({
       variant={active ? "secondary" : "ghost"}
       size="sm"
       className={cn(
-        "h-8 justify-start overflow-hidden font-normal transition-all duration-200",
-        collapsed ? "w-8 gap-0 px-2 has-[>svg]:px-2" : "w-full gap-2 px-2.5 has-[>svg]:px-2.5",
+        "min-h-[28px] min-w-[28px] justify-start overflow-hidden font-normal transition-all duration-200 [@media(pointer:coarse)]:min-h-[44px] [@media(pointer:coarse)]:min-w-[44px]",
+        collapsed
+          ? "h-8 w-8 gap-0 px-2 has-[>svg]:px-2"
+          : "h-8 w-full gap-2 px-2.5 has-[>svg]:px-2.5",
       )}
     >
-      <Link href={href} aria-label={label}>
+      <Link href={href} aria-label={label} data-testid={`rail-nav-${label.toLowerCase()}`}>
         <Icon className="size-4" />
         <span
           className={cn(
@@ -172,11 +153,11 @@ function NavRow({
   );
 
   return (
-    <TooltipProvider delayDuration={0}>
-      <Tooltip>
-        <TooltipTrigger asChild>{row}</TooltipTrigger>
-        {collapsed ? <TooltipContent side="right">{label}</TooltipContent> : null}
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>{row}</TooltipTrigger>
+      {collapsed ? (
+        <TooltipContent side="right">{label}</TooltipContent>
+      ) : null}
+    </Tooltip>
   );
 }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { HistoryIcon } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -24,6 +25,7 @@ import {
   NUMERIC,
 } from "@/components/grove/table-columns";
 import { abbreviate, duration, projectLabel, timestamp, tokenTotal } from "./format";
+import { UsageCostFigure } from "./cost";
 
 /**
  * How much of a session's token spend went to sub-agents it delegated to, as a
@@ -92,6 +94,7 @@ export function UsageSessions({
                 <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Turns</TableHead>
                 <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Tools</TableHead>
                 <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Tokens</TableHead>
+                <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Cost</TableHead>
                 {/* The delegated SHARE of the column to its left, not a second
                     token count: `tokens` already includes every sub-agent's
                     spend, so a reader looking at 900M cannot tell whether one
@@ -154,9 +157,25 @@ function UsageSessionRow({ row }: { row: UsageSessionRowView }): React.ReactNode
       className={cwd === null ? undefined : "relative hover:bg-muted/50 focus-within:bg-muted/50"}
     >
       <TableCell className="font-mono text-xs" title={row.session_id}>
-        <UsageSessionIdentity row={row} cwd={cwd} />
-        <span className="ms-2 font-sans text-content-tertiary">
-          {row.account_label ?? row.provider}
+        <span className="flex items-center gap-2">
+          <UsageSessionIdentity row={row} cwd={cwd} />
+          {row.workspace_title ? (
+            <span className="min-w-0 truncate font-sans text-content-tertiary" title={row.workspace_title}>
+              {row.workspace_title}
+            </span>
+          ) : null}
+          {row.workspace_deleted_at ? (
+            <Badge
+              variant="secondary"
+              className="shrink-0 px-1.5 text-xs"
+              title="Workspace deleted; this session and its transcript remain available."
+            >
+              workspace deleted
+            </Badge>
+          ) : null}
+          <span className="shrink-0 font-sans text-content-tertiary">
+            {row.account_label ?? row.provider}
+          </span>
         </span>
       </TableCell>
       <TableCell className={LABEL_CELL} title={row.project ?? row.cwd ?? "unknown project"}>
@@ -170,6 +189,9 @@ function UsageSessionRow({ row }: { row: UsageSessionRowView }): React.ReactNode
       </TableCell>
       <TableCell className={NUMERIC}>
         <AbbreviatedNumber value={tokenTotal(row.tokens)} />
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        <UsageCostFigure cost={row.cost} />
       </TableCell>
       <TableCell className={NUMERIC}>
         <DelegatedShare row={row} />

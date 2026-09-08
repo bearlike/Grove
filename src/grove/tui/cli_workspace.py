@@ -3,8 +3,12 @@
 The lifecycle verbs (``create`` / ``message`` / ``pause`` / ``resume`` /
 ``respawn`` / ``kill`` / ``attach``) mirror the daemon's ``POST
 /workspaces`` family over the SAME engine path the TUI uses — a direct
-``WorkspaceManager`` bound to the cwd's repo via ``build()``, never an
-HTTP round-trip. ``grove create`` closes a real gap: without it, creation
+``WorkspaceManager``, never an HTTP round-trip. A verb that NAMES a
+workspace resolves it host-wide and binds the Manager to the repo the
+record names, so it works from any directory (including outside a git
+repo entirely); only ``create`` and the cwd-inference branch of
+``resolve_or_infer_workspace`` ask where the caller is standing.
+``grove create`` closes a real gap: without it, creation
 is reachable only through the daemon API + MCP, so a human or an agent at
 a shell could not spin up a workspace.
 
@@ -116,6 +120,7 @@ from grove.core.contracts.views import WorkspaceDefaultsView, WorkspaceStateView
 from grove.core.issueops import HandoverKey, PickupEngine
 from grove.core.phase import PHASE_ORDER, PhaseReport, TaskPhase, TicketClaim
 from grove.core.store import JsonWorkspaceStore
+from grove.core.tmux import AttachInstruction
 from grove.tui.cli_complete import Complete
 
 
@@ -297,6 +302,15 @@ _BRIEF_OPTION = typer.Option(
     help="Hand the agent Grove's first-turn brief pointing it at the "
     "working-in-grove skill. Omit to use the configured default "
     "(brief.enabled). Create-time only; the choice is persisted.",
+)
+
+_NATIVE_OPTION = typer.Option(
+    None,
+    "--native/--terminal",
+    help="Run the agent as a Grove-owned native session (headless; interrupt, "
+    "model switch and answers go to its own protocol) or in its interactive "
+    "terminal. Omit to use the roster entry's own default. Claude Code and "
+    "Codex only; the choice is persisted.",
 )
 
 # Same B008 exemption gap as `_RUNTIME_OPTION` above: `TaskPhase | None` is a
@@ -668,34 +682,52 @@ def clean_exit() -> Iterator[None]:
         raise typer.Exit(code=1) from exc
 
 
-def resolve_workspace(manager: WorkspaceManager, ref: str) -> WorkspaceState:
-    """The unique workspace whose id matches ``ref`` exactly or by prefix.
+def host_registry() -> RepoRegistry:
+    """A host-wide :class:`RepoRegistry` — every repo this machine knows.
 
-    Mirrors ``SessionExplorer.resolve`` — exact match wins, else a unique
-    prefix; nothing / ambiguous raises :class:`GroveError` listing the
-    candidates so the user can extend the prefix without re-running ``ls``.
+    ``load_config(repo_root=None)`` (user + built-in layers, no single project's
+    overlay) plus the shared global store, with ``config_loader`` wired so each
+    repo's Manager still resolves its OWN cascade on first access — that is what
+    keeps a project-scoped agent or init script working for a workspace reached
+    from outside its repo.
 
-    Public (not ``_``-prefixed) because ``grove sessions remap`` resolves a
-    workspace ref the same way — one funnel, imported cleanly rather than
-    reaching across modules for a private symbol (#F10c).
+    The third call site of this two-line recipe (``_activity_service`` here,
+    ``cli_sessions._catalog``), which is where it stops being a coincidence and
+    starts being a definition, so both now read it from here.
     """
-    states = manager.list()
-    exact = [s for s in states if s.id == ref]
-    if exact:
-        return exact[0]
-    matches = [s for s in states if s.id.startswith(ref)]
-    if not matches:
-        raise GroveError(f"no workspace matches {ref!r} in this repo")
-    if len(matches) > 1:
-        ids = ", ".join(s.id for s in matches[:8])
-        raise GroveError(f"workspace ref {ref!r} is ambiguous: {ids}")
-    return matches[0]
+    return RepoRegistry(
+        cfg=load_config(repo_root=None),
+        store=JsonWorkspaceStore(),
+        config_loader=load_config,
+    )
 
 
-def resolve_or_infer_workspace(manager: WorkspaceManager, ref: str | None) -> WorkspaceState:
-    """The workspace named by ``ref`` (id-prefix), or — when ref is omitted —
-    the one whose worktree contains the cwd. Ambiguous/none → GroveError
-    listing candidates, same currency as :func:`resolve_workspace`.
+def resolve_workspace(ref: str) -> tuple[WorkspaceManager, WorkspaceState]:
+    """The workspace ``ref`` names, wherever on this host it lives, and a
+    Manager bound to its repo.
+
+    **Deliberately not scoped to the cwd's repo.** A workspace id is
+    host-unique and the record itself names the repo, so requiring the caller
+    to also be standing inside that repo was a precondition the operation never
+    had — and it made ``grove attach <id>`` fail outside any git repo at all,
+    which is exactly when a person reaches for it. Every id-addressed verb goes
+    through here and inherits that.
+
+    Resolution and its errors live on ``RepoRegistry.resolve_workspace``; this
+    is the CLI's one-line adapter onto it.
+    """
+    return host_registry().resolve_workspace(ref)
+
+
+def resolve_or_infer_workspace(
+    ref: str | None, *, manager: WorkspaceManager | None = None
+) -> tuple[WorkspaceManager, WorkspaceState]:
+    """The workspace named by ``ref`` (host-wide id-prefix), or — when ref is
+    omitted — the one whose worktree contains the cwd.
+
+    Only the inference branch needs a repo, because only it asks a question
+    about where the caller is standing; ``manager`` is the already-bound
+    Manager to infer within, built from the cwd when not supplied.
 
     **Ambiguity is refused out loud, never resolved silently.** Ties at the
     same depth are collected, not broken by picking whichever ``manager.list()``
@@ -708,7 +740,8 @@ def resolve_or_infer_workspace(manager: WorkspaceManager, ref: str | None) -> Wo
     the user a ref to paste.
     """
     if ref is not None:
-        return resolve_workspace(manager, ref)
+        return resolve_workspace(ref)
+    manager = manager if manager is not None else build()
     cwd = Path.cwd().resolve()
     # Compare RESOLVED Path objects, never raw strings (git emits '/', str(Path)
     # emits '\\' on Windows — the per-repo cross-platform rule). A ROOT workspace's
@@ -731,7 +764,7 @@ def resolve_or_infer_workspace(manager: WorkspaceManager, ref: str | None) -> Wo
         raise GroveError(
             f"{len(best)} workspaces share this directory — name one explicitly: {rows}"
         )
-    return best[0]
+    return manager, best[0]
 
 
 def create_workspace(
@@ -803,6 +836,7 @@ def create_workspace(
     ),
     runtime: Runtime | None = _RUNTIME_OPTION,
     brief: bool | None = _BRIEF_OPTION,
+    native: bool | None = _NATIVE_OPTION,
     prompt: str | None = typer.Option(
         None,
         "--prompt",
@@ -874,12 +908,18 @@ def create_workspace(
             title=quick.title(title),
             description=description,
             branch_plan=quick.branch_plan(flags),
-            skip_init=no_init or quick.defaults.skip_init,
+            # Four fields left UNSET when the user named none: the engine
+            # resolves an omitted one from the same saved `defaults` this
+            # command used to re-apply itself. Passing the resolved answer back
+            # would pin today's config onto the workspace forever, and the copy
+            # of the resolution here is exactly what drifted from the engine's.
+            skip_init=True if no_init else None,
             initial_prompt=prompt,
             resume_session_id=resume_session,
-            model=model or quick.defaults.model,
-            runtime=runtime or Runtime(quick.defaults.runtime),
-            brief=quick.defaults.brief if brief is None else brief,
+            model=model,
+            runtime=runtime,
+            brief=brief,
+            native=native,
             project_cwd=Path(cwd) if cwd is not None else None,
         )
         state = manager.create(request)
@@ -904,8 +944,29 @@ def create_workspace(
     if instruction is not None:
         # Outside clean_exit for the same reason `grove attach` is: exec
         # replaces this process, so it never returns and raises no GroveError.
-        argv = instruction.terminal_argv()
-        os.execvp(argv[0], argv)
+        _exec_attach(instruction)
+
+
+def _exec_attach(instruction: AttachInstruction) -> None:
+    """Replace this process with the way in, saying first when it is a viewer.
+
+    A native workspace's pane is Grove's worker printing protocol frames, and
+    the attach is read-only so a stray Ctrl-C cannot kill the session's owner.
+    Inside an outer tmux the way in is `switch-client`, whose `-r` TOGGLES the
+    client's flag rather than setting it, so that arm stays writable — and the
+    notice is the one place a person is told to keep their hands off the pane.
+    The binary is resolved off PATH by design (tmux is Grove's one hard runtime
+    dep; a missing one surfaces as the OS's exec error).
+    """
+    if instruction.read_only:
+        typer.secho(
+            "native session: attaching read-only to the protocol event log; "
+            "steer with `grove message` / the dashboard, detach with Ctrl-b d",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    argv = instruction.terminal_argv()
+    os.execvp(argv[0], argv)
 
 
 def message_workspace(
@@ -928,8 +989,7 @@ def message_workspace(
       grove message a1b2 "now add a test for the empty case"
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         manager.send_message(state.id, text)
         typer.secho(f"sent to {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -964,8 +1024,7 @@ def pause_workspace(
       grove pause a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         manager.pause(state.id, force=force)
         typer.secho(f"paused {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -977,8 +1036,7 @@ def resume_workspace(workspace: str = _WORKSPACE_ARG) -> None:
       grove resume a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         manager.resume(state.id)
         typer.secho(f"resumed {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -994,8 +1052,7 @@ def respawn_workspace(workspace: str = _WORKSPACE_ARG) -> None:
       grove respawn a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         manager.respawn(state.id)
         typer.secho(f"respawned {state.id} ({state.title})", fg=typer.colors.GREEN)
 
@@ -1022,8 +1079,7 @@ def kill_workspace(
       grove kill a1b2 --keep-branch -y
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         if not yes and not typer.confirm(f"kill {state.id} ({state.title})?"):
             raise typer.Abort()
         manager.kill(state.id, delete_branch=delete_branch)
@@ -1038,20 +1094,18 @@ def attach_workspace(workspace: str = _WORKSPACE_ARG) -> None:
     or ``devcontainer exec … tmux`` straight into the container's own tmux for a
     containerized one. The engine refuses a workspace with no live session —
     surfaced as a clean error. Detach with the usual tmux key (Ctrl-b d).
+    A native workspace attaches read-only: the pane is the session's protocol
+    event log, and steering goes through ``grove message`` and the dashboards.
 
     \b
       grove attach a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         instruction = manager.attach(state.id)
     # Outside clean_exit: exec replaces this process, so it never returns and
-    # raises no GroveError. The binary is resolved off PATH by design (tmux is
-    # Grove's one hard runtime dep; a missing one surfaces as the OS's exec
-    # error).
-    argv = instruction.terminal_argv()
-    os.execvp(argv[0], argv)
+    # raises no GroveError.
+    _exec_attach(instruction)
 
 
 # ─── read verb (parity with the TUI peek rail + the MCP read tools) ───────────
@@ -1090,8 +1144,7 @@ def show_workspace(
       grove show --json | jq .description
     """
     with clean_exit():
-        manager = build()
-        state = resolve_or_infer_workspace(manager, workspace)
+        manager, state = resolve_or_infer_workspace(workspace)
         if as_json:
             typer.echo(WorkspaceStateView.from_state(state).model_dump_json(indent=2))
             return
@@ -1139,8 +1192,7 @@ def edit_workspace(
     with clean_exit():
         if title is None and description is None:
             raise GroveError("nothing to change: pass --title and/or --description")
-        manager = build()
-        state = resolve_or_infer_workspace(manager, workspace)
+        manager, state = resolve_or_infer_workspace(workspace)
         # Forward only what was named. `update` separates "leave alone" from
         # "clear" with its own sentinel, and an empty --description is a real
         # instruction (clear it) rather than an omission, so the two must not be
@@ -1259,7 +1311,6 @@ def phase_workspace(
       grove phase show                              # same as bare `grove phase`
     """
     with clean_exit():
-        manager = build()
         target_phase = phase
         target_ref = ref
         # Single-token form: `grove phase <phase>` — Click hands a lone
@@ -1272,7 +1323,7 @@ def phase_workspace(
             target_ref = None
 
         if target_phase is not None:
-            state = resolve_or_infer_workspace(manager, target_ref)
+            manager, state = resolve_or_infer_workspace(target_ref)
             written = manager.set_phase(
                 state.id, target_phase, note, blocked=blocked, ticket=ticket
             )
@@ -1292,7 +1343,7 @@ def phase_workspace(
             raise GroveError(
                 "--blocked only applies when setting a phase, e.g. `grove phase planning --blocked`"
             )
-        state = resolve_or_infer_workspace(manager, target_ref)
+        manager, state = resolve_or_infer_workspace(target_ref)
         current = manager.phase(state.id)
         _emit_phase(state, current)
 
@@ -1301,18 +1352,8 @@ def phase_workspace(
 
 
 def _activity_service() -> ActivityService:
-    """Host-wide :class:`ActivityService`, independent of the current cwd's project.
-
-    Mirrors ``cli_sessions._catalog()`` (and the daemon's own construction in
-    ``daemon/app.py``): ``load_config(repo_root=None)`` (user + built-in layers
-    only, no single project's overlay applies) plus the shared global store.
-    Same recipe, different consumer — kept local rather than shared because a
-    third copy would be the actual duplication; two call sites matching a
-    two-line construction is not.
-    """
-    cfg = load_config(repo_root=None)
-    registry = RepoRegistry(cfg=cfg, store=JsonWorkspaceStore(), config_loader=load_config)
-    return ActivityService(registry=registry)
+    """Host-wide :class:`ActivityService`, independent of the current cwd's project."""
+    return ActivityService(registry=host_registry())
 
 
 def fleet_status() -> None:
@@ -1332,7 +1373,12 @@ def fleet_status() -> None:
       grove fleet | jq '.projects[].workspaces[] | select(.needs_attention)'
     """
     with clean_exit():
-        snapshot = _activity_service().snapshot()
+        service = _activity_service()
+        try:
+            service.bootstrap()
+            snapshot = service.snapshot()
+        finally:
+            service.close()
     view = DashboardSnapshotView.from_snapshot(snapshot)
     typer.echo(view.model_dump_json(indent=2))
 
@@ -1445,8 +1491,7 @@ def tickets_attach(
       grove tickets attach acme/api#42               # qualify when ambiguous
     """
     with clean_exit():
-        manager = build()
-        state = resolve_or_infer_workspace(manager, workspace)
+        manager, state = resolve_or_infer_workspace(workspace)
         updated = manager.attach_link(state.id, ref)
         typer.secho(f"attached to {state.id} ({state.title})", fg=typer.colors.GREEN)
         _emit_ticket_refs(_resolve_refs(manager, updated.ticket_refs))
@@ -1463,8 +1508,7 @@ def tickets_list(
       grove tickets list --workspace a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_or_infer_workspace(manager, workspace)
+        manager, state = resolve_or_infer_workspace(workspace)
         typer.secho(f"{state.id}  {state.title}", fg=typer.colors.GREEN, bold=True)
         # The phase read is what turns a list of refs into a progress report,
         # and it is one file read the listing can afford. Best-effort by the
@@ -1493,8 +1537,7 @@ def tickets_detach(
       grove tickets detach 42 --workspace a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_or_infer_workspace(manager, workspace)
+        manager, state = resolve_or_infer_workspace(workspace)
         selector = manager.ticket_providers.resolve_link(ref)
         updated = manager.detach_ticket(state.id, selector.provider, selector.id)
         typer.secho(

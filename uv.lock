@@ -631,7 +631,7 @@ wheels = [
 
 [[package]]
 name = "grove"
-version = "0.0.8"
+version = "0.0.9"
 source = { editable = "." }
 dependencies = [
     { name = "bashlex" },
@@ -644,6 +644,7 @@ dependencies = [
     { name = "textual" },
     { name = "truststore" },
     { name = "typer" },
+    { name = "watchfiles" },
 ]
 
 [package.optional-dependencies]
@@ -727,6 +728,7 @@ requires-dist = [
     { name = "truststore", specifier = ">=0.9,<1" },
     { name = "typer", specifier = ">=0.12,<1" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'daemon'", specifier = ">=0.30,<1" },
+    { name = "watchfiles", specifier = ">=1.1,<2" },
 ]
 provides-extras = ["daemon", "client", "mcp", "telemetry", "all"]
 
@@ -751,7 +753,7 @@ docs = [
     { name = "mike" },
     { name = "mkdocs" },
     { name = "mkdocs-callouts", specifier = ">=1.16.0" },
-    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl" },
+    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl" },
     { name = "mkdocstrings", extras = ["python"] },
     { name = "pymdown-extensions", specifier = ">=10.20.1" },
 ]
@@ -1233,8 +1235,8 @@ wheels = [
 
 [[package]]
 name = "mkdocs-shadcn-mewbo"
-version = "1.15.0"
-source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl" }
+version = "1.26.2"
+source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl" }
 dependencies = [
     { name = "bottle" },
     { name = "gitpython" },
@@ -1243,7 +1245,7 @@ dependencies = [
     { name = "pymdown-extensions" },
 ]
 wheels = [
-    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl", hash = "sha256:27a7850d103f3279dc1ba4893471e8ba4187df255354e01b217da75b5ce5aaee" },
+    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl", hash = "sha256:95d7b50a61e74d8619684da0d9b1f638873c1db35bf8983f69aeff3c377614ae" },
 ]
 
 [package.metadata]

@@ -13,7 +13,7 @@ import typer
 from loguru import logger
 
 from grove import __version__
-from grove._truststore import TrustStoreError, use_system_trust_store
+from grove._truststore import CA_PATH_ENV, TrustStoreError, use_system_trust_store
 from grove.core import GroveError, build, load_config, paths
 from grove.core.agents.hook import run_hook_from_stdin
 from grove.core.config import add_known_project, dump_config_json, dump_schema_json, write_schema
@@ -22,7 +22,9 @@ from grove.tui.cli_agent import register as register_agent_commands
 from grove.tui.cli_code import register as register_code_commands
 from grove.tui.cli_complete import Complete
 from grove.tui.cli_complete import register as register_completion_commands
+from grove.tui.cli_diagram import register as register_diagram_commands
 from grove.tui.cli_doctor import doctor_app
+from grove.tui.cli_mailbox import mailbox_app
 from grove.tui.cli_onboarding import (
     AgentChoice,
     render_outcomes,
@@ -56,6 +58,7 @@ auth_app = typer.Typer(
 )
 app.add_typer(auth_app, name="auth")
 app.add_typer(sessions_app, name="sessions")
+app.add_typer(mailbox_app, name="mailbox")
 
 # `grove recollect` — the SAME function as `grove sessions recollect`, grafted
 # flat like `ls` and `version`. Not a second implementation: Typer registers the
@@ -74,6 +77,7 @@ app.add_typer(usage_app, name="usage")
 # Flat workspace verbs (`grove create` / `grove message`) — grafted on like
 # `ls`/`version` rather than nested under a `workspace` subgroup.
 register_workspace_commands(app)
+register_diagram_commands(app)
 register_quota_commands(app)
 
 # `grove skills install` / `grove mcp install` — onboard Claude/Codex.
@@ -110,10 +114,23 @@ def main(ctx: typer.Context) -> None:
     # A user-level CA covers the process rather than one repo: `grove config
     # show` may read a project, but a forge call from any subcommand is equally
     # entitled to the configured deployment trust.
+    #
+    # An unreadable config must NOT fail the command here: `version` and `debug`
+    # touch no network and used to die on a file they never needed, so a broken
+    # config took down the one command that tells you which Grove you are
+    # running. Verbs that DO need config load it themselves and report it with
+    # the context of what was asked. Falling back to the env var is the route
+    # `grove.mcp` already relies on, not a silent downgrade — and a
+    # `TrustStoreError` stays fatal, because that names a CA somebody configured
+    # on purpose and a quiet fallback makes a broken private PKI look healthy.
     try:
-        tls = load_config(None).tls
-        degraded = use_system_trust_store(tls.ca_path)
-    except (GroveError, TrustStoreError) as exc:
+        ca_path: str | None = load_config(None).tls.ca_path
+    except GroveError as exc:
+        logger.debug("config unreadable, falling back to {}: {}", CA_PATH_ENV, exc)
+        ca_path = os.environ.get(CA_PATH_ENV)
+    try:
+        degraded = use_system_trust_store(ca_path)
+    except TrustStoreError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
     # A host whose system store itself cannot be read still gets Grove's bundled

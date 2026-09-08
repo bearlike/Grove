@@ -252,6 +252,7 @@ describe("activeFilterCount", () => {
   it("counts every hidden state and project alongside the attention toggle", () => {
     expect(
       activeFilterCount({
+        ...NO_FILTER,
         query: "",
         attentionOnly: true,
         hiddenStates: ["idle", "error"],

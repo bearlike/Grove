@@ -45,6 +45,37 @@ class _Adapter:
         return self.activity
 
 
+@dataclass
+class _CascadingAdapter:
+    """Adapter fake whose discovery returns its entire profile cascade per scope."""
+
+    kind: str
+    refs: list[SessionRef]
+    paths_by_session: dict[tuple[str, str], list[Path]]
+    messages: tuple[AgentMessage, ...]
+    activity: AgentActivity
+    reads: int = 0
+    discovery_calls: int = 0
+    failures: dict[tuple[str, str], str] | None = None
+
+    def discover_all(self) -> tuple[SessionRef, ...]:
+        self.discovery_calls += 1
+        return tuple(self.refs)
+
+    def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
+        key = (str(cwd), session_id)
+        if self.failures is not None and (detail := self.failures.get(key)) is not None:
+            raise OSError(detail)
+        return self.paths_by_session[key]
+
+    def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
+        self.reads += 1
+        return self.messages
+
+    def parse_activity(self, cwd: Path, session_id: str) -> AgentActivity:
+        return self.activity
+
+
 def _registry(tmp_path: Path, cfg: GroveConfig) -> RepoRegistry:
     return RepoRegistry(cfg=cfg, store=JsonWorkspaceStore(tmp_path / "state.json"))
 
@@ -277,6 +308,124 @@ def test_subagent_messages_partition_into_separate_nullable_columns(tmp_path: Pa
     store.close()
 
 
+def test_projector_attributes_cascaded_discovery_to_actual_profiles_once(tmp_path: Path) -> None:
+    """Configured scan scopes can return default-profile evidence too."""
+    at = datetime(2026, 8, 9, 12, tzinfo=UTC)
+
+    def transcript(
+        profile: Path, session_id: str, *, child: bool = False
+    ) -> tuple[Path, Path | None]:
+        main = profile / "projects" / "project" / f"{session_id}.jsonl"
+        main.parent.mkdir(parents=True)
+        main.write_text("{}\\n", encoding="utf-8")
+        subagent = main.parent / f"{session_id}-child.jsonl" if child else None
+        if subagent is not None:
+            subagent.write_text("{}\\n", encoding="utf-8")
+        return main, subagent
+
+    configured_a = tmp_path / "configured-a"
+    configured_b = tmp_path / "configured-b"
+    default = tmp_path / "default"
+    configured_a_main, _ = transcript(configured_a, "same-id")
+    configured_b_main, _ = transcript(configured_b, "same-id")
+    default_main, default_child = transcript(default, "ambient-id", child=True)
+    assert default_child is not None
+    default_alias = tmp_path / "default-alias"
+    default_alias.symlink_to(default, target_is_directory=True)
+    alias_main = default_alias / "projects" / "project" / "ambient-id.jsonl"
+    cwd_a = tmp_path / "cwd-a"
+    cwd_b = tmp_path / "cwd-b"
+    cwd_default = tmp_path / "cwd-default"
+    for cwd in (cwd_a, cwd_b, cwd_default):
+        cwd.mkdir()
+    refs = [
+        SessionRef(
+            "same-id",
+            "claude_code",
+            str(cwd_a),
+            configured_a_main,
+            at,
+            configured_a_main.stat().st_mtime,
+        ),
+        SessionRef(
+            "same-id",
+            "claude_code",
+            str(cwd_b),
+            configured_b_main,
+            at,
+            configured_b_main.stat().st_mtime,
+        ),
+        SessionRef(
+            "ambient-id",
+            "claude_code",
+            str(cwd_default),
+            default_main,
+            at,
+            default_main.stat().st_mtime,
+        ),
+        # The cascade repeats this default ref under every configured scan.
+        SessionRef(
+            "ambient-id",
+            "claude_code",
+            str(cwd_default),
+            alias_main,
+            at,
+            alias_main.stat().st_mtime,
+        ),
+    ]
+    adapter = _CascadingAdapter(
+        kind="claude_code",
+        refs=refs,
+        paths_by_session={
+            (str(cwd_a), "same-id"): [configured_a_main],
+            (str(cwd_b), "same-id"): [configured_b_main],
+            (str(cwd_default), "ambient-id"): [default_main, default_child],
+        },
+        messages=(AgentMessage(role="assistant", timestamp=at),),
+        activity=AgentActivity(state=AgentActivityState.WAITING, last_event_at=at),
+    )
+    cfg = GroveConfig.model_validate(
+        {
+            "agents": [
+                {
+                    "name": "claude",
+                    "command": "claude",
+                    "kind": "claude_code",
+                    "env": {"CLAUDE_CONFIG_DIR": f"{configured_a},{configured_b}"},
+                }
+            ]
+        }
+    )
+    store = UsageStore(tmp_path / "usage.db")
+    projector = UsageProjector(
+        cfg=cfg, registry=_registry(tmp_path, cfg), store=store, adapters=(adapter,)
+    )
+
+    first = projector.refresh()
+    assert first.changed_sources == 3
+    assert adapter.reads == 3
+    assert store.scalar("SELECT COUNT(*) FROM sources") == 3
+    assert store.scalar("SELECT COUNT(*) FROM sessions") == 3
+    assert store.scalar("SELECT COUNT(*) FROM ingested_files") == 4
+    assert {
+        (row["session_id"], row["root"])
+        for row in store.query(
+            "SELECT s.session_id, src.root FROM sessions s "
+            "JOIN sources src ON src.source_id=s.source_id"
+        )
+    } == {
+        ("same-id", str(configured_a.resolve())),
+        ("same-id", str(configured_b.resolve())),
+        ("ambient-id", str(default.resolve())),
+    }
+
+    unchanged = projector.refresh()
+    assert unchanged.changed_sources == 0
+    assert adapter.reads == 3
+    assert store.scalar("SELECT COUNT(*) FROM sessions") == 3
+    store.close()
+
+
 def test_projector_marks_discovered_transcript_without_cwd_degraded(tmp_path: Path) -> None:
     _, main, _ = _files(tmp_path, "claude_code", "session-no-cwd")
     at = datetime(2026, 8, 9, 12, tzinfo=UTC)
@@ -307,6 +456,95 @@ def test_projector_marks_discovered_transcript_without_cwd_degraded(tmp_path: Pa
     assert source["health"] == "degraded"
     assert source["detail"] == "transcript cwd was not measured"
     assert adapter.reads == 0
+    store.close()
+
+
+def test_projector_keeps_all_source_failures_in_a_stable_detail_order(tmp_path: Path) -> None:
+    at = datetime(2026, 8, 9, 12, tzinfo=UTC)
+    profile = tmp_path / "profile"
+    cwd_a = tmp_path / "cwd-a"
+    cwd_b = tmp_path / "cwd-b"
+    cwd_a.mkdir()
+    cwd_b.mkdir()
+    paths: dict[tuple[str, str], list[Path]] = {}
+    refs: list[SessionRef] = []
+    for cwd, session_id in ((cwd_a, "a"), (cwd_b, "b")):
+        transcript = profile / "projects" / "project" / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("{}\\n", encoding="utf-8")
+        refs.append(
+            SessionRef(
+                session_id,
+                "claude_code",
+                str(cwd),
+                transcript,
+                at,
+                transcript.stat().st_mtime,
+            )
+        )
+        paths[(str(cwd), session_id)] = [transcript]
+    adapter = _CascadingAdapter(
+        kind="claude_code",
+        refs=list(reversed(refs)),
+        paths_by_session=paths,
+        messages=(),
+        activity=AgentActivity(state=AgentActivityState.UNKNOWN),
+        failures={(str(cwd_a), "a"): "alpha failed", (str(cwd_b), "b"): "beta failed"},
+    )
+    cfg = GroveConfig()
+    store = UsageStore(tmp_path / "usage.db")
+    projector = UsageProjector(
+        cfg=cfg, registry=_registry(tmp_path, cfg), store=store, adapters=(adapter,)
+    )
+
+    result = projector.refresh()
+    assert result.degraded_sources == 1
+    assert (
+        store.query("SELECT health, detail FROM sources")[0]["detail"]
+        == "alpha failed; beta failed"
+    )
+    store.close()
+
+
+def test_projector_preserves_degraded_detail_until_a_clean_later_refresh(tmp_path: Path) -> None:
+    at = datetime(2026, 8, 9, 12, tzinfo=UTC)
+    profile = tmp_path / "profile"
+    root_main = profile / "projects" / "project" / "root.jsonl"
+    bad_main = profile / "projects" / "project" / "bad.jsonl"
+    root_main.parent.mkdir(parents=True)
+    root_main.write_text("{}\\n", encoding="utf-8")
+    bad_main.write_text("{}\\n", encoding="utf-8")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    root_ref = SessionRef("root", "claude_code", str(cwd), root_main, at, root_main.stat().st_mtime)
+    bad_ref = SessionRef("bad", "claude_code", None, bad_main, at, bad_main.stat().st_mtime)
+    adapter = _CascadingAdapter(
+        kind="claude_code",
+        refs=[root_ref, bad_ref],
+        paths_by_session={(str(cwd), "root"): [root_main]},
+        messages=(AgentMessage(role="assistant", timestamp=at),),
+        activity=AgentActivity(state=AgentActivityState.WAITING, last_event_at=at),
+    )
+    cfg = GroveConfig()
+    store = UsageStore(tmp_path / "usage.db")
+    projector = UsageProjector(
+        cfg=cfg, registry=_registry(tmp_path, cfg), store=store, adapters=(adapter,)
+    )
+
+    degraded = projector.refresh()
+    assert degraded.degraded_sources == 1
+    source = store.query("SELECT health, detail FROM sources")[0]
+    assert (source["health"], source["detail"]) == (
+        "degraded",
+        "transcript cwd was not measured",
+    )
+
+    adapter.refs = [root_ref]
+    repaired = projector.refresh()
+    assert repaired.degraded_sources == 0
+    source = store.query("SELECT health, detail FROM sources")[0]
+    assert (source["health"], source["detail"]) == ("ok", None)
+    assert adapter.reads == 1  # the clean refresh was incremental, not a re-read
     store.close()
 
 
@@ -434,10 +672,21 @@ def test_relaxing_retention_forces_unchanged_transcript_rebuild(tmp_path: Path) 
 
 @dataclass
 class _FakeWorkspaceState:
-    """Just enough of ``WorkspaceState`` for the ``_workspace_index`` seam."""
+    """Just enough of ``WorkspaceState`` for the ``_workspace_index`` seam.
+
+    ``worktree_path``/``agent_cwd``/``transcript_context`` are NOT optional on
+    the real dataclass, so they carry values here too: attribution now falls
+    back to a cwd match for any provider that mints no session id (every Codex
+    workspace), and a fake missing those attributes would exercise an arm
+    production cannot reach — the false-green double this suite's guide warns
+    about. Defaulted so the minted-id cases stay one-line.
+    """
 
     id: str
     agent_session_id: str | None
+    worktree_path: str = "/nonexistent/worktree"
+    agent_cwd: str = "/nonexistent/worktree"
+    transcript_context: object | None = None
 
 
 @dataclass

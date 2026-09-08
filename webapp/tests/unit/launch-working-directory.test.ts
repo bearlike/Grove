@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { projectSelectionValues } from "@/components/grove/launch/controls/project-pill";
+import {
+  projectSelectionValues,
+  resolveLaunchProject,
+} from "@/components/grove/launch/controls/project-pill";
 
 /**
  * The split under test: `projectCwd` is what the USER picked, cleared on every
@@ -37,5 +40,32 @@ describe("projectSelectionValues", () => {
     const switched = projectSelectionValues({ repoRoot: "/repos/other", cwd: "/repos/other" });
     expect(switched.projectCwd).toBeNull();
     expect(switched.repoRoot).toBe("/repos/other");
+  });
+});
+
+describe("resolveLaunchProject", () => {
+  const choices = [
+    { repoRoot: "/repos/grove", cwd: "/repos/grove", label: "Grove" },
+    { repoRoot: "/repos/other", cwd: "/repos/other", label: "Other" },
+  ] as const;
+
+  it("restores the remembered project when the launch query names an unavailable project", () => {
+    expect(
+      resolveLaunchProject({
+        choices,
+        requestedCwd: "/repos/removed",
+        remembered: { repoRoot: "/repos/other", cwd: "/repos/other", label: "" },
+      }),
+    ).toEqual(choices[1]);
+  });
+
+  it("waits for the project catalog before deciding a query is stale", () => {
+    expect(
+      resolveLaunchProject({
+        choices: [],
+        requestedCwd: "/repos/removed",
+        remembered: { repoRoot: "/repos/other", cwd: "/repos/other", label: "" },
+      }),
+    ).toBeNull();
   });
 });

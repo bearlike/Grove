@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   useMutation,
   useQueries,
@@ -10,12 +10,14 @@ import {
 } from "@tanstack/react-query";
 
 import { GroveProtocolError } from "@/lib/grove/api";
+import type { DiagramDocumentView, DiagramWriter } from "@/lib/grove/api";
 import type { components } from "@/lib/grove/api/types.gen";
 import type {
   AgentSummaryView,
   BranchInfo,
   CommitSummaryView,
   HealthView,
+  ModelOptionView,
   ProvisionProgressView,
   SessionControlsView,
   SessionDetailView,
@@ -26,6 +28,8 @@ import type {
   TodoListView,
   WhoamiView,
   WorkspaceDiffView,
+  WorkspaceHistoryView,
+  WorkspacePanelView,
   WorkspacePeekView,
   WorkspaceQueueView,
   WorkspaceStateView,
@@ -149,6 +153,120 @@ export function useWorkspaceTodo(id: string | null): UseQueryResult<TodoListView
 }
 
 /**
+ * Every name, progress claim and ticket this workspace has recorded — the
+ * durable history that survives the workspace being killed.
+ *
+ * **An empty view is the ordinary answer.** Recording is forward-only, so every
+ * workspace created before the store shipped has nothing, and a caller must
+ * render that as "nothing recorded yet" rather than as a broken panel.
+ *
+ * No `/events` frame carries these rows, so there is nothing to invalidate on;
+ * the read is cheap (one indexed SQLite read). It gets no interval because the rows only grow when the agent reports a NEW claim, and
+ * the claim it is reporting right now is already live on the Task card. The
+ * dialog re-reads on open, which is the only moment a reader is looking.
+ */
+export function useWorkspaceHistory(
+  id: string | null,
+): UseQueryResult<WorkspaceHistoryView> {
+  return useQuery({
+    queryKey: groveKeys.history(id ?? ""),
+    queryFn: () => groveClient.getWorkspaceHistory(id!),
+    enabled: id !== null,
+  });
+}
+
+/** The workspace's resolved embedded panels. */
+export function useWorkspacePanels(
+  id: string | null,
+): UseQueryResult<WorkspacePanelView[]> {
+  return useQuery({
+    queryKey: groveKeys.panels(id ?? ""),
+    queryFn: () => groveClient.getWorkspacePanels(id!),
+    enabled: id !== null,
+  });
+}
+
+/**
+ * The workspace's diagram document.
+ *
+ * `watch` is the caller's statement that an EDITABLE diagram is on screen right
+ * now — the tab is selected and the collaboration is active. Only then does
+ * this poll, because the interval exists solely to notice a write that came
+ * from outside this browser, and a diagram nobody is looking at has nobody to
+ * warn. There is no global watcher and no fleet-wide cost: `WorkPanel` mounts
+ * one tab at a time, so an unopened Diagram tab issues no request at all.
+ *
+ * Not gated on window focus. A reader watching an agent redraw a diagram on a
+ * second screen is the case this is for, and `document.hidden` would call that
+ * idle.
+ */
+export function useWorkspaceDiagram(
+  id: string | null,
+  repo: string,
+  watch: boolean,
+): UseQueryResult<DiagramDocumentView> {
+  return useQuery({
+    queryKey: groveKeys.diagram(id ?? ""),
+    queryFn: ({ signal }) => groveClient.getDiagram(id!, repo, signal),
+    enabled: id !== null,
+    // UNGATED even though `workspace_source_changed` covers the edge, because
+    // this interval is a CONFLICT DETECTOR rather than a freshness mechanism:
+    // noticing that something wrote the `.drawio` under an open editor is what
+    // turns a silent overwrite into a visible conflict, and a dropped stream
+    // must not be the reason a draft is lost. Still mounted only by a visible,
+    // editable diagram, so a stopped or unread one costs nothing.
+    refetchInterval: watch ? POLL_MS.diagram : false,
+  });
+}
+
+/**
+ * The two diagram writes, as one stable object.
+ *
+ * A `DiagramWriter` rather than two `useMutation`s: the caller is a state
+ * machine that serializes and coalesces its own saves (see
+ * `runtime/diagram.ts`), and a mutation hook's retry, status and cache
+ * behaviour would be a second, disagreeing opinion about the same queue. What
+ * it does owe the cache is the acknowledged document, which every write returns
+ * — so the query never has to re-fetch what the response already said.
+ */
+export function useDiagramWriter(id: string, repo: string): DiagramWriter {
+  const queryClient = useQueryClient();
+  return useMemo(() => {
+    /**
+     * Cancel the in-flight read BEFORE writing, and await the cancellation.
+     *
+     * A GET issued before this PUT would answer after it with the pre-write
+     * bytes, and nothing downstream can distinguish that from somebody else
+     * having written the file — so the client would raise a conflict against
+     * its own save and block every later autosave. Cancelling is the only
+     * seam that removes the ambiguity instead of guessing at it: the stale
+     * answer is never delivered, so it is never observed.
+     */
+    const write = async (
+      run: () => Promise<DiagramDocumentView>,
+    ): Promise<DiagramDocumentView> => {
+      await queryClient.cancelQueries({ queryKey: groveKeys.diagram(id) });
+      const document = await run();
+      // A poll may have started while the write was in flight. Fence that
+      // read as well before publishing the acknowledged document to the cache.
+      await queryClient.cancelQueries({ queryKey: groveKeys.diagram(id) });
+      return record(document);
+    };
+    const record = (document: DiagramDocumentView) => {
+      queryClient.setQueryData(groveKeys.diagram(id), document);
+      // The descriptor's mode lives on the workspace record, so a stop has to
+      // reach the surfaces reading THAT, not just this document.
+      void queryClient.invalidateQueries({ queryKey: groveKeys.workspace(id) });
+      return document;
+    };
+    return {
+      update: (request) => write(() => groveClient.updateDiagram(id, repo, request)),
+      stop: (request) => write(() => groveClient.stopDiagram(id, repo, request)),
+    };
+  }, [id, repo, queryClient]);
+}
+
+/**
  * The workspace's full branch log.
  *
  * The stream covers the EDGE but not the data: `recent_commits` on the activity
@@ -170,24 +288,21 @@ export function useWorkspaceCommits(id: string | null): UseQueryResult<CommitSum
 /**
  * The worktree's uncommitted changes as one raw unified patch.
  *
- * UNGATED, and the exception proves the rule. The stream carries `dirty_files`,
- * which is the same SET this route diffs — but editing a file that is already
- * dirty moves no counter, so a fingerprint edge would leave the tab confidently
- * stale on the most common change there is. No frame carries patch content, so
- * the interval is the only freshness there is.
- *
- * It is also the largest payload the app fetches — 133 KB on a 33-file tree,
- * bounded at 1 MB by the daemon — which is why the interval is the slowest in
- * the table and why this hook is only ever mounted by the Files tab. `WorkPanel`
- * mounts one tab at a time, so a workspace nobody is reading a diff for costs
- * nothing at all.
+ * GATED, and what made that possible is a new edge rather than a cheaper poll.
+ * `dirty_files` moves only when the SET changes, so editing an already-dirty
+ * file carried no activity delta and the interval was the only freshness there
+ * was. `workspace_source_changed` is emitted per filesystem invalidation
+ * regardless of whether any counter moved, so the edge now covers the case the
+ * poll existed for. The interval stays as the stream-drop backstop, because the
+ * patch bytes themselves are never in a frame.
  */
 export function useWorkspaceDiff(id: string | null): UseQueryResult<WorkspaceDiffView> {
+  const { connected } = useActivityStream();
   return useQuery({
     queryKey: groveKeys.diff(id ?? ""),
     queryFn: () => groveClient.getDiff(id!),
     enabled: id !== null,
-    refetchInterval: POLL_MS.diff,
+    refetchInterval: backstopInterval(connected, POLL_MS.diff),
   });
 }
 
@@ -218,41 +333,41 @@ export function useSharePolicy(repoRoot: string | null): UseQueryResult<SharePol
  * building must cost zero requests, so this only ticks while a workspace is
  * actually provisioning.
  *
- * The interval is deliberately UNGATED. No frame on `/events` carries the
- * provision log — the daemon reads it per request off the on-disk file — so
- * gating this on the stream would freeze a build's only progress display for
- * the whole build window, which is the surface it exists to fix.
+ * The log bytes stay off `/events`, but `session_activity` supplies the edge
+ * that says provisioning changed, so the interval is a disconnected-stream
+ * backstop and a live stream invalidates the active query immediately.
  */
 export function useProvisionProgress(
   id: string | null,
   enabled: boolean,
 ): UseQueryResult<ProvisionProgressView> {
+  const { connected } = useActivityStream();
   return useQuery({
     queryKey: groveKeys.provision(id ?? ""),
     queryFn: () => groveClient.getProvisionProgress(id!),
     enabled: id !== null && enabled,
-    refetchInterval: POLL_MS.provision,
+    refetchInterval: backstopInterval(connected, POLL_MS.provision),
   });
 }
 
 /**
  * A workspace's attributed agent sessions, newest first.
  *
- * The interval is deliberately UNGATED. The stream's `sessions` array carries
- * `AgentSessionView`, which is a different and much thinner shape than this
- * route's `SessionSummaryView` — `title`, `first_prompt`, `last_prompt`,
- * `modified_at` and `size_bytes` ride no event at all, and they are exactly
- * what the session picker and the thread list render.
+ * The stream carries the changed session set but not this route's richer
+ * `SessionSummaryView` fields (`title`, prompts, `modified_at`, `size_bytes`).
+ * Its `session_activity` edge therefore invalidates the richer read, and the
+ * interval remains a disconnected-stream backstop.
  */
 export function useWorkspaceSessions(
   id: string | null,
   limit?: number,
 ): UseQueryResult<SessionSummaryView[]> {
+  const { connected } = useActivityStream();
   return useQuery({
     queryKey: groveKeys.sessions(id ?? ""),
     queryFn: () => groveClient.getSessions(id!, limit === undefined ? undefined : { limit }),
     enabled: id !== null,
-    refetchInterval: POLL_MS.sessions,
+    refetchInterval: backstopInterval(connected, POLL_MS.sessions),
   });
 }
 
@@ -449,18 +564,18 @@ export function useSessionTurns(
 }
 
 /**
- * Every agent session on the host — a browse surface, deliberately off the
- * activity tick.
+ * Every agent session in the catalog.
  *
- * The interval is deliberately UNGATED. This is the host-wide catalog, most of
- * whose rows belong to sessions Grove never launched and no workspace owns, so
- * nothing on `/events` describes them.
+ * Catalog source watching publishes `catalog_changed` for every relevant file
+ * mutation, so this list refreshes from that edge and polls only while the main
+ * stream is unavailable.
  */
 export function useSessionCatalog(limit?: number): UseQueryResult<SessionSummaryView[]> {
+  const { connected } = useActivityStream();
   return useQuery({
     queryKey: groveKeys.catalog(limit),
     queryFn: () => groveClient.getSessionCatalog(limit),
-    refetchInterval: POLL_MS.catalog,
+    refetchInterval: backstopInterval(connected, POLL_MS.catalog),
   });
 }
 
@@ -489,6 +604,26 @@ export function useAgents(repo: string | null): UseQueryResult<AgentSummaryView[
   return useQuery({
     queryKey: groveKeys.agents(repo ?? ""),
     queryFn: () => groveClient.listAgents(repo!),
+    enabled: repo !== null,
+  });
+}
+
+/**
+ * One agent's models, each with the name and context window a picker draws.
+ *
+ * Separate from `useAgents` because the enrichment is per agent and the agent
+ * pill changes under the model pill: a catalog keyed only by repo would show
+ * the previous agent's models after a switch. No `refetchInterval` — a model
+ * catalog changes when config or a gateway does, neither of which the activity
+ * stream reports, so polling it would be a timer nothing ever answers.
+ */
+export function useModels(
+  repo: string | null,
+  agent: string | null,
+): UseQueryResult<ModelOptionView[]> {
+  return useQuery({
+    queryKey: groveKeys.models(repo ?? "", agent ?? ""),
+    queryFn: () => groveClient.listModels(repo!, agent),
     enabled: repo !== null,
   });
 }

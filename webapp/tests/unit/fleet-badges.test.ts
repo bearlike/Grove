@@ -64,9 +64,9 @@ const componentName = (Icon: React.ElementType): string =>
 describe("one `default` per object, across all its axes", () => {
   // The status axis owns the loudest tone because it is the axis a card leads
   // with — identity-plus-state in the header band.
-  it("spends `default` on the workspace status axis", () => {
-    expect(statusTone("active")).toBe("default");
-    expect(statusTone("running")).toBe("default");
+  it("keeps ordinary live lifecycle badges neutral", () => {
+    expect(statusTone("active")).toBe("secondary");
+    expect(statusTone("running")).toBe("secondary");
   });
 
   // `working` used to be `default` here, so an active workspace running a
@@ -143,8 +143,10 @@ describe("the fleet state vocabulary", () => {
     expect(statusMarks.get("running")).toBe(statusMarks.get("active"));
   });
 
-  it("keeps phase position in both a named word and a grayscale-safe glyph", () => {
+  it("keeps phase position in both a named word and a grayscale-safe Lucide icon", () => {
     expect(new Set(TASK_PHASES.map(phaseLabel)).size).toBe(TASK_PHASES.length);
-    expect(new Set(TASK_PHASES.map((phase) => phaseGlyph(phase))).size).toBe(TASK_PHASES.length);
+    expect(new Set(TASK_PHASES.map((phase) => componentName(phaseGlyph(phase)))).size).toBe(
+      TASK_PHASES.length,
+    );
   });
 });

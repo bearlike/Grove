@@ -36,7 +36,8 @@ from grove.core.agents import (
     all_adapters,
     get_adapter,
 )
-from grove.core.agents.claude_code import ClaudeCodeAdapter
+from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
+from grove.core.agents.codex import _CodexHome
 from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook
 from grove.core.contracts.usage import DurationView
 from grove.core.errors import GroveError
@@ -424,6 +425,9 @@ class SessionExplorer:
         with self._manager.transcript_config_dir_scope(
             kind, ctx.config_dir if ctx is not None else None
         ):
+            minted = self._minted_listing(adapter, state, seen)
+            if minted is not None:
+                listings.append(minted)
             for cwd in state.transcript_scan_cwds:
                 for summary in adapter.list_sessions(cwd):
                     key = (summary.adapter_kind, summary.session_id)
@@ -472,6 +476,53 @@ class SessionExplorer:
         # `WorkspaceManager.shared_session_id` and looks that id up here.
         listings.sort(key=lambda ls: ls.summary.modified_at or _EPOCH, reverse=True)
         return tuple(listings)
+
+    def _minted_listing(
+        self, adapter: AgentAdapter, state: WorkspaceState, seen: set[tuple[str, str]]
+    ) -> SessionListing | None:
+        """The workspace's OWN session, resolved by id rather than by scanning —
+        ``None`` when it minted none or its transcript is not on disk yet.
+
+        The cwd scan below answers "which sessions live in these directories",
+        which is the only question a discovery scan can ask and the wrong one
+        for a session Grove itself minted: the id is already known, so the
+        directory is an inference about where the file landed rather than a
+        fact. **Claude Code invalidates that inference** — entering one of its
+        native ``.claude/worktrees/`` checkouts re-homes the whole transcript
+        under the worktree it entered, while each record's own ``cwd`` keeps
+        naming the directory that record was written in. The folder therefore
+        encodes a path that is neither the session's first cwd nor necessarily
+        its last (measured: two of three relocated transcripts on the reference
+        host ended in a SUBDIRECTORY of the folder's path), so there is no cwd
+        the workspace could scan that would find it, and no repaired encoding
+        that would either. The workspace listed nothing at all, while the
+        activity stream kept advertising the minted id straight off the store
+        record — a dashboard naming a session its own turns route answered 404
+        for.
+        A minted id is ``grove_launched`` and therefore never adoption-gated
+        (Grove minted it FOR this workspace), so resolving it by identity
+        weakens no attribution rule: discovered sessions keep the full
+        birth-or-pane gate below. Claiming the ``seen`` key here is what keeps
+        the scan from listing it a second time when the transcript sits where
+        the encoding predicts — the overwhelmingly common case, where this
+        costs one extra glob and changes nothing observable.
+        """
+        session_id = state.agent_session_id
+        if not session_id:
+            return None
+        cwd = state.transcript_scan_cwds[0]
+        summary = adapter.session_summary(cwd, session_id)
+        if summary is None:
+            return None
+        seen.add((summary.adapter_kind, summary.session_id))
+        return SessionListing(
+            summary=summary,
+            provenance="grove_launched",
+            workspace_id=state.id,
+            workspace_title=state.title,
+            workspace_branch=state.branch,
+            duration=self._duration(adapter, cwd, summary.session_id),
+        )
 
     @staticmethod
     def _duration(adapter: AgentAdapter, cwd: Path, session_id: str) -> DurationView | None:
@@ -820,6 +871,21 @@ class SessionCatalog:
         self._registry = registry
         self._turn_counts = turn_counts or TurnCountCache()
 
+    def entry_for_path(self, path: Path) -> CatalogEntry | None:
+        """Materialize one filesystem session record without a catalog-wide scan.
+
+        The event source already identified the changed transcript. This reads
+        only that file's bounded adapter head metadata, then uses the indexed
+        state store directly for workspace attribution — never ``Manager.list()``,
+        ``discover_all()``, a ``/proc`` walk, or a transcript parse. ``None``
+        means the path is not a current local-session transcript or vanished
+        while being read; callers remove any prior cached row for that path.
+        """
+        ref = self._ref_for_path(path)
+        if ref is None:
+            return None
+        return self._entry_for_ref(ref)
+
     def scan(self, *, limit: int | None = None) -> tuple[CatalogEntry, ...]:
         """Every discoverable session, newest-first by transcript mtime.
 
@@ -889,6 +955,89 @@ class SessionCatalog:
         entries.sort(key=lambda e: e.ref.mtime, reverse=True)
         return tuple(entries[:limit]) if limit is not None else tuple(entries)
 
+    def _ref_for_path(self, path: Path) -> SessionRef | None:
+        """The adapter's bounded-head reference for one known transcript path.
+
+        ``discover_all`` is intentionally too broad for a file edge. Claude and
+        Codex already expose the exact bounded metadata readers their full-store
+        walks use, so this path-specific route reuses those readers rather than
+        constructing an adapter-specific parser here. Remote sessions have no
+        local transcript path and therefore correctly return ``None``.
+        """
+        try:
+            path = path.resolve()
+            if path.suffix != ".jsonl" or not path.is_file():
+                return None
+            claude_root = _ClaudeHome.projects_dirs()
+            if any(path.is_relative_to(root) for root in claude_root):
+                cwd, birth, branch = _ClaudeHome._head_cwd_and_birth(path)
+                info = path.stat()
+                return SessionRef(
+                    session_id=path.stem,
+                    adapter_kind="claude_code",
+                    cwd=cwd,
+                    transcript_path=path,
+                    birth=birth,
+                    mtime=info.st_mtime,
+                    git_branch=branch,
+                    size_bytes=info.st_size,
+                )
+            if path.name.startswith("rollout-") and path.is_relative_to(_CodexHome.sessions_dir()):
+                meta, birth = _CodexHome._meta_and_birth(path)
+                session_id = meta.get("id")
+                if not isinstance(session_id, str) or not session_id:
+                    return None
+                cwd = meta.get("cwd")
+                cwd = cwd if isinstance(cwd, str) and cwd else None
+                git = meta.get("git")
+                branch = git.get("branch") if isinstance(git, dict) else None
+                branch = branch if isinstance(branch, str) and branch else None
+                info = path.stat()
+                return SessionRef(
+                    session_id=session_id,
+                    adapter_kind="codex",
+                    cwd=cwd,
+                    transcript_path=path,
+                    birth=birth,
+                    mtime=info.st_mtime,
+                    git_branch=branch,
+                    size_bytes=info.st_size,
+                )
+        except OSError:
+            return None
+        return None
+
+    def _entry_for_ref(self, ref: SessionRef) -> CatalogEntry:
+        """Add catalog-only annotations to a single already-head-read reference."""
+        states = self._registry.workspace_states()
+        minted = {state.agent_session_id: state for state in states if state.agent_session_id}
+        by_cwd: dict[str, WorkspaceState] = {}
+        effective_kinds: dict[str, str] = {}
+        for workspace in states:
+            by_cwd.setdefault(str(workspace.agent_cwd), workspace)
+            by_cwd.setdefault(workspace.worktree_path, workspace)
+            if workspace.transcript_context is not None:
+                by_cwd.setdefault(workspace.transcript_context.agent_cwd, workspace)
+            effective_kinds[workspace.id] = str(workspace.agent_kind or "")
+        state = minted.get(ref.session_id)
+        if state is None and ref.cwd is not None:
+            candidate = by_cwd.get(ref.cwd)
+            if candidate is not None and ref.adapter_kind == effective_kinds[candidate.id]:
+                state = candidate
+        known_roots = {Path(state.repo_root).resolve() for state in states}
+        project = self._resolve_project(Path(ref.cwd), known_roots) if ref.cwd is not None else None
+        facts = self._turn_counts.facts_for((ref,))
+        known = facts.get((ref.adapter_kind, ref.session_id))
+        return CatalogEntry(
+            ref=ref,
+            provenance="grove_launched" if ref.session_id in minted else "fs_discovered",
+            project=project,
+            workspace_id=state.id if state else None,
+            workspace_title=state.title if state else None,
+            turn_count=known.turns if known else None,
+            duration=known.duration if known else None,
+        )
+
     def count_turns(
         self, entries: Sequence[CatalogEntry], *, stop: Callable[[], bool] | None = None
     ) -> int:
@@ -949,21 +1098,43 @@ class SessionCatalog:
         provenance rule can't drift between the project-scoped and host-wide
         views. Never a filesystem crawl: ``known_roots()`` is the existing
         store-roots-union-declared-roots union.
+
+        The states come from the registry's INDEXED store read rather than a
+        ``Manager.list()`` per repo — the maps want each record's id, cwd and
+        kind, and ``list()`` additionally reconciles status against live tmux
+        (~500 ms for 23 workspaces) for an answer nothing here reads. But the
+        kind still resolves through ``effective_kind``: a record written before
+        ``agent_kind`` existed carries ``None`` and only the repo's own config
+        cascade can name its adapter, so substituting ``generic`` there silently
+        un-attributes every legacy session. One Manager per repo is minted for
+        that lookup, which the registry already caches.
         """
         minted: dict[str, WorkspaceState] = {}
         by_cwd: dict[str, WorkspaceState] = {}
         eff_kind: dict[str, str] = {}
-        for root in self._registry.known_roots():
-            manager = self._registry.get(root)
-            for state in manager.list():
-                eff_kind[state.id] = manager.effective_kind(state)
-                if state.agent_session_id:
-                    minted[state.agent_session_id] = state
-                cwd_keys = [str(state.agent_cwd), state.worktree_path]
-                if state.transcript_context is not None:
-                    cwd_keys.append(state.transcript_context.agent_cwd)
-                for cwd_key in cwd_keys:
-                    by_cwd.setdefault(cwd_key, state)
+        for state in self._registry.workspace_states():
+            if state.agent_kind is not None:
+                eff_kind[state.id] = state.agent_kind
+            else:
+                # Guarded for the reason the gallery's own per-repo loop is:
+                # `registry.get` resolves that repo's config cascade and raises
+                # on invalid JSON, and one unreadable project must not blank the
+                # host-wide catalog. `generic` is the same answer
+                # `effective_kind` gives a record whose agent is unknown.
+                try:
+                    eff_kind[state.id] = self._registry.get(Path(state.repo_root)).effective_kind(
+                        state
+                    )
+                except Exception as exc:
+                    logger.debug("catalog kind fallback for {}: {}", state.id, type(exc).__name__)
+                    eff_kind[state.id] = "generic"
+            if state.agent_session_id:
+                minted[state.agent_session_id] = state
+            cwd_keys = [str(state.agent_cwd), state.worktree_path]
+            if state.transcript_context is not None:
+                cwd_keys.append(state.transcript_context.agent_cwd)
+            for cwd_key in cwd_keys:
+                by_cwd.setdefault(cwd_key, state)
         return minted, by_cwd, eff_kind
 
     @staticmethod

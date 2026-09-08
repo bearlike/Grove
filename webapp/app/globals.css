@@ -31,12 +31,14 @@
    * `text-body` token could never reach them, so the only lever that resizes
    * this app end to end is the value behind the class they already use.
    *
-   * The ROOT font size stays 16px deliberately. Tailwind v4 derives spacing
-   * from rem too, so shrinking the root would shrink every gutter, control
-   * height and touch target with the type — a proportional zoom-out, not a
-   * density change. Type moves; geometry does not.
+   * The ROOT font size is NO LONGER 16px — see the `html` rule in the base
+   * layer below, which scales it to 80% on a fine pointer. That rule is the
+   * app's density lever precisely because Tailwind v4 derives spacing from rem
+   * too; this ramp still decides the RELATIVE weight of each step, and the
+   * root decides how much of the screen the whole system spends.
    *
-   * 12px is the floor and nothing here goes under it. WCAG sets no minimum
+   * 12px is the floor and nothing here goes under it, measured against the
+   * root this ramp is written for. WCAG sets no minimum
    * size, so the honest constraint is the one we can hold: every step is rem,
    * so browser zoom and user font settings still scale it, and every step is
    * legible against all three content tiers below (measured: worst pairing is
@@ -91,7 +93,7 @@
    * well or a terminal RECESSES below it. The app had no vocabulary for
    * "below" at all, which is why every inset region reached for `bg-muted`.
    *
-   * FOUR RUNGS, NOT SEVEN. Adjacent steps are 0.055–0.070 OKLCH L, which is
+   * FOUR RUNGS, NOT SEVEN. Adjacent steps are at least 0.05 OKLCH L, which is
    * roughly 3–5× the just-noticeable difference under ideal viewing and is the
    * margin chosen to survive a dim panel at reduced brightness. Seven rungs
    * inside the same range could not hold that separation.
@@ -107,13 +109,8 @@
   --color-surface-overlay: var(--surface-overlay);
   /* The redundant boundary carrier. A rung is never identified by fill alone. */
   --color-surface-edge: var(--surface-edge);
-  /*
-   * The edge of anything INTERACTIVE, held at >= 3:1 against every rung.
-   * WCAG 1.4.11 scopes non-text contrast to what identifies a COMPONENT or its
-   * STATE — a control's edge, a focus ring, a selected mark. It does not reach
-   * a card's decorative edge, and chasing 3:1 between adjacent container fills
-   * would produce a checkerboard rather than a calmer app.
-   */
+  /* Secondary outlines on labelled controls. Inputs and focus indicators keep
+     stronger independent tokens because their boundaries convey interaction. */
   --color-edge-control: var(--edge-control);
 
   --color-success: var(--success);
@@ -139,10 +136,38 @@
    * `--content-tertiary` already means.
    */
   --color-merged: var(--merged);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /*
+   * FIVE RADII, EACH A ROLE — see `design-system.md` §4.3 for the tuple.
+   *
+   *   0     list rows, table cells
+   *   2.3   keycaps, badges, inner cells, code blocks
+   *   3.45  buttons, inputs, selects, tab triggers, chips
+   *   5.75  cards, composer, popovers, dialogs, the page panel
+   *   full  circles only — status dots, avatars, brand marks, spinners
+   *
+   * EVERY step of Tailwind's radius scale is redefined onto one of those roles,
+   * and that is the mechanism rather than an aesthetic preference. The vendored
+   * tree speaks `rounded-sm` through `rounded-3xl` in 130-odd places and cannot
+   * be edited, so leaving `2xl` and `3xl` at their upstream 16px/24px means a
+   * composer and a menu that ignore `--radius` entirely. Collapsing the scale is
+   * what makes the token actually govern; the arbitrary px literals the vendored
+   * files also carry are pinned by slot in the §00 block further down.
+   *
+   * The pixel floor keeps roles distinct at the density root. Both floor and
+   * rem base are 15% softer than the original 2/3/5 roles; rem still grows the
+   * whole set with reader font settings. `xl` keeps the
+   * `--radius-container` indirection because that is how a nested enclosure
+   * (`card-region`) supplies the cell role to the vendored Card without a
+   * radius utility or a vendor edit.
+   */
+  --radius-xs: calc(max(5.75px, var(--radius)) * 0.4);
+  --radius-sm: calc(max(5.75px, var(--radius)) * 0.4);
+  --radius-md: calc(max(5.75px, var(--radius)) * 0.6);
+  --radius-lg: max(5.75px, var(--radius));
+  --radius-xl: var(--radius-container, max(5.75px, var(--radius)));
+  --radius-2xl: max(5.75px, var(--radius));
+  --radius-3xl: max(5.75px, var(--radius));
+  --radius-4xl: max(5.75px, var(--radius));
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -193,33 +218,43 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  /* THE FLIP. These four shadcn tokens now READ the ladder instead of holding
-     their own values, which is what puts every surface in the app on a named
-     rung without touching a single component. `--card` and `--popover` were
-     both the same pure white as `--background` here — measured 1.00:1, three
-     names for one surface — so a hairline border was the only thing separating
-     a dialog from the page behind it. */
+  --radius: 0.2875rem;
+  /*
+   * THE HEADER BAND — a low-amplitude gradient plus a 1px catch-light.
+   *
+   * The stops are 0.05 L apart, the same step the surface ladder uses, because
+   * a narrower one is not a subtle band: it is an invisible one. The previous
+   * pair spanned 0.015 L and measured as flat chrome on both themes, which is
+   * the whole reason this is stated as an amplitude rather than as two colours.
+   *
+   * The highlight is one step LIGHTER than the start and is what reads as
+   * chrome rather than as a tint — a band lit from above has an edge, and
+   * without it the gradient looks like a fill somebody forgot to finish.
+   */
+  --surface-header-start: oklch(0.99 0.002 286);
+  --surface-header-end: oklch(0.94 0.004 286);
+  --surface-header-highlight: oklch(1 0 0);
+  /* Shared surfaces read the ladder: a card is the `raised` rung, one step off
+     the page it sits on, and its header band and inner enclosures carry the
+     hierarchy inside it. Overlays retain their separate fill and scrim. */
   --background: var(--surface-base);
   --foreground: oklch(0.141 0.005 285.823);
   --card: var(--surface-raised);
   --card-foreground: oklch(0.141 0.005 285.823);
   --popover: var(--surface-overlay);
   --popover-foreground: oklch(0.141 0.005 285.823);
-  /* Grove's clay, not shadcn's near-black neutral. `--primary` is what every
-     `default` badge, focus ring and primary button resolves to, so leaving it
-     achromatic meant the brand hue existed in exactly one place (the mark) and
-     the product itself had no colour language at all: an `active` workspace and
-     a resting one differed by a shade of grey. Solved against `--primary-
-     foreground` at 4.54:1. */
-  --primary: oklch(0.58 0.145 45);
+  /* The action fill must support small text, not only a state glyph. This clay
+     clears 4.5:1 against primary-foreground; the brand artwork is independent. */
+  --primary: oklch(0.56 0.145 45);
   --primary-foreground: oklch(0.985 0 0);
   /* The third state `--success`/`--destructive` could not express: work that is
      under way. §4.1 rightly refused an amber with no state table behind it, so
      this one arrives WITH its gate written down — it is spent on exactly one
      axis, progress that has started and not finished (a todo in flight, a phase
      mid-ramp), and never as decoration. 4.51:1 on its own foreground. */
-  --warning: oklch(0.55 0.14 75);
+  /* Semantic figures also sit on the sunken rail at 12px. These light-mode
+     hues clear 4.5:1 there, not only 3:1 as an icon on a white card. */
+  --warning: oklch(0.49 0.14 75);
   --warning-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.967 0.001 286.375);
   --secondary-foreground: oklch(0.21 0.006 285.885);
@@ -243,14 +278,19 @@
   --muted-foreground: oklch(0.495 0.016 286);
   --accent: oklch(0.967 0.001 286.375);
   --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  /* Control edges and focus rings leave the decorative border behind and take
-     the 3:1 non-text token. `--border` stays where it is on purpose: WCAG
-     1.4.11 scopes its floor to what identifies a COMPONENT or its STATE, so a
-     decorative container edge is allowed to be quiet and a control's is not. */
-  --input: var(--edge-control);
-  --ring: var(--edge-control);
+  --destructive: oklch(0.48 0.245 27.325);
+  /* Decorative edges composite over the surface that actually owns each
+     perimeter, which is the only generic 40%-reduction seam: the same 60% alpha
+     applies to raised cards, base headers, and sunken dividers. Do not use parent
+     opacity; it would also fade text and state marks. `--border-source` keeps the
+     pre-change opaque value for non-border derivations. */
+  --border-source: oklch(0.83 0.006 286);
+  --border: color-mix(in srgb, var(--border-source) 60%, transparent);
+  /* PROMINENT TIER, unchanged. These identify a component or its state, which
+     is the only thing WCAG 1.4.11 actually reaches, and they were already
+     solved from the extreme: 3.00 / 3.66 / 4.05 across sunken / base / raised. */
+  --input: oklch(0.594 0.008 286);
+  --ring: oklch(0.594 0.008 286);
   /* The three-tier neutral ramp. Primary and tertiary alias shadcn's existing
      pair so nothing has to be re-picked; only the middle step is new.
      Measured against --background: 19.90:1, 9.21:1, 6.15:1 — three clearly
@@ -293,27 +333,29 @@
      stronger separator than any tint could be; spending the last of the range
      here would have cost the card/page step that a user actually looks at. */
   --surface-overlay: oklch(1 0 0);
-  --surface-edge: oklch(0.87 0.006 286);
-  /* SOLVED AGAINST `sunken`, NOT `base`. The previous 0.64 was derived as "the
-     lightest value still clearing 3:1 on `base`, and it clears every lighter
-     rung by more" — true, and it silently skipped the one rung that is DARKER
-     than the datum. On `sunken` it measures 2.50:1, under the non-text floor,
-     which matters because `sunken` is exactly where controls sit: terminals,
-     diff wells, code blocks, inset lists.
-
-     0.594 is the lightest value clearing 3:1 against the DARKEST light rung:
-     3.00 / 3.66 / 4.05 on sunken / base / raised. One token still covers the
-     ladder; it just has to be solved from the bottom.
-
-     Note the mirror in dark, which is why neither theme's value can be derived
-     from the other's: there the edge is lighter than every rung, so the worst
-     case is the LIGHTEST one (`overlay`), and 0.56 clears it at 3.08:1. */
-  --edge-control: oklch(0.594 0.008 286);
+  /* `--surface-edge` is a decorative perimeter, so it uses the same exact
+     60%-opacity reduction as `--border`. The opaque source remains available to
+     fill derivations below; those fills are not borders and must not change. */
+  --surface-edge-source: oklch(0.82 0.007 286);
+  --surface-edge: color-mix(in srgb, var(--surface-edge-source) 60%, transparent);
+  /* The card's ramp, LIGHT: white down toward the edge token, because there is
+     nothing above `raised` to climb to. Derived, never a new colour. */
+  --attachment-card-start: var(--surface-raised);
+  --attachment-card-end: color-mix(in oklab, var(--surface-edge-source) 28%, var(--surface-raised));
+  /* SUBTLE TIER, stated rather than implied. This token never made a 3:1 claim
+     — §4.6 already said it "is not a 3:1 focus indicator" — so naming its tier
+     turns a caveat into a fact. It is the New workspace button's border, which
+     is `bg-transparent` on the sidebar and measured 1.67:1; 1.79 there now.
+     1.4.11 does not reach it (the button's own label identifies it), so this is
+     a legibility decision, not a compliance one — and it sits a step above the
+     divider tier because a control's edge is the only thing drawing it, where a
+     divider merely separates two things that are already visible. */
+  --edge-control: oklch(0.80 0.009 286);
   /* Grove's one addition to the shadcn palette: a semantic green for measured
      progress and healthy quota. shadcn ships `destructive` but no positive
      counterpart, so without this every "good" signal reaches for a raw palette
      colour — which is exactly what lint:styling forbids in components/grove. */
-  --success: oklch(0.58 0.14 155);
+  --success: oklch(0.47 0.14 155);
   --success-foreground: oklch(0.985 0 0);
   /* Merged. Solved against `sunken`, the DARKEST rung in this theme and so the
      worst case for a dark mark — 4.24:1 there, 5.71:1 on the card it actually
@@ -346,18 +388,18 @@
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.967 0.001 286.375);
   --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
+  /* Sidebar divisions are decorative edges on the same shared token. */
+  --sidebar-border: var(--border);
   --sidebar-ring: oklch(0.705 0.015 286.067);
 }
 
 .dark {
-  /* The same flip, onto dark's OWN ladder — the rung values below are designed
-     independently and are not the light ones inverted. Dark had real headroom
-     in both directions, so unlike light it never needed a foreground retune to
-     survive this: every tier already clears AA on all four rungs, down to 5.46
-     for tertiary on `overlay`. `--card` and `--popover` were the same 0.21
-     here too, so a dialog over a card had no tonal step at all; now they are
-     0.225 and 0.285. */
+  --surface-header-start: oklch(0.303142 0.006 286);
+  --surface-header-end: oklch(0.255779 0.006 286);
+  --surface-header-highlight: oklch(0.350505 0.006 286);
+  /* Dark keeps its own ladder. The card body is the `raised` rung above the
+     page; popovers retain the overlay rung. Every content tier clears AA
+     across the ladder, including the header's darker stop. */
   --background: var(--surface-base);
   --foreground: oklch(0.985 0 0);
   --card: var(--surface-raised);
@@ -378,20 +420,23 @@
   --accent: oklch(0.274 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
+  /* The surface below supplies the other 40% of every decorative seam; keeping
+     this reduction in the color token avoids dimming the content it encloses. */
+  --border-source: oklch(0.36 0.008 286);
+  --border: color-mix(in srgb, var(--border-source) 60%, transparent);
   /* The biggest single accessibility gain in this commit, and it was invisible
      to the audit because it is not a solid colour: dark `--input` was a 15%
      white ALPHA edge, which composites to 1.49–1.62:1 over these rungs. A
      contrast table that lists colours never measured it. Opaque now, at
      3.08–4.42:1 depending on the rung. */
-  --input: var(--edge-control);
-  --ring: var(--edge-control);
+  --input: oklch(0.56 0.008 286);
+  --ring: oklch(0.56 0.008 286);
   /* Only the middle step is restated: primary and tertiary alias --foreground
      and --muted-foreground, which this block already redefines. Measured
      against the dark --background: 19.06:1, 12.34:1, 7.59:1. */
   --content-secondary: oklch(0.845 0.01 286);
   /*
-   * The ladder, DARK. Every step clears the 0.05 floor (0.055 / 0.070 / 0.060)
+   * The ladder, DARK. Every step clears the 0.05 floor (0.055 / 0.058152 / 0.071848)
    * because dark mode has headroom in both directions and does not need shadow
    * to carry elevation — which is why `surface-raised`'s shadow resolves to
    * `none` here while the tonal step does the lifting.
@@ -402,12 +447,19 @@
    */
   --surface-sunken: oklch(0.1 0.005 286);
   --surface-base: oklch(0.155 0.005 286);
-  --surface-raised: oklch(0.225 0.006 286);
+  --surface-raised: oklch(0.213152 0.006 286);
   --surface-overlay: oklch(0.285 0.006 286);
-  --surface-edge: oklch(0.32 0.008 286);
-  /* L 0.56 is the darkest value still clearing 3:1 on `overlay`, the lightest
-     rung in this theme — so it clears the darker rungs by more. */
-  --edge-control: oklch(0.56 0.008 286);
+  /* This remains the source for attachment fills; only its edge output below
+     becomes translucent. */
+  --surface-edge-source: oklch(0.36 0.008 286);
+  --surface-edge: color-mix(in srgb, var(--surface-edge-source) 60%, transparent);
+  /* ComposerBar's dark:bg-popover resolves to overlay, not raised. Both
+     attachment stops must sit above it to retain the approved separation. */
+  --attachment-card-start: color-mix(in oklab, var(--surface-edge-source) 94%, var(--foreground));
+  --attachment-card-end: var(--surface-edge-source);
+  /* SUBTLE TIER. A quiet resting edge, distinct from the stronger input/ring
+     values that carry the 3:1 identity claim. 1.85:1 at `overlay`. */
+  --edge-control: oklch(0.40 0.009 286);
   --success: oklch(0.7 0.17 162.48);
   --success-foreground: oklch(0.21 0.006 285.885);
   /* Merged, solved from the opposite end: here the mark is LIGHTER than every
@@ -432,8 +484,153 @@
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.274 0.006 286.033);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  /* Sidebar divisions share the decorative edge output. */
+  --sidebar-border: var(--border);
   --sidebar-ring: oklch(0.552 0.016 285.938);
+}
+
+/*
+ * THE TERMINAL PALETTE — 16 ANSI colours, and the range is the decision.
+ *
+ * `fancy-ansi` emits `var(--ansi-red)` and friends with its own defaults, so
+ * this block is the whole override: no vendored port, no `!important`, no call
+ * site touched. Verified in the shipped `dist/main.js`, not only in its README.
+ *
+ * THE DEFAULTS FAIL BOTH THEMES, AND LIGHT IS THE WORSE ONE — which is the
+ * opposite of how it reads. Measured on the terminal's own ground: 13 of 16
+ * colours miss 4.5:1 in light, 5 of 16 in dark. Dark's failures are DIM
+ * (`black` 1.63, `bright-black` 2.82) so they read as unreadable; light's are
+ * washed-out brights (`bright-yellow` 1.09, `white` 1.08) which stay just
+ * legible enough to register as poor quality instead. The instinct that dark
+ * is worse is real perception of a real defect in the other theme.
+ *
+ * SO CONSTRAIN THE RANGE RATHER THAN PICK SIXTEEN COLOURS. One lightness per
+ * tier per theme and one chroma, with only the hue varying: the defaults span
+ * 8.7x (light) and 10.9x (dark) between their best and worst contrast, and
+ * these span 2.3x and 2.0x. Every value clears 4.5:1 on every rung of the
+ * ladder in both themes, so a terminal in a sunken well reads like one on the
+ * page.
+ *
+ * BRIGHT MOVES AWAY FROM THE GROUND, never toward white. On a light terminal
+ * "bright" is darker and more saturated; on a dark one it is lighter. Moving
+ * it toward white in light mode is what produced the 1.09:1 yellow.
+ *
+ * The hues are the ANSI angles, NOT Grove's neutral 286. A terminal's colours
+ * are an agent's semantic output — red is a failure, green is a pass — so they
+ * answer to the meaning they carry, not to the app's chrome hue.
+ */
+:root {
+  --ansi-black: oklch(0.3 0.006 286);
+  --ansi-red: oklch(0.45 0.13 27);
+  --ansi-green: oklch(0.45 0.13 155);
+  --ansi-yellow: oklch(0.45 0.13 75);
+  --ansi-blue: oklch(0.45 0.13 265);
+  --ansi-magenta: oklch(0.45 0.13 330);
+  --ansi-cyan: oklch(0.45 0.13 200);
+  /* The dimmest ink in this theme, so it is the value that binds: "white" on a
+     light ground has to be a mid grey or it is not text. */
+  --ansi-white: oklch(0.48 0.004 286);
+  --ansi-bright-black: oklch(0.42 0.006 286);
+  --ansi-bright-red: oklch(0.38 0.16 27);
+  --ansi-bright-green: oklch(0.38 0.16 155);
+  --ansi-bright-yellow: oklch(0.38 0.16 75);
+  --ansi-bright-blue: oklch(0.38 0.16 265);
+  --ansi-bright-magenta: oklch(0.38 0.16 330);
+  --ansi-bright-cyan: oklch(0.38 0.16 200);
+  --ansi-bright-white: oklch(0.3 0.004 286);
+
+  /*
+   * THE 256-COLOUR GREYSCALE RAMP (SGR 232-255), which the 16 colours above do
+   * not cover and which turned out to be the most common ink in a real agent
+   * TUI: 54 of the spans in one measured pane, at 2.62:1.
+   *
+   * `fancy-ansi` emits `var(--ansi-gray-N, rgb(s,s,s))` for these, so the
+   * FALLBACK was winning because nothing defined the variable — 13 of the 24
+   * vendor greys miss 4.5:1 in light and 12 in dark. A palette audit that only
+   * checks the named 16 reports clean while most of the screen fails.
+   *
+   * N counts DOWN from the darkest vendor step (N=24) to the lightest (N=1), so
+   * the ramp is remapped rather than reordered: a TUI's own shade hierarchy
+   * survives, and only the range moves. Both ends are solved at the worst rung
+   * a terminal sits on. 24 flat declarations because CSS cannot compute a
+   * custom-property name, and a generated block is what keeps them exact.
+   *
+   * SGR 16-231 (the colour cube) is NOT reachable — the vendor emits a literal
+   * `rgb()` with no variable for those, so an agent using them opts out of the
+   * theme entirely. Nothing here can fix that without a port.
+   */
+  --ansi-gray-24: oklch(0.490 0.004 286);
+  --ansi-gray-23: oklch(0.480 0.004 286);
+  --ansi-gray-22: oklch(0.470 0.004 286);
+  --ansi-gray-21: oklch(0.460 0.004 286);
+  --ansi-gray-20: oklch(0.450 0.004 286);
+  --ansi-gray-19: oklch(0.440 0.004 286);
+  --ansi-gray-18: oklch(0.430 0.004 286);
+  --ansi-gray-17: oklch(0.420 0.004 286);
+  --ansi-gray-16: oklch(0.410 0.004 286);
+  --ansi-gray-15: oklch(0.400 0.004 286);
+  --ansi-gray-14: oklch(0.390 0.004 286);
+  --ansi-gray-13: oklch(0.380 0.004 286);
+  --ansi-gray-12: oklch(0.370 0.004 286);
+  --ansi-gray-11: oklch(0.360 0.004 286);
+  --ansi-gray-10: oklch(0.350 0.004 286);
+  --ansi-gray-9: oklch(0.340 0.004 286);
+  --ansi-gray-8: oklch(0.330 0.004 286);
+  --ansi-gray-7: oklch(0.320 0.004 286);
+  --ansi-gray-6: oklch(0.310 0.004 286);
+  --ansi-gray-5: oklch(0.300 0.004 286);
+  --ansi-gray-4: oklch(0.290 0.004 286);
+  --ansi-gray-3: oklch(0.280 0.004 286);
+  --ansi-gray-2: oklch(0.270 0.004 286);
+  --ansi-gray-1: oklch(0.260 0.004 286);
+}
+
+.dark {
+  /* Mirror image of light's `--ansi-white`: the dimmest ink here, so "black" on
+     a dark ground is a mid grey. This is the single worst default in either
+     theme — `#2e3436` measures 1.63:1 on this surface. */
+  --ansi-black: oklch(0.62 0.006 286);
+  --ansi-red: oklch(0.7 0.13 27);
+  --ansi-green: oklch(0.7 0.13 155);
+  --ansi-yellow: oklch(0.7 0.13 75);
+  --ansi-blue: oklch(0.7 0.13 265);
+  --ansi-magenta: oklch(0.7 0.13 330);
+  --ansi-cyan: oklch(0.7 0.13 200);
+  --ansi-white: oklch(0.82 0.004 286);
+  --ansi-bright-black: oklch(0.65 0.006 286);
+  --ansi-bright-red: oklch(0.82 0.15 27);
+  --ansi-bright-green: oklch(0.82 0.15 155);
+  --ansi-bright-yellow: oklch(0.82 0.15 75);
+  --ansi-bright-blue: oklch(0.82 0.15 265);
+  --ansi-bright-magenta: oklch(0.82 0.15 330);
+  --ansi-bright-cyan: oklch(0.82 0.15 200);
+  --ansi-bright-white: oklch(0.92 0.004 286);
+  /* Same ramp, mirrored: N=24 is still the quietest ink, but quiet on a dark
+     ground means DARKER-than-bright rather than lighter. */
+  --ansi-gray-24: oklch(0.620 0.004 286);
+  --ansi-gray-23: oklch(0.635 0.004 286);
+  --ansi-gray-22: oklch(0.650 0.004 286);
+  --ansi-gray-21: oklch(0.664 0.004 286);
+  --ansi-gray-20: oklch(0.679 0.004 286);
+  --ansi-gray-19: oklch(0.694 0.004 286);
+  --ansi-gray-18: oklch(0.709 0.004 286);
+  --ansi-gray-17: oklch(0.723 0.004 286);
+  --ansi-gray-16: oklch(0.738 0.004 286);
+  --ansi-gray-15: oklch(0.753 0.004 286);
+  --ansi-gray-14: oklch(0.768 0.004 286);
+  --ansi-gray-13: oklch(0.783 0.004 286);
+  --ansi-gray-12: oklch(0.797 0.004 286);
+  --ansi-gray-11: oklch(0.812 0.004 286);
+  --ansi-gray-10: oklch(0.827 0.004 286);
+  --ansi-gray-9: oklch(0.842 0.004 286);
+  --ansi-gray-8: oklch(0.857 0.004 286);
+  --ansi-gray-7: oklch(0.871 0.004 286);
+  --ansi-gray-6: oklch(0.886 0.004 286);
+  --ansi-gray-5: oklch(0.901 0.004 286);
+  --ansi-gray-4: oklch(0.916 0.004 286);
+  --ansi-gray-3: oklch(0.930 0.004 286);
+  --ansi-gray-2: oklch(0.945 0.004 286);
+  --ansi-gray-1: oklch(0.960 0.004 286);
 }
 
 /*
@@ -473,9 +670,637 @@
  * deliberately: those were measured off the assistant-ui base demo and
  * reviewed, and the tint step carries this boundary on its own.
  */
+/* The vendored Card speaks xl for every enclosure. A nested region supplies
+   the cell role to that same token; no radius utility or vendor edit is needed. */
+@utility card-region {
+  --radius-container: calc(max(5.75px, var(--radius)) * 0.4);
+}
+
+/*
+ * Radius roles for vendor literals that bypass the theme scale. Unlayered
+ * selectors intentionally outrank Tailwind utilities without vendor edits.
+ * Prefer slots; the named class exceptions cover upstream children without
+ * slots. Keep Card unpinned so card-region's --radius-container still works.
+ * Literal exceptions precede slot rules, which carry the more specific role.
+ */
+.rounded,
+.rounded-\[10px\],
+.rounded-\[14px\],
+.aui-attachment-tile {
+  border-radius: var(--radius-sm);
+}
+.rounded-\[20px\],
+.rounded-\[24px\] {
+  border-radius: var(--radius-lg);
+}
+
+/* Rows and cells — 0. A row's boundary is its neighbours, never a corner.
+   This comes AFTER the literal sweep on purpose: `composer-menu-item` carries
+   `rounded-[10px]`, which is the cell role everywhere else it appears. */
+[data-slot="composer-menu-item"],
+[data-slot="model-selector-item"],
+[data-slot="command-item"],
+[data-slot="table-row"],
+[data-slot="table-cell"],
+[data-slot="table-head"] {
+  border-radius: 0;
+}
+
+/* Resting buttons/selects have visible labels or glyphs; their outline is
+   secondary. TooltipTrigger becomes the button's slot, so the semantic native
+   variant is the stable seam. Keep focus and invalid-state borders unchanged. */
+:is(button, a, [role="button"])[data-variant="outline"]:not(:focus-visible):not([aria-invalid="true"]),
+[data-slot="select-trigger"]:not(:focus-visible):not([aria-invalid="true"]) {
+  border-color: var(--edge-control);
+}
+
+/* The global base border is decorative. Rebind its source only inside actual
+   controls so their existing border, state, and focus utilities stay intact. */
+:is(button, input, select, textarea, summary, [role="button"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="combobox"], a[data-slot="badge"]) {
+  --border: var(--border-source);
+  --surface-edge: var(--surface-edge-source);
+}
+
+/* Native outline buttons add a one-pixel shadow that makes their enclosure read
+   heavier than the quiet resting edge. The semantic variant is preserved by a
+   tooltip wrapper while data-slot is not. */
+:is(button, a, [role="button"])[data-variant="outline"] {
+  box-shadow: none;
+}
+
+/* Workspace navigation shares one baseline per band. The native line marker
+   belongs to its trigger, so resizing never waits for measured coordinates. */
+.workspace-header {
+  min-height: 32px;
+}
+.workspace-header-actions:has(.workspace-pane-actions) {
+  flex: 0 1 26rem;
+}
+.workspace-tab-strip {
+  --tab-target: 24px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.workspace-work-tabs {
+  min-height: 32px;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-tab-list {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 31px;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  border: 0;
+}
+.workspace-tab-list [role="tab"] {
+  flex: 1 0 auto;
+  height: auto;
+  align-self: stretch;
+  min-width: var(--tab-target);
+  min-height: var(--tab-target);
+  padding: 0 0.5rem;
+  gap: 0;
+  transition-property: color;
+  outline-offset: -2px;
+}
+.workspace-tab-list [role="tab"]::after {
+  inset-inline: -1px;
+  bottom: -2px;
+  height: 2px;
+  transition: none;
+  pointer-events: none;
+}
+.workspace-tab-list [data-tab-label] {
+  display: block;
+  width: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+.workspace-tab-list [data-tab-label] > span {
+  display: block;
+  width: max-content;
+  padding-inline-start: 0.375rem;
+}
+.workspace-tab-list[data-label-mode="all"] [data-tab-label],
+.workspace-tab-list[data-label-mode="active"] [data-state="active"] [data-tab-label] {
+  width: auto;
+  visibility: visible;
+}
+/* A forced-colors background can disappear; selection must remain a shape. */
+@media (forced-colors: active) {
+  .workspace-tab-list [role="tab"][data-state="active"]::after {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+}
+@media (pointer: coarse) {
+  .workspace-header {
+    min-height: 45px;
+  }
+  .workspace-tab-strip {
+    --tab-target: 44px;
+  }
+  .workspace-work-tabs {
+    min-height: 45px;
+  }
+  .workspace-tab-list {
+    min-height: 44px;
+  }
+}
+
+/* Inner cells, badges, keycaps — 2. `file-root` left this block: an attachment
+   is a card, not a cell inside one, and takes the container role. */
+[data-slot="generation-loader"] .rounded-\[3px\],
+[data-slot="badge"] {
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * THE WORKING MATRIX KEEPS TIME ON THE COMPOSITOR, NOT ON THE MAIN THREAD.
+ *
+ * `working-loader.tsx` drives the vendored `GenerationLoader` from one shared
+ * `setInterval`, which is what lets it stand down for reduced motion and for a
+ * hidden tab — properties a bare CSS animation cannot have, so that clock
+ * stays. But a JS-driven tick is only as smooth as the main thread beneath it:
+ * every long task freezes the matrix mid-frame, and the loader whose entire job
+ * is to say "something is happening" is then the most visible thing that looks
+ * broken. Measured on the deployed app 2026-09-15: a 1,160ms task during load,
+ * i.e. more than a second of a visibly stuck "Working" mark.
+ *
+ * So the CELLS carry their own compositor-driven breathing on top of whatever
+ * position the clock last set. `opacity` is compositor-only, so this survives a
+ * blocked main thread and costs no style recalc or layout. The clock still owns
+ * the PATTERN (which cells are lit); this only guarantees the mark never reads
+ * as frozen while the pattern waits its turn. Reduced motion stands it down —
+ * the vendored cells already carry `motion-reduce:transition-none`, and the
+ * media query here is what covers the animation this rule adds.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  [data-slot="generation-loader"] [class*="opacity-15"] {
+    animation: loader-cell-breathe 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes loader-cell-breathe {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/*
+ * A SHIMMER OVER NOTHING IS A PER-FRAME REPAINT OF NOTHING.
+ *
+ * `tw-shimmer` animates `background-position` across a nine-stop
+ * `color-mix(in oklch)` gradient that is clipped to the text, so every frame
+ * repaints the glyphs — it is the most expensive idle animation this app runs
+ * (measured 2026-09-15 on the deployed workspace route: disabling it removed
+ * 653ms of main-thread task time per 6s of idle and took slow frames 2 → 0,
+ * against 753ms for hiding the entire transcript).
+ *
+ * The vendored `GenerationLoader` renders its label element unconditionally,
+ * and `WorkingMark` deliberately passes an empty label so the rail keeps its
+ * pixels — which left three shimmers animating on measured 0x0 elements. The
+ * vendored component exposes no prop for this and `registry:check` forbids
+ * editing it, so the theme boundary is the seam: an empty label has no text to
+ * clip a gradient to, and `:empty` says exactly that without naming a caller.
+ */
+[data-slot="generation-loader"] .shimmer:empty {
+  animation: none;
+  background: none;
+}
+
+/* Vendor Markdown fences use literal pixels; tool and diff code already use
+   this ramp step. Normalize fences on every surface, including plan/mailbox bodies. */
+.aui-md-pre {
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
+}
+
+/* Glass surrounds the coins; opening fades only that shell, never its artwork. */
+.tool-icon-stack {
+  --tool-stack-glass: 255 255 255;
+  --tool-stack-disc-base: oklch(0.96 0.006 286);
+  --tool-stack-disc-edge: oklch(0.65 0.02 286 / 0.45);
+  position: relative;
+  isolation: isolate;
+  min-width: 3rem;
+  justify-content: center;
+  padding: 0.1875rem 0.375rem;
+}
+
+.tool-icon-stack::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgb(var(--tool-stack-glass) / 0.28), rgb(var(--tool-stack-glass) / 0.08));
+  border: 1px solid var(--surface-edge);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.35), 0 1px 3px rgb(0 0 0 / 0.1);
+  backdrop-filter: blur(6px);
+  opacity: 1;
+  transition: opacity 160ms ease;
+}
+
+.dark .tool-icon-stack {
+  --tool-stack-disc-base: oklch(0.22 0.008 286);
+  --tool-stack-disc-edge: oklch(0.7 0.015 286 / 0.4);
+}
+
+.dark .tool-icon-stack::before {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.09), rgb(255 255 255 / 0.025));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12), 0 1px 3px rgb(0 0 0 / 0.2);
+}
+
+.tool-icon-stack[data-state="open"]::before {
+  opacity: 0.3;
+}
+
+.tool-icon-stack-disc {
+  width: 1.375rem;
+  height: 1.375rem;
+  flex-shrink: 0;
+  position: relative;
+  border-radius: 50%;
+  border: 1px solid var(--tool-stack-disc-edge);
+  background: linear-gradient(
+    150deg,
+    color-mix(in srgb, var(--tool-stack-tint, var(--muted-foreground)) 12%, var(--tool-stack-disc-base)),
+    color-mix(in srgb, var(--tool-stack-tint, var(--muted-foreground)) 16%, var(--tool-stack-disc-base))
+  );
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 1px 2px rgb(0 0 0 / 0.16);
+}
+
+/* Preserve the compact, overlapping coin stack; artwork paints above every rim. */
+.tool-icon-stack-disc + .tool-icon-stack-disc {
+  margin-left: -0.375rem;
+}
+
+.tool-icon-stack-disc > svg {
+  position: relative;
+  z-index: 1;
+}
+
+.tool-icon-stack-more {
+  color: var(--content-primary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-icon-stack::before { transition: none; }
+}
+
+/* A handoff's SENDER pill is dimmed to `text-foreground/45` by the vendored
+   element, which is legible on the page background and is not on the raised
+   card this one actually lands on (dark `oklch(0.213)` against the page's
+   `oklch(0.155)`). The agent's name is the least skippable thing on the card,
+   so both pills read at the same tier and the hierarchy is carried by the
+   recipient's tint instead. Scoped to Grove's own composition class so no
+   other `agent-handoff` in the app is repainted.
+
+   FIRST-CHILD only: the recipient pill carries its own tint (blue in transit,
+   `text-foreground/80` settled) and repainting both would erase the one cue
+   that says which agent holds control. */
+[data-slot="agent-handoff"].handoff-agent > div > span:first-child {
+  color: var(--color-content-primary);
+}
+
+/* Controls — 3. Anything a pointer acts on that is not a circle. */
+[data-slot="composer-send"],
+[data-slot="composer-attach"],
+[data-slot="composer-voice-button"],
+[data-slot="composer-model-trigger"],
+[data-slot="agent-status"] {
+  border-radius: var(--radius-md);
+}
+
+/* Containers — 5. Cards, bars, menus, panels: anything that holds a surface. */
+[data-slot="composer-bar"],
+[data-slot="composer-menu"],
+[data-slot="composer-context"],
+[data-slot="agent-card"],
+[data-slot="approval-card"],
+[data-slot="canvas-split"],
+[data-slot="command-palette"],
+[data-slot="elicitation-form"],
+[data-slot="permission-grant"],
+[data-slot="settings-panel"],
+[data-slot="timeline"],
+[data-slot="todo-list"] {
+  border-radius: var(--radius-lg);
+}
+
+/*
+ * The generation loader's matrix is sized in EM, so it stays proportional to
+ * the type beside it instead of to the root.
+ *
+ * Upstream draws `size-2` cells (0.5rem) with a `gap-1`. Measured on the
+ * running app at this app's 80% root: a 25.5px matrix beside a 12.8px label —
+ * twice the height of the word it belongs to, and the largest mark in the
+ * transcript footer. A rem value cannot fix that, because the defect is that it
+ * is rem: the cell tracks the ROOT while the thing it must agree with is the
+ * LABEL. The same argument `entity.tsx` makes for its `size-[1em]` glyphs —
+ * "reads the same everywhere" has to mean the same PROPORTION.
+ *
+ * A `size-*` utility at the call site would be the wrong repair twice over:
+ * `lint:styling` forbids Grove code from restyling vendored internals, and the
+ * cells are the vendored component's own children with no prop reaching them.
+ * This is the radius block's mechanism applied to a second property — unlayered
+ * selectors outrank Tailwind's utilities, so no vendor edit is needed.
+ *
+ * SIZE THE CELL IN REM AGAINST THE RAMP STEP, NOT IN EM. The em instinct is
+ * right about the goal and wrong about the mechanism here: `text-sm` sits on
+ * the vendored LABEL, which is the grid's SIBLING, so the grid inherits the
+ * root and `0.5em` is `0.5rem` spelled differently — measured 6.39px both ways,
+ * which reads as a stale stylesheet rather than as the wrong element. Declaring
+ * a font-size on the loader root does make the em resolve, and then the label's
+ * own `text-sm` compounds against it and lands at 10.4px, under the 12px floor.
+ *
+ * `calc(var(--text-sm) * …)` is the honest expression of "proportional to the
+ * label": it reads the same ramp step the label reads, so the two move together
+ * under the density lever, browser zoom and a user font size — everything a px
+ * value would opt out of — and neither one can shift the other.
+ *
+ * 0.75 of the step puts the 3x3 matrix at ~1.5 label-heights: a mark beside a
+ * word rather than a block above it.
+ */
+[data-slot="generation-loader"] > div {
+  gap: calc(var(--text-sm) * 0.1875);
+}
+[data-slot="generation-loader"] > div > span {
+  width: calc(var(--text-sm) * 0.375);
+  height: calc(var(--text-sm) * 0.375);
+}
+
+/* The attachment card, named by `components/grove/attachment-file.tsx`. Both
+   composer bodies are `surface-raised`, so a card on the same rung was a
+   transparent outline on the bar holding it; the stops (declared per theme
+   below) lift it off. Top-lit, because a card with a top reads as an object. */
+.attachment-card {
+  background-color: var(--attachment-card-end);
+  background-image: linear-gradient(
+    to bottom,
+    var(--attachment-card-start),
+    var(--attachment-card-end)
+  );
+  border-radius: var(--radius-lg);
+}
+
+/* Native composer roles reach vendor literals here, without editing upstream.
+   Configuration sits below the raised writing surface. Callers own geometry. */
+.composer-shelf {
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--surface-edge);
+  border-radius: var(--radius-lg);
+}
+
+/* Decorative and static. Markup supplies aria-hidden; the mask softens the grid edge. */
+.launch-brand-field {
+  background-image:
+    repeating-linear-gradient(
+      to right,
+      color-mix(in oklab, var(--surface-edge) 70%, transparent) 0 1px,
+      transparent 1px 100%
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--surface-edge) 70%, transparent) 0 1px,
+      transparent 1px 100%
+    );
+  background-size: calc(var(--text-sm) * 2) calc(var(--text-sm) * 2);
+  /* Alpha only — a mask reads the channel, never the hue. */
+  mask-image: radial-gradient(closest-side, rgb(0 0 0) 0%, rgb(0 0 0 / 0) 100%);
+  pointer-events: none;
+}
+
+/* Both editors follow the reading ramp rather than upstream pixel literals. */
+[data-slot="composer-input"],
+[data-slot="composer-bar"] .aui-composer-input,
+[data-slot="composer-bar"] [data-slot="textarea"] {
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+}
+
+/* The bar owns the editor's boundary and focus indicator, not a nested box. */
+[data-slot="composer-bar"] [data-slot="textarea"] {
+  border: 0;
+  box-shadow: none;
+  background-color: transparent;
+}
+
+/* Use an opaque focus edge only for the editor. Toolbar controls keep their own. */
+[data-slot="composer-bar"]:has([data-slot="textarea"]:focus-visible),
+[data-slot="composer-bar"]:has(.aui-composer-input:focus-visible),
+[data-slot="composer-bar"]:has([data-slot="composer-input"]:focus-visible) {
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
+}
+
+/* Placeholder contrast follows the same theme tier as metadata. */
+[data-slot="composer-input"]::placeholder,
+[data-slot="composer-bar"] .aui-composer-input::placeholder,
+[data-slot="composer-bar"] [data-slot="textarea"]::placeholder {
+  color: var(--content-tertiary);
+}
+
+/* The one honest pixel: a POINTER does not shrink when type gets denser (§1).
+   `size-8` is 25.6px at this root before a call site narrows it. The file
+   row's remove control floors itself at its call site (`grove/attachment-file`)
+   because the vendored File element gives that slot no name. */
+[data-slot="composer-send"],
+[data-slot="composer-attach"],
+[data-slot="composer-voice-button"] {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* Every control on a composer toolbar is one defined pill (§5, "the composer
+   control"): a 1px edge and the same top-lit gradient the attachment card
+   wears, so attach, model and expand read as objects on the bar rather than
+   glyphs floating in it. Reached by slot so the landing page, the workspace
+   reply and the expand dialog cannot each decide it. Send is deliberately
+   absent — it is the one filled (ink) control and the vendor already draws it.
+   The expand control is matched by element + variant, never by slot: it is a
+   `TooltipIconButton`, and `TooltipTrigger asChild` overwrites the button's
+   `data-slot` with its own (see the outline-button rule above). The model
+   trigger is ALSO a ghost button, so the circle rule below excludes it. */
+[data-slot="composer-toolbar"] [data-slot="composer-attach"],
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"],
+[data-slot="composer-toolbar"] button[data-variant="ghost"] {
+  border: 1px solid var(--edge-control);
+  background-color: var(--attachment-card-end);
+  background-image: linear-gradient(
+    to bottom,
+    var(--attachment-card-start),
+    var(--attachment-card-end)
+  );
+  color: var(--content-secondary);
+}
+[data-slot="composer-toolbar"] [data-slot="composer-attach"]:hover,
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"]:hover,
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"][aria-expanded="true"],
+[data-slot="composer-toolbar"] button[data-variant="ghost"]:hover {
+  border-color: var(--surface-edge);
+  color: var(--content-primary);
+}
+/* The mark and the pressed state: the vendored ghost trigger fills with
+   `--accent` on hover, which flattens the pill it just stopped being. */
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"]:hover,
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"][aria-expanded="true"] {
+  background-image: linear-gradient(
+    to bottom,
+    var(--attachment-card-end),
+    var(--attachment-card-start)
+  );
+}
+/* The worded control shares the icon-only controls' height, or the row
+   reads as one short pill among three squares. */
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"] {
+  padding-inline: calc(var(--spacing) * 2.5);
+  height: 28px;
+}
+/* Icon-only controls are ONE size: send is drawn at 28px on both composers,
+   and attach (25.6px) and expand (19.2px) beside it read as three different
+   controls until they match. A size, not a floor — the 24px pointer floor
+   above still holds and this sits over it. */
+[data-slot="composer-toolbar"] [data-slot="composer-attach"],
+[data-slot="composer-toolbar"] button[data-variant="ghost"]:not([data-slot="model-selector-trigger"]) {
+  width: 28px;
+  height: 28px;
+}
+/* One shape for every toolbar control, send included: a rounded square at
+   the control role. The vendor draws send and attach as circles and the
+   model trigger at `rounded-md`, so a row mixed two circles, a rectangle and
+   a pill; a composer's controls are one family and take one corner. This is
+   a shape decision on the toolbar, not a new radius role — it reuses the
+   control role's own token, so the census still sees 3.45. */
+[data-slot="composer-toolbar"] [data-slot="composer-attach"],
+[data-slot="composer-toolbar"] [data-slot="composer-send"],
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"],
+[data-slot="composer-toolbar"] button[data-variant="ghost"] {
+  border-radius: var(--radius-md);
+}
+
+/* The composer bar alone takes a corner 20% past the container role. It is
+   the one container that holds a live editor plus a toolbar of rounded
+   squares, and at 5.75px its corner read tighter than the controls inside it.
+   Scoped to the bar's own slot so cards, menus and the page panel keep 5.75;
+   the radius census admits this value for exactly that slot. */
+[data-slot="composer-bar"] {
+  border-radius: calc(var(--radius-lg) * 1.2);
+}
+
+/* An open menu is the overlay rung (§4.3): edge AND shadow, in BOTH themes.
+   The vendored `PopoverContent` ships `shadow-md` alone, which on the dark
+   ladder reads as the same plane as the composer under it. */
+[data-slot="model-selector-content"],
+[data-slot="popover-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="select-content"] {
+  border-color: var(--surface-edge);
+  box-shadow:
+    0 12px 32px -12px rgb(0 0 0 / 0.28),
+    0 2px 6px rgb(0 0 0 / 0.1);
+}
+.dark [data-slot="model-selector-content"],
+.dark [data-slot="popover-content"],
+.dark [data-slot="dropdown-menu-content"],
+.dark [data-slot="select-content"] {
+  box-shadow:
+    0 16px 40px -12px rgb(0 0 0 / 0.6),
+    0 2px 8px rgb(0 0 0 / 0.35);
+}
+
+/* The model menu's height is ONE bound, taken from what Radix says fits.
+   The vendored popover clips at `overflow-hidden` while the vendored list
+   inside caps itself at 300px on its own — two bounds that disagree, so with
+   a search row above the list the popover cut the list's tail and the tail
+   could not be scrolled to; flipped above a low composer, the whole menu
+   ran past the viewport the same way. Let the content be a column no taller
+   than the space Radix measured, and let the list be the part that gives. */
+[data-slot="model-selector-content"] {
+  display: flex;
+  flex-direction: column;
+  max-height: min(24rem, var(--radix-popover-content-available-height));
+}
+[data-slot="model-selector-content"] > [data-slot="command"] {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+[data-slot="model-selector-content"] [data-slot="model-selector-list"] {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* A model row is two lines — a name over its context window — and it was
+   reading cramped for two reasons at once. The rows sat flush against each
+   other, and they inherit the vendored `text-sm`, which at this app's 80%
+   density root resolves to 10.4px with a 9.6px caption: both under §1's 12px
+   floor, on the one surface whose whole job is to be read and compared.
+
+   Fixed with RAMP STEPS, never px literals, so the menu still tracks the
+   density lever, the reader's font size and zoom (§1, "a px floor opts that
+   surface out"). The row keeps sizing itself — nothing here sets a height. */
+[data-slot="model-selector-content"] [data-slot="model-selector-group"] {
+  padding-inline: calc(var(--spacing) * 1);
+  padding-block: calc(var(--spacing) * 1);
+}
+[data-slot="model-selector-content"] [data-slot="model-selector-item"] {
+  font-size: var(--text-lg);
+  line-height: var(--text-lg--line-height);
+}
+/* The caption is one step below the name, not two: the vendored row's own
+   `text-xs` would land at 9.6px here. */
+[data-slot="model-selector-content"] [data-slot="model-selector-item"] .text-xs {
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+}
+[data-slot="model-selector-content"]
+  [data-slot="model-selector-item"]
+  + [data-slot="model-selector-item"] {
+  margin-top: calc(var(--spacing) * 0.5);
+}
+
+/* A cap's bottom edge supplies relief without a shadow or a header gradient. */
+@utility keycap {
+  border: 1px solid var(--surface-edge);
+  border-bottom: 2px solid var(--surface-sunken);
+}
+
+/* Full is reserved for circular marks, never labels or controls. */
+[data-slot="status-dot"] {
+  border-radius: 9999px;
+}
+
+/* Only headed sections opt in; bodies and nested enclosures stay flat.
+   Two layers, painted top-down: a 1px catch-light, then the band under it. A
+   `border-top` would be the other way to draw the highlight and is the wrong
+   one — the card already owns its perimeter, and a second border on the first
+   child changes the header's box height as well as its colour. */
+@utility surface-header {
+  background-image:
+    linear-gradient(to bottom, var(--surface-header-highlight) 0 1px, transparent 1px),
+    linear-gradient(to bottom, var(--surface-header-start), var(--surface-header-end));
+}
+
+@media (forced-colors: active) {
+  .surface-header {
+    background: Canvas;
+  }
+}
+
 @utility shell-panel {
   background-color: var(--surface-base);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -516,26 +1341,47 @@
   overflow-x: auto;
 }
 
-/*
- * Scroll-edge scrims: content dissolving into the surface at a boundary.
- *
- * A GRADIENT AND NOT A BOX-SHADOW, deliberately. The job is making the header
- * above and the composer below readable while a transcript passes beneath them
- * — a scrim actually fades what is underneath, where a box-shadow only draws a
- * lip at the edge and leaves the text behind it at full contrast. It fades to
- * `--background` because that is the surface these sit on, so the effect is
- * content dissolving into the page rather than a grey band laid over it.
- *
- * These are painted only while the scroller is away from that edge — a scrim
- * over a transcript already at its top hides nothing and is pure decoration.
- * The condition lives in `workspace/scroll-edges.ts`.
- */
+/* Both scrolling surfaces share one depth treatment without changing their fills. */
+.rail-scroll-depth,
+.aui-thread-root {
+  --scroll-depth-ink: rgb(0 0 0 / 0.10);
+
+  @variant dark {
+    --scroll-depth-ink: rgb(0 0 0 / 0.35);
+  }
+}
+
 @utility scroll-edge-top {
-  background-image: linear-gradient(to bottom, var(--background), transparent);
+  background-image: linear-gradient(to bottom, var(--scroll-depth-ink), transparent);
 }
 
 @utility scroll-edge-bottom {
-  background-image: linear-gradient(to top, var(--background), transparent);
+  background-image: linear-gradient(to top, var(--scroll-depth-ink), transparent);
+}
+
+/* Fixed chrome casts into the rail, not onto the adjacent page. The inner
+   gutter clears the fade at either scroll limit; neither overlay handles input. */
+.rail-scroll-depth {
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    height: 0.75rem;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  &::before {
+    top: 0;
+    background-image: linear-gradient(to bottom, var(--scroll-depth-ink), transparent);
+  }
+
+  &::after {
+    bottom: 0;
+    background-image: linear-gradient(to top, var(--scroll-depth-ink), transparent);
+  }
+
 }
 
 @layer base {
@@ -544,6 +1390,48 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /*
+   * APP DENSITY — the one lever, and it is the root rem.
+   *
+   * Grove is read on a 2K desktop, and it was being read at 80% browser zoom
+   * because at 100% it fit too little: measured off the two reference captures
+   * (2540x1238, same screen, same workspace), every dimension differs by the
+   * same 0.8 — a 489px rail against a 390px one, and type, controls, icons and
+   * gutters in step with it. That is the whole request: not smaller text, the
+   * SAME view, natively.
+   *
+   * THIS SUPERSEDES the "root stays 16px, type moves and geometry does not"
+   * rule stated on the type ramp above, and does so knowingly. That rule was
+   * right about the mechanism and wrong about the goal here: a proportional
+   * zoom-out is exactly what the reference is, so anything that moved type
+   * alone would leave the chrome oversized and the request unmet. Tailwind v4
+   * derives spacing, control heights, `size-*` icons and its own breakpoints
+   * from rem too, which is what makes ONE declaration reach all of them —
+   * per-component density props would be the same change spelled a hundred
+   * times, and would still miss the vendored tree.
+   *
+   * A PERCENTAGE, NEVER A PX VALUE. 80% is 80% of whatever the reader's
+   * browser default is, so someone who has raised theirs to 20px still gets
+   * 16px here. Browser zoom multiplies on top of this untouched, and every
+   * step of the type ramp remains rem, so a 200% zoom is still 200%. What the
+   * ramp's 12px floor now means is 12px BEFORE this scale, which is the honest
+   * reading: the floor was always relative to the root it was measured
+   * against.
+   *
+   * A finger has a fixed size and a pixel budget does not, so a coarse pointer
+   * opts out and keeps full-size touch targets. Deliberately `pointer: coarse`
+   * and not a width breakpoint: the constraint is the input device, and a
+   * narrow window on a desktop wants the density it asked for.
+   */
+  html {
+    font-size: 80%;
+  }
+  @media (pointer: coarse) {
+    html {
+      font-size: 100%;
+    }
   }
 
   /*
@@ -643,6 +1531,93 @@
   display: none;
 }
 
+/*
+ * THE ONBOARDING TOUR IS THE OVERLAY RUNG, AND ITS LOOK LIVES HERE ONLY.
+ * reactour positions two elements and styles both with inline defaults — a
+ * white 353px popover with a 24/30px inset and a hard drop shadow, and a black
+ * 0.7-alpha mask. Both are overridden at the theme boundary rather than through
+ * its `styles` prop, for the same reason every popover above is: the prop is a
+ * per-call-site look, and this is the one place a rung is defined.
+ *
+ * The popover takes exactly the overlay tuple (§4.3): the overlay fill, the
+ * surface edge, the container radius and the same both-themes shadow the
+ * vendored menus get above. `!important` because reactour writes inline.
+ * The mask is a scrim (an alpha is right for "slightly darker than whatever is
+ * there") — `color` is what its SVG fills with, and the vendored dialog overlay
+ * uses the same black-at-half, so a tour and a dialog dim the page alike; the
+ * cut-out gets a soft edge instead of the vendored hard rectangle.
+ */
+.reactour__popover {
+  background-color: var(--surface-overlay) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--surface-edge);
+  border-radius: var(--radius-lg) !important;
+  padding: 0.875rem 1rem !important;
+  max-width: 22rem !important;
+  box-shadow:
+    0 12px 32px -12px rgb(0 0 0 / 0.28),
+    0 2px 6px rgb(0 0 0 / 0.1) !important;
+  --rtp-arrow-border-top: 0;
+  --rtp-arrow-border-right: 0;
+  --rtp-arrow-border-bottom: 0;
+  --rtp-arrow-border-left: 0;
+}
+.dark .reactour__popover {
+  box-shadow:
+    0 16px 40px -12px rgb(0 0 0 / 0.6),
+    0 2px 8px rgb(0 0 0 / 0.35) !important;
+}
+.reactour__mask {
+  color: rgb(0 0 0) !important;
+  opacity: 0.5 !important;
+}
+.dark .reactour__mask {
+  opacity: 0.65 !important;
+}
+
+/*
+ * THE HIGHLIGHTED AREA WEARS A SLOW, LOW GLOW. reactour draws the cut-out
+ * twice: a black rect inside the SVG `<mask>` (the hole) and, last, a
+ * transparent rect over it (the click-through highlight), which is the one
+ * element positioned exactly on the anchor and therefore the only place a
+ * border can be drawn. It is an SVG rect, so the edge is `stroke` and the glow
+ * is an SVG `drop-shadow` filter — `box-shadow` does not apply to SVG.
+ *
+ * Primary, not a raw palette colour, so the ring follows the theme; the pulse
+ * drives only `stroke-opacity` and the filter's alpha, so nothing lays out.
+ * The mask itself keeps `pointer-events: none` from reactour — the rect's own
+ * `pointer-events: auto` is what makes the anchor unclickable under
+ * `disableInteraction`, and a stroke does not change that.
+ *
+ * Same lifecycle vocabulary as the phase markers above: this is a CONTINUOUS
+ * pulse — "look here" for as long as the step is on screen — and it stands
+ * down under reduced motion to a static ring.
+ */
+@keyframes tour-glow {
+  0%,
+  100% {
+    stroke-opacity: 0.55;
+    filter: drop-shadow(0 0 3px oklch(from var(--primary) l c h / 0.35));
+  }
+  50% {
+    stroke-opacity: 1;
+    filter: drop-shadow(0 0 9px oklch(from var(--primary) l c h / 0.6));
+  }
+}
+.reactour__mask rect.tour-highlight {
+  stroke: var(--primary);
+  stroke-width: 1.5px;
+  rx: 6px;
+  animation: tour-glow 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reactour__mask rect.tour-highlight {
+    animation: none;
+    stroke-opacity: 0.8;
+    filter: none;
+  }
+}
+
 @media print {
   .print-only {
     display: block;
@@ -735,5 +1710,133 @@
      the bounded things ask for it. */
   [data-slot="card"] {
     break-inside: avoid;
+  }
+}
+
+/* The rail groups observations without adding a card per event. This unlayered
+   theme rule outranks utility classes, so mark tones and dimensions belong here. */
+.history-feed-rail {
+  flex-direction: column;
+  align-items: center;
+}
+.history-feed-rail::after {
+  content: "";
+  width: 1px;
+  min-height: 0;
+  flex: 1 1 auto;
+  background: var(--border);
+}
+.history-feed-rail[data-last]::after {
+  display: none;
+}
+.history-feed-mark {
+  display: flex;
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--content-secondary);
+  background: var(--surface-overlay);
+}
+.history-feed-mark > svg {
+  width: 1rem;
+  height: 1rem;
+}
+.history-feed-mark[data-tone="done"] {
+  color: var(--success);
+}
+.history-feed-mark[data-tone="blocked"] {
+  color: var(--warning);
+}
+
+/* ---------------------------------------------------------------------------
+ * THE PHASE TRACK'S MOTION AND TINTS
+ *
+ * Lives here, at the theme boundary, for the reason every other block in this
+ * file does: `lint:styling` forbids colour utilities under `components/grove/`,
+ * so a track that says "reached" with a hue has to get it from a class the
+ * linter can see is not a raw palette value. Keyframes have no Tailwind utility
+ * at all, so a component could not own them even if it wanted to.
+ *
+ * Three cues, three lifetimes, and the distinction is the whole design:
+ *   - `.phase-node-live` is a LOOP. It runs only while the agent is working and
+ *     says "something is happening here"; it is what stops when work stops.
+ *   - `.phase-flash` / `.phase-note-flash` are ONE-SHOT. They say "this just
+ *     changed" and then get out of the way — the yellow-fade pattern. The state
+ *     they announce is carried by the static styling underneath, so a reader
+ *     arriving after the fade has lost the notification and nothing else.
+ *   - `.phase-connector-*` is STATIC. A magnitude is not an event.
+ * ------------------------------------------------------------------------- */
+
+@keyframes phase-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0;
+    transform: scale(1.75);
+  }
+}
+
+@keyframes phase-flash {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* The halo is a SIBLING ring rather than a box-shadow on the glyph, so the
+   animation drives `transform`/`opacity` only — both compositor properties, so
+   a fleet of working workspaces costs no layout and no style recalc. */
+.phase-node-live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background-color: currentColor;
+  animation: phase-pulse 2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.phase-flash::after,
+.phase-note-flash::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: var(--primary);
+  animation: phase-flash 1.2s ease-out forwards;
+  pointer-events: none;
+}
+
+/* The connector's two halves. `--phase-fill` is the checklist fraction, set
+   inline by the component because it is DATA rather than a design decision —
+   the same split `Progress` makes with its indicator transform. */
+.phase-connector-fill {
+  background-color: var(--primary);
+}
+.phase-connector-rest {
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--primary) 0 2px,
+    transparent 2px 6px
+  );
+  opacity: 0.4;
+}
+
+/* WCAG 2.3.3 and the app's own rule: every cue collapses to its END STATE.
+   Not `animation: none` alone — that would leave the flash overlays painted at
+   their opening frame, which is the loudest they ever are. */
+@media (prefers-reduced-motion: reduce) {
+  .phase-node-live::after,
+  .phase-flash::after,
+  .phase-note-flash::before {
+    animation: none;
+    display: none;
   }
 }

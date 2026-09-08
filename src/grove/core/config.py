@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -27,6 +28,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     ValidationError,
     field_validator,
     model_validator,
@@ -34,6 +36,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from grove.core import paths
+from grove.core.admission import AdmissionLimits
 from grove.core.errors import ConfigError, EnvSourceError
 
 # `use_attribute_docstrings` is what PUBLISHES the prose under each field. Every
@@ -59,40 +62,102 @@ class WorktreeConfig(BaseModel):
     model_config = _FROZEN
 
     root_template: str = "${repo}/.worktrees"
-    """Template for the worktree parent dir; supports ${repo}, ${repo_name}, ~."""
+    """Where worktrees live. Supports `${repo}`, `${repo_name}` and `~`."""
 
     branch_prefix: str = "grove/"
-    """Prefix prepended to every auto-created branch."""
+    """Prefix on every auto created branch."""
 
 
 BranchMode = Literal["auto", "new", "existing", "remote", "root"]
 """Which branch-source variant the create form opens on."""
 
+MODEL_ID_MAX_LENGTH = 64
+MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:\[\]-]*\Z")
+
+
+def validate_model_id(value: str | None) -> str | None:
+    """Normalize a model id Grove will forward, or raise ``ValueError``.
+
+    ONE rule with two callers — ``WorkspaceDefaults.model`` here and
+    ``CreateWorkspaceRequest.model`` on the wire — because both end up as an
+    argv token in ``claude --model <id>``. A saved default used to carry only a
+    length cap while the wire carried this pattern, and the gap is not cosmetic:
+    the moment the engine started resolving the saved default (below), a stored
+    id beginning with ``-`` would have become a FLAG to the agent binary, which
+    is the value-becomes-syntax class the branch-name guard already covers.
+
+    This limits argv shape, not model semantics: providers still validate any id
+    we forward. A separator is admitted unless dangerous, not excluded unless
+    proven necessary — brackets occur in real gateway ids
+    (``anthropic-opus-5[1m]``), and list-form argv with ``shell=False`` never
+    expands them.
+    """
+    if value is None:
+        return None
+    model = value.strip()
+    if not model:
+        return None
+    if len(model) > MODEL_ID_MAX_LENGTH:
+        raise ValueError(f"model id {model!r} exceeds {MODEL_ID_MAX_LENGTH} characters")
+    if not MODEL_ID_PATTERN.fullmatch(model):
+        raise ValueError(f"invalid model id {model!r}")
+    return model
+
 
 class WorkspaceDefaults(BaseModel):
-    """Pre-filled answers for the new-workspace form.
+    """Your saved answers for a create that does not name one. Every field is optional and
+    an unset one falls through to its normal source.
 
-    Every field is optional and ``None`` means "no saved default" — the field
+    Every field is optional, and ``None`` means "no saved default" — the field
     falls through to whatever the existing per-field cascade already resolved
     (``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's
-    own default for model). Title is deliberately absent: it names one task,
-    never a default. So are concrete branch/remote names, for the same reason.
+    own default for model). Grove applies these in the engine, so every surface
+    that creates a workspace — the CLI, the TUI, the web composer, MCP and
+    issue-ops — honours them identically, and a create form showing you a
+    pre-filled answer is showing you what will actually happen.
+
+    Title is deliberately absent: it names one task, never a default. So are
+    concrete branch and remote names, for the same reason.
     """
 
+    # Why the engine resolves this rather than each client: it did not, once,
+    # and the difference was invisible. `WorkspaceDefaultsView` honoured
+    # `runtime` while `RuntimeResolver` read `container.enabled` — which is True
+    # by default — so a saved `host` was displayed by every form and ignored by
+    # every create whose client did not repeat the resolution itself.
+    # `GroveConfig.default_runtime` / `default_brief` / `default_skip_init` are
+    # that one resolution; `create` and the view both read them.
     model_config = _FROZEN
 
     agent: str | None = None
+    """Agent selected when a create form opens."""
     # Runtime would cycle via workspace.py; keep its values literal here.
     runtime: Literal["host", "container"] | None = None
+    """`host` or `container` for a new workspace. Unset falls through to
+    `container.enabled`.
+    """
     brief: bool | None = None
-    model: str | None = Field(default=None, max_length=200)
+    """Whether a new agent receives Grove's first turn brief. Unset falls through to
+    `brief.enabled`.
+    """
+    model: str | None = None
+    """Model id sent to the selected agent. Unset uses the agent's own default."""
     branch_mode: BranchMode | None = None
+    """How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`."""
     base_ref: str | None = None
+    """The branch or ref a new branch starts from."""
     skip_init: bool | None = None
+    """Whether to skip the configured init script."""
+
+    @field_validator("model")
+    @classmethod
+    def _valid_model(cls, value: str | None) -> str | None:
+        return validate_model_id(value)
 
 
 class AgentCwdsConfig(BaseModel):
-    """Named directories, relative to the repo root, an agent may start in.
+    """Named directories inside the repo an agent may start in. Only the agent session
+    moves, the worktree, branch and init script stay at the root.
 
     A repository is often several projects, and in a large monorepo each
     directory belongs to a different team. This is the labelled set a create
@@ -114,15 +179,14 @@ class AgentCwdsConfig(BaseModel):
     model_config = _FROZEN
 
     entries: dict[str, str] = Field(default_factory=dict)
-    """Label → repo-relative POSIX path. A label is what a person picks from a
-    dropdown; the path is what reaches the wire, so renaming a label never
-    invalidates a workspace that already exists. Insertion order is the
-    presentation order every picker uses."""
+    """Label to repo relative path. The label is what a person picks, the path is what the
+    agent starts in, and insertion order is picker order.
+    """
 
     default: str | None = None
-    """The label a create with no working directory named resolves to. ``None``
-    (the default) keeps the historical behaviour: the agent starts at the
-    worktree root. Must name an entry."""
+    """The label a create resolves to when it names no directory. Unset starts the agent at
+    the worktree root.
+    """
 
     @field_validator("entries")
     @classmethod
@@ -187,48 +251,35 @@ AgentKind = Literal["claude_code", "codex", "generic", "mewbo"]
 
 
 class AgentSpec(BaseModel):
-    """One selectable agent in the new-workspace picker."""
+    """One selectable agent in the create picker. Anything terminal based works."""
 
     model_config = _FROZEN
 
     name: str
-    """Identifier used as the merge key when cascading agent lists across layers."""
+    """Picker identifier, and the merge key across cascade layers."""
 
     command: str
-    """Shell command sent to the agent tmux window via send-keys."""
+    """Shell command sent to the agent window. Quoted arguments and `$VAR` expansion work.
+    """
 
     kind: AgentKind = "generic"
-    """Which `AgentAdapter` introspects this agent's session for the Activity
-    Dashboard. `claude_code` enables transcript-based activity tracking — live
-    status, human-turn / reply counts, the session's self-generated title — and
-    lets Grove mint a deterministic `--session-id` at launch. `codex` reads the
-    same transcript signals from Codex CLI rollout files, but the id is
-    server-internal (no launch flag) so its session is adopted via discovery,
-    not minted. `mewbo` introspects a remote orchestrator over REST. `generic`
-    (the default) launches the command but tracks nothing: a plain shell, or any
-    tool with no known transcript format. Mechanism, not policy — declare it per
-    agent and it cascades like every other field."""
+    """Which adapter reads this agent's session. `claude_code` and `codex` read transcripts
+    for live state and tokens, `mewbo` reads a remote session over REST, `generic`
+    tracks nothing.
+    """
 
     env: dict[str, str] = Field(default_factory=dict)
-    """Extra env vars *exported* into the agent's tmux window before launch."""
+    """Extra environment variables exported into the agent's window before launch."""
 
     models: tuple[str, ...] = ()
-    """Curated model ids to OFFER for this agent in the create-form picker — a
-    display/override seam, never a validated allowlist (any id is still
-    forwarded verbatim on create; the provider boundary). Empty (the default)
-    falls through to the adapter's live discovery: Codex reads ``codex debug
-    models``, Claude Code offers its stable ``fable``/``opus``/``sonnet``/
-    ``haiku`` aliases, a remote/shell agent offers nothing. Set it to pin,
-    restrict, reorder, or add gateway/custom ids — it cascades and merges by
-    field like every other AgentSpec knob (mechanism, not policy). A curated
-    list here is never trimmed, however long: only live discovery is capped
-    at ten, since nobody chose what a tool happens to publish. A gateway
-    behind one agent can publish twenty or more models under a shared prefix,
-    and naming every one of them here is what puts all of them in the
-    picker."""
+    """Model ids offered in the create form picker. A convenience list, never a validated
+    allowlist. Empty falls through to the adapter's live discovery, which is capped at
+    ten.
+    """
 
     env_unset: tuple[str, ...] = ()
-    """Env vars *cleared* in the agent's tmux window before ``env`` is applied.
+    """Variable names cleared before `env` is applied, so an ambient value cannot leak into
+    the agent's window.
 
     The hermetic half of the launch env: a tmux pane inherits the
     tmux server's environment, which inherited the daemon's, so an ambient value
@@ -239,23 +290,77 @@ class AgentSpec(BaseModel):
     Unset runs first, so a key present in both ``env_unset`` and ``env`` ends up
     exported. Pure mechanism, not policy: the launcher just clears whatever vars
     the config names — no var name is hard-coded anywhere — and a future container
-    launcher applies the same ``env`` / ``env_unset`` set at create time."""
+    launcher applies the same ``env`` / ``env_unset`` set at create time.
+    """
 
     description: str = ""
+    """One line label shown in the picker."""
 
     tools_offline: bool = False
-    """Launch this agent with network-facing tools disallowed: Claude
-    Code drops ``WebFetch``/``WebSearch``, Codex flips its sandbox to
-    workspace-write with networking off. Mechanism, not policy — a deployment
-    that wants a hermetic/offline agent profile sets this per `AgentSpec`
-    rather than Grove hard-coding a tool list; the adapter owns the actual
-    flag shape (`AgentAdapter.offline_decoration`), same provider-boundary
-    split as `model_decoration`. `generic`/`mewbo` have no local tool gate, so
-    it's a no-op for those kinds."""
+    """Launch with network facing tools disallowed. Claude Code drops `WebFetch` and
+    `WebSearch`, Codex turns off sandbox networking. No effect on `generic` or `mewbo`.
+    """
+
+    native: bool = True
+    """Run the agent as a Grove owned native session instead of its interactive terminal.
+    On by default for Claude Code and Codex, ignored by other kinds, and every create
+    surface can override it per workspace.
+
+    On by default for Claude Code and Codex: Grove launches ``claude -p`` on the
+    stream-json protocol or ``codex app-server`` on stdio, holds the session's
+    control channel (interrupt, model switch, peer mail, live facts) and prints
+    the agent's output in the pane. Native permissions still apply. Set it to
+    ``false`` for the interactive terminal UI instead — the built-in
+    ``claude-terminal`` and ``codex-terminal`` entries are exactly that. Ignored
+    for ``generic`` and ``mewbo`` agents, which have no native protocol to own.
+    A native session cannot pause or resume; stop or recreate it instead.
+    """
+
+    NATIVE_KINDS: ClassVar[frozenset[str]] = frozenset({"claude_code", "codex"})
+
+    @property
+    def owns_native_session(self) -> bool:
+        """Whether a launch of this agent is a Grove-owned native session.
+
+        The ONE predicate every launch-shaped decision reads: ``native`` says
+        what the operator wants, the kind says whether a protocol exists to
+        want it on. Reading the flag alone would make a ``generic`` shell try
+        to speak stream-json.
+        """
+        return self.native_for(None)
+
+    def native_for(self, choice: bool | None) -> bool:
+        """The launch mode one create takes: the request's choice, else this entry's.
+
+        ``choice`` is ``CreateWorkspaceRequest.native``; ``None`` means the
+        caller left it to the roster. The kind gate applies to both roads, so a
+        checkbox on a shell entry cannot ask for a protocol that does not exist.
+        """
+        wanted = self.native if choice is None else choice
+        return wanted and self.kind in self.NATIVE_KINDS
+
+    @model_validator(mode="before")
+    @classmethod
+    def _mailbox_alias(cls, data: Any) -> Any:
+        """``mailbox`` was this field's opt-in name; accept it once, warning.
+
+        The rename inverted the default, so an old ``mailbox: true`` is a
+        no-op and an old ``mailbox: false`` — nobody wrote one — would silently
+        mean "terminal". Map it rather than forbid it so a config that worked
+        yesterday still loads, and say so once per load.
+        """
+        if isinstance(data, dict) and "mailbox" in data:
+            data = dict(data)
+            value = data.pop("mailbox")
+            logger.warning(
+                "agents[].mailbox is deprecated; use `native` (agent {!r})", data.get("name")
+            )
+            data.setdefault("native", value)
+        return data
 
 
 class InitScriptConfig(BaseModel):
-    """Optional setup script run in its own tmux window before the agent starts."""
+    """A setup script run in its own tmux window before the agent starts."""
 
     model_config = _FROZEN
 
@@ -269,21 +374,27 @@ class InitScriptConfig(BaseModel):
     """
 
     enabled: bool = False
+    """Run the init script when a workspace is created."""
     shell: Literal["bash", "sh", "zsh"] = "bash"
+    """Shell the script runs under."""
     inline: str | None = None
     """Inline shell snippet. Mutually exclusive with `path`."""
 
     path: str | None = None
-    """Repo-relative path to a script file. Mutually exclusive with `inline`."""
+    """Repo relative path to a script file. Mutually exclusive with `inline`."""
 
     timeout_seconds: int = 300
+    """Seconds before the script is killed and counted as failed."""
     fail_fast: bool = True
-    """If True, a non-zero exit rolls back the worktree+session+branch."""
+    """A non zero exit rolls back the worktree, session and branch. Off leaves the
+    workspace in `error` for you to inspect.
+    """
 
     run_on_resume: bool = False
+    """Run the script again when a paused workspace resumes."""
 
     applies_to: Literal["all", "host", "container"] = "all"
-    """Which workspace runtimes this script is for — a filter, not a runtime.
+    """Which runtimes the script is for. `all`, `host` or `container`.
 
     A host-side setup step is redundant (or actively wrong) when the
     devcontainer's own lifecycle hooks already do that work, and vice versa.
@@ -326,32 +437,54 @@ class InitScriptConfig(BaseModel):
 
 
 class TmuxConfig(BaseModel):
-    """tmux session/window naming and behavior."""
+    """tmux session naming and refresh cadences."""
 
     model_config = _FROZEN
 
     session_prefix: str = "grove-"
+    """Prefix on every Grove tmux session name."""
     init_window_name: str = "init"
+    """Window the init script runs in."""
     agent_window_name: str = "agent"
+    """Window the agent runs in."""
     shell_window_name: str = "shell"
+    """Window that holds a plain shell."""
     history_limit: int = 50_000
+    """Scrollback lines kept per pane."""
+
+    detached_size: str = Field(default="200x50", pattern=r"^$|^[0-9]{1,4}x[0-9]{1,4}$")
+    """Size, as `<columns>x<rows>`, a session is created at while nothing is attached.
+
+    A session created detached has no client to take its dimensions from, so
+    tmux falls back to its own 80x24 default — an aspect ratio no current
+    terminal has. Everything that reads the session before a human attaches
+    sees that shape: the agent lays out its first screen for it, and the web
+    dashboard's terminal pane and every `peek` read it forever, because those
+    consume `capture-pane` output and never attach a client at all.
+
+    This is a starting size, not a pin. `window-size latest` still resizes the
+    window to whichever terminal attaches, so a human's own terminal continues
+    to win; the value only decides what the session looks like until then, and
+    for the surfaces where nothing ever attaches. Set it to whatever your
+    terminals actually are. Empty keeps tmux's own default.
+    """
 
     peek_pane_refresh_seconds: float = 0.25
-    """Fast pane-only tick for the peek rail (`tmux capture-pane`).
+    """How often the peek rail refreshes the pane.
 
     Bounded subprocess work; keep low for snappier feel, raise on slow
     machines or when watching a large pane.
     """
 
     peek_stats_refresh_seconds: float = 3.0
-    """Slower full-peek tick (git ahead/behind, diff stats, dirty count).
+    """How often the peek rail refreshes git counts and diff stats.
 
     These don't change at sub-second granularity; rerunning them on every
     pane tick would burn IO without any user-visible benefit.
     """
 
     peek_history_lines: int = Field(default=500, ge=1)
-    """How many lines of tmux scrollback the pane snapshot captures (`-S -N`).
+    """Scrollback lines the pane snapshot captures.
 
     The live viewport is only ~40 rows, so without scrollback a long agent
     session previews as just its current screen — earlier output is never
@@ -361,31 +494,18 @@ class TmuxConfig(BaseModel):
     """
 
     activity_threshold_seconds: int = Field(default=30, ge=1)
-    """Age (seconds) of the last tmux pane_activity before a workspace flips
-    Active → Idle. Used by `WorkspaceManager._reconcile_status`. Tighter
-    values track real-time work but flicker for agents that pause to think;
-    looser values smooth flicker but lag the badge. The original 5s default
-    read every thinking/long-tool agent (no pane output for >5s is routine)
-    as Idle — and the status blend demotes a WORKING transcript to IDLE on
-    that signal, so the flicker surfaced on every dashboard card.
+    """Seconds of pane silence before a workspace flips from active to idle. Too low and a
+    thinking agent flickers, too high and the badge lags.
     """
 
     steer_settle_ms: int = Field(default=200, ge=0)
-    """Delay (ms) `tmux.send_text`/`send_keys` wait between typing steered
-    text and sending the submitting Enter. The TUI's bracketed paste
-    buffers everything landing inside its accumulation window as literal
-    text, so an Enter sent immediately after a paste can be coalesced into
-    that same window and read as a literal newline rather than a lone
-    submitting keypress — only a lone `return` keypress submits. Waiting
-    this long first lets the window close before Enter lands. The same
-    value also bounds the post-Enter verify-and-retry wait (one settle
-    period is enough for the composer to render either the reset prompt or
-    the still-pasted text). 0 disables both delays.
+    """Milliseconds between pasting steered text and sending Enter, so the agent's TUI
+    treats Enter as a submit rather than part of the paste. `0` disables the wait.
     """
 
 
 class HooksConfig(BaseModel):
-    """Grove-managed Claude Code status hooks. On by default.
+    """Grove managed Claude Code status hooks, for exact push based state.
 
     When ``enabled``, Grove launches ``claude_code`` agents with
     ``--settings <grove-hooks-settings>`` so a lightweight hook pushes exact
@@ -402,21 +522,23 @@ class HooksConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
+    """Launch Claude Code with Grove's managed hooks for exact push based status."""
 
     daemon_url: str = ""
-    """Base URL the hook's native ``http`` handler POSTs each event to.
+    """Base URL the hook posts each event to.
 
     Empty (the default) keeps the built-in loopback address, so the rendered
     settings stay byte-identical to a config that never mentions this. It is a
     knob because the address is only correct for an agent sharing the daemon's
     loopback: a runtime launched into its own network namespace — a container —
     reaches the daemon at a different host entirely, and an address a runtime
-    cannot resolve is policy that has no business being fixed in code."""
+    cannot resolve is policy that has no business being fixed in code.
+    """
 
 
 class BriefConfig(BaseModel):
-    """The one-paragraph brief a new workspace's agent is handed on its first
-    turn, pointing it at Grove's ``working-in-grove`` skill. On by default.
+    """The one paragraph brief a new agent is handed on its first turn, pointing it at
+    Grove's `working-in-grove` skill.
 
     The brief says where the agent is, that what it reports is published onto
     the workspace's attached tickets, and which skill carries the rules; the
@@ -439,9 +561,10 @@ class BriefConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
+    """Whether a new agent receives the brief at all."""
 
     instructions: str = ""
-    """Your own text, appended to the brief every agent in this repo is handed.
+    """Your own text, appended to the brief every agent in this repo receives.
 
     Grove's own brief says where the agent is and which skill carries the rules.
     This is where a team adds what only they know: the review conventions, the
@@ -460,8 +583,8 @@ class BriefConfig(BaseModel):
     """
 
     self_naming: bool = True
-    """Ask an agent whose workspace has no description to write one, and to
-    replace a generated title with a real one.
+    """Ask an agent whose workspace has no description to write one, and to replace a
+    generated title with a real one.
 
     A workspace created without a title is named after a short generated id, on
     the promise that it stays renameable — but nothing was renaming it, so a
@@ -518,13 +641,12 @@ class RangeSource(BaseModel):
     model_config = _FROZEN
 
     url: str
-    """Where the JSON lives. Fetched from the HOST at provision time, where the
-    network is unrestricted — never from inside the container the firewall is
-    about to constrain."""
+    """Where the JSON lives. Fetched from the host, never from inside the container."""
 
     keys: tuple[str, ...] = ()
-    """Which top-level keys hold the CIDR arrays. Empty means every key whose
-    value is an array of strings."""
+    """Which top level keys hold the CIDR arrays. Empty takes every key whose value is an
+    array of strings.
+    """
 
 
 def _default_range_sources() -> tuple[RangeSource, ...]:
@@ -559,7 +681,7 @@ def _default_package_plane() -> tuple[str, ...]:
 
 
 class ContainerAgentConfig(BaseModel):
-    """What the container shares from the host agent configuration.
+    """What the container shares from your host agent configuration.
 
     Default ``full``: native integration with the host — config, sign-in,
     skills — is a *feature*, delivered through bind mounts, and it is what makes
@@ -576,13 +698,15 @@ class ContainerAgentConfig(BaseModel):
     model_config = _FROZEN
 
     share: AgentShare = "full"
-    """Sharing level. Read from non-committed layers; a committed layer's value
-    applies only when it TIGHTENS what the rest of the cascade resolved."""
+    """How much of your agent configuration the container sees. `full` mounts sign in,
+    skills and memory, `projects` mounts transcripts only, `isolated` gives the
+    container its own config directory. A committed layer can only tighten it.
+    """
 
     trust: bool = True
-    """Whether the seeded agent configuration records the container's workspace
-    folder as already trusted, and its committed `.mcp.json` servers as already
-    approved.
+    """Seed the workspace folder as already trusted and its committed `.mcp.json` servers
+    as already approved, so the agent never stops on a first run dialog nobody can
+    answer.
 
     On by default because a container workspace is an *unattended* start: the
     agent runs in a directory the tool has never seen, and the tool asks — once,
@@ -590,11 +714,12 @@ class ContainerAgentConfig(BaseModel):
     terminal to answer, so the workspace simply never begins working. Turning
     this off restores that prompt, which means a containerized agent will not
     start on its own until a human attaches and answers it; the isolation the
-    container itself provides is unchanged either way."""
+    container itself provides is unchanged either way.
+    """
 
 
 class ContainerTmuxConfig(BaseModel):
-    """Whether the agent runs under a tmux INSIDE its container, and whose tmux.
+    """Whether the agent runs under a tmux inside its container, and whose tmux.
 
     The multiplexer used to sit on the far side of the namespace boundary from
     the process it multiplexes: the agent ran as ``devcontainer exec … -- claude``
@@ -622,21 +747,25 @@ class ContainerTmuxConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
-    """Run the agent under a container-side tmux when one is reachable.
+    """Run the agent under a tmux inside the container when one is reachable. Off is a bare
+    exec with no persistence.
 
     ``False`` restores the bare ``devcontainer exec -- <agent>`` launch: the
     agent still runs, but its terminal dies with the host client and there is
-    no reattach path."""
+    no reattach path.
+    """
 
     prefer_image: bool = True
-    """Use the image's OWN tmux when the container has one, else Grove's bundle.
+    """Use the image's own tmux when it has one, otherwise Grove's bundle.
 
     Presence is detected once per provision through the same
     ``devcontainer exec`` road the agent itself takes, so the probe sees the
-    remote user's PATH rather than the image's default user's."""
+    remote user's PATH rather than the image's default user's.
+    """
 
     payload: str = ""
-    """Host directory holding ``bin/<arch>/tmux`` plus a shared ``terminfo/``.
+    """A host directory holding `bin/<arch>/tmux` and a `terminfo/` tree, in place of
+    Grove's bundle.
 
     Empty (default) uses Grove's own cache, built on demand. A value is an
     operator-supplied bundle, mounted read-only exactly like the built one and
@@ -649,28 +778,31 @@ class ContainerTmuxConfig(BaseModel):
     machine running an amd64 image, or the reverse under emulation). ``<arch>``
     is docker's platform name — ``amd64`` or ``arm64``. Compiled terminfo is
     capability data rather than machine code, so one ``terminfo/`` serves every
-    architecture."""
+    architecture.
+    """
 
     session: str = "agent"
-    """The in-container tmux session name ``new-session -A`` keys on.
+    """The in container tmux session the agent runs in. Renaming it orphans a live agent.
 
     This is a REATTACH IDENTITY, not a display name, which is why it is its own
     field rather than a reuse of ``tmux.agent_window_name``: renaming the host
     window is cosmetic, while renaming this orphans a live agent's session
-    behind a newly-created empty one."""
+    behind a newly-created empty one.
+    """
 
     shell_session: str = "shell"
-    """The in-container tmux session an interactive shell attaches to.
+    """The in container tmux session `grove shell` attaches to.
 
     Its own field for the same reason :attr:`session` is one — a reattach
     identity, not a display name — and separate FROM it because the shell and
     the agent are two sessions on one in-container server: sharing a name would
     drop a user into the agent's own pane. ``grove shell`` and the attach
     layout's shell window both key on this, which is what makes them the same
-    persistent shell rather than two."""
+    persistent shell rather than two.
+    """
 
     term_fallback: str = "xterm-256color"
-    """``TERM`` to retry an attach with when tmux refuses the client's own.
+    """`TERM` retried when tmux refuses the client's own. Empty disables the retry.
 
     Empty DISABLES the retry — one field rather than a flag plus a value,
     because a bool and a string can express "enabled with no TERM", which means
@@ -684,11 +816,12 @@ class ContainerTmuxConfig(BaseModel):
     substituted ``TERM`` renders, resizes on SIGWINCH, detaches and reattaches
     correctly — tmux and ncurses cannot tell a substituted value from a native
     one. Grove SAYS so on stderr when it substitutes; a silent one would leave a
-    user debugging their own terminal's colours."""
+    user debugging their own terminal's colours.
+    """
 
 
 class ContainerDecorConfig(BaseModel):
-    """Whether the container gets Grove's own tmux chrome and statusline.
+    """Whether the container gets Grove's tmux chrome and statusline.
 
     Grove bind-mounts a small read-only asset bundle into every containerized
     workspace at ``/grove/decor``: a tmux config and a Claude Code statusline
@@ -703,23 +836,18 @@ class ContainerDecorConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
-    """Mount and compose the bundle at all. ``False`` means no mount and
-    nothing composed — the container gets bare default tmux chrome and no
-    Grove statusline."""
+    """Mount and compose the terminal chrome bundle at all."""
 
     statusline: bool = True
-    """Compose the statusline into the agent's settings. Independent of
-    ``tmux_conf`` so an operator can take one without the other."""
+    """Compose Grove's statusline into the agent's settings."""
 
     tmux_conf: bool = True
-    """Pass Grove's tmux config to the in-container tmux."""
+    """Pass Grove's tmux config to the in container tmux."""
 
     payload: str = ""
-    """Host directory holding the decor assets. Empty (default) uses Grove's
-    own bundled copy shipped in the wheel. A value is an operator-supplied
-    bundle, mounted read-only exactly like the built-in one and never written
-    to — the escape hatch that keeps this mechanism rather than policy: Grove
-    ships one sane look, an operator can replace it wholesale."""
+    """A host directory of your own decor assets, mounted read only in place of Grove's
+    bundle.
+    """
 
 
 class EgressConfig(BaseModel):
@@ -748,43 +876,36 @@ class EgressConfig(BaseModel):
     model_config = _FROZEN
 
     mode: EgressMode = "allowlist"
-    """``allowlist`` (default) applies the derived firewall; ``open`` applies
-    nothing; ``deny`` permits only loopback and the workspace's own network.
-    Anything but ``open`` **fails closed**: if the firewall verifiably failed to
-    apply, the container start fails. That is config integrity, not a permission
-    gate — the agent's own flags are never inspected."""
+    """`allowlist` applies the derived firewall, `open` applies nothing, `deny` permits
+    only loopback and the workspace's own network. Anything but `open` fails closed if
+    the firewall cannot be applied.
+    """
 
     allow: tuple[str, ...] = ()
-    """Extra destinations (hostnames or CIDRs) added to the derived set."""
+    """Extra hostnames or CIDRs added to the derived allowlist."""
 
     agent_plane: dict[AgentKind, tuple[str, ...]] = Field(default_factory=_default_agent_plane)
-    """Per-kind agent endpoints. Provider facts with a cascade override, same
-    shape as ``ProxyConfig.upstreams`` — a gateway deployment repoints them
-    without touching code."""
+    """Per agent kind provider endpoints. A gateway deployment repoints them here."""
 
     package_plane: tuple[str, ...] = Field(default_factory=_default_package_plane)
-    """Package indexes/registries reachable regardless of agent kind."""
+    """Package indexes and registries reachable regardless of agent kind."""
 
     grove_plane: tuple[str, ...] = ("host.docker.internal",)
-    """How the container reaches Grove itself (hook ingest, the daemon). The
-    connected-container default is what keeps status precise."""
+    """How the container reaches Grove itself for hook ingest and the daemon."""
 
     range_sources: tuple[RangeSource, ...] = Field(default_factory=_default_range_sources)
-    """Providers that PUBLISH their address ranges, fetched at provision time.
-    The answer to a hostname whose DNS answer outlives its usefulness:
-    `github.com` presents one A record with a 42-second TTL drawn from a large
-    pool, so an allowlist pinned at container start is authoritative for under
-    a minute and a coin flip for the rest of a multi-hour session — measured
-    rotating from `140.82.116.3` to `20.29.134.23` inside 80 seconds.
+    """Providers that publish their address ranges as JSON, fetched from the host at
+    provision time, for hosts whose DNS answers outlive their usefulness.
 
     Additive to the hostname planes above, never a replacement: a source that
     fails to fetch degrades to exactly today's behaviour rather than to nothing.
     Config rather than code so the next provider that publishes ranges needs an
-    entry, not a branch."""
+    entry, not a branch.
+    """
 
 
 class ResourcesConfig(BaseModel):
-    """Per-container caps, applied at launch.
+    """Per container caps, applied at launch.
 
     One knob on the policy cascade, deliberately NOT a slice hierarchy: the
     agent container gets them via ``docker update`` after ``up`` (the
@@ -800,20 +921,18 @@ class ResourcesConfig(BaseModel):
     model_config = _FROZEN
 
     memory: str = ""
-    """``docker update --memory`` value (``8g``, ``512m``). Empty = uncapped."""
+    """Memory cap such as `8g` or `512m`. Empty is uncapped."""
 
     cpus: str = ""
-    """``docker update --cpus`` value (``4``, ``1.5``). Empty = uncapped.
-    A string, not a float: it is passed through verbatim and compose's
-    ``deploy.resources.limits.cpus`` is a string there too."""
+    """CPU cap such as `4` or `1.5`, as a string. Empty is uncapped."""
 
     pids: int = 0
-    """``docker update --pids-limit`` value. ``0`` = uncapped (a fork-bomb cap
-    is cheap insurance for an autonomous agent, but it is policy, not default)."""
+    """Process count cap. `0` is uncapped."""
 
 
 class EnvSourceConfig(BaseModel):
-    """A config section that draws values from a dotenv file or a command.
+    """Where a section reads its secrets from. A file or a command, never a literal in
+    config.
 
     The two knobs below are the ONE mechanism Grove has for "give this feature an
     environment it could not read from my own process". They exist because the
@@ -854,7 +973,8 @@ class EnvSourceConfig(BaseModel):
     """
 
     env_file: str | None = None
-    """Dotenv file whose variables this section draws on.
+    """Dotenv file this section's variables are read from. Repo relative or absolute, `~`
+    expanded. A configured file that is missing is an error at use.
 
     Repo-relative or absolute, ``~`` expanded. Mutually exclusive with
     ``env_command``. A configured-but-missing file is a HARD ERROR at the point of
@@ -869,7 +989,8 @@ class EnvSourceConfig(BaseModel):
     """
 
     env_command: str | None = None
-    """Host command whose stdout is parsed as dotenv.
+    """Host command whose stdout is parsed as dotenv, so a secret never touches disk. Re
+    run at every use and never honored from a committed layer.
 
     Exists so secrets never have to be materialized to disk: any command that
     prints dotenv to stdout works, and Grove knows nothing about any particular
@@ -931,7 +1052,7 @@ class EnvSourceConfig(BaseModel):
 
 
 class ContainerConfig(EnvSourceConfig):
-    """Run the agent inside a container instead of directly on the host.
+    """Run the agent inside a container built from the repo's own devcontainer.
 
     **Default-ON, deliberately reversing Grove's earlier "containers are
     strictly opt-in" default.** The container is what lets an agent run fully
@@ -958,33 +1079,26 @@ class ContainerConfig(EnvSourceConfig):
     SECTION: ClassVar[str] = "container"
 
     enabled: bool = True
-    """The cascade DEFAULT for a new workspace's runtime: ``True`` →
-    ``Runtime.CONTAINER``, ``False`` → ``Runtime.HOST``. Only consulted at
-    create; ``resume``/``respawn`` read the persisted ``runtime`` so flipping
-    this never migrates an existing workspace."""
+    """The default runtime for a new workspace. `true` is container, `false` is host. Read
+    only at create, so flipping it never moves an existing workspace.
+    """
 
     up_timeout_seconds: float = 900.0
-    """Wall-clock bound on one ``devcontainer up`` (and ``build``). A cold build
-    that pulls a base image and installs Features is legitimately minutes long,
-    so this is generous — but it MUST stay inside every client's own deadline
-    (``GroveClient._LIFECYCLE_TIMEOUT_S``), or the caller gives up on a create
-    that then succeeds and leaves an orphaned container with no record."""
+    """Seconds one `devcontainer up` or build may take before the create counts as failed.
+    A cold build is legitimately minutes long.
+    """
 
     default_config: str = ""
-    """Path to the ``devcontainer.json`` Grove passes via ``--config`` for a repo
-    that has no ``.devcontainer/`` of its own. Empty (default) uses the
-    self-contained config packaged in the wheel. The file must stay
-    self-contained — image + features only, no ``build.dockerfile``, no
-    ``dockerComposeFile``, no local-path features — because a config outside the
-    worktree cannot resolve config-directory-relative paths."""
+    """The `devcontainer.json` used for a repo that has none of its own. Empty uses the
+    self contained config packaged with Grove.
+    """
 
     docker_bin: str = "docker"
-    """The container CLI binary/path (``docker``, or an absolute path / drop-in
-    shim). NOT the Podman-driver seam — a different runtime is a different
-    ``ContainerDriver`` class, this only points at a docker-compatible CLI."""
+    """The docker compatible CLI Grove shells out to. A name on `PATH` or an absolute path.
+    """
 
     shell: tuple[str, ...] = ("bash", "sh")
-    """Interactive shells ``grove shell`` and the attach shell window try, in order.
+    """Shells `grove shell` tries inside the container, in order.
 
     A CHAIN rather than one name, because the shell is a property of somebody
     else's image and Grove cannot know it: ``bash`` is absent from Alpine-based
@@ -997,26 +1111,27 @@ class ContainerConfig(EnvSourceConfig):
 
     Resolution happens INSIDE the container (``command -v``), not here: presence
     is a fact about the image, and probing it from the host would be a second
-    ``exec`` answering a question the shell itself answers for free."""
+    ``exec`` answering a question the shell itself answers for free.
+    """
 
     agent_config: ContainerAgentConfig = Field(default_factory=ContainerAgentConfig)
-    """How much of the host agent configuration the container shares."""
+    """What the container shares from the host agent configuration."""
 
     egress: EgressConfig = Field(default_factory=EgressConfig)
-    """Where the containerized agent may reach on the network."""
+    """Where a containerized agent may reach on the network."""
 
     tmux: ContainerTmuxConfig = Field(default_factory=ContainerTmuxConfig)
-    """Whether the agent runs under a tmux inside the container, and whose."""
+    """Whether the agent runs under a tmux inside its container, and whose tmux."""
 
     resources: ResourcesConfig = Field(default_factory=ResourcesConfig)
-    """Per-container CPU / memory / pid caps."""
+    """Per container caps, applied at launch."""
 
     decor: ContainerDecorConfig = Field(default_factory=ContainerDecorConfig)
-    """Grove's tmux config + statusline bundle, mounted into every container."""
+    """Whether the container gets Grove's own tmux chrome and statusline."""
 
 
 class ChannelsConfig(BaseModel):
-    """Grove-managed Claude Code *channel* delivery (research preview).
+    """Grove managed Claude Code channel delivery, a research preview.
 
     A channel is Claude Code's native seam for pushing a message a **running,
     interactive** session acts on (and relaying permission decisions), unlike a
@@ -1035,18 +1150,19 @@ class ChannelsConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Whether Grove delivers channel messages into running Claude Code sessions."""
+
+    admission: AdmissionLimits = Field(default_factory=AdmissionLimits)
+    """Item and byte reservations held until each accepted delivery has an outcome."""
 
     allowed_senders: list[str] = Field(default_factory=list)
-    """Sender allowlist for inbound channel deliveries. Each entry is a sender
-    identifier (a Grove client/device label) permitted to POST a message into a
-    running session's channel. **Empty means allow all** — enabling the feature
-    is the deliberate opt-in, so a bare enable is permissive; populate this to
-    RESTRICT which senders may drive a running agent. Mechanism, not policy: the
-    server matches an inbound message's declared sender against this list."""
+    """Sender labels allowed to post into a running session's channel. Empty allows every
+    sender, so populate it to restrict.
+    """
 
 
 class PermissionConfig(BaseModel):
-    """Grove-hosted Claude Code ``--permission-prompt-tool`` answering.
+    """Grove hosted answering of Claude Code's permission prompts.
 
     A *permission prompt* is the "allow this tool call?" gate a headless / paneless
     session hits with no interactive terminal to answer it. When ``enabled``, Grove
@@ -1068,23 +1184,22 @@ class PermissionConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Let Grove answer Claude Code's permission prompts through its prompt tool."""
 
     default: Literal["allow", "deny"] = "deny"
-    """The decision the prompt tool returns while no interactive human/daemon
-    relay is wired. ``deny`` is fail-closed (the safe default for an unattended
-    agent); ``allow`` is the deliberate permissive opt-in for a trusted sandbox
-    (a container workspace whose blast radius is bounded). Mechanism, not policy:
-    the tool answers whatever this names, verbatim."""
+    """The answer while no human relay is wired. `deny` fails closed for an unattended
+    agent, `allow` is the deliberate opt in for a bounded sandbox.
+    """
 
 
 class TLSConfig(BaseModel):
-    """Additional certificate authority roots for Grove's outbound TLS clients."""
+    """Extra certificate authority roots for Grove's outbound TLS clients."""
 
     model_config = _FROZEN
 
     ca_path: str = Field(default="", json_schema_extra={"x-env-var": "GROVE_TLS_CA_PATH"})
-    """A PEM CA bundle file or OpenSSL-hashed CA directory trusted alongside the
-    operating system's roots.
+    """A PEM bundle or OpenSSL hashed CA directory trusted alongside the operating system's
+    roots.
 
     Use this when Grove must reach a private forge, gateway, or collector whose
     root CA cannot be installed in the operating system store. Empty (the
@@ -1095,7 +1210,7 @@ class TLSConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    """Daemon HTTP authentication knobs.
+    """Daemon authentication and pairing limits.
 
     The handshake-based pairing flow gates every HTTP entry point on a valid
     bearer token (no loopback bypass; see CLAUDE.md). ``enabled = false`` is
@@ -1105,28 +1220,27 @@ class AuthConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
-    """Master switch. ``False`` disables the dep entirely — only used by
-    in-process tests that exercise paths unrelated to auth. Production
-    must leave this ``True``."""
+    """Master switch for daemon authentication. Only in process tests turn it off."""
 
     session_ttl_seconds: int = Field(default=30 * 24 * 3600, ge=60)
-    """Sliding session TTL. Each ``validate()`` extends ``expires_at`` by this
-    many seconds, so a daily user never re-pairs; idle for the full window
-    means the session ages out and the device must pair again."""
+    """Sliding session lifetime. Every request extends it, so a daily user never re pairs
+    and an idle device ages out.
+    """
 
     pairing_ttl_seconds: int = Field(default=300, ge=30)
-    """How long a pairing code is valid for approval after creation."""
+    """How long a pairing code stays valid for approval."""
 
     pair_init_per_minute: int = Field(default=5, ge=1)
-    """Per-source rate limit on ``POST /auth/pair``. Bounds brute-force."""
+    """Per source rate limit on starting a pairing, which bounds brute force."""
 
     pair_poll_per_minute: int = Field(default=60, ge=1)
-    """Per-source rate limit on ``GET /auth/pair/{id}``. Generous; the
-    browser polls every 2 s during the approval wait."""
+    """Per source rate limit on polling a pairing. The browser polls every two seconds
+    while it waits for approval.
+    """
 
 
 class MewboConfig(BaseModel):
-    """Connection settings for the Mewbo orchestrator (``kind: "mewbo"`` agents).
+    """Connection settings for `kind: "mewbo"` agents.
 
     The ``mewbo`` adapter reads these to reach the Mewbo API: a workspace of
     that kind mints its session on the orchestrator rather than in a local
@@ -1139,17 +1253,14 @@ class MewboConfig(BaseModel):
     """Base URL of the Mewbo REST API."""
 
     api_key_env: str = "MEWBO_API_KEY"
-    """NAME of the environment variable holding the API key — never the key
-    itself. Committed project config must stay secret-free (the repo and its
-    config examples are published); the key lives only in the consuming
-    process's environment."""
+    """Name of the environment variable holding the API key, never the key itself."""
 
     timeout_seconds: float = 10.0
-    """Per-request HTTP timeout for Mewbo API calls."""
+    """Per request HTTP timeout."""
 
 
 class GiteaTicketConfig(BaseModel):
-    """Gitea Issues provider settings (``provider: "gitea"``).
+    """Gitea Issues provider settings.
 
     Secret-free like every config layer: ``token_env`` is the NAME of the
     environment variable holding the API token, never the token itself, so a
@@ -1168,17 +1279,23 @@ class GiteaTicketConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Turn the provider on."""
     base_url: str = Field(
         default="https://gitea.com", json_schema_extra={"x-env-var": "GROVE_GITEA_BASE_URL"}
     )
+    """Your Gitea instance."""
     owner: str | None = None
+    """Repository owner."""
     repo: str | None = None
+    """Repository name."""
     token_env: str = "GROVE_GITEA_TOKEN"
+    """Name of the environment variable holding the API token, never the token."""
     branch_prefix: str = ""
+    """A branch prefix that marks a bare number as a Gitea ticket."""
 
 
 class GitHubTicketConfig(BaseModel):
-    """GitHub Issues provider settings (``provider: "github"``).
+    """GitHub Issues provider settings.
 
     ``base_url`` defaults to the public REST API; point it at a GitHub
     Enterprise ``/api/v3`` root to use Enterprise. Same secret-free
@@ -1188,15 +1305,21 @@ class GitHubTicketConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Turn the provider on."""
     base_url: str = "https://api.github.com"
+    """The GitHub API root. Change it for GitHub Enterprise."""
     owner: str | None = None
+    """Repository owner."""
     repo: str | None = None
+    """Repository name."""
     token_env: str = "GROVE_GITHUB_TOKEN"
+    """Name of the environment variable holding the API token, never the token."""
     branch_prefix: str = ""
+    """A branch prefix that marks a bare number as a GitHub ticket."""
 
 
 class LinearTicketConfig(BaseModel):
-    """Linear provider settings (``provider: "linear"``).
+    """Linear provider settings.
 
     Linear keys are alphanumeric (``ENG-123``), so there is no numeric
     ``branch_prefix`` — the team key IS the discriminator. ``team_key`` scopes
@@ -1207,13 +1330,17 @@ class LinearTicketConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Turn the provider on."""
     base_url: str = "https://api.linear.app/graphql"
+    """The Linear API root."""
     team_key: str | None = None
+    """The team key that prefixes your issue ids, such as `ENG`."""
     token_env: str = "GROVE_LINEAR_TOKEN"
+    """Name of the environment variable holding the API token, never the token."""
 
 
 class TicketsConfig(EnvSourceConfig):
-    """External ticket-tracker integration, one submodel per MVP provider.
+    """Ticket tracker integration, one block per provider.
 
     Each provider is independently ``enabled`` and configured. All three stay
     off by default (mechanism, not policy): a repo opts in by enabling the
@@ -1246,8 +1373,11 @@ class TicketsConfig(EnvSourceConfig):
     SECTION: ClassVar[str] = "tickets"
 
     gitea: GiteaTicketConfig = Field(default_factory=GiteaTicketConfig)
+    """Gitea Issues provider settings."""
     github: GitHubTicketConfig = Field(default_factory=GitHubTicketConfig)
+    """GitHub Issues provider settings."""
     linear: LinearTicketConfig = Field(default_factory=LinearTicketConfig)
+    """Linear provider settings."""
 
 
 # The built-in initial prompt an issue-ops-created workspace boots on. Placeholders
@@ -1289,7 +1419,8 @@ Issue link: {url}
 
 
 class IssueOpsConfig(BaseModel):
-    """Turn issue-comment mentions into workspace actions, and mirror progress back.
+    """Turn issue comment mentions into workspace actions, and mirror progress back onto
+    the ticket.
 
     One submodel, two faces. INBOUND: a commenter mentions the ``trigger``
     token as the first word of an issue comment; the forwarder (a stateless CI
@@ -1312,64 +1443,47 @@ class IssueOpsConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
-    """Master switch for the OUTBOUND live status comment — the sticky
-    per-workspace comment the publisher mirrors onto its ticket. Off by default;
-    the daemon builds and binds the publisher only when this is ``True``.
-    Independent of inbound command routing, which opts in via the CI workflow plus
-    an enabled ticket provider (see the class docstring)."""
+    """Publish the live status comment onto every ticket a workspace works. Off leaves
+    command routing untouched and writes nothing to your tracker.
+    """
+
+    admission: AdmissionLimits = Field(default_factory=AdmissionLimits)
+    """Maximum retained assignment deliveries, including running work."""
 
     trigger: str = "@grove"
-    """The mention token that must OPEN a comment (word-boundary, first token) for
-    the engine to act. A mention-style ``@``-prefixed token by default — a bare
-    ``/`` prefix collides with the forge's own markdown slash commands. Compared
-    case-insensitively; everything after it is the command (a fixed verb or free
-    prompt text)."""
+    """The mention that must open a comment for Grove to act, matched case insensitively at
+    a word boundary.
+    """
 
     allowed_actors: list[str] = Field(default_factory=list)
-    """The opt-in WIDENING knob on the permission policy. By default a command is
-    honored only when the forwarder asserts the commenter has repo write access;
-    listing a login here lets that user drive issue-ops REGARDLESS of their repo
-    permission (a trusted bot account, an external collaborator). Empty (default)
-    keeps the strict write-access-only policy. Matched case-insensitively. Never a
-    NARROWING knob — write access always suffices; this only adds to it."""
+    """Logins allowed to drive issue ops regardless of repo permission. Write access always
+    suffices, this only adds to it.
+    """
 
     agent: str = "claude"
-    """Which configured agent an issue-ops-created workspace spawns. Must name an
-    entry in ``agents``; ``create`` raises (and the engine replies) if it doesn't.
-    Defaults to the built-in ``claude`` agent — override per deployment to route
-    issue work to a different tool. Mechanism, not policy."""
+    """Which configured agent an issue ops created workspace spawns. Must name an entry in
+    `agents`.
+    """
 
     prompt_template: str = _DEFAULT_ISSUEOPS_PROMPT
-    """The initial prompt a newly-created workspace boots on, with ``{title}``,
-    ``{body}``, ``{number}``, ``{url}``, ``{comments}`` and ``{command_text}``
-    placeholders filled from the ticket. ``{comments}`` renders the whole comment
-    thread in order, so the agent starts with the discussion rather than spending
-    turns fetching it. One template serves both ways a workspace is started from a
-    ticket — an ``@grove`` comment and an assignee pickup — and ``{command_text}``
-    says which, so a deployment tunes the agent's marching orders in one place.
-    Cascades like all config; the built-in default states the autonomous
-    issue→PR mandate."""
+    """The first prompt a ticket created workspace boots on, with `{title}`, `{body}`,
+    `{number}`, `{url}`, `{comments}` and `{command_text}` filled from the ticket.
+    """
 
     update_window_seconds: float = Field(default=5.0, ge=0)
-    """Coalescing window for the OUTBOUND status comment — at most one
-    comment PATCH per workspace per window. Forges apply secondary rate limits to
-    same-comment edit storms, so the publisher folds every render-relevant change
-    into per-workspace state and flushes the merged result once the window
-    elapses. ``0`` flushes every change (no coalescing)."""
+    """At most one status comment edit per workspace per window, so a burst of activity
+    never trips the forge's rate limit. `0` flushes every change.
+    """
 
     deep_link_base_url: str = ""
-    """The webapp base (e.g. ``https://grove.example.com``); a status comment
-    deep-links to ``{base}/w/{id}``. Reuses the ``notifications`` deep-link
-    convention verbatim. Empty (default) omits the link."""
+    """Your dashboard's base URL. Set, the comment links to `{base}/w/{id}`. Empty omits
+    the link.
+    """
 
     assign_bot: bool = False
-    """Mark what Grove is working ON THE TRACKER: assign the ticket provider's own
-    account — whoever the configured token authenticates as — to every ticket a
-    live workspace holds, so every Grove-managed issue is findable with the
-    tracker's own assignee filter by people who never open Grove. Off by default:
-    it writes to somebody else's tracker. Assigning needs repo write, which
-    commenting does not; where the token cannot assign, the refusal is logged
-    naming the ticket and never fails the workspace.
+    """Assign the tracker's own account to every ticket a live workspace holds, so Grove's
+    work is findable with the tracker's assignee filter. Released when the workspace
+    ends.
 
     Assignment is an OUTPUT of Grove working a ticket and never an input: it is
     reconciled from the live fleet, and nothing here starts work. Turning this on
@@ -1379,35 +1493,26 @@ class IssueOpsConfig(BaseModel):
     The assignment is RELEASED when the workspace holding the ticket ends, so the
     board says who is working an issue now rather than who once did. Only
     assignments this daemon made are released — a ticket assigned to the bot by
-    hand is left alone, and every other assignee is always untouched."""
+    hand is left alone, and every other assignee is always untouched.
+    """
 
     pickup_enabled: bool = False
-    """The assignee AS the inbound work queue: the daemon polls for open issues
-    assigned to the provider's own account that no live workspace holds and that
-    Grove has never been handed before, and starts a workspace for each. A human
-    assigns the bot; a workspace appears. Off by default — this spawns real
-    agents. Needs no CI runner, which is what makes inbound automation reachable
-    on a deployment that cannot host one."""
+    """Treat the assignee field as the work queue. Assign the bot to an open issue and the
+    daemon starts a workspace for it, with no comment and no CI runner.
+    """
 
     pickup_interval_seconds: float = Field(default=60.0, ge=5)
-    """How often the pickup poll asks each configured tracker for its assigned
-    issues. A standing load on someone else's API, so it is a knob rather than a
-    constant; a provider that errors or rate-limits is backed off for
-    ``pickup_backoff_seconds`` regardless of this cadence."""
+    """How often the pickup poll asks each tracker for its assigned issues."""
 
     pickup_max_active: int = Field(default=3, ge=1)
-    """How many pickup-started workspaces may be working at once, across every
-    repo on the host. Assigning the bot to forty issues must not spawn forty
-    agents: each tick counts the assigned tickets that already have a live
-    workspace and starts at most enough to reach this ceiling. The rest are
-    DEFERRED to the next tick and named in the log — never silently dropped."""
+    """How many pickup started workspaces may run at once across the host. The rest wait
+    for the next tick.
+    """
 
     pickup_backoff_seconds: float = Field(default=300.0, ge=0)
-    """How long one tracker is skipped after it fails or rate-limits a poll.
-    Applies to the whole provider, not one ticket, because a 403 or a 429 is a
-    statement about the credential or the budget rather than about the issue that
-    happened to be asked for. Backoff does not compound — the next successful
-    poll clears it."""
+    """How long a tracker is skipped after it fails or rate limits a poll. The next good
+    poll clears it.
+    """
 
 
 # Which agent-state edges may fire a push. String values mirror
@@ -1466,7 +1571,7 @@ _DEFAULT_NTFY_PRIORITIES: dict[NotifySeverity, int] = {
 
 
 class GotifyChannelConfig(BaseModel):
-    """Gotify push channel.
+    """The Gotify push channel.
 
     ``server_url`` is the Gotify base (e.g. ``https://gotify.example.com``), and
     it also reads from ``GROVE_GOTIFY_API_URL`` so a deployment can point every
@@ -1479,29 +1584,34 @@ class GotifyChannelConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Deliver through Gotify."""
     server_url: str = Field(default="", json_schema_extra={"x-env-var": "GROVE_GOTIFY_API_URL"})
+    """Your Gotify server."""
     token_env: str = "GROVE_GOTIFY_TOKEN"
+    """Name of the environment variable holding a Gotify application token, never the
+    token.
+    """
     priority: int = Field(default=5, ge=0, le=10)
-    """Fallback priority for a severity with no entry in ``priorities``."""
+    """Fallback priority for a severity with no entry in `priorities`."""
 
     priorities: dict[NotifySeverity, Annotated[int, Field(ge=0, le=10)]] = Field(
         default_factory=lambda: dict(_DEFAULT_GOTIFY_PRIORITIES)
     )
-    """Severity → Gotify priority, bounded like ``priority`` itself. The defaults
-    hit Gotify's own Android thresholds: ``<=0`` min, ``1-3`` low (silent),
-    ``4-7`` default (vibrates), ``>=8`` high (heads-up + sound). So a pending
-    question buzzes and a routine pause does not."""
+    """Severity to Gotify priority, 0 to 10. The defaults land on Gotify's own Android
+    thresholds, so a question buzzes and a routine pause does not.
+    """
 
     markdown: bool = True
-    """Send the rich body with ``client::display.contentType: text/markdown``.
-    Both official clients render CommonMark; turn it off for a client that does
-    not."""
+    """Send the rich markdown body. Turn it off for a client that does not render
+    CommonMark.
+    """
 
     timeout_seconds: float = Field(default=5.0, gt=0)
+    """Seconds to wait on one push before skipping it."""
 
 
 class WebhookChannelConfig(BaseModel):
-    """Generic JSON webhook channel — the "mechanism, not policy" sink.
+    """A generic JSON webhook channel speaking ntfy's publish format.
 
     POSTs the notification as JSON to ``url``. ntfy's JSON-publish API works
     directly: set ``topic`` and point ``url`` at the ntfy base. ``token_env`` (a
@@ -1511,25 +1621,27 @@ class WebhookChannelConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Deliver through the webhook."""
     url: str = ""
+    """The URL to POST to."""
     token_env: str = ""
+    """Name of the environment variable holding a bearer token, if the URL needs one."""
     topic: str = ""
-    """ntfy topic; included in the JSON body only when set (ntfy requires it)."""
+    """ntfy topic, included only when set."""
 
     priorities: dict[NotifySeverity, Annotated[int, Field(ge=1, le=5)]] = Field(
         default_factory=lambda: dict(_DEFAULT_NTFY_PRIORITIES)
     )
-    """Severity → priority on ntfy's 1-5 scale (5 = max, 3 = default), and bounded
-    to it: ntfy **rejects** an out-of-range priority outright, so an unvalidated
-    value here would silently drop the notification at the far end. A sink that
-    reads the JSON itself can ignore the field — the raw ``severity`` string is in
-    the body too."""
+    """Severity to priority on ntfy's 1 to 5 scale. Bounded, since ntfy rejects a value
+    outside it.
+    """
 
     timeout_seconds: float = Field(default=5.0, gt=0)
+    """Seconds to wait on one POST before skipping it."""
 
 
 class NotificationsConfig(BaseModel):
-    """Push notifications on workspace edges. Off by default.
+    """Push notifications when an agent needs you. Off by default.
 
     Three independent triggers, each with its own switch, all fanning out to
     every enabled channel:
@@ -1553,45 +1665,41 @@ class NotificationsConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Send push notifications at all."""
     on: list[NotifyTransition] = Field(default_factory=lambda: list(_DEFAULT_NOTIFY_ON))
+    """Agent states that fire a notification. `waiting`, `blocked`, `error` and `idle`.
+    """
     on_question: bool = True
-    """Push when the agent asks the human something. The one trigger every
-    harness can produce — a question is a transcript/hook *content* signal, while
-    ``blocked`` is a *state* only some adapters ever reach."""
+    """Push when the agent asks you something, with the prompt and its options. The one
+    trigger every harness can produce.
+    """
 
     on_lifecycle: list[NotifyLifecycle] = Field(
         default_factory=lambda: list(_DEFAULT_NOTIFY_LIFECYCLE)
     )
+    """Workspace events that fire a notification, such as `error`, `orphaned_detected` and
+    `offline_detected`. Routine verbs are off by default.
+    """
     debounce_seconds: float = Field(default=30.0, ge=0)
-    """Per-workspace quiet window after a state fire — one buzz per attention
-    episode, not one per WAITING↔WORKING tool round-trip. Questions are exempt
-    (they dedupe by id instead)."""
+    """Quiet window per workspace after a state fires, so one attention episode is one
+    buzz. Questions dedupe by id instead.
+    """
 
     waiting_quiet_minutes: float = Field(default=15.0, ge=0)
-    """How long a session must stay genuinely settled before a ``waiting`` push
-    fires — the honest fallback for what "turn ended" cannot promise on its own.
-    A WAITING transcript state means the top-level turn stopped generating, not
-    that the task is done: Grove already tracks the in-session sub-agent count
-    (``active_subagents``), the hook's live sub-agent fleet, and the harness's
-    own steer queue, and a WAITING edge is held back while any of those is
-    nonzero. None of them can see an arbitrary backgrounded shell command
-    (``Bash ... run_in_background``) — Claude's tool call returns immediately and
-    Grove gets no close event to watch for — so once every known tracker agrees
-    nothing is left, the push still waits this long with nothing new observed
-    before it fires, which is the proxy for the rest. ``0`` fires the instant the
-    known trackers agree nothing is left, with no wait — the old behaviour."""
+    """How long a session must stay settled before a `waiting` push fires, since a finished
+    turn may still have a background command running. `0` fires as soon as every known
+    tracker agrees nothing is left.
+    """
 
     deep_link_base_url: str = "http://localhost:3000"
-    """Where a notification's tap lands: ``{base}/w/{id}``, the webapp's workspace
-    route — where you can read the transcript *and answer the question*. Defaults
-    to the webapp's own local origin (its `next start` port) because a push whose
-    link goes nowhere is a dead end, and a single-host install is the overwhelming
-    common case. Point it at your reachable origin (e.g.
-    ``https://grove.example.com``) to make the tap work from a phone; set it empty
-    to render no link at all."""
+    """Where a tap lands, `{base}/w/{id}`. The default is the web app's own local origin,
+    which a phone cannot reach, so set your reachable address or empty for no link.
+    """
 
     gotify: GotifyChannelConfig = Field(default_factory=GotifyChannelConfig)
+    """The Gotify push channel."""
     webhook: WebhookChannelConfig = Field(default_factory=WebhookChannelConfig)
+    """A generic JSON webhook channel, speaking ntfy's publish format."""
 
     @property
     def deep_link_is_loopback(self) -> bool:
@@ -1710,7 +1818,7 @@ TelemetryContent = Literal["none", "messages", "all"]
 
 
 class TelemetryBackfillConfig(BaseModel):
-    """Explicit historical-export consent and profile selection.
+    """Consent and profile selection for exporting historical sessions.
 
     Empty by default: usage discovery may index every reachable transcript,
     while an external telemetry write must name the exact provider roots it is
@@ -1721,12 +1829,15 @@ class TelemetryBackfillConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
+    """Allow `grove usage backfill --telemetry` to export historical sessions at all."""
     profiles: dict[AgentKind, tuple[str, ...]] = Field(default_factory=dict)
+    """Provider config roots whose transcripts may be exported, such as `~/.codex`."""
     content: TelemetryContent = "none"
+    """How much content a backfilled trace carries. `none` exports structure only."""
 
 
 class TelemetryReceiverConfig(BaseModel):
-    """The daemon's own OTLP/HTTP endpoint for a harness's native exporter.
+    """The daemon's own OTLP endpoint for a harness's native exporter.
 
     Grove's other telemetry tiers describe a session from the outside — a
     frozen launch-time identity stamp and a replayed transcript. This is the
@@ -1741,32 +1852,56 @@ class TelemetryReceiverConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
-    """Mount the receiver on the daemon. With this off, the daemon serves no
-    OTLP endpoint and every other field here is inert."""
+    """Mount the receiver on the daemon. Off serves no endpoint."""
 
     path: str = "/otlp"
-    """Where the receiver is mounted under the daemon's own address. Point a
-    harness's ``OTEL_EXPORTER_OTLP_ENDPOINT`` (or a signal-specific
-    ``_TRACES_ENDPOINT``) at this path to feed it."""
+    """Where the receiver is mounted under the daemon's address. Point a harness's
+    `OTEL_EXPORTER_OTLP_ENDPOINT` at it.
+    """
 
     queue_capacity: int = 256
-    """Export batches the receiver holds before it starts shedding.
+    """Export batches held before the receiver starts shedding.
 
     Sized in batches, not spans, because a batch is the unit a sender retries.
     A burst beyond this capacity is dropped and logged rather than queued
     without bound — an unbounded queue would let a telemetry spike take the
-    daemon down with it."""
+    daemon down with it.
+    """
 
     workers: int = 2
     """Threads that transform accepted batches off the daemon's event loop.
 
     The work is CPU-bound protobuf walking, so more workers smooth latency
     rather than raise throughput; they exist to keep this work off the loop
-    that also serves every dashboard and SSE stream, not to parallelize it."""
+    that also serves every dashboard and SSE stream, not to parallelize it.
+    """
+
+
+class TelemetryExportConfig(BaseModel):
+    """Capacity and retry limits for acknowledged span export."""
+
+    model_config = _FROZEN
+
+    admission: AdmissionLimits = Field(
+        default_factory=lambda: AdmissionLimits(max_items=2048, max_bytes=8 * 1024 * 1024)
+    )
+    batch_size: int = Field(default=512, gt=0)
+    max_retries: int = Field(default=0, ge=0, le=10)
+    retry_backoff_seconds: float = Field(default=1.0, ge=0)
+    max_retry_backoff_seconds: float = Field(default=30.0, ge=0)
+
+    @model_validator(mode="after")
+    def _bounds_agree(self) -> TelemetryExportConfig:
+        if self.batch_size > self.admission.max_items:
+            raise ValueError("export batch_size exceeds admission.max_items")
+        if self.retry_backoff_seconds > self.max_retry_backoff_seconds:
+            raise ValueError("export retry backoff exceeds maximum")
+        return self
 
 
 class TelemetryConfig(EnvSourceConfig):
-    """LangFuse credentials + OpenTelemetry passthrough knobs.
+    """Langfuse credentials and OpenTelemetry passthrough. The three credential fields hold
+    variable names, never secrets, so committed config stays publishable.
 
     Secret-free like every other integration submodel (the ``mewbo.api_key_env``
     discipline): the three canonical values are env-var NAMES, never secret
@@ -1796,40 +1931,39 @@ class TelemetryConfig(EnvSourceConfig):
     model_config = _FROZEN
 
     SECTION: ClassVar[str] = "telemetry"
+    export: TelemetryExportConfig = Field(default_factory=TelemetryExportConfig)
 
     enabled: bool = False
+    """Export Grove's own spans to the configured backend."""
 
     backfill: TelemetryBackfillConfig = Field(default_factory=TelemetryBackfillConfig)
+    """Consent and profile selection for exporting historical sessions."""
 
     receiver: TelemetryReceiverConfig = Field(default_factory=TelemetryReceiverConfig)
-    """The daemon's own OTLP/HTTP ingest endpoint — independent of ``enabled``
-    above, which gates Grove's own *export*. A harness may export directly to
-    the receiver with this section otherwise off."""
+    """The daemon's own OTLP endpoint for a harness's native exporter. Independent of
+    `enabled`.
+    """
 
     host_env: str = "LANGFUSE_HOST"
-    """NAME of the env var holding the Langfuse host (e.g. a self-hosted or
-    ``https://cloud.langfuse.com`` URL) — never the URL itself. The default is
-    Langfuse's own documented variable name; a deployment whose secret store
-    exports something else (``LANGFUSE_BASE_URL`` is a common alternative)
-    names that here rather than renaming the variable."""
+    """Name of the variable holding the Langfuse host, never the URL itself. Rename it here
+    if your secret store exports a different name.
+    """
 
     public_key_env: str = "LANGFUSE_PUBLIC_KEY"
-    """NAME of the env var holding the Langfuse public key."""
+    """Name of the variable holding the Langfuse public key."""
 
     secret_key_env: str = "LANGFUSE_SECRET_KEY"
-    """NAME of the env var holding the Langfuse secret key — never the secret
-    itself."""
+    """Name of the variable holding the Langfuse secret key, never the secret itself."""
 
     passthrough_kinds: tuple[AgentKind, ...] = ("claude_code", "codex")
-    """Which agent runtimes get the derived telemetry env exported into their
-    launch env — an allow-list, mechanism not policy (mirrors
-    ``NotificationsConfig.on``'s "which transitions" shape). ``mewbo`` runs
-    server-side (no local pane to export into) and a bare ``generic`` shell has
-    no instrumentation to feed, so both are excluded by default; set explicitly
-    to opt in."""
+    """Agent kinds that receive the derived telemetry environment at launch. `mewbo` runs
+    server side and `generic` has nothing to instrument, so both are out by default.
+    """
 
     reserved_env: tuple[str, ...] = _OTEL_EXPORT_ENV
-    """Environment variables Grove OWNS for every agent process it launches.
+    """OTLP exporter variables Grove owns for every agent it launches, so an agent's own
+    exporter cannot split one session into two traces. A displaced value is logged by
+    name.
 
     Grove composes an agent's launch environment, so it already decides whether
     that agent exports at all. These names make the decision total: for a
@@ -1850,10 +1984,12 @@ class TelemetryConfig(EnvSourceConfig):
     per signal, and where it sends. Grove's identity stamp
     (``OTEL_RESOURCE_ATTRIBUTES``) and an inbound trace context are deliberately
     absent — they say who the agent is, not where its telemetry goes. Narrow the
-    tuple to hand a name back to the agent; empty it to reserve nothing."""
+    tuple to hand a name back to the agent; empty it to reserve nothing.
+    """
 
     content_owner: dict[AgentKind, ContentOwner] = Field(default_factory=dict)
-    """Which side emits each runtime's prompt/response CONTENT — per agent kind.
+    """Which side emits each runtime's prompt and response content, per agent kind, so a
+    turn is never recorded twice or not at all.
 
     **Exactly one owner per session, and it is chosen HERE.** Grove always emits
     the context (workspace, branch, ticket, agent identity); content is the half
@@ -2119,7 +2255,7 @@ def _default_proxy_base_url_env() -> dict[AgentKind, str]:
 
 
 class ProxyConfig(BaseModel):
-    """Loopback LLM-gateway passthrough proxy for wire-truth capture.
+    """A loopback proxy in front of the LLM gateway for wire level capture.
 
     Off by default (mechanism, not policy). When a deployment opts in and the
     orchestrator serves the proxy (``grove.core.proxy.ProxyApp``), an agent is
@@ -2142,35 +2278,33 @@ class ProxyConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = False
-    """Master switch. ``False`` leaves launch env and traffic untouched."""
+    """Route agent traffic through Grove's loopback proxy for wire level capture. Off
+    leaves launch env and traffic untouched.
+    """
 
     host: str = "127.0.0.1"
-    """Loopback interface the proxy listens on — never a routable address; the
-    proxy relays provider credentials, so it must stay same-host only."""
+    """Loopback interface the proxy listens on. Never a routable address, since it relays
+    provider credentials.
+    """
 
     port: int = Field(default=8788, ge=1, le=65535)
-    """Port the proxy listens on. The value :meth:`proxy_env` hands the agent is
-    ``http://{host}:{port}``."""
+    """Port the proxy listens on."""
 
     upstreams: dict[AgentKind, str] = Field(default_factory=_default_proxy_upstreams)
-    """Per-kind real upstream base URL the proxy forwards to (verbatim). The keys
-    are the opt-in set; a kind absent here is not proxied."""
+    """Per agent kind real upstream base URL. A kind absent here is not proxied."""
 
     base_url_env: dict[AgentKind, str] = Field(default_factory=_default_proxy_base_url_env)
-    """Per-kind NAME of the env var that points that runtime at the proxy — the
-    documented gateway seam each provider exposes (Claude:
-    ``ANTHROPIC_BASE_URL``; Codex: its ``model_providers`` base-url env). Never a
-    URL literal here — :meth:`proxy_env` assembles ``{name: proxy_url}``."""
+    """Per agent kind name of the variable that points that runtime at the proxy, such as
+    `ANTHROPIC_BASE_URL` for Claude Code.
+    """
 
     log_bodies: bool = False
-    """Content-gating: capture the REQUEST body into the telemetry event. Off by
-    default — a captured body can hold prompt content, so opting in is deliberate.
-    Response bodies are NEVER captured; only their token ``usage`` is extracted.
-    Headers (auth included) are never captured or logged regardless."""
+    """Capture request bodies into the telemetry event. Off by default because a body can
+    hold prompt content. Response bodies and headers are never captured.
+    """
 
     max_body_bytes: int = Field(default=8192, ge=0)
-    """Truncation cap (bytes) applied to a captured request body when
-    ``log_bodies`` is set — bounds the telemetry payload."""
+    """Cap on a captured request body."""
 
     def proxy_env(self, kind: AgentKind, env: Mapping[str, str] | None = None) -> dict[str, str]:
         """Derive the launch-env that points a ``kind`` agent at the proxy.
@@ -2218,53 +2352,203 @@ class ProxyConfig(BaseModel):
         return {env_name: proxy_url}
 
 
-class ModelPriceConfig(BaseModel):
-    """What one model's tokens cost, per million tokens.
+class ModelsConfig(BaseModel):
+    """How a model id READS in a picker, as distinct from what it costs.
 
-    Prices are yours to state because no price list Grove could ship stays
-    correct: providers reprice, gateways mark up, and a stale built-in table
-    would produce confident wrong money. A model with no entry here reports its
-    cost as unknown rather than as zero.
+    A provider id is an address, not a name: a gateway publishes
+    ``anthropic-gpt-5.6-luna`` and every catalog endpoint measured on the
+    reference host publishes no display name beside it. So the name is declared
+    here rather than derived — an operator names the models their fleet actually
+    runs, and a model nobody named keeps its id.
+
+    Display only. Nothing here ever changes what is sent to a provider, which is
+    what keeps a rename safe for a workspace already pinned to the id.
     """
 
     model_config = _FROZEN
 
-    input: float = 0.0
-    """Price per million fresh (uncached) input tokens."""
+    display_names: dict[str, str] = Field(default_factory=dict)
+    """Model id to the name a picker prints for it. Exact match only, because a prefix
+    rule would silently name a model the operator never saw. An id with no entry keeps
+    its own spelling rather than being guessed at.
+    """
 
-    output: float = 0.0
-    """Price per million output tokens."""
+    @field_validator("display_names")
+    @classmethod
+    def _nonblank_display_names(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(not model.strip() or not name.strip() for model, name in value.items()):
+            raise ValueError("model display names must not contain blank ids or names")
+        return value
 
-    cache_read: float = 0.0
-    """Price per million tokens served from a warm prompt cache — typically a
-    small fraction of ``input``, which is why the audit never folds the two."""
+    def display_name(self, model_id: str) -> str | None:
+        """The declared name for ``model_id``, or ``None`` when none is declared.
 
-    cache_write: float = 0.0
-    """Price per million tokens written into the prompt cache, usually charged
-    at a premium over ``input``."""
+        ``None`` means *nobody named this*, which a client renders as the id
+        itself. It is deliberately not a fallback computed here: the clients
+        already share one pure labelling adapter, and a second spelling rule in
+        the engine is how two surfaces come to print one model two ways.
+        """
+        return self.display_names.get(model_id)
+
+
+class ModelPriceConfig(BaseModel):
+    """What one model's tokens cost, per million tokens.
+
+    A missing rate is distinct from an explicit free rate. Manual configurations
+    retain zero defaults for compatibility; source snapshots use ``None`` when a
+    provider did not report a particular rate.
+    """
+
+    model_config = _FROZEN
+
+    input: float | None = 0.0
+    """Per million fresh input tokens."""
+
+    output: float | None = 0.0
+    """Per million output tokens."""
+
+    cache_read: float | None = 0.0
+    """Per million tokens served from the prompt cache, usually a fraction of `input`.
+    """
+
+    cache_write: float | None = 0.0
+    """Per million tokens written into the prompt cache, usually a premium over `input`.
+    """
+
+    @field_validator("input", "output", "cache_read", "cache_write")
+    @classmethod
+    def _valid_rate(cls, value: float | None) -> float | None:
+        if value is not None and (not math.isfinite(value) or value < 0):
+            raise ValueError("price rates must be finite and nonnegative")
+        return value
+
+
+class UsagePricingSourceConfig(BaseModel):
+    """One authenticated LiteLLM compatible model info endpoint."""
+
+    model_config = _FROZEN
+
+    base_url: str
+    """The service root or its `/v1` root. Grove reads `model/info` under it."""
+
+    token_env: str
+    """Name of the environment variable holding this source's bearer token."""
+
+    timeout_seconds: float = 10.0
+    """Bound on one model info request."""
+
+    @field_validator("base_url")
+    @classmethod
+    def _valid_base_url(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("pricing source base_url must be an absolute HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError(
+                "pricing source base_url must not carry credentials, query, or fragment"
+            )
+        return value.rstrip("/")
+
+    @field_validator("token_env")
+    @classmethod
+    def _valid_token_env(cls, value: str) -> str:
+        if not value or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("pricing source token_env must be an environment variable name")
+        return value
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _valid_timeout(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("pricing source timeout_seconds must be finite and positive")
+        return value
 
 
 class UsagePricingConfig(BaseModel):
     """Model prices used to estimate cost from token counts.
 
-    An estimate is never presented as billed cash: a subscription session's
-    token cost is hypothetical, and the wire says so. Where a provider reports
-    its own per-request cost, that figure wins and these prices are unused.
+    Manual entries take precedence over source snapshots. Sources are opt-in so
+    the default has no network behavior.
     """
 
     model_config = _FROZEN
 
     currency: str = "USD"
-    """ISO 4217 code the prices below are quoted in."""
+    """ISO 4217 code the prices are quoted in."""
 
     models: dict[str, ModelPriceConfig] = Field(default_factory=dict)
-    """Model id (as the tool reports it) to its price. Matched on exact id
-    first, then on the longest configured id that prefixes it, so a dated
-    release inherits its family's price without a new entry per snapshot."""
+    """Manual prices by model id, exact match first then longest prefix. They override
+    fetched entries.
+    """
+
+    sources: list[UsagePricingSourceConfig] = Field(default_factory=list)
+    """Authenticated pricing endpoints. Empty disables remote pricing, and a higher layer
+    replaces the list.
+    """
+
+    aliases: dict[str, str] = Field(default_factory=dict)
+    """Model id to the id it is priced as. Explicit only, Grove never infers one from a
+    prefix.
+    """
+
+    cache_ttl_seconds: float = 3600.0
+    """Maximum age of a fetched price snapshot before it is refreshed."""
+
+    _fetched_models: frozenset[str] = PrivateAttr(default_factory=frozenset)
+
+    @field_validator("currency")
+    @classmethod
+    def _valid_currency(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            raise ValueError("pricing currency must be a three-letter uppercase ISO 4217 code")
+        return value
+
+    @field_validator("aliases")
+    @classmethod
+    def _nonblank_aliases(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(not source.strip() or not target.strip() for source, target in value.items()):
+            raise ValueError("pricing aliases must not contain blank model ids")
+        return value
+
+    @field_validator("cache_ttl_seconds")
+    @classmethod
+    def _valid_cache_ttl(cls, value: float) -> float:
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("pricing cache_ttl_seconds must be finite and nonnegative")
+        return value
+
+    @model_validator(mode="after")
+    def _aliases_are_acyclic(self) -> UsagePricingConfig:
+        if self.sources and self.currency != "USD":
+            raise ValueError("LiteLLM pricing sources quote USD; currency must be USD")
+        if any(not key.strip() or not value.strip() for key, value in self.aliases.items()):
+            raise ValueError("pricing alias names and targets must not be blank")
+        for start in self.aliases:
+            seen: set[str] = set()
+            model = start
+            while model in self.aliases:
+                if model in seen:
+                    raise ValueError("pricing aliases must not contain a cycle")
+                seen.add(model)
+                model = self.aliases[model]
+        return self
+
+    def with_fetched_models(
+        self, models: dict[str, ModelPriceConfig], fetched_models: frozenset[str]
+    ) -> UsagePricingConfig:
+        """Return an internal price snapshot while retaining source provenance."""
+        result = self.model_copy(update={"models": models})
+        object.__setattr__(result, "_fetched_models", fetched_models)
+        return result
+
+    @property
+    def fetched_models(self) -> frozenset[str]:
+        """Exact-only source entries in the internal catalog snapshot."""
+        return self._fetched_models
 
 
 class UsageQuotaGatewayConfig(BaseModel):
-    """One aggregate quota endpoint that holds subscriptions from several vendors.
+    """One aggregate quota endpoint holding subscriptions from several vendors.
 
     The bearer token stays in the consuming process environment; configuring an
     endpoint never puts a credential into a cascadeable file. An empty URL leaves
@@ -2274,14 +2558,14 @@ class UsageQuotaGatewayConfig(BaseModel):
     model_config = _FROZEN
 
     base_url: str = ""
-    """The gateway endpoint to GET once for every aggregate quota refresh."""
+    """The gateway endpoint fetched once per quota refresh."""
 
     token_env: str = "GROVE_QUOTA_GATEWAY_TOKEN"
-    """Name of the environment variable carrying the gateway bearer token."""
+    """Name of the environment variable holding the gateway bearer token."""
 
 
 class UsageQuotaConfig(BaseModel):
-    """How subscription windows and billing posture are collected per account.
+    """How subscription windows are collected per account.
 
     Grove reads each tool's OWN credential store at refresh time and calls the
     endpoint that credential selects. It never copies a secret into Grove's
@@ -2293,7 +2577,7 @@ class UsageQuotaConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
-    """Collect quota for the explicitly selected ``profiles`` below."""
+    """Collect quota for the selected `profiles`."""
 
     profiles: dict[
         Literal["claude_code", "codex"], tuple[Annotated[str, Field(min_length=1)], ...]
@@ -2309,8 +2593,7 @@ class UsageQuotaConfig(BaseModel):
     """
 
     ttl_seconds: int = Field(default=900, ge=30)
-    """How long a good reading is served before a provider whose read costs a
-    request is asked again.
+    """How long a good reading is served before the provider is asked again.
 
     Every Grove process on this host shares one probe ledger, so a dashboard, a
     terminal UI and a `grove usage` run inside one window together cost one
@@ -2318,33 +2601,31 @@ class UsageQuotaConfig(BaseModel):
     twenty times and a weekly one hundreds of times, while pages are opened far
     more often than either moves. A provider whose quota is a file its own tool
     already wrote is not governed by this at all: there is no budget to protect
-    there, and holding its answer back would only make it older."""
+    there, and holding its answer back would only make it older.
+    """
 
     retry_floor_seconds: int = Field(default=120, ge=10)
-    """Wait after the FIRST auth or rate-limit failure before retrying that
-    account, doubling with each further failure. Last-good data keeps rendering,
-    marked stale, in the meantime. A provider that sends its own ``Retry-After``
-    is obeyed instead whenever it asks for longer."""
+    """Wait after the first auth or rate limit failure, doubling per failure, while the
+    last good reading keeps rendering as stale.
+    """
 
     retry_max_seconds: int = Field(default=3600, ge=60)
-    """Ceiling on that doubling. A limit nobody has lifted is not worth asking
-    about more than once an hour, and a fixed floor against one is still a
-    request every floor, forever — which is what a rate limiter reads as
-    continuing to knock."""
+    """Ceiling on that doubling."""
 
     timeout_seconds: float = Field(default=10.0, gt=0)
-    """Bound on each credential read and each provider request."""
+    """Bound on each credential read and provider request."""
 
     labels: dict[str, str] = Field(default_factory=dict)
-    """Account id to display name, so an operator can tell two profiles apart
-    without Grove ever storing an email address."""
+    """Account id to display name, so two profiles are distinguishable without Grove
+    storing an email.
+    """
 
     gateway: UsageQuotaGatewayConfig = Field(default_factory=UsageQuotaGatewayConfig)
-    """Optional aggregate source, resolved through this quota configuration cascade."""
+    """One aggregate quota endpoint holding subscriptions from several vendors."""
 
     window_seconds: dict[str, int] = Field(default_factory=dict)
-    """Window label to its length in seconds, for providers that publish a reset
-    instant but never say how long the window is.
+    """Window label to its length, for providers that publish a reset instant but never the
+    window's length.
 
     A burn rate needs a window START, and a start is only derivable from a reset
     plus a duration. Anthropic's usage endpoint reports the reset and no
@@ -2357,16 +2638,14 @@ class UsageQuotaConfig(BaseModel):
     """
 
     burn_tight_percent: float = Field(default=85.0, gt=0)
-    """Projected usage at reset, as a percentage of the window, above which a
-    window is called `tight` rather than on track. Grove extrapolates the pace
-    so far to the window's own reset and compares it here; a lower number asks
-    to be warned earlier. No provider is contacted to work this out."""
+    """Projected usage at reset above which a window reads `tight`. Grove extrapolates the
+    pace so far and contacts no provider.
+    """
 
     burn_over_percent: float = Field(default=100.0, gt=0)
-    """Projected usage at reset above which a window is called `over` — on
-    course to exhaust before it resets. Held apart from `burn_tight_percent` so
-    "spending faster than I meant to" and "will run out" stay two verdicts, and
-    settable above 100 for a workload that treats the limit as advisory."""
+    """Projected usage at reset above which a window reads `over`, on course to run out
+    before it resets.
+    """
 
     @model_validator(mode="after")
     def _burn_thresholds_are_ordered(self) -> UsageQuotaConfig:
@@ -2389,15 +2668,13 @@ class UsageCommandsConfig(BaseModel):
     model_config = _FROZEN
 
     basename: bool = True
-    """Fold an absolute path to its final component, so `/usr/bin/git` and
-    `git` are one row rather than two spellings of one tool."""
+    """Fold an absolute path to its final component, so `/usr/bin/git` and `git` are one
+    row.
+    """
 
     version_suffix_pattern: str = r"(?<=[A-Za-z])\d+(?:\.\d+)+$"
-    """Trailing version fragment stripped from an executable's name, so
-    `python3.12` ranks as `python`. Deliberately requires a DOT: a bare
-    trailing digit run is part of the name far more often than it is a version
-    (`base64`, `bzip2`, `sha256sum`), and stripping it invents tools that do
-    not exist. Set to something that matches nothing to disable."""
+    """Trailing version fragment stripped from a name, so `python3.12` counts as `python`.
+    """
 
     aliases: dict[str, str] = Field(
         default_factory=lambda: {
@@ -2408,21 +2685,20 @@ class UsageCommandsConfig(BaseModel):
             "pip3": "pip",
         }
     )
-    """Executable names folded onto one row. The defaults fold only spellings
-    of the SAME program.
+    """Executable names folded onto one row.
 
     Three collapses a reader often expects are deliberately absent, because
     each would hide the cost it exists to reveal. `npm`/`npx` and `rg`/`grep`
     are different programs with different performance. And `uv run python …`
     is credited to `uv`, not `python`, because uv's own dependency resolution
     is real time the invocation spent — folding it onto the interpreter
-    reports that overhead as if the code had been running."""
+    reports that overhead as if the code had been running.
+    """
 
     censored_at_ms: int = Field(default=600_000, ge=0)
-    """A measured duration at or above this is reported as CENSORED rather
-    than as cost. Real durations cluster tightly just above 600 s because that
-    is the harness's own default timeout ceiling: the number says when the tool
-    gave up, not how long the command needed. `0` disables the flag."""
+    """A duration at or above this is reported as censored rather than as cost, since it
+    marks the harness's own timeout rather than the command's length. `0` disables it.
+    """
 
     @model_validator(mode="after")
     def _version_suffix_compiles(self) -> UsageCommandsConfig:
@@ -2444,7 +2720,7 @@ class UsageCommandsConfig(BaseModel):
 
 
 class UsageInsightsConfig(BaseModel):
-    """Thresholds for the deterministic audit detectors.
+    """Thresholds for the usage audit's detectors.
 
     Defaults are conservative: a detector would rather stay silent than rank a
     normal working pattern as a problem. Every one of these is config because a
@@ -2454,28 +2730,28 @@ class UsageInsightsConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
+    """Run the detectors at all."""
 
     min_occurrences: int = Field(default=3, ge=2)
-    """How many times a pattern must recur before it is reported at all."""
+    """How often a pattern must recur before it is reported."""
 
     retry_window_seconds: int = Field(default=300, ge=1)
-    """Repeats of the same failing call within this window count as one retry
-    loop rather than as independent failures."""
+    """Repeats of the same failing call inside this window count as one retry loop."""
 
     edit_churn_edits: int = Field(default=4, ge=2)
-    """Mutations to one file inside a session before it is called churn."""
+    """Edits to one file in a session before it is called churn."""
 
     slow_operation_ms: int = Field(default=60_000, ge=1)
-    """A generation or tool call above this duration is a slow-operation
-    candidate — reported only where the evidence supports a real duration."""
+    """A generation or tool call above this is a slow operation candidate."""
 
     concentration_share: float = Field(default=0.5, gt=0, le=1)
-    """Share of tokens or active time one project, account or model must hold
-    before concentration is worth naming."""
+    """Share of tokens or time one project, account or model must hold before concentration
+    is named.
+    """
 
 
 class UsageConfig(BaseModel):
-    """The historical usage audit — indexing, pricing, quota and insights.
+    """The usage audit. Indexing, pricing, quota and insights.
 
     Reads the agent transcripts Grove can already reach and projects them into a
     private local cache so historical questions answer quickly. The cache holds
@@ -2487,46 +2763,46 @@ class UsageConfig(BaseModel):
     model_config = _FROZEN
 
     enabled: bool = True
+    """Index transcripts into the usage audit at all."""
 
     retention_days: int | None = None
-    """Drop indexed events older than this on refresh. ``null`` keeps
-    everything — the transcripts are the source of truth either way."""
+    """Drop indexed events older than this on refresh. Unset keeps everything."""
 
     max_sessions_per_page: int = Field(default=100, ge=1, le=1000)
-    """Upper bound on one page of the session audit table."""
+    """Upper bound on one page of the session table."""
 
     max_breakdown_rows: int = Field(default=50, ge=1, le=500)
-    """Rows returned per breakdown dimension before the long tail is dropped.
-    The response says when it truncated, so a capped list is never mistaken for
-    a complete one."""
+    """Rows per breakdown dimension before the long tail is dropped. The response says when
+    it truncated.
+    """
 
     busy_timeout_ms: int = Field(default=5000, ge=0)
-    """How long a writer waits on SQLite's lock before ``database is locked``.
-    Up to three processes can write ``usage.sqlite3`` — the daemon, the TUI's
-    Usage screen and ``grove usage backfill`` — and SQLite's own default is 0,
-    which raises on the first genuine cross-process collision instead of
-    waiting. ``0`` restores that immediate-raise default."""
+    """How long a writer waits on the SQLite lock, since the daemon, the TUI and a backfill
+    can all write at once. `0` raises immediately.
+    """
 
     pricing: UsagePricingConfig = Field(default_factory=UsagePricingConfig)
+    """Model prices used to estimate cost from token counts."""
     quota: UsageQuotaConfig = Field(default_factory=UsageQuotaConfig)
+    """How subscription windows are collected per account."""
     insights: UsageInsightsConfig = Field(default_factory=UsageInsightsConfig)
+    """Thresholds for the audit's deterministic detectors."""
     commands: UsageCommandsConfig = Field(default_factory=UsageCommandsConfig)
+    """How a shell tool call's time is attributed to the command that led it."""
 
 
 class UIConfig(BaseModel):
-    """Client-facing UI knobs. The TUI consumes these; core ignores them."""
+    """TUI preferences."""
 
     model_config = _FROZEN
 
     theme: str = "auto"
-    """Theme id. `auto`/`dark`/`light` map to the built-in Grove themes;
-    any other string selects a user override registered from
-    `${user_config_dir}/grove/themes/*.toml`. Validated at app startup
-    by `grove.tui.theme.resolve_theme_name` — unknown ids raise
-    `ConfigError` then, not here, so the cascade can persist a name even
-    before its TOML file exists."""
+    """`auto`, `dark`, `light`, or the name of a theme file under
+    `${user_config_dir}/grove/themes/`.
+    """
 
     keybindings: dict[str, str] = Field(default_factory=dict)
+    """Key overrides for the TUI."""
 
 
 # ─── root model ─────────────────────────────────────────────────────────────
@@ -2543,6 +2819,9 @@ class AgentRoster:
     the explicit ``builtin_agents`` switch :meth:`allowed` implements.
     """
 
+    # The native entry and its terminal twin ship as a PAIR per provider, so
+    # the picker always offers the interactive UI beside the owned session
+    # without a config edit; they cascade and merge by name like any built-in.
     BUILTINS: ClassVar[tuple[AgentSpec, ...]] = (
         AgentSpec(
             name="claude",
@@ -2551,10 +2830,24 @@ class AgentRoster:
             description="Anthropic Claude Code",
         ),
         AgentSpec(
+            name="claude-terminal",
+            command="claude",
+            kind="claude_code",
+            native=False,
+            description="Anthropic Claude Code (interactive terminal)",
+        ),
+        AgentSpec(
             name="codex",
             command="codex",
             kind="codex",
             description="OpenAI Codex CLI",
+        ),
+        AgentSpec(
+            name="codex-terminal",
+            command="codex",
+            kind="codex",
+            native=False,
+            description="OpenAI Codex CLI (interactive terminal)",
         ),
         AgentSpec(name="shell", command="$SHELL", description="Plain shell"),
     )
@@ -3101,6 +3394,43 @@ class DeclaredEnvVars:
         return variable if isinstance(variable, str) else None
 
 
+class PanelConfig(BaseModel):
+    """One embeddable view served by a service in this workspace's compose stack.
+
+    A panel deliberately names a compose service rather than an origin. A
+    committed ``.grove/config.json`` is untrusted input, and arbitrary hosts or
+    URLs would turn an iframe convenience into a host-network proxy. Resolution
+    therefore proves that this service belongs to the workspace's already-owned
+    compose project before the daemon connects. No committed-layer stripping is
+    needed: the service and port are contained by that ownership proof.
+    """
+
+    model_config = _FROZEN
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
+    """URL safe identifier, unique within `panels`."""
+
+    title: str = Field(min_length=1, max_length=200)
+    """Tab label."""
+
+    service: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    """Docker Compose service name inside this workspace's stack."""
+
+    port: int = Field(ge=1, le=65535)
+    """Port the service exposes on its compose network."""
+
+    path: str = "/"
+    """Initial path and optional query string for the iframe."""
+
+    @field_validator("path")
+    @classmethod
+    def _path_is_relative_to_the_panel_origin(cls, value: str) -> str:
+        """Refuse a path that could be read as an alternate origin or protocol."""
+        if not value.startswith("/") or value.startswith("//"):
+            raise ValueError("panel path must begin with one '/' and not name an origin")
+        return value
+
+
 class GroveConfig(BaseModel):
     """Merged, validated configuration. Built once per `load_config` call."""
 
@@ -3114,12 +3444,22 @@ class GroveConfig(BaseModel):
     # unions these into ``known_roots()`` and drops any that aren't an existing
     # git repo. A user-level concern that still cascades like every other field.
     projects: list[str] = Field(default_factory=list)
+    """Repo roots kept visible in every picker even with zero workspaces. `~` expands,
+    and a path that is not a git repo is ignored.
+    """
+    panels: list[PanelConfig] = Field(default_factory=list)
+    """Embeddable compose-service views this project permits in each workspace.
+
+    Empty by default. A panel is visible only while the workspace's persisted
+    compose project is verified, running, and contains the named service; a
+    declaration alone never opens a network destination.
+    """
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
     agent_cwds: AgentCwdsConfig = Field(default_factory=AgentCwdsConfig)
     defaults: WorkspaceDefaults = Field(default_factory=WorkspaceDefaults)
     builtin_agents: bool = True
-    """Whether Grove's own agents (``claude``, ``codex``, ``shell``) are offered
-    alongside the ones you declare.
+    """Whether Grove's own agents are offered alongside the ones you declare. Off makes
+    your `agents` list the whole roster.
 
     ``true`` (the default) is the standing contract: the built-ins are literally layer
     0 of the cascade, so declaring ``agents`` REFINES them and can never hide one
@@ -3145,6 +3485,10 @@ class GroveConfig(BaseModel):
     tls: TLSConfig = Field(default_factory=TLSConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
+    lifecycle_max_pending: int = Field(default=64, gt=0)
+    """Maximum accepted lifecycle operations, including lock waiters and running work."""
+    activity_admission: AdmissionLimits = Field(default_factory=AdmissionLimits)
+    """Item and byte reservations for pending and running activity transitions."""
     brief: BriefConfig = Field(default_factory=BriefConfig)
     container: ContainerConfig = Field(default_factory=ContainerConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
@@ -3155,13 +3499,62 @@ class GroveConfig(BaseModel):
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
     usage: UsageConfig = Field(default_factory=UsageConfig)
+
+    @model_validator(mode="after")
+    def _panel_names_are_unique(self) -> GroveConfig:
+        """Reject duplicate URL coordinates before any request can be ambiguous."""
+        names = [panel.name for panel in self.panels]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"panel names must be unique: {', '.join(duplicates)}")
+        return self
 
     def find_agent(self, name: str) -> AgentSpec | None:
         for spec in self.agents:
             if spec.name == name:
                 return spec
         return None
+
+    # ─── resolved create defaults ────────────────────────────────────────────
+    #
+    # What a create that says nothing about a field actually gets. Three
+    # properties rather than one resolved object, because each is read on its
+    # own by a different caller and a bundle would need every caller to know
+    # about fields it does not use.
+    #
+    # These exist so that omitting a field on the wire and displaying the saved
+    # answer in a form agree with each other. They did not, and the asymmetry
+    # was silent in the worst direction: `WorkspaceDefaultsView` honoured
+    # `defaults.runtime` while `RuntimeResolver` read `container.enabled`
+    # directly, so a user whose saved default was `host` watched the composer
+    # say Host and got a container on every project that had not turned
+    # containers off — `container.enabled` defaults to True. The same shape hid
+    # `defaults.model` and `defaults.skip_init` from every client that trusted
+    # the engine. Resolving HERE means the CLI, TUI, daemon, MCP and issue-ops
+    # inherit the user's saved answer for free, which is the argument
+    # `agent_cwds.default_path()` already makes one section over.
+    #
+    # `branch_mode` is deliberately NOT here: `CreateWorkspaceRequest.branch_plan`
+    # defaults to `AutoBranch()`, so an omitted plan is indistinguishable from an
+    # explicit auto one and there is no "unspecified" for this to answer. That
+    # asymmetry is why every client still applies it itself.
+
+    @property
+    def default_runtime(self) -> Literal["host", "container"]:
+        """Where an unopinionated create runs — the saved answer, else the cascade."""
+        return self.defaults.runtime or ("container" if self.container.enabled else "host")
+
+    @property
+    def default_brief(self) -> bool:
+        """Whether an unopinionated create hands its agent the first-turn brief."""
+        return self.brief.enabled if self.defaults.brief is None else self.defaults.brief
+
+    @property
+    def default_skip_init(self) -> bool:
+        """Whether an unopinionated create skips the init script."""
+        return self.defaults.skip_init or False
 
 
 # ─── public helpers ─────────────────────────────────────────────────────────

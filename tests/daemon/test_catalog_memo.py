@@ -1,10 +1,11 @@
-"""_CatalogMemo — the TTL that keeps the host catalog request-scoped.
+"""Event-owned catalog and gallery memo indexes.
 
-The invariant these pin is a cost one: the catalog head-reads every session in
-every adapter's store and walks ``/proc``, so a UI interaction (list, then
-drill into a row) must cost ONE scan, and nothing may turn it into a poll.
-A counting stub stands in for the catalog, so the memo's own behavior is tested
-without any filesystem.
+The host catalog head-reads every discovered session and walks ``/proc``; the
+gallery adds one ``git ls-files`` per worktree. These tests pin the replacement
+for their former TTL: one bootstrap read, then only explicit event mutations or
+explicitly requested reconciliation can make either full scan happen. The
+counting stub keeps the parse-fact worker hermetic while retaining its
+single-flight contract.
 """
 
 from __future__ import annotations
@@ -15,20 +16,31 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from grove.core.agents import SessionRef
+from grove.core.gallery import GalleryItem
+from grove.core.process import LiveRuntime
 from grove.core.sessions import CatalogEntry
-from grove.daemon._catalog import _CatalogMemo
+from grove.daemon._catalog import _CatalogMemo, _GalleryMemo
 
 
-def _entry(session_id: str, *, kind: str = "claude_code", cwd: str | None = "/w") -> CatalogEntry:
+def _entry(
+    session_id: str,
+    *,
+    kind: str = "claude_code",
+    cwd: str | None = "/w",
+    path: Path | None = None,
+    mtime: float = 1.0,
+) -> CatalogEntry:
     return CatalogEntry(
         ref=SessionRef(
             session_id=session_id,
             adapter_kind=kind,
             cwd=cwd,
-            transcript_path=Path("/tmp/x.jsonl"),
+            transcript_path=path or Path(f"/tmp/{session_id}.jsonl"),
             birth=datetime(2026, 7, 27, tzinfo=UTC),
-            mtime=1.0,
+            mtime=mtime,
         ),
         provenance="fs_discovered",
         project=None,
@@ -36,7 +48,7 @@ def _entry(session_id: str, *, kind: str = "claude_code", cwd: str | None = "/w"
 
 
 class _CountingCatalog:
-    """Records how many real scans (and turn-count passes) the memo let through."""
+    """Records whole scans and count passes the memo lets through."""
 
     def __init__(self, rows: tuple[CatalogEntry, ...]) -> None:
         self.rows = rows
@@ -44,6 +56,7 @@ class _CountingCatalog:
         self.counted = 0
         self.release = threading.Event()
         self.entered = threading.Event()
+        self.finished = threading.Event()
 
     def scan(self, *, limit: int | None = None) -> tuple[CatalogEntry, ...]:
         self.scans += 1
@@ -56,54 +69,101 @@ class _CountingCatalog:
         self.counted += 1
         self.entered.set()
         self.release.wait(timeout=5)
+        self.finished.set()
         return 1
 
 
-class _Clock:
-    def __init__(self) -> None:
-        self.now = 100.0
+class _CountingGallery:
+    def __init__(self, items: tuple[GalleryItem, ...]) -> None:
+        self.items_to_return = items
+        self.scans = 0
+        self.scanned_rows: list[tuple[CatalogEntry, ...]] = []
 
-    def __call__(self) -> float:
-        return self.now
+    def scan(self, rows: tuple[CatalogEntry, ...]) -> tuple[GalleryItem, ...]:
+        self.scans += 1
+        self.scanned_rows.append(rows)
+        return self.items_to_return
 
 
-def _memo(catalog: _CountingCatalog, clock: _Clock) -> _CatalogMemo:
-    return _CatalogMemo(catalog, ttl_seconds=5.0, clock=clock)  # type: ignore[arg-type]
+def _item(item_id: str, *, path: Path, modified_at: datetime | None = None) -> GalleryItem:
+    return GalleryItem(
+        id=item_id,
+        path=path,
+        relative_path=path.name,
+        repo_root=Path("/repo"),
+        repo_name="repo",
+        worktree_path=Path("/repo"),
+        size_bytes=1,
+        modified_at=modified_at or datetime(2026, 7, 27, tzinfo=UTC),
+        digest="0" * 64,
+        pages=1,
+    )
 
 
-def test_repeat_reads_inside_the_ttl_cost_one_scan() -> None:
+def _memo(catalog: _CountingCatalog) -> _CatalogMemo:
+    return _CatalogMemo(catalog)  # type: ignore[arg-type]
+
+
+def test_reads_bootstrap_once_and_never_expire_on_elapsed_time() -> None:
     catalog = _CountingCatalog((_entry("a"), _entry("b")))
-    clock = _Clock()
-    memo = _memo(catalog, clock)
+    memo = _memo(catalog)
 
-    memo.rows()
-    clock.now += 4.9
-    memo.rows()
-    memo.find(kind="claude_code", cwd="/w", session_id="b")
+    assert [entry.ref.session_id for entry in memo.rows()] == ["a", "b"]
+    assert memo.find(kind="claude_code", cwd="/w", session_id="b") is not None
+    assert memo.rows() == memo.rows()
 
+    assert catalog.scans == 1
+    assert memo.generation == 1
+
+
+def test_known_session_append_or_change_updates_only_that_record() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    memo.rows()
+
+    changed = _entry("a", mtime=9.0)
+    appended = _entry("b", mtime=10.0)
+    assert memo.invalidate(entry=changed) is True
+    assert memo.invalidate(entry=appended) is True
+
+    rows = memo.rows()
+    assert [(row.ref.session_id, row.ref.mtime) for row in rows] == [("b", 10.0), ("a", 9.0)]
+    assert catalog.scans == 1
+    assert memo.generation == 3
+
+
+def test_known_session_deletion_by_path_removes_only_that_record() -> None:
+    first = _entry("a", path=Path("/tmp/a.jsonl"))
+    second = _entry("b", path=Path("/tmp/b.jsonl"))
+    catalog = _CountingCatalog((first, second))
+    memo = _memo(catalog)
+    memo.rows()
+
+    assert memo.invalidate(path=Path("/tmp/a.jsonl")) is True
+    assert [row.ref.session_id for row in memo.rows()] == ["b"]
     assert catalog.scans == 1
 
 
-def test_the_ttl_expires_so_a_new_session_shows_up() -> None:
+def test_unknown_file_event_explicitly_invalidates_then_next_read_reconciles() -> None:
     catalog = _CountingCatalog((_entry("a"),))
-    clock = _Clock()
-    memo = _memo(catalog, clock)
-    assert [e.ref.session_id for e in memo.rows()] == ["a"]
+    memo = _memo(catalog)
+    memo.rows()
+    catalog.rows = (_entry("b", mtime=2.0), _entry("a"))
 
-    catalog.rows = (_entry("b"), _entry("a"))
-    clock.now += 5.0
-    assert [e.ref.session_id for e in memo.rows()] == ["b", "a"]
+    memo.on_file_events(object())
+    assert catalog.scans == 1  # an edge does not perform I/O on its callback thread
+    assert [row.ref.session_id for row in memo.rows()] == ["b", "a"]
     assert catalog.scans == 2
 
 
-def test_the_memo_holds_the_unbounded_scan_so_a_wider_request_is_answerable() -> None:
-    """Memoizing per-``limit`` would answer a 200-row request from a 1-row
-    cache, so the memo caches everything and the route slices."""
-    catalog = _CountingCatalog(tuple(_entry(f"s{i}") for i in range(10)))
-    memo = _memo(catalog, _Clock())
+def test_reconcile_is_an_explicit_whole_scan() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    memo.rows()
+    catalog.rows = (_entry("b"),)
 
-    assert len(memo.rows()) == 10
-    assert catalog.scans == 1
+    assert [row.ref.session_id for row in memo.reconcile()] == ["b"]
+    assert catalog.scans == 2
 
 
 def test_find_matches_on_all_three_coordinates() -> None:
@@ -113,36 +173,81 @@ def test_find_matches_on_all_three_coordinates() -> None:
             _entry("dup", kind="codex", cwd="/other"),
         )
     )
-    memo = _memo(catalog, _Clock())
+    memo = _memo(catalog)
 
     hit = memo.find(kind="codex", cwd="/other", session_id="dup")
     assert hit is not None
     assert hit.ref.adapter_kind == "codex"
-    # Any single coordinate off is a miss, never the other row.
     assert memo.find(kind="codex", cwd="/w", session_id="dup") is None
     assert memo.find(kind="claude_code", cwd="/w", session_id="nope") is None
 
 
 def test_find_never_matches_a_row_that_recorded_no_cwd() -> None:
-    """~2 % of Claude transcripts never reveal a cwd; such a row lists but is
-    not drillable, and must not be matched by some other row's coordinates."""
     catalog = _CountingCatalog((replace(_entry("a"), ref=_entry("a", cwd=None).ref),))
-    memo = _memo(catalog, _Clock())
+    memo = _memo(catalog)
 
     assert memo.find(kind="claude_code", cwd="/w", session_id="a") is None
 
 
-def test_the_turn_count_pass_is_single_flight_and_never_blocks_the_scan() -> None:
-    """Counting is a full transcript parse per changed session, so a second
-    request must not queue a second pass over the same files — and neither
-    request may wait for one."""
+def test_gallery_rejoins_when_catalog_generation_changes() -> None:
     catalog = _CountingCatalog((_entry("a"),))
-    memo = _memo(catalog, _Clock())
+    sessions = _memo(catalog)
+    first = _item("a", path=Path("/repo/first.drawio"))
+    gallery_source = _CountingGallery((first,))
+    gallery = _GalleryMemo(gallery_source, sessions)  # type: ignore[arg-type]
+
+    assert gallery.items() == (first,)
+    sessions.invalidate(entry=_entry("b", mtime=2.0))
+    assert gallery.items() == (first,)
+
+    assert catalog.scans == 1
+    assert gallery_source.scans == 2
+    assert [row.ref.session_id for row in gallery_source.scanned_rows[-1]] == ["b", "a"]
+
+
+def test_known_diagram_update_and_deletion_change_only_that_item() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    sessions = _memo(catalog)
+    first = _item("a", path=Path("/repo/first.drawio"))
+    second = _item(
+        "b",
+        path=Path("/repo/second.drawio"),
+        modified_at=datetime(2026, 7, 28, tzinfo=UTC),
+    )
+    gallery_source = _CountingGallery((first,))
+    gallery = _GalleryMemo(gallery_source, sessions)  # type: ignore[arg-type]
+    gallery.items()
+
+    assert gallery.invalidate(item=second) is True
+    assert gallery.invalidate(path=first.path) is True
+    assert [item.id for item in gallery.items()] == ["b"]
+    assert gallery_source.scans == 1
+
+
+def test_gallery_file_event_invalidates_without_scanning_on_callback_thread() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    sessions = _memo(catalog)
+    first = _item("a", path=Path("/repo/first.drawio"))
+    second = _item("b", path=Path("/repo/second.drawio"))
+    gallery_source = _CountingGallery((first,))
+    gallery = _GalleryMemo(gallery_source, sessions)  # type: ignore[arg-type]
+    gallery.items()
+    gallery_source.items_to_return = (second,)
+
+    gallery.on_file_events(object())
+    assert gallery_source.scans == 1
+    assert gallery.items() == (second,)
+    assert gallery_source.scans == 2
+
+
+def test_the_turn_count_pass_is_single_flight_and_never_blocks_the_scan() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
     try:
         memo.rows()
         memo.count_turns_in_background()
         assert catalog.entered.wait(timeout=5)
-        memo.count_turns_in_background()  # returns at once; joins nothing
+        memo.count_turns_in_background()
         memo.count_turns_in_background()
         assert catalog.counted == 1
     finally:
@@ -150,12 +255,35 @@ def test_the_turn_count_pass_is_single_flight_and_never_blocks_the_scan() -> Non
         memo.close()
 
 
+def test_changed_session_defers_its_next_turn_count_until_the_flight_finishes() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+        assert catalog.entered.wait(timeout=5)
+        memo.invalidate(entry=_entry("a", mtime=2.0))
+        memo.count_turns_in_background()
+        assert catalog.counted == 1
+
+        catalog.release.set()
+        assert memo._counting is not None
+        memo._counting.result(timeout=5)
+        memo.count_turns_in_background()
+        assert memo._counting is not None
+        memo._counting.result(timeout=5)
+        assert catalog.counted == 2
+    finally:
+        catalog.release.set()
+        memo.close()
+
+
 def test_close_stops_scheduling_and_does_not_wait_for_a_pass_in_flight() -> None:
     catalog = _CountingCatalog((_entry("a"),))
-    memo = _memo(catalog, _Clock())
+    memo = _memo(catalog)
     memo.rows()
 
-    memo.close()  # would hang here if shutdown waited on the blocked pass
+    memo.close()
     memo.count_turns_in_background()
 
     assert catalog.counted == 0
@@ -163,12 +291,53 @@ def test_close_stops_scheduling_and_does_not_wait_for_a_pass_in_flight() -> None
 
 
 def test_nothing_is_scheduled_before_a_scan_has_produced_rows() -> None:
-    """The pass exists to serve a listing somebody asked for; with no rows in
-    hand there is nothing to count and no request to have prompted it."""
     catalog = _CountingCatalog(())
-    memo = _memo(catalog, _Clock())
+    memo = _memo(catalog)
     try:
         memo.count_turns_in_background()
         assert catalog.counted == 0
+    finally:
+        memo.close()
+
+
+def test_liveness_is_refolded_per_read_not_frozen_at_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A process starting after bootstrap must still read as live.
+
+    Liveness is the one field on a catalog row that is not a fact about a
+    FILE, so no filesystem event can carry it: an agent starts and exits with
+    nothing for the event sources to observe. A `live` bit cached at bootstrap
+    therefore reported a RUNNING agent as dead for as long as nothing
+    unrelated happened to touch its transcript — which on a quiet session is
+    forever. Mutation-tested: caching the bit turns this red.
+    """
+    entry = _entry("s1", cwd="/w")
+    catalog = _CountingCatalog((entry,))
+    memo = _CatalogMemo(catalog)  # type: ignore[arg-type]
+    running: list[LiveRuntime] = []
+    monkeypatch.setattr("grove.core.process.list_agent_runtimes", lambda **_: tuple(running))
+    monkeypatch.setattr(
+        "grove.core.sessions.SessionCatalog.fold_liveness",
+        staticmethod(
+            lambda entries, runtimes, *, now: tuple(
+                replace(e, live=any(r.cwd == Path(e.ref.cwd or "") for r in runtimes))
+                for e in entries
+            )
+        ),
+    )
+    try:
+        assert memo.rows()[0].live is False  # bootstrap: nothing running
+        running.append(
+            LiveRuntime(
+                pid=1,
+                kind="claude_code",
+                cwd=Path("/w"),
+                started_at=datetime(2026, 7, 27, tzinfo=UTC),
+            )
+        )
+        # No file changed and no generation moved, so a cached bit stays false.
+        assert memo.rows()[0].live is True
+        assert catalog.scans == 1, "re-folding liveness must not cost another scan"
     finally:
         memo.close()

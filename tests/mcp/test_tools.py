@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from grove._skills import SkillLibrary
 from grove.client import ProtocolError, TransportError
 from grove.core.contracts import ContainerAttachView, RootBranch
 from grove.core.contracts.phase import PhaseView
@@ -83,6 +84,23 @@ async def test_get_workspace_passes_id(fake_client: FakeGroveClient) -> None:
     result = await tools.get_workspace("ws-42")
     assert result.id == "ws-42"
     assert fake_client.calls == [("get_workspace", {"ws_id": "ws-42"})]
+
+
+async def test_get_skill_lists_and_reads_exact_packaged_text(fake_client: FakeGroveClient) -> None:
+    tools = GroveTools(fake_client)
+
+    names = await tools.get_skill()
+    text = await tools.get_skill("collaborating-on-diagrams")
+
+    assert "collaborating-on-diagrams" in names
+    assert isinstance(text, str)
+    assert text == SkillLibrary.read("collaborating-on-diagrams")
+    assert fake_client.calls == []
+
+
+async def test_get_skill_rejects_unadvertised_name(fake_client: FakeGroveClient) -> None:
+    with pytest.raises(ValueError, match="unknown bundled skill"):
+        await GroveTools(fake_client).get_skill("../collaborating-on-diagrams")
 
 
 async def test_list_projects_returns_rows_and_takes_no_arguments(

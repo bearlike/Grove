@@ -1,5 +1,10 @@
 name: CI
 
+# Automatic gate for push and PR. Every gate it runs is defined in a reusable
+# `_*.yml` workflow shared verbatim with dispatch.yml, so the on-demand path and
+# the automatic path can never describe different work — the usual failure of a
+# hand-maintained "quick CI" is that it drifts from the real one silently.
+
 on:
   push:
     branches: ["**"]
@@ -16,61 +21,122 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: Lint + Types + Contracts
-    runs-on: ubuntu-latest
+  # Which areas did this change touch? Gates for untouched areas are skipped on
+  # push/PR only — a dispatched run always executes exactly what was asked for,
+  # because a dispatch that silently runs nothing is the opposite of the
+  # transparency this split exists to provide.
+  changes:
+    name: Detect changed areas
     if: github.event_name != 'schedule'
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      webapp: ${{ steps.filter.outputs.webapp }}
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
         with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-      # Name the one group this job needs. `--all-groups` reaches for metadata
-      # on every group's direct-URL requirement even when the group is then
-      # excluded, so it fetched the docs theme, which is pinned to a GitHub
-      # release asset with no index mirror to retry against. One refused stream
-      # there failed the whole install over a package `make lint` never runs.
-      # `--no-group docs` did NOT suppress it; dropping `--all-groups` does.
-      # `--frozen` then installs straight from uv.lock with no resolution step,
-      # so no URL metadata is needed at all.
-      - name: Install
-        run: uv sync --frozen --group dev
-      - name: Lint
-        run: make lint
+          # Need the base commit to diff against; a shallow clone has no merge base.
+          fetch-depth: 0
+      - id: filter
+        env:
+          # A PR diffs against its base; a push diffs against its own before-state.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # Plain git, not dorny/paths-filter: no third-party action fetch, which
+          # keeps this working on a Gitea runner with no marketplace access.
+          #
+          # Fail OPEN, never closed. A first push to a branch, a force-push or a
+          # squash leaves BASE unresolvable (all-zero sha), and a diff that
+          # errors must run EVERYTHING — a differential gate whose failure mode
+          # is "skip the tests" reports green for work nothing checked.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "base unresolvable; running all gates"
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            echo "webapp=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE" "${{ github.sha }}")
+          echo "$changed"
+          # A workflow change re-runs both sides: the gate definitions themselves
+          # are what changed, so neither side can be assumed unaffected.
+          if echo "$changed" | grep -qE '^(src/|tests/|pyproject\.toml|uv\.lock|Makefile|\.github/workflows/)'; then
+            echo "python=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "python=false" >> "$GITHUB_OUTPUT"
+          fi
+          if echo "$changed" | grep -qE '^(webapp/|\.github/workflows/)'; then
+            echo "webapp=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "webapp=false" >> "$GITHUB_OUTPUT"
+          fi
 
-  test:
-    name: Test
-    # Linux-only: Grove is a terminal (tmux-centric) app + loopback daemon.
-    # There is no macOS/Windows matrix — tmux is the runtime dependency and
-    # native packaging was retired, so cross-OS legs added cost without signal.
-    runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-      # `dev` only, for the reason given in the lint job. Pillow rides `dev`
-      # so `tests/tools/screenshots/` still resolves here.
-      - name: Install
-        run: uv sync --frozen --group dev
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
-      - name: Unit + Pilot tests
-        run: uv run pytest -m "not integration"
-      - name: Integration tests (real tmux + git)
-        run: uv run pytest -m integration
+  py-quality:
+    name: Python quality
+    needs: changes
+    # `== 'true'` — a job `needs` output is a STRING, and on Gitea 1.26 so is a
+    # dispatch boolean. `== true` coerces to NaN == 1 and silently never fires.
+    if: needs.changes.outputs.python == 'true'
+    uses: ./.github/workflows/_py-quality.yml
+
+  # The uv-using gates are CHAINED, not parallel. act_runner shares both
+  # `/opt/hostedtoolcache` and its action-clone cache across concurrent jobs and
+  # neither is concurrency-safe: two jobs resolving `astral-sh/setup-uv` at once
+  # corrupt the shared clone, and the victim fails with a bare `❌ Failure` plus
+  # an `lstat .../.git-blame-ignore-revs: no such file or directory` that names
+  # nothing about this repo. The tell is that the failing leg MOVES between runs
+  # while the survivors stay green — a real gate failure fails the same leg every
+  # time. `needs` here buys correctness, not order: on a capacity-1 runner these
+  # serialized anyway, so the wall-clock cost is only paid on a wider runner.
+  py-tests:
+    name: Python tests
+    needs: [changes, py-quality]
+    if: ${{ !cancelled() && needs.changes.outputs.python == 'true' }}
+    uses: ./.github/workflows/_py-tests.yml
+    with:
+      markers: "not integration"
+
+  py-integration:
+    name: Python integration
+    needs: [changes, py-tests]
+    if: ${{ !cancelled() && needs.changes.outputs.python == 'true' }}
+    uses: ./.github/workflows/_py-tests.yml
+    with:
+      paths: tests
+      markers: "integration"
+
+  webapp-gate:
+    name: Webapp gate
+    needs: [changes, py-integration]
+    if: ${{ !cancelled() && needs.changes.outputs.webapp == 'true' }}
+    uses: ./.github/workflows/_webapp-gate.yml
+
+  webapp-e2e:
+    name: Webapp e2e
+    # Chained after the webapp gate for DISK, not for ordering. Each job
+    # container is capped (`--memory`, and `/tmp` is RAM-backed), so e2e's
+    # Playwright browser download running CONCURRENTLY with the 26-minute test
+    # leg exhausted that shared budget: one run died in `npm install` with
+    # ENOSPC, the next took 49 Python tests down with `No space left on
+    # device` — failures that name git and the filesystem and look nothing
+    # like the cause. Running it after the other legs have released their
+    # space is what keeps the gate's verdict about the code.
+    needs: [changes, webapp-gate]
+    # PR and main only. e2e is the most expensive gate by an order of magnitude,
+    # and running it on every push to every branch would spend the fleet's
+    # capacity on work-in-progress commits that are about to be amended.
+    if: ${{ !cancelled() && needs.changes.outputs.webapp == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') }}
+    uses: ./.github/workflows/_webapp-e2e.yml
 
   unlocked-install:
     name: Unlocked install (what users actually get)
-    # `uv sync` above is a LOCKED resolution against uv.lock, so the test jobs
-    # can never see a newly-published incompatible major of a dependency. Users
+    # `uv sync` in the reusable workflows is a LOCKED resolution against uv.lock,
+    # so those jobs can never see a newly-published incompatible major. Users
     # install with `uv tool install`, which resolves fresh from PyPI and ignores
     # the lockfile — this job is the only one standing in that environment, and
     # it exists because an unbounded pin (`mcp>=1.2`) let SDK 2.0.0 through.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
     # Advisory on push/PR, blocking on the daily schedule. An unlocked resolve
     # can go red for reasons no PR author caused (an upstream major, a PyPI
     # blip); a required check that red-lights unrelated work gets routed around

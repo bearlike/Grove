@@ -13,18 +13,17 @@ import { accountStatusTone } from "./tokens";
 import { SUPPLEMENTARY_RULE, WindowMeters } from "./window-meter";
 
 /**
- * One grid for all four states, so nothing below this row moves as the quota
- * probe resolves.
- *
- * **The second column starts at `lg`, not `md`, and that is a measurement.** At
- * a 768px viewport the rail is already expanded (it is a `Sheet` only below
- * `md`), so `md:grid-cols-2` left each card **226px** wide — narrow enough that
- * a meter's own "25% used · 75% left" truncated against "resets in 4d 22h". No
- * amount of truncation discipline rescues a container that small; the fix is to
- * stop creating it. At `lg` the same card is ~366px, which is the width this
- * card's rows were designed and measured against.
+ * One grid for every quota state. The container owns its breakpoints: usage can
+ * appear in a narrow split pane even when the viewport is wide, so viewport
+ * breakpoints would create columns before their cards have room to reflow.
  */
-const ACCOUNTS = "grid gap-4 lg:grid-cols-2 xl:grid-cols-3";
+const ACCOUNTS = "grid min-w-0 gap-3 @3xl:grid-cols-2 @5xl:grid-cols-3";
+
+/** Places the grid beneath a query container without giving any account a hard
+ * minimum width. A narrow pane keeps one readable card instead of overflowing. */
+function AccountGrid({ children }: { children: React.ReactNode }): React.ReactNode {
+  return <div className="@container">{children}</div>;
+}
 
 /**
  * Subscription capacity, one card per billing account.
@@ -58,46 +57,54 @@ export function UsageQuota({
   // "no profile configured" beside it.
   if (failed) {
     return (
-      <div className={ACCOUNTS}>
-        <CardShell className="col-span-full p-4" data-testid="usage-quota-failed">
-          <SectionFailure
-            detail="Quota could not be read. The totals above are unaffected — quota collection fails on its own."
-            onRetry={onRetry}
-            retrying={retrying}
-          />
-        </CardShell>
-      </div>
+      <AccountGrid>
+        <section className={ACCOUNTS} aria-label="Subscription windows">
+          <CardShell className="col-span-full p-3" data-testid="usage-quota-failed">
+            <SectionFailure
+              detail="Quota could not be read. The totals above are unaffected — quota collection fails on its own."
+              onRetry={onRetry}
+              retrying={retrying}
+            />
+          </CardShell>
+        </section>
+      </AccountGrid>
     );
   }
 
   if (!quotas) {
     return (
-      <div className={ACCOUNTS} aria-hidden>
-        {Array.from({ length: 2 }, (_, index) => (
-          <Skeleton key={index} className="h-52 w-full" />
-        ))}
-      </div>
+      <AccountGrid>
+        <section className={ACCOUNTS} aria-hidden aria-label="Subscription windows">
+          {Array.from({ length: 2 }, (_, index) => (
+            <Skeleton key={index} className="h-52 w-full" />
+          ))}
+        </section>
+      </AccountGrid>
     );
   }
 
   if (quotas.accounts.length === 0) {
     return (
-      <div className={ACCOUNTS}>
-        <CardShell className="col-span-full p-4" data-testid="usage-quota-empty">
-          <p className="text-sm text-content-tertiary">
-            No subscription profile is configured, so no window was read.
-          </p>
-        </CardShell>
-      </div>
+      <AccountGrid>
+        <section className={ACCOUNTS} aria-label="Subscription windows">
+          <CardShell className="col-span-full p-3" data-testid="usage-quota-empty">
+            <p className="text-sm text-content-tertiary">
+              No subscription profile is configured, so no window was read.
+            </p>
+          </CardShell>
+        </section>
+      </AccountGrid>
     );
   }
 
   return (
-    <section className={ACCOUNTS} aria-label="Subscription windows" data-testid="usage-quota">
-      {quotas.accounts.map((account) => (
-        <AccountCard key={account.account_id} account={account} />
-      ))}
-    </section>
+    <AccountGrid>
+      <section className={ACCOUNTS} aria-label="Subscription windows" data-testid="usage-quota">
+        {quotas.accounts.map((account) => (
+          <AccountCard key={account.account_id} account={account} />
+        ))}
+      </section>
+    </AccountGrid>
   );
 }
 

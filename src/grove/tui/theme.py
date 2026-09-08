@@ -23,11 +23,11 @@ enough). See `ThemeOverride` for the schema.
 from __future__ import annotations
 
 import tomllib
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from textual.theme import Theme
 
 from grove.core import InitStatus, WorkspaceStatus
 from grove.core.agents import AgentActivityState
@@ -41,6 +41,7 @@ from grove.core.workspace import Runtime
 
 if TYPE_CHECKING:
     from textual.app import App
+    from textual.theme import Theme
 
 
 # ─── canonical hex values (single source of truth) ─────────────────────────
@@ -236,40 +237,69 @@ _LIGHT_VARS: Final[dict[str, str]] = {
 
 
 # ─── Textual Theme objects ─────────────────────────────────────────────────
+#
+# Built lazily: constructing a `Theme` needs `textual.theme`, whose import
+# costs ~70ms and every non-TUI `grove` invocation (every shell-completion
+# TAB included) was paying it just to import this module for its hex
+# constants. The hex atoms and the Rich-side lookup dicts above need no
+# Textual import at all; only `GROVE_DARK`/`GROVE_LIGHT` do, so only their
+# construction is deferred — via module `__getattr__` (PEP 562), which keeps
+# `from grove.tui.theme import GROVE_DARK` working unchanged for every caller.
 
-GROVE_DARK: Final = Theme(
-    name="grove-dark",
-    primary=_DARK_PRIMARY,
-    secondary=_DARK_FG_MUTED,
-    accent=_DARK_PRIMARY,
-    warning=_DARK_WARNING,
-    error=_DARK_ERROR,
-    success=_DARK_SUCCESS,
-    foreground=_DARK_FG,
-    background=_DARK_BG,
-    surface=_DARK_SURFACE,
-    panel=_DARK_PANEL,
-    boost=_DARK_PANEL,
-    dark=True,
-    variables=dict(_DARK_VARS),
-)
+_DARK_THEME_NAME: Final = "grove-dark"
+_LIGHT_THEME_NAME: Final = "grove-light"
 
-GROVE_LIGHT: Final = Theme(
-    name="grove-light",
-    primary=_LIGHT_PRIMARY,
-    secondary=_LIGHT_FG_MUTED,
-    accent=_LIGHT_PRIMARY,
-    warning=_LIGHT_WARNING,
-    error=_LIGHT_ERROR,
-    success=_LIGHT_SUCCESS,
-    foreground=_LIGHT_FG,
-    background=_LIGHT_BG,
-    surface=_LIGHT_SURFACE,
-    panel=_LIGHT_PANEL,
-    boost=_LIGHT_PANEL,
-    dark=False,
-    variables=dict(_LIGHT_VARS),
-)
+
+@lru_cache(maxsize=1)
+def _dark_theme() -> Theme:
+    from textual.theme import Theme  # noqa: PLC0415
+
+    return Theme(
+        name=_DARK_THEME_NAME,
+        primary=_DARK_PRIMARY,
+        secondary=_DARK_FG_MUTED,
+        accent=_DARK_PRIMARY,
+        warning=_DARK_WARNING,
+        error=_DARK_ERROR,
+        success=_DARK_SUCCESS,
+        foreground=_DARK_FG,
+        background=_DARK_BG,
+        surface=_DARK_SURFACE,
+        panel=_DARK_PANEL,
+        boost=_DARK_PANEL,
+        dark=True,
+        variables=dict(_DARK_VARS),
+    )
+
+
+@lru_cache(maxsize=1)
+def _light_theme() -> Theme:
+    from textual.theme import Theme  # noqa: PLC0415
+
+    return Theme(
+        name=_LIGHT_THEME_NAME,
+        primary=_LIGHT_PRIMARY,
+        secondary=_LIGHT_FG_MUTED,
+        accent=_LIGHT_PRIMARY,
+        warning=_LIGHT_WARNING,
+        error=_LIGHT_ERROR,
+        success=_LIGHT_SUCCESS,
+        foreground=_LIGHT_FG,
+        background=_LIGHT_BG,
+        surface=_LIGHT_SURFACE,
+        panel=_LIGHT_PANEL,
+        boost=_LIGHT_PANEL,
+        dark=False,
+        variables=dict(_LIGHT_VARS),
+    )
+
+
+def __getattr__(name: str) -> object:
+    if name == "GROVE_DARK":
+        return _dark_theme()
+    if name == "GROVE_LIGHT":
+        return _light_theme()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ─── lookup tables for Rich-side consumers ─────────────────────────────────
@@ -468,7 +498,7 @@ def register_themes(app: App[Any], *, themes_dir: Path | None = None) -> None:
     rather than at theme-switch time so the failure surfaces close to the
     cause. Idempotent on the built-ins; user themes register on first sight.
     """
-    for theme in (GROVE_DARK, GROVE_LIGHT):
+    for theme in (_dark_theme(), _light_theme()):
         if theme.name not in app.available_themes:
             app.register_theme(theme)
     if themes_dir is None:
@@ -505,7 +535,9 @@ def load_theme_overrides(themes_dir: Path) -> list[Theme]:
 
 def _apply_override(override: ThemeOverride) -> Theme:
     """Materialize an override into a full `Theme` against its polarity base."""
-    base = GROVE_DARK if override.dark else GROVE_LIGHT
+    from textual.theme import Theme  # noqa: PLC0415
+
+    base = _dark_theme() if override.dark else _light_theme()
     cols = override.colors
     merged_vars = {**base.variables, **override.variables}
     return Theme(
@@ -537,9 +569,9 @@ def resolve_theme_name(setting: str, available: set[str]) -> str:
         ValueError: if `setting` is a custom name that has not been registered.
     """
     if setting in {"auto", "dark"}:
-        return GROVE_DARK.name
+        return _DARK_THEME_NAME
     if setting == "light":
-        return GROVE_LIGHT.name
+        return _LIGHT_THEME_NAME
     if setting in available:
         return setting
     raise ValueError(f"unknown ui.theme {setting!r}; registered themes: {sorted(available)}")

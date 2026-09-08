@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from grove.core.config import TicketsConfig
 from grove.core.contracts.tickets import TicketSelector
-from grove.core.errors import TicketProviderNotConfigured
+from grove.core.errors import TicketProviderError, TicketProviderNotConfigured
 from grove.core.tickets import TicketProviderRegistry
 
 
@@ -62,6 +64,58 @@ def test_format_branch_name_delegates_to_named_provider() -> None:
     reg = _registry(linear=True)
     stem = reg.format_branch_name(TicketSelector(provider="linear", id="ENG-9"), "Do A Thing")
     assert stem == "ENG-9-do-a-thing"
+
+
+def test_registry_owns_the_production_credential_snapshot(tmp_path: Path) -> None:
+    """A reload route reaches the source once through the registry, not providers."""
+    token = tmp_path / "tickets.env"
+    token.write_text("T_GITEA=first")
+    cfg = TicketsConfig.model_validate(
+        {
+            "env_file": "tickets.env",
+            "gitea": {"enabled": True, "owner": "o", "repo": "r", "token_env": "T_GITEA"},
+        }
+    )
+    registry = TicketProviderRegistry(cfg, repo_root=tmp_path)
+
+    assert registry.refresh_credentials() == 1
+    token.write_text("T_GITEA=second")
+    registry.invalidate_credentials()
+    assert registry.refresh_credentials() == 2
+    assert registry.get("gitea").configured is True
+
+
+def test_registry_close_clears_its_owned_credentials(tmp_path: Path) -> None:
+    """Closing a cached registry clears snapshots as well as HTTP transports."""
+    cfg = TicketsConfig.model_validate(
+        {
+            "env_file": "tickets.env",
+            "gitea": {"enabled": True, "owner": "o", "repo": "r", "token_env": "T_GITEA"},
+        }
+    )
+    (tmp_path / "tickets.env").write_text("T_GITEA=secret")
+    registry = TicketProviderRegistry(cfg, repo_root=tmp_path)
+    assert registry.get("gitea").configured is True
+
+    registry.close()
+    with pytest.raises(TicketProviderError, match="closed"):
+        registry.refresh_credentials()
+
+
+def test_injected_mapping_has_no_credential_lifecycle(tmp_path: Path) -> None:
+    """Tests retain a plain mapping seam; only production owns a snapshot."""
+    registry = TicketProviderRegistry(
+        TicketsConfig.model_validate(
+            {"gitea": {"enabled": True, "owner": "o", "repo": "r", "token_env": "T_GITEA"}}
+        ),
+        repo_root=tmp_path,
+        env={"T_GITEA": "test"},
+    )
+
+    assert registry.refresh_credentials() is None
+    registry.invalidate_credentials()
+    registry.close()
+    assert registry.get("gitea").configured is True
 
 
 def test_provider_views_report_configured_state() -> None:

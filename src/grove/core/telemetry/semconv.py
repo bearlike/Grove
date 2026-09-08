@@ -34,7 +34,7 @@ path depends on a module the OTel project has said it will move.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, ClassVar, Final, Literal
@@ -124,6 +124,35 @@ class LangfuseAttr:
     TRACE_TAGS: Final = "langfuse.trace.tags"
     RELEASE: Final = "langfuse.release"
 
+    OBSERVATION_METADATA_PREFIX: Final = "langfuse.observation.metadata."
+    """The one documented route to a FILTERABLE metadata property.
+
+    LangFuse's OTel mapping puts every attribute it does not recognise under
+    ``metadata.attributes`` and every resource attribute under
+    ``metadata.resourceAttributes``, and states that neither is queryable —
+    only top-level keys of ``metadata`` can be filtered on. So every ``grove.*``
+    attribute this module emits is *stored* and *unfindable*, which is why a
+    fact something must SELECT on has to be written a second time through this
+    prefix. Verified against the vendor's native-OpenTelemetry mapping table on
+    2026-09-07; the vendor's own example is
+    ``langfuse.observation.metadata.user_name`` → ``metadata.user_name``.
+    """
+
+    @staticmethod
+    def metadata(key: str) -> str:
+        """The filterable-metadata attribute key for ``key``.
+
+        **Dots are folded to underscores, and that is load-bearing rather than
+        cosmetic.** The vendor documents filtering on *top-level* metadata keys
+        and its published examples are all flat identifiers; a dotted key is
+        exactly the shape its nesting rules already use elsewhere, so spelling
+        ``grove.tool.category`` here risks reproducing the unfilterable nesting
+        this prefix exists to escape. Folding also means the flat name is
+        DERIVED from the ``grove.*`` attribute it mirrors rather than being a
+        second, hand-maintained vocabulary that can drift from it.
+        """
+        return f"{LangfuseAttr.OBSERVATION_METADATA_PREFIX}{key.replace('.', '_')}"
+
 
 class GroveIdentityAttr:
     """Facts about a workspace that are true from the moment it launches.
@@ -188,6 +217,45 @@ class GroveLiveAttr:
     # other is a clock, and a reader comparing two sub-agents needs to know
     # which they are looking at.
     AGENT_ATTACHMENT: Final = "grove.agent.attachment"
+
+
+FILTERABLE_IDENTITY_KEYS: Final = (
+    GroveIdentityAttr.WORKSPACE_ID,
+    GroveIdentityAttr.REPO,
+    GroveIdentityAttr.PROJECT,
+    GroveIdentityAttr.BRANCH,
+    GroveIdentityAttr.AGENT_KIND,
+    GroveIdentityAttr.AGENT_NAME,
+    GroveIdentityAttr.RUNTIME,
+)
+"""The identity facts an evaluator SELECTS and GROUPS by.
+
+Deliberately a subset of :class:`GroveIdentityAttr`, for the same reason
+:attr:`TraceIdentity._TAG_FIELDS` is one — but a *different* subset, because the
+three projections answer three different questions. Attributes are the complete
+record; tags are what a human narrows a list by clicking; these are what an
+automated rule filters an evaluation cohort on and what a dashboard splits a
+score by. A worktree path or a free-prose title has no place in any of those,
+and a churny value (the phase) would make one observation's cohort membership
+depend on when the file was last written.
+"""
+
+
+def filterable_identity(attributes: Mapping[str, object]) -> dict[str, str]:
+    """Flat, filterable copies of whichever identity keys this span already has.
+
+    Reads the attributes rather than a :class:`TraceIdentity`, because the two
+    tiers hold that identity in different places — the transcript replay builds
+    the object, while the gateway re-export finds the same keys stamped onto the
+    inbound OTLP *resource* by Grove's launch-time enrichment. One function over
+    the keys themselves serves both without either tier learning the other's
+    shape, and an absent key contributes nothing rather than an empty claim.
+    """
+    return {
+        LangfuseAttr.metadata(key): str(value)
+        for key in FILTERABLE_IDENTITY_KEYS
+        if (value := attributes.get(key)) not in (None, "")
+    }
 
 
 class GenAiOperation(StrEnum):

@@ -2,169 +2,120 @@
 
 ## How the packages fit together
 
-Grove is one engine with several clients around it. `grove.core` owns
-every decision, and CI enforces the boundaries between them.
-
-- **`grove.daemon`**: loopback FastAPI, REST plus SSE.
-- **`grove.client`**: transport-agnostic attach SDK.
-- **`grove.tui`**: the primary interactive client.
-- **`grove.mcp`**: the same lifecycle for MCP-capable agents.
-- **`webapp/`**: a Next.js client with its own BFF.
+- Grove has one engine and several clients. `grove.core` owns decisions while CI enforces dependency boundaries.
+- The daemon serves REST and SSE. The TUI, client SDK, MCP server and web dashboard expose the engine through different interfaces.
 
 ## The package layout
 
-```
+```text
 grove/
-├── core/                # the engine, zero UI dependencies
-│   ├── __init__.py     # public API (re-exports only)
-│   ├── config.py       # Pydantic models + cascade resolver + schema dump
-│   ├── workspace.py    # state dataclass + identity + transitions
-│   ├── git.py          # subprocess wrappers (the `git` side-effect surface)
-│   ├── tmux.py         # libtmux wrappers + init runner (the `tmux` side-effect surface)
-│   ├── mewbo.py        # Mewbo REST I/O (the `mewbo` side-effect surface)
-│   ├── store.py        # atomic JSON state, repo-scoped queries
-│   ├── manager.py      # WorkspaceManager façade, orchestration only
-│   ├── registry.py     # RepoRegistry: one manager per repo, for multi-repo clients
-│   ├── activity.py     # ActivityService: the cross-project activity hub
-│   ├── sessions.py     # SessionExplorer: agent-session discovery across worktrees
-│   ├── auth.py         # pairing handshake + session store
-│   ├── paths.py        # platformdirs helpers
-│   ├── errors.py       # exception hierarchy
-│   ├── contracts/      # cross-boundary Pydantic shapes (plans, requests, views, palettes)
-│   └── agents/         # agent adapters: per-kind session introspection
-│
-├── daemon/              # loopback FastAPI app: REST + SSE over the engine
-├── client/              # transport-agnostic attach SDK (local PTY / SSH)
-├── mcp/                 # MCP server: stdio or HTTP tools over the client SDK
-└── tui/                 # the Textual client
-    ├── cli.py          # Typer entry points
-    ├── app.py          # GroveApp(textual.App) root
-    ├── theme.py        # color tokens + theme registration
-    ├── _status.py      # Rich-side glyph + color accessors
-    ├── keys.py         # global key spec + footer key partitions
-    ├── screens/        # list, dashboard, sessions, project picker, create, edit, steer, confirms, help, pairing
-    └── widgets/        # workspace list, dashboard grid, peek rail, status bar, footer
+├── core/
+│   ├── __init__.py          # public exports
+│   ├── config.py            # configuration cascade
+│   ├── workspace.py         # workspace state
+│   ├── git.py
+│   ├── tmux.py
+│   ├── mewbo.py
+│   ├── store.py             # atomic storage
+│   ├── manager.py           # orchestration
+│   ├── registry.py
+│   ├── activity.py
+│   ├── sessions.py
+│   ├── auth.py              # pairing
+│   ├── mailboxes.py         # native coordination
+│   ├── native.py            # steering clients
+│   ├── native_launch.py
+│   ├── native_worker.py
+│   ├── paths.py
+│   ├── errors.py
+│   ├── contracts/
+│   └── agents/
+│       ├── native_owner.py
+│       ├── native_claude.py
+│       └── native_codex.py
+├── daemon/                  # loopback FastAPI
+├── client/                  # local PTY and SSH SDK
+├── mcp/                     # tools over the SDK
+└── tui/                     # Textual
+    ├── cli.py
+    ├── app.py
+    ├── theme.py
+    ├── _status.py
+    ├── keys.py
+    ├── screens/
+    └── widgets/
 
-webapp/                  # Next.js dashboard; its BFF routes talk to the daemon
+webapp/                     # Next.js and its BFF
 ```
 
-Every client imports `WorkspaceManager` and the public types. Four
-`import-linter` contracts in [`pyproject.toml`](repo:pyproject.toml)
-make that a build gate.
+- Public exports define the engine API. [`pyproject.toml`](repo:pyproject.toml) declares the import contracts that CI checks.
 
 ## The boundaries, enforced
 
-- **Core has no UI dependencies.** No `textual`, `rich`, `typer`, `click`, or `grove.tui` inside `grove.core`.
-- **Daemon depends only on core.** No `grove.client` or `grove.tui` inside `grove.daemon`. Clients depend on the daemon, never the reverse.
-- **The client SDK stays clean.** No `grove.daemon` or `grove.tui` inside `grove.client`. It speaks wire shapes, not process internals.
-- **The MCP server speaks only through the client SDK.** MCP client to `grove.mcp` to `GroveClient` to daemon to core, so it can run on a different host.
-
-`include_external_packages = true` catches third-party imports too, or
-`import textual` would slip through silently. `lint-imports` runs on
-every push.
+- Core cannot import UI packages. The daemon depends on core, never on clients.
+- The client SDK cannot import daemon or TUI internals. MCP reaches the daemon through `GroveClient`, including from another host.
+- `include_external_packages = true` extends checks to external imports. `lint-imports` enforces these boundaries on every push.
 
 ## The public share boundary
 
-Every route on the daemon requires a bearer token, with three exceptions:
-the pairing handshake, the liveness probe, and the public share
-namespace. A shared workspace is readable at `/public/{token}` by
-somebody who has no Grove session at all.
-
-Think of a share token as a coat-check ticket. Whoever holds it gets
-that one coat and nothing else. They cannot browse the cloakroom, and
-losing the ticket does not expose anybody else's coat.
-
-Three properties make that true, and each is structural rather than a
-check somebody has to remember.
-
-**The token is the state.** `WorkspaceState.share_token` is one nullable
-field. Present means public, absent means private, and the value is the
-link itself. There is no second boolean that can disagree with it.
-Revoking clears the field, which kills the link permanently rather than
-parking it.
-
-**A separate path prefix, not a scoped credential.** The tempting design
-teaches the bearer dependency to recognise a share token and lets
-`/workspaces/{id}/...` serve both audiences. That was rejected. It puts
-the boundary in an allowlist that lives away from the route being
-written, so a route added next year is one forgotten entry from being
-world readable. With a prefix, every route under `/workspaces` carries
-the auth dependency and always will. A test asserts set equality over
-every route lacking it, so a new public route fails the suite rather
-than shipping quietly.
-
-**An allowlist, never a redaction.** `grove.core.contracts.public` writes
-out every field by hand. A field added to `WorkspaceStateView` later is
-private by default. The reverse design, serialising the state and then
-dropping keys, fails open and fails silently: the leak ships with the
-change that introduced the field. Host paths, container identities and
-the token itself never cross. Nested shapes get the same scrutiny as top
-level ones, because the authenticated activity view embeds a whole
-workspace state and would have carried every path through a field
-nobody inspects.
-
-Sharing policy is per project, not per workspace, and lives in
-`grove.core.share_policy`. It holds two things: how long a new link
-lives, and an optional passcode (stored as a hash, never plaintext). The
-two behave differently on purpose. Expiry is stamped when a link is
-minted, so changing the TTL affects future links and leaves circulating
-ones alone. A passcode is checked on every read, so setting one locks
-existing links immediately.
-
-The reader supplies a passcode as a request header. There is no grant,
-no cookie and no session for an anonymous reader, which is what keeps
-this small: a grant would need a lifetime, a store and a revocation
-story, while a header needs none of them.
+- Bearer authentication protects daemon routes except pairing, liveness and `/public/{token}`. A share token opens one workspace, never the fleet.
+- `WorkspaceState.share_token` is the publication state. Clearing it revokes the link without a second boolean to synchronize.
+- Public routes have a separate prefix. A route census prevents accidentally exposing an authenticated route.
+- `grove.core.contracts.public` explicitly selects public fields, including nested data. New fields stay private rather than escaping a redaction list.
+- `grove.core.share_policy` sets project policy. Expiry is fixed when a link is minted, while an optional hashed passcode is checked on every read.
+- Readers supply the passcode in a header. No anonymous grant, cookie or session needs storing.
 
 ## Side effects at the edges
 
-- [`src/grove/core/git.py`](repo:src/grove/core/git.py): worktree add and remove, branch delete, status, log.
-- [`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py): session create, capture-pane, list-windows, switch-client.
-- [`src/grove/core/mewbo.py`](repo:src/grove/core/mewbo.py): Mewbo REST I/O for remote sessions.
-
-Manager methods orchestrate them, staying testable against in-memory
-fakes. A new I/O concern belongs in one of these files, or a fourth,
-never scattered.
+- [`src/grove/core/git.py`](repo:src/grove/core/git.py), [`src/grove/core/tmux.py`](repo:src/grove/core/tmux.py) and [`src/grove/core/mewbo.py`](repo:src/grove/core/mewbo.py) isolate their respective I/O.
+- [`src/grove/core/native_launch.py`](repo:src/grove/core/native_launch.py) prepares worker credentials and configuration. [`src/grove/core/native_worker.py`](repo:src/grove/core/native_worker.py) starts the provider and holds the daemon connection.
+- Managers orchestrate these edges, which tests replace with fakes. New I/O belongs at one boundary.
 
 ## The contracts layer
 
-`grove.core.contracts` holds anything crossing a client-engine line now
-or later:
-
-- the branch-source intent (`BranchPlan`, a union over `AutoBranch`, `NewNamedBranch`, `ExistingLocalBranch`, `TrackRemoteBranch`, `RootBranch`)
-- the request envelopes
-- the daemon's response views (`WorkspaceStateView`, `WorkspacePeekView`, activity and session views)
-- the status and agent-state color palettes every client renders alike
-
-Pydantic at public-contract boundaries with `extra="forbid"`, plain
-`@dataclass(slots=True)` for in-process state (`WorkspaceState`, the
-resolved-branch IR). Test: would a non-Python client construct or
-receive this? Pydantic if yes, dataclass if no.
+- `grove.core.contracts` owns branch intent, request envelopes, response views and shared palettes.
+- Values crossing client boundaries use Pydantic with `extra="forbid"`. Internal state uses `@dataclass(slots=True)`.
 
 ## The agents layer
 
-`grove.core.agents` is the provider boundary for coding agents. Each
-adapter introspects one agent kind's sessions and maps its vocabulary
-onto the shared `AgentActivityState` axis: `claude_code` for Claude
-Code's transcripts, `codex` for Codex CLI rollout files, `mewbo` for
-remote Mewbo sessions over REST, `generic` a deliberate no-op.
+- Adapters map Claude Code transcripts, Codex rollout files and Mewbo sessions onto `AgentActivityState`. The `generic` adapter deliberately does nothing.
+- The registry selects by `kind`. Adapters normalize protocol shape, never model behavior.
 
-An adapter normalizes shape, not semantics. It never second-guesses what
-a model does. Engine code asks the registry for an adapter by `kind`,
-agnostic about which agent is behind it.
+## The native session control plane
+
+- Claude Code and Codex default to Grove owned native sessions. Their tmux pane runs `grove-native-worker`, which owns the provider channel.
+- The worker starts `claude -p` or `codex app-server` and registers through `/mailboxes/connection` SSE.
+- Steering reaches the coordinator through `CoordinatorSteerClient` inside the daemon or `DaemonSteerClient` over HTTP.
+- Each sent or received frame becomes a timestamped stdout line. Dashboards expose this wire log as Stream.
+- Questions and stream facts enter the hook spool. `ClaudeHook.drain` folds them into the existing session sidecar rather than adding another activity reader.
+
+```mermaid
+sequenceDiagram
+    participant Client as CLI / TUI / web
+    participant Daemon as grove.daemon + coordinator
+    participant Worker as grove-native-worker (tmux pane)
+    participant Provider as claude -p / codex app-server
+    participant Spool as hook spool → sidecar → activity
+    Worker->>Daemon: register, hold /mailboxes/connection (SSE)
+    Client->>Daemon: message / interrupt / set model / answer
+    Daemon->>Worker: control frame over the SSE stream
+    Worker->>Provider: provider frame on stdin
+    Provider-->>Worker: stream event or JSON-RPC frame on stdout
+    Worker->>Worker: one timestamped line per frame
+    Worker->>Spool: *.ask.json, *.facts.json
+```
+
+- `native: false`, `claude-terminal` or `codex-terminal` keeps the interactive agent UI. Grove steers it through pasted keystrokes.
 
 ## The observability spine
 
-Three engine pieces feed every dashboard, consumed the same way by the
-TUI and the daemon.
-
-- **`ActivityService`**, the hub. Polls workspaces, blends agent state with tmux output, tracks dirty files and commits, emits deltas only on change. The TUI consumes it in process, and the daemon streams it over SSE.
-- **`RepoRegistry`**, one `WorkspaceManager` per repository, so clients dispatch without re-reading config.
-- **`SessionExplorer`**, agent sessions found across the repo root and every worktree. `grove sessions`, the daemon endpoints, and the web sessions panel are thin views over it.
+- `ActivityService` combines agent state, tmux output and git changes. The TUI consumes deltas directly and the daemon streams them over SSE.
+- `RepoRegistry` keeps one manager per repository without repeatedly resolving configuration.
+- `SessionExplorer` discovers sessions across the repository and its worktrees for CLI, daemon and web consumers.
 
 ## Dependencies flow inward
 
-The dependency graph runs strictly inward, clients to engine:
+- Clients depend on the engine. Reverse dependencies couple internal helpers to callers and invite circular imports.
 
 ```mermaid
 flowchart LR
@@ -176,17 +127,18 @@ flowchart LR
     Daemon -.REST + SSE.-> Core
     Core --> Git([core.git])
     Core --> Tmux([core.tmux])
+    Tmux --> Worker([grove-native-worker])
+    Worker -.stdio.-> Provider([claude -p / codex app-server])
+    Worker -.SSE + http.-> Daemon
+    Core --> Native([core.native*])
     Core --> Mewbo([core.mewbo])
     Core --> Store([core.store])
     Core --> Contracts([core.contracts])
     Core --> Agents([core.agents])
 ```
 
-Reverse arrows are smells. Most circular-import pain here traces back to
-a low-level helper that knew about a high-level caller.
-
 ## See also
 
-- [Public API](develop-public-api.md): the re-exports and docstrings.
-- [Engineering principles](develop-principles.md): the rules this layout enforces.
-- [Contributing](develop-contributing.md): make targets, commits, PRs.
+- Read [Public API](develop-public-api.md) for exported contracts.
+- Read [Engineering principles](develop-principles.md) for design rules.
+- Read [Contributing](develop-contributing.md) for development commands and pull requests.

@@ -63,8 +63,8 @@ cd /tmp/test && bash -lc "$(jq -r '.init_script.inline' /path/to/.grove/config.j
 RUNNING, because `pause` removes the worktree directory and would silently
 lose uncommitted work.
 
-Switch to the `shell` window (`Ctrl-B 0/1`), commit or stash, detach, then
-press ++p++ again.
+Switch to the `shell` window with ++ctrl+b++ then ++0++ or ++1++.
+Commit or stash, detach, then press ++p++ again.
 
 ## Agent window auto-closed, workspace shows OFFLINE
 

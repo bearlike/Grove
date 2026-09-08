@@ -193,11 +193,23 @@ class UsageStore:
     parameter rather than a literal baked into ``_connect_prepared``.
     """
 
-    def __init__(self, db_path: Path, *, busy_timeout_ms: int = 5000) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        busy_timeout_ms: int = 5000,
+        history_path: Path | None = None,
+    ) -> None:
         self._path = db_path
         self._busy_timeout_ms = busy_timeout_ms
         self._lock = threading.RLock()
         self._conn: sqlite3.Connection | None = None
+        # The durable workspace-name store, ATTACHed so a session row can be
+        # joined to what its workspace was CALLED — in SQL, without this cache
+        # holding a fact it would discard on its next version bump. None means
+        # the default path; see `_attach_history` for why a failure is silent.
+        self._history_path = history_path
+        self._history_attached = False
 
     @property
     def path(self) -> Path:
@@ -313,6 +325,12 @@ class UsageStore:
         stored = self._stored_version(conn)
         if stored == SCHEMA_VERSION:
             return conn
+        if stored is not None and stored > SCHEMA_VERSION:
+            conn.close()
+            raise sqlite3.DatabaseError(
+                f"Usage cache schema {stored} is newer than supported {SCHEMA_VERSION}; "
+                "update this Grove process or use a separate cache path."
+            )
         if stored is not None:
             logger.info(
                 "usage: cache schema {} != {}, rebuilding {}", stored, SCHEMA_VERSION, self._path
@@ -331,7 +349,55 @@ class UsageStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA temp_store=MEMORY")
         conn.execute(f"PRAGMA busy_timeout={int(self._busy_timeout_ms)}")
+        self._attach_history(conn)
         return conn
+
+    def _attach_history(self, conn: sqlite3.Connection) -> None:
+        """ATTACH the durable workspace-name store as ``history``, best-effort.
+
+        The coupling is one-directional: this cache reads that file, nothing
+        there reads this one, so **deleting the cache is still always safe** and
+        a schema bump here cannot touch a title.
+
+        The store is CONSTRUCTED first rather than attached blind, because
+        ``ATTACH`` on a missing path creates an empty database with no tables —
+        a join against which fails at query time instead of here, which is the
+        version of this failure nobody can diagnose. A failure sets
+        ``history_attached`` False and the queries omit the join, so a session
+        row renders without its title rather than not rendering at all.
+        """
+        from grove.core.workspace_history import WorkspaceHistoryStore  # noqa: PLC0415
+
+        try:
+            path = self._history_path
+            if path is None:
+                path = paths.workspace_history_path()
+            # `ensure_schema`, not construction: the store connects lazily, so
+            # merely building one leaves the file absent and the ATTACH below
+            # would then create an empty database whose missing tables fail at
+            # QUERY time. Measured: 24 usage tests failed with
+            # "no such table: history.workspace_names" before this call existed.
+            store = WorkspaceHistoryStore(path)
+            store.ensure_schema()
+            store.close()
+            conn.execute("ATTACH DATABASE ? AS history", (str(path),))
+        except (sqlite3.DatabaseError, OSError) as exc:
+            self._history_attached = False
+            logger.debug("usage: workspace history not attached: {}", exc)
+        else:
+            self._history_attached = True
+
+    @property
+    def history_attached(self) -> bool:
+        """Whether ``history.*`` is joinable on this connection.
+
+        Read by the queries so a name join degrades to no names rather than to
+        an error. Resolving the connection first is deliberate: the flag is only
+        meaningful once an ATTACH has been attempted.
+        """
+        with self._lock:
+            self.connect()
+            return self._history_attached
 
     @staticmethod
     def _stored_version(conn: sqlite3.Connection) -> int | None:

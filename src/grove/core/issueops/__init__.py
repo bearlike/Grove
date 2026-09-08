@@ -28,6 +28,11 @@ re-triggering the inbound poll, and ``IssuePrompt`` renders the single
 
 from __future__ import annotations
 
+from grove.core.contracts.assignment_events import (
+    AssignmentLifecycleEvent,
+    AssignmentTicketEvent,
+    AssignmentTicketIdentity,
+)
 from grove.core.issueops.engine import IssueOpsEngine, StatusPublisher
 from grove.core.issueops.handover import HandoverEntry, HandoverKey, HandoverLog
 from grove.core.issueops.marker import SIGNATURE_MARKER, STICKY_MARKER
@@ -46,6 +51,9 @@ __all__ = [
     "SIGNATURE_MARKER",
     "STICKY_MARKER",
     "AssigneePoller",
+    "AssignmentLifecycleEvent",
+    "AssignmentTicketEvent",
+    "AssignmentTicketIdentity",
     "CommandParser",
     "HandoverEntry",
     "HandoverKey",

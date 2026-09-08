@@ -16,8 +16,12 @@ faked, so the composed ``Authorization`` header is asserted on the wire.
 
 from __future__ import annotations
 
+import shlex
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
+from time import sleep
 
 import httpx
 import pytest
@@ -28,7 +32,8 @@ from grove.core.config import (
     LinearTicketConfig,
     TicketsConfig,
 )
-from grove.core.errors import TicketProviderError
+from grove.core.env_source import EnvSource
+from grove.core.errors import EnvSourceError, TicketProviderError
 from grove.core.tickets import TicketProviderRegistry
 from grove.core.tickets.credentials import TicketEnv
 from grove.core.tickets.gitea import GiteaProvider
@@ -63,9 +68,8 @@ def _capturing_transport(seen: list[httpx.Request]) -> httpx.MockTransport:
 
 
 def test_env_file_written_after_construction_is_picked_up(tmp_path: Path) -> None:
-    """The init-script case, end to end: build the registry while the file the
-    config names holds no token yet, THEN have the script write one, and the
-    provider is live — no restart, no rebuilt registry, nothing invalidated."""
+    """The init-script case remains automatic: a missing file signature changes
+    when the lifecycle writer creates it, and the next source consumption reloads."""
     target = tmp_path / ".grove" / "tickets.env"
     target.parent.mkdir(parents=True)
     target.write_text("# written by .grove/init.sh\n", encoding="utf-8")
@@ -97,9 +101,9 @@ def test_a_request_after_the_file_appears_carries_the_new_token(tmp_path: Path) 
     assert seen[-1].headers["Authorization"] == f"token {TOKEN}"
 
 
-def test_a_rotated_value_is_seen_without_rebuilding_anything(tmp_path: Path) -> None:
-    """The other half of "never cached": the second request must not replay the
-    first resolution, or a daemon serves a token the store already rotated."""
+def test_a_rotated_file_value_is_seen_without_rebuilding_anything(tmp_path: Path) -> None:
+    """File signatures invalidate at consumption, so an atomic file rotation
+    replaces the owned snapshot without rebuilding a long-lived registry."""
     target = tmp_path / "tickets.env"
     target.write_text("T_GITEA=first\n", encoding="utf-8")
     seen: list[httpx.Request] = []
@@ -165,6 +169,247 @@ def test_env_command_stdout_is_parsed_as_dotenv(tmp_path: Path) -> None:
         _tickets(env_command=f"{sys.executable} -c {script!r}"), repo_root=tmp_path, base={}
     )
     assert env["T_GITEA"] == TOKEN
+
+
+# ─── snapshots: one resolution, explicit command refresh ───────────────────
+
+
+def test_command_source_is_resolved_once_for_ordinary_mapping_reads(tmp_path: Path) -> None:
+    """Capability/mapping reads are source-free once the first snapshot exists."""
+    counter = tmp_path / "calls"
+    script = (
+        "from pathlib import Path; "
+        f"path = Path({str(counter)!r}); "
+        "path.write_text(str(int(path.read_text() or '0') + 1) if path.exists() else '1'); "
+        "print('T_GITEA=from-command')"
+    )
+    env = TicketEnv(
+        _tickets(env_command=f"{sys.executable} -c {script!r}"), repo_root=tmp_path, base={}
+    )
+
+    assert env["T_GITEA"] == "from-command"
+    assert env["T_GITEA"] == "from-command"
+    assert len(env) == 1
+    assert list(env) == ["T_GITEA"]
+    assert counter.read_text() == "1"
+    assert env.generation == 1
+
+
+def test_provider_capabilities_reuse_the_command_snapshot(tmp_path: Path) -> None:
+    """`configured` and each capability remain I/O-free after initial resolution."""
+    counter = tmp_path / "calls"
+    script = (
+        "from pathlib import Path; "
+        f"path = Path({str(counter)!r}); "
+        "path.write_text(str(int(path.read_text() or '0') + 1) if path.exists() else '1'); "
+        "print('T_GITEA=from-command')"
+    )
+    provider = GiteaProvider(
+        GiteaTicketConfig(enabled=True, owner="o", repo="r", token_env="T_GITEA"),
+        env=TicketEnv(
+            _tickets(env_command=f"{sys.executable} -c {script!r}"), repo_root=tmp_path, base={}
+        ),
+    )
+
+    assert provider.configured is True
+    assert provider.can_comment is True
+    assert provider.can_edit_body is True
+    assert provider.can_assign is True
+    assert counter.read_text() == "1"
+
+
+def test_concurrent_initial_reads_share_one_command_resolution(tmp_path: Path) -> None:
+    """A burst cannot fork one subprocess per provider/capability consumer."""
+    started = tmp_path / "started"
+    release = tmp_path / "release"
+    counter = tmp_path / "calls"
+    script = (
+        "from pathlib import Path\n"
+        "import time\n"
+        f"started = Path({str(started)!r})\n"
+        f"release = Path({str(release)!r})\n"
+        f"calls = Path({str(counter)!r})\n"
+        "calls.write_text(str(int(calls.read_text() or '0') + 1) if calls.exists() else '1')\n"
+        "started.touch()\n"
+        "while not release.exists():\n"
+        "    time.sleep(0.001)\n"
+        "print('T_GITEA=shared')\n"
+    )
+    env = TicketEnv(
+        _tickets(env_command=f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"),
+        repo_root=tmp_path,
+        base={},
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(lambda: env["T_GITEA"]) for _ in range(8)]
+        for _ in range(1_000):
+            if started.exists():
+                break
+            sleep(0.001)
+        else:
+            pytest.fail("command did not start")
+        release.touch()
+        assert [future.result() for future in futures] == ["shared"] * 8
+
+    assert counter.read_text() == "1"
+    assert env.generation == 1
+
+
+def test_joined_refresh_propagates_its_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refresh waiter receives the same denied generation, not false success."""
+    env = TicketEnv(_tickets(env_command="unused"), repo_root=tmp_path, base={})
+    started = Event()
+    release = Event()
+
+    def fail_after_release(cls: type[EnvSource], *args: object, **kwargs: object) -> EnvSource:
+        del cls, args, kwargs
+        started.set()
+        assert release.wait(timeout=1)
+        raise EnvSourceError("source failed")
+
+    monkeypatch.setattr(EnvSource, "resolve", classmethod(fail_after_release))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(env.refresh)
+        assert started.wait(timeout=1)
+        joined = pool.submit(env.refresh)
+        release.set()
+        with pytest.raises(TicketProviderError, match="could not be resolved"):
+            first.result()
+        with pytest.raises(TicketProviderError, match="could not be resolved"):
+            joined.result()
+
+
+def test_unexpected_resolution_error_releases_waiters_without_leaking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An untrusted resolver exception becomes a generic denied snapshot."""
+    env = TicketEnv(_tickets(env_command="unused"), repo_root=tmp_path, base={})
+    started = Event()
+    release = Event()
+    secret = "resolver-secret"
+
+    def explode_after_release(cls: type[EnvSource], *args: object, **kwargs: object) -> EnvSource:
+        del cls, args, kwargs
+        started.set()
+        assert release.wait(timeout=1)
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(EnvSource, "resolve", classmethod(explode_after_release))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(lambda: env["T_GITEA"])
+        assert started.wait(timeout=1)
+        second = pool.submit(lambda: env["T_GITEA"])
+        release.set()
+        for future in (first, second):
+            with pytest.raises(TicketProviderError) as excinfo:
+                future.result()
+            assert secret not in str(excinfo.value)
+            assert "could not be resolved" in str(excinfo.value)
+
+    assert env.generation == 1
+
+
+def test_close_forgets_snapshot_and_refuses_later_reads(tmp_path: Path) -> None:
+    """Registry shutdown cannot leave a token reachable through its environment."""
+    env = TicketEnv(
+        _tickets(env_command=f"{sys.executable} -c \"print('T_GITEA=secret')\""),
+        repo_root=tmp_path,
+        base={},
+    )
+    assert env["T_GITEA"] == "secret"
+    env.close()
+
+    assert "secret" not in repr(env)
+    with pytest.raises(TicketProviderError, match="closed"):
+        env["T_GITEA"]
+    with pytest.raises(TicketProviderError, match="closed"):
+        env.refresh()
+
+
+def test_command_rotation_requires_explicit_refresh(tmp_path: Path) -> None:
+    """Commands have no implicit change feed; refresh replaces exactly once."""
+    token = tmp_path / "token"
+    token.write_text("first")
+    counter = tmp_path / "calls"
+    script = (
+        "from pathlib import Path; "
+        f"token = Path({str(token)!r}); calls = Path({str(counter)!r}); "
+        "calls.write_text(str(int(calls.read_text() or '0') + 1) if calls.exists() else '1'); "
+        "print('T_GITEA=' + token.read_text())"
+    )
+    env = TicketEnv(
+        _tickets(env_command=f"{sys.executable} -c {script!r}"), repo_root=tmp_path, base={}
+    )
+
+    assert env["T_GITEA"] == "first"
+    token.write_text("second")
+    assert env["T_GITEA"] == "first"
+    assert env.refresh() == 2
+    assert env["T_GITEA"] == "second"
+    assert counter.read_text() == "2"
+
+
+def test_invalidate_defers_command_rotation_to_the_next_read(tmp_path: Path) -> None:
+    """A rotation owner may separate its event edge from the consuming request."""
+    token = tmp_path / "token"
+    token.write_text("first")
+    script = (
+        "from pathlib import Path; "
+        f"token = Path({str(token)!r}); "
+        "print('T_GITEA=' + token.read_text())"
+    )
+    env = TicketEnv(
+        _tickets(env_command=f"{sys.executable} -c {script!r}"), repo_root=tmp_path, base={}
+    )
+
+    assert env["T_GITEA"] == "first"
+    token.write_text("second")
+    env.invalidate()
+    assert env.generation == 1
+    assert env["T_GITEA"] == "second"
+    assert env.generation == 2
+
+
+def test_failed_refresh_revokes_the_prior_command_snapshot(tmp_path: Path) -> None:
+    """A failed refresh must not silently keep authorizing with an old token."""
+    mode = tmp_path / "mode"
+    mode.write_text("ready")
+    script = (
+        "from pathlib import Path; import sys; "
+        f"mode = Path({str(mode)!r}); "
+        "sys.exit(1) if mode.read_text() == 'broken' else print('T_GITEA=first')"
+    )
+    env = TicketEnv(
+        _tickets(env_command=f"{sys.executable} -c {script!r}"), repo_root=tmp_path, base={}
+    )
+
+    assert env["T_GITEA"] == "first"
+    mode.write_text("broken")
+    with pytest.raises(TicketProviderError, match="could not be resolved"):
+        env.refresh()
+    with pytest.raises(TicketProviderError, match="could not be resolved"):
+        env["T_GITEA"]
+    assert env.generation == 2
+
+
+def test_source_instances_never_share_a_repository_snapshot(tmp_path: Path) -> None:
+    """Two repository contexts with identical config resolve only their own file."""
+    first_root = tmp_path / "one"
+    second_root = tmp_path / "two"
+    first_root.mkdir()
+    second_root.mkdir()
+    (first_root / "tickets.env").write_text("T_GITEA=one")
+    (second_root / "tickets.env").write_text("T_GITEA=two")
+    cfg = _tickets(env_file="tickets.env")
+
+    first = TicketEnv(cfg, repo_root=first_root, base={})
+    second = TicketEnv(cfg, repo_root=second_root, base={})
+    assert first["T_GITEA"] == "one"
+    assert second["T_GITEA"] == "two"
+    assert first.generation == second.generation == 1
 
 
 # ─── failure shapes: a render path degrades, a request raises ───────────────

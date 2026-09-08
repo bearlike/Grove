@@ -67,11 +67,11 @@ const ACTIVITY: UsageActivityView = {
 const render = (node: React.ReactNode): string =>
   renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>);
 
-/** The tag that actually carries `not measured`, with its classes. */
+/** The tag that carries the unavailable state, with its classes. */
 function absenceTag(html: string): string {
-  const match = html.match(/<[a-z]+[^>]*>(?=[^<]*not measured)/g);
-  if (!match) throw new Error("no 'not measured' in markup");
-  return match[match.length - 1]!;
+  const match = html.match(/<[a-z]+[^>]*>(?=[^<]*(?:unavailable|no sessions|not measured))/g);
+  if (!match) throw new Error("no unavailable state in markup");
+  return match[0]!;
 }
 
 describe("the null state is quieter than the data it replaces", () => {

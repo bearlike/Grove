@@ -2,14 +2,17 @@
 
 import { TicketIcon, TriangleAlertIcon } from "lucide-react";
 
-import { SectionCard } from "@/components/grove/card";
+import { CardScroll, SectionCard } from "@/components/grove/card";
 import { PhaseBadge } from "@/components/grove/fleet/badges";
+import { phaseLabel } from "@/components/grove/fleet/tokens";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PhaseView, TicketProviderView, TicketRef } from "@/lib/grove/api";
 import { ticketKey, useTicketProviders, useTickets } from "@/lib/grove/hooks";
 import { cn } from "@/lib/utils";
+import { TicketProgressMeter } from "./phase-meter";
 import {
   compareTicketRefs,
   mergeTicket,
@@ -19,12 +22,22 @@ import {
   ticketKindLabel,
   ticketPhaseKey,
   ticketPhases,
+  ticketRollup,
   ticketState,
   ticketStateColour,
-  ticketStatusTone,
+  ticketStateLabel,
   titleRuns,
+  type PanelTab,
   type TicketPhaseMark,
 } from "./selectors";
+
+/**
+ * Past this many rows the list bounds itself and scrolls, rather than making a
+ * card taller than the pane it lives in. A VISIBLE count sits in the header, so
+ * a bound is never a silent cap (§10) — every row stays in the DOM, reachable by
+ * keyboard and by find-in-page.
+ */
+const BOUNDED_ROWS = 6;
 
 /**
  * The issues and pull requests this workspace is working — the tracker's view of
@@ -59,10 +72,12 @@ export function TicketRefsCard({
   repoRoot,
   refs,
   phase,
+  onNavigate,
 }: {
   repoRoot: string | null;
   refs: readonly TicketRef[];
   phase: PhaseView | null;
+  onNavigate?: (tab: PanelTab) => void;
 }) {
   // `null` means DO NOT RESOLVE, and it is what the public share view passes.
   // Two reasons, and the first is not about tidiness: resolving a ticket needs
@@ -106,7 +121,9 @@ export function TicketRefsCard({
     // reported nothing.
     phase: claims.get(ticketPhaseKey(ref)) ?? null,
     resolving:
-      resolving && (providers.isPending || live.loading) && !live.byKey.has(ticketKey(ref)),
+      resolving &&
+      (providers.isPending || live.loading) &&
+      !live.byKey.has(ticketKey(ref)),
   }));
   rows.sort((a, b) => compareTicketRefs(a.ticket, a.phase, b.ticket, b.phase));
 
@@ -121,17 +138,33 @@ export function TicketRefsCard({
       )
     : [];
 
+  if (rows.length === 0) {
+    return (
+      <TicketsEmpty
+        providers={providers.data}
+        failed={providers.isError}
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
+  // Both halves of this are already on the page, so the aggregate costs no
+  // request — and it belongs HERE rather than on the Task card because it is an
+  // aggregate over these rows. The Task card reports the workspace's own claim,
+  // which is a different object and must never be averaged with them.
+  const rollup = ticketRollup(refs, phase);
+
   return (
     <SectionCard
       icon={<TicketIcon />}
       title="Tickets"
-      description="Issues and pull requests this workspace is tracking"
       action={
-        refs.length > 0 ? (
-          <Badge variant="outline" className="tabular-nums" data-testid="ticket-count">
-            {refs.length} linked
-          </Badge>
-        ) : undefined
+        <span
+          className="text-xs tabular-nums text-content-tertiary"
+          data-testid="ticket-count"
+        >
+          {refs.length} linked
+        </span>
       }
       flush
       className="@xl:col-span-2"
@@ -139,24 +172,36 @@ export function TicketRefsCard({
     >
       {/* One child, because a `flush` card's body still spaces its rows: the
           list and its notes are one stack separated by rules, not by gutters. */}
-      <div className="flex min-w-0 flex-col">
-        {rows.length === 0 ? (
-          <TicketsEmpty providers={providers.data} failed={providers.isError} />
-        ) : (
+      <div className="@container/tickets flex min-w-0 flex-col">
+        {rollup && (
+          <div className="p-3 pb-2">
+            <TicketProgressMeter rollup={rollup} />
+          </div>
+        )}
+        {/* BOUNDED, NOT CAPPED: past a handful of rows the list scrolls inside
+            the card instead of making the card the page, and every row is still
+            rendered. The header's `N linked` is what stops the bound reading as
+            a silent truncation. */}
+        <Bounded rows={rows.length}>
           <ul className="divide-y divide-border" data-testid="ticket-refs">
             {rows.map(({ key, ticket, resolving, phase: claim }) => (
               <li key={key}>
-                <TicketRow ticket={ticket} resolving={resolving} phase={claim} />
+                <TicketRow
+                  ticket={ticket}
+                  resolving={resolving}
+                  phase={claim}
+                />
               </li>
             ))}
           </ul>
-        )}
+        </Bounded>
 
         {rows.some(({ ticket }) => ticket.ambiguous) && (
           <Note data-testid="tickets-ambiguous-note">
-            A link marked <span className="text-content-secondary">uncertain</span> was inferred
-            from this branch, and more than one ticket matched. Confirm it with{" "}
-            <Command>grove tickets attach</Command>, or drop it with{" "}
+            A link marked{" "}
+            <span className="text-content-secondary">uncertain</span> was
+            inferred from this branch, and more than one ticket matched. Confirm
+            it with <Command>grove tickets attach</Command>, or drop it with{" "}
             <Command>grove tickets detach</Command>.
           </Note>
         )}
@@ -168,8 +213,8 @@ export function TicketRefsCard({
           <Note data-testid="tickets-degraded">
             Showing what Grove last recorded.{" "}
             {unresolvable.map((provider) => providerLabel(provider)).join(", ")}{" "}
-            {unresolvable.length === 1 ? "has" : "have"} no credentials configured here, so live
-            status cannot be read.
+            {unresolvable.length === 1 ? "has" : "have"} no credentials
+            configured here, so live status cannot be read.
           </Note>
         )}
 
@@ -182,7 +227,11 @@ export function TicketRefsCard({
                 Could not read this project&apos;s ticket providers.
               </span>
               <span>Every row is the last value Grove recorded.</span>
-              <Button variant="outline" size="sm" onClick={() => void providers.refetch()}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void providers.refetch()}
+              >
                 Retry
               </Button>
             </span>
@@ -193,8 +242,8 @@ export function TicketRefsCard({
           <Note data-testid="tickets-error">
             <span className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="text-destructive">
-                {live.failed === 1 ? "One ticket" : `${live.failed} tickets`} could not be
-                refreshed.
+                {live.failed === 1 ? "One ticket" : `${live.failed} tickets`}{" "}
+                could not be refreshed.
               </span>
               <span>Every row above is the last value Grove recorded.</span>
               <Button variant="outline" size="sm" onClick={live.retry}>
@@ -231,103 +280,158 @@ export function TicketRow({
   resolving: boolean;
   phase?: TicketPhaseMark | null;
 }) {
-  const state = ticketState(ticket.status, ticket.draft);
+  const state = ticketState(ticket.status, ticket.draft, ticket.kind);
   const KindIcon = ticketGlyph(ticket.kind, state);
   const kind = ticketKindLabel(ticket.kind);
-  const meta = [providerLabel(ticket.provider), kind, ticket.assignee ? `@${ticket.assignee}` : ""]
-    .filter(Boolean)
-    .join(" · ");
+  const stateWord = ticketStateLabel(state, ticket.status);
+  const note = phase?.note?.trim() || null;
 
   const body = (
     <>
-      {/* The forge convention, and the reason it works without being taught:
-          the SHAPE says issue-or-PR and open-or-merged-or-closed, and the hue
-          only agrees with it. Read in greyscale the row loses nothing. */}
-      <KindIcon
-        aria-hidden
-        className={cn("mt-0.5 size-[1em] shrink-0", ticketStateColour(state))}
-        data-testid="ticket-glyph"
-        data-state={state}
-      />
-      <span className="sr-only">
-        {kind}, {state}:{" "}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-baseline gap-2">
-          {/* Dotted underline: the whole row is the link, but the id is the
-              part a reader points at, so it is the part that has to look like
-              a destination rather than a label. */}
-          <span className="shrink-0 font-mono text-xs tabular-nums text-content-primary underline decoration-dotted underline-offset-2">
-            {ticketIdLabel(ticket)}
+      <div className="flex min-w-0 flex-col gap-1 @md/tickets:flex-row @md/tickets:items-start @md/tickets:gap-3">
+        <span className="flex min-w-0 flex-1 items-start gap-2">
+          {/* The forge convention, and the reason it works without being
+              taught: the SHAPE says issue-or-PR and open-or-merged-or-closed,
+              and the hue only agrees with it. Read in greyscale the row loses
+              nothing — which is exactly why the WORD below is unconditional. */}
+          <KindIcon
+            aria-hidden
+            className={cn(
+              "mt-0.5 size-[1em] shrink-0",
+              ticketStateColour(state),
+            )}
+            data-testid="ticket-glyph"
+            data-state={state}
+          />
+          <span className="sr-only">
+            {kind}, {stateWord ?? "state not recorded"}:{" "}
           </span>
-          {resolving && !ticket.title ? (
-            // A skeleton only where there is genuinely nothing to show. A title
-            // Grove already holds is never replaced by a loading shape — stale
-            // text beats a spinner over information the reader can already use.
-            <Skeleton className="h-4 w-40" data-testid="ticket-title-loading" />
-          ) : (
-            <span className="min-w-0 flex-1 truncate text-sm text-content-primary">
-              {ticket.title ? (
-                <TicketTitle title={ticket.title} />
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 items-baseline gap-2">
+              {/* Dotted underline: the whole row is the link, but the id is the
+                  part a reader points at, so it is the part that has to look
+                  like a destination rather than a label. */}
+              <span className="shrink-0 font-mono text-xs tabular-nums text-content-primary underline decoration-dotted underline-offset-2">
+                {ticketIdLabel(ticket)}
+              </span>
+              {resolving && !ticket.title ? (
+                // A skeleton only where there is genuinely nothing to show. A
+                // title Grove already holds is never replaced by a loading
+                // shape — stale text beats a spinner over information the
+                // reader can already use.
+                <Skeleton
+                  className="h-4 w-40"
+                  data-testid="ticket-title-loading"
+                />
               ) : (
-                <span className="text-content-tertiary">No title recorded</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-content-primary">
+                  {ticket.title ? (
+                    <TicketTitle title={ticket.title} />
+                  ) : (
+                    <span className="text-content-tertiary">
+                      No title recorded
+                    </span>
+                  )}
+                </span>
               )}
             </span>
-          )}
+            {/* THE TRACKER'S OWN LINE: who tracks it, what kind of thing it is,
+                what state they say it is in, and who holds it. The state word is
+                the second carrier for the glyph's hue (§4.7) and is never
+                omitted — a row read in greyscale, or by a reader who cannot
+                separate green from red, loses nothing. `unknown` quotes the
+                tracker's own word rather than inventing a controlled one. */}
+            <span className="flex min-w-0 flex-wrap items-baseline gap-x-1 text-xs text-content-tertiary">
+              <span>{providerLabel(ticket.provider)}</span>
+              <span aria-hidden>·</span>
+              <span className="capitalize">{kind}</span>
+              {stateWord && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span
+                    className={cn("font-medium", ticketStateColour(state))}
+                    data-testid="ticket-status"
+                    data-state={state}
+                  >
+                    {stateWord}
+                  </span>
+                </>
+              )}
+              {ticket.assignee && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="min-w-0 truncate">@{ticket.assignee}</span>
+                </>
+              )}
+            </span>
+          </span>
         </span>
-        <span className="truncate text-xs text-content-tertiary">{meta}</span>
-      </span>
-      {/* THE BADGE BUDGET ON THIS ROW, WORKED OUT RATHER THAN ASSUMED (§6).
-          Four marks can land here now — an uncertain link, the tracker's own
-          status, Grove's phase, and blocked — but at most two of them are ever
-          TONED, so the row keeps a step of headroom under the three-toned cap.
 
-          - `uncertain` is `outline`. It is a fact about the LINK, not a state
-            of the ticket, and a hairline chip is what §6 gives a neutral fact.
-          - The tracker's status comes from `STATUS_TONE`: `outline` or
-            `secondary`, never `default`, decided when the glyph took the hue.
-          - Grove's phase is `outline` while the work is moving. It reports a
-            POSITION, and a position must never out-shout the ticket's own word.
-          - BLOCKED IS THE ONE MARK THAT WINS, and it wins by being the row's
-            only `destructive`. It is the only fact here anybody can act on
-            right now, and it is a claim about GROVE'S work — which is why it
-            rides the phase badge rather than arriving as a fifth chip.
+        {/* GROVE'S CLAIM, the column a reader consults after they know what they
+            are looking at. It STACKS below the identity at narrow widths rather
+            than competing with the title for the same row — the phase word and
+            the step are two short lines, and squeezing them beside a truncating
+            title is what made the old row clip a name to nothing.
 
-          NOTHING on this card is `default`. The one loudest mark §6 allows this
-          object is still spent where it always was: the workspace status badge
-          on the Identity card beside this one.
+            §6's budget is unchanged and now has more headroom: `uncertain` is a
+            fact about the LINK and stays `outline`, the phase reports a POSITION
+            and stays quiet, and `blocked` remains the row's only `destructive`,
+            riding the phase badge rather than arriving as another chip. The
+            tracker's status is no longer a badge at all — it is the coloured
+            word on the line above, which is where the reader was already
+            looking. */}
+        <span
+          className="flex shrink-0 flex-wrap items-center gap-1.5 @md/tickets:flex-col @md/tickets:items-end @md/tickets:gap-0.5"
+          data-testid="ticket-claim"
+        >
+          <span className="flex items-center gap-1.5">
+            {ticket.ambiguous && (
+              <Badge
+                variant="outline"
+                title="Grove inferred this link from the branch and more than one ticket matched — it may be the wrong one."
+                data-testid="ticket-ambiguous"
+              >
+                <TriangleAlertIcon aria-hidden />
+                uncertain
+              </Badge>
+            )}
+            {/* The ticket goes in so the hover can state the TRACKER'S claim
+                beside Grove's own, attributed to each. The two axes are the
+                thing readers conflate, and a mark that explains only its own
+                half invites it. */}
+            <PhaseBadge phase={phase} ticket={ticket} />
+          </span>
+          {/* NOT REPORTED IS A STATE, and it is stated. A ticket the agent has
+              said nothing about must never inherit `scoping` — the absence is
+              the fact, and printing it is what stops a blank column reading as
+              a rendering fault. */}
+          <span className="text-xs tabular-nums text-content-tertiary">
+            {phase
+              ? `Step ${phase.index + 1} of ${phase.total}`
+              : "No phase reported"}
+          </span>
+        </span>
+      </div>
 
-          ORDER IS READING ORDER: what the ticket says, then what Grove says
-          about it. The tracker's word stays adjacent to the tracker's content,
-          and Grove's claim is the last column — the one a reader consults after
-          they know what they are looking at. */}
-      <span className="flex shrink-0 items-center gap-1.5">
-        {ticket.ambiguous && (
-          <Badge
-            variant="outline"
-            title="Grove inferred this link from the branch and more than one ticket matched — it may be the wrong one."
-            data-testid="ticket-ambiguous"
-          >
-            <TriangleAlertIcon aria-hidden />
-            uncertain
-          </Badge>
-        )}
-        {ticket.status && (
-          <Badge variant={ticketStatusTone(ticket.status)} data-testid="ticket-status">
-            {ticket.status}
-          </Badge>
-        )}
-        {/* The ticket goes in so the hover can state the TRACKER'S claim beside
-            Grove's own, attributed to each. The two axes are the thing readers
-            conflate, and a mark that explains only its own half invites it. */}
-        <PhaseBadge phase={phase} ticket={ticket} />
-      </span>
+      {/* THE AGENT'S OWN WORDS, IN FULL, ON THE ROW THAT NAMES THE TICKET. They
+          used to live in a second `Ticket reports` list on the Task card, which
+          restated rows already on this page and split one ticket across two
+          cards. They are prose, so they wrap; a tooltip-only note would be a
+          report nobody on a touch device can read. */}
+      {note && (
+        <p
+          className="min-w-0 break-words text-xs text-content-secondary"
+          data-testid="ticket-note"
+        >
+          {note}
+        </p>
+      )}
     </>
   );
 
   // The full title lives in `title` on the row, so a name clipped in a docked
   // half-width panel is still recoverable without opening the tracker.
-  const shared = "flex w-full min-w-0 items-start gap-2 px-3 py-2 text-start";
+  const shared = "flex w-full min-w-0 flex-col gap-1 px-3 py-2 text-start";
   if (!ticket.url) {
     return (
       <div className={shared} title={ticket.title ?? undefined}>
@@ -339,7 +443,11 @@ export function TicketRow({
     <a
       href={ticket.url}
       target="_blank"
-      rel="noreferrer"
+      // `noopener` as well as `noreferrer`: browsers imply it for `_blank`, and
+      // a rule you can read beats a default you have to remember. Same pair
+      // every response link gets — a ticket row and a citation in an answer are
+      // both somewhere else, and they must not behave differently.
+      rel="noopener noreferrer"
       title={ticket.title ?? ticket.url}
       className={cn(
         shared,
@@ -400,28 +508,42 @@ function TicketTitle({ title }: { title: string }) {
  * one the old chip row rendered as an absent card.
  *
  * It says what would be here, how to put one here, and which trackers this
- * project can even talk to. Quiet by the rule that an absence is never the
- * loudest thing on a screen: tertiary, no weight, no colour.
+ * project can even talk to. It is a standalone alert rather than a card nested
+ * inside the Tickets card, so the card body keeps one surface boundary.
  */
 function TicketsEmpty({
   providers,
   failed,
+  onNavigate,
 }: {
   providers: TicketProviderView[] | undefined;
   failed: boolean;
+  onNavigate?: (tab: PanelTab) => void;
 }) {
   return (
-    <div
-      className="flex flex-col items-center gap-2 px-3 py-6 text-center text-sm text-content-tertiary"
-      data-testid="tickets-empty"
-    >
-      <p>No issue or pull request is linked to this workspace.</p>
-      <p className="text-xs">
-        Attach one with <Command>grove tickets attach &apos;#42&apos;</Command>, name a ticket when
-        you create a workspace, or let Grove infer it from a branch that carries the id.
-      </p>
-      <TrackerLine providers={providers} failed={failed} />
-    </div>
+    <Alert data-testid="tickets-empty">
+      <TicketIcon aria-hidden />
+      <AlertTitle>No tickets are linked</AlertTitle>
+      <AlertDescription>
+        <p className="text-xs text-content-tertiary">
+          Attach one with{" "}
+          <Command>grove tickets attach &apos;#42&apos;</Command>, name a ticket
+          when you create a workspace, or let Grove infer it from a branch that
+          carries the id.
+        </p>
+        <TrackerLine providers={providers} failed={failed} />
+        {onNavigate && (
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs"
+            onClick={() => onNavigate("changes")}
+          >
+            Review branch changes
+          </Button>
+        )}
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -439,13 +561,17 @@ function TrackerLine({
   if (failed) {
     return (
       <p className="text-xs" data-testid="tickets-providers-error">
-        <span className="text-destructive">Could not read this project&apos;s trackers.</span> The
-        daemon answered with an error; reopen this tab to try again.
+        <span className="text-destructive">
+          Could not read this project&apos;s trackers.
+        </span>{" "}
+        The daemon answered with an error; reopen this tab to try again.
       </p>
     );
   }
   if (providers === undefined) {
-    return <Skeleton className="h-4 w-56" data-testid="tickets-providers-loading" />;
+    return (
+      <Skeleton className="h-4 w-56" data-testid="tickets-providers-loading" />
+    );
   }
   if (providers.length === 0) {
     return (
@@ -458,9 +584,14 @@ function TrackerLine({
   return (
     <p className="text-xs" data-testid="tickets-providers">
       {providers.map((provider) => (
-        <span key={provider.provider} className="mr-2 inline-flex items-center gap-1">
+        <span
+          key={provider.provider}
+          className="mr-2 inline-flex items-center gap-1"
+        >
           {providerLabel(provider.provider)}
-          {provider.context && <span className="font-mono">{provider.context}</span>}
+          {provider.context && (
+            <span className="font-mono">{provider.context}</span>
+          )}
           {!provider.configured && <span>(no credentials)</span>}
         </span>
       ))}
@@ -468,10 +599,36 @@ function TrackerLine({
   );
 }
 
+/**
+ * A list that bounds itself once it is long enough to become the page.
+ *
+ * `CardScroll` is the app's one bounding idiom (`max-h-*` plus native overflow),
+ * and the threshold is a ROW COUNT rather than a height so a short list never
+ * gains a scroller it does not need. Below it, this is a passthrough: no
+ * wrapper, no scroll context, nothing for a keyboard user to fall into.
+ */
+function Bounded({
+  rows,
+  children,
+}: {
+  rows: number;
+  children: React.ReactNode;
+}) {
+  if (rows <= BOUNDED_ROWS) return <>{children}</>;
+  return (
+    <CardScroll className="max-h-80" data-testid="tickets-bounded">
+      {children}
+    </CardScroll>
+  );
+}
+
 /** A note under the list: metadata about the list, never louder than a row. */
 function Note({ children, ...props }: React.ComponentProps<"div">) {
   return (
-    <div className="border-t border-border px-3 py-2 text-xs text-content-tertiary" {...props}>
+    <div
+      className="border-t border-border px-3 py-2 text-xs text-content-tertiary"
+      {...props}
+    >
       {children}
     </div>
   );
@@ -486,5 +643,7 @@ function Command({ children }: { children: React.ReactNode }) {
 function configuredProviders(
   providers: TicketProviderView[] | undefined,
 ): TicketRef["provider"][] {
-  return (providers ?? []).filter((provider) => provider.configured).map((p) => p.provider);
+  return (providers ?? [])
+    .filter((provider) => provider.configured)
+    .map((p) => p.provider);
 }

@@ -1,30 +1,29 @@
 "use client";
 
-import { ApprovalCard } from "@/components/elements/approval-card";
-import { ElicitationForm } from "@/components/elements/elicitation-form";
-import { questionPresentation } from "@/lib/grove/adapters";
-import type { QuestionPresentation } from "@/lib/grove/adapters";
 import type { AgentQuestionView } from "@/lib/grove/api";
+import { PlanApproval } from "./plan-approval";
+import { QuestionCard, ResolvedQuestion } from "./question-card";
 
 /**
- * A question as it reads once it is no longer live — in the transcript, or
- * while an answer is in flight.
+ * One resolved question from the transcript.
  *
- * Both vendored elements are display-only for the option list (their choice
- * chips are spans, not controls), which is exactly right here and exactly wrong
- * for a live batch; see `pending-question.tsx` for the interactive twin.
+ * The question's prompt is the always-visible disclosure summary. The detail
+ * contains its original choices (including descriptions) and the provider's
+ * recorded group result. It deliberately has no action callbacks: history
+ * reports a settled interaction and cannot offer dead controls.
+ *
+ * A settled plan keeps its own surface rather than degrading to the question
+ * card — the plan is still a document, and reading back what was approved is the
+ * main reason to scroll to it. Omitting `onChoose` is what makes it inert, so
+ * the read-only shape cannot drift from the live one.
  */
-export function QuestionView({ presentation }: { presentation: QuestionPresentation }) {
-  if (presentation.kind === "approval") {
-    const { kind: _kind, groupId: _groupId, ...props } = presentation;
-    return <ApprovalCard {...props} className="max-w-none" data-testid="question-approval" />;
-  }
-  const { kind: _kind, groupId: _groupId, ...props } = presentation;
-  return <ElicitationForm {...props} className="max-w-none" data-testid="question-form" />;
-}
-
-/** One historical question from the transcript. */
 export function HistoricalQuestion({ question }: { question: AgentQuestionView }) {
-  const presentation = questionPresentation([question]);
-  return presentation ? <QuestionView presentation={presentation} /> : null;
+  if (question.kind === "plan_approval") {
+    return <PlanApproval question={question} />;
+  }
+  return (
+    <QuestionCard question={question} state="resolved">
+      <ResolvedQuestion question={question} />
+    </QuestionCard>
+  );
 }

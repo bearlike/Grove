@@ -1,9 +1,10 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
   panesShown,
   storedView,
-  storedWorkTab,
   resolvedWorkspaceSelection,
 } from "@/components/grove/workspace/selectors";
 
@@ -50,13 +51,24 @@ describe("panesShown", () => {
  * default without overwriting a reader's explicit choice.
  */
 describe("resolvedWorkspaceSelection", () => {
-  it("opens the live terminal until a transcript exists", () => {
+  it("opens the work pane until a transcript exists, and still lands on Info", () => {
     expect(
       resolvedWorkspaceSelection(false, { view: null, workTab: null }),
     ).toEqual({
       view: "work",
-      workTab: "terminal",
+      workTab: "info",
     });
+  });
+
+  it("lands on Info on EVERY visit, whatever the transcript is doing", () => {
+    // The landing tab is not a function of the data at all — that is the point.
+    // A tab that depended on the first turn arriving would move under a reader
+    // mid-visit, which is the behaviour `Workspace` keeps null selections for.
+    for (const hasTranscript of [false, true]) {
+      expect(
+        resolvedWorkspaceSelection(hasTranscript, { view: null, workTab: null }).workTab,
+      ).toBe("info");
+    }
   });
 
   it("opens the split once there is a real transcript", () => {
@@ -100,17 +112,23 @@ describe("storedView", () => {
   });
 });
 
-describe("storedWorkTab", () => {
-  it("returns a valid saved tab as an explicit choice", () => {
-    for (const tab of ["terminal", "changes", "files", "info", "controls"]) {
-      expect(storedWorkTab(tab)).toBe(tab);
-    }
-  });
+/**
+ * The work tab is NOT persisted, and this is the census that says so.
+ *
+ * A source assertion rather than a behavioural one because the mechanism being
+ * pinned is an ABSENCE: there is no storage key to read back, so the only thing
+ * that can regress is somebody re-adding one. `view` is asserted alongside it
+ * so this cannot pass by the whole file having been renamed out from under it.
+ */
+describe("work-tab persistence", () => {
+  const WORKSPACE = readFileSync(
+    new URL("../../components/grove/workspace/index.tsx", import.meta.url),
+    "utf8",
+  );
 
-  it("keeps absence and garbage distinct from a default", () => {
-    expect(storedWorkTab(null)).toBeNull();
-    expect(storedWorkTab("history")).toBeNull();
-    expect(storedWorkTab(7)).toBeNull();
-    expect(storedWorkTab({ tab: "changes" })).toBeNull();
+  it("persists the PANE and nothing else", () => {
+    expect(WORKSPACE).toContain("grove-workspace-view:");
+    expect(WORKSPACE).not.toContain("grove-workspace-work-tab");
+    expect(WORKSPACE).not.toContain("storedWorkTab");
   });
 });

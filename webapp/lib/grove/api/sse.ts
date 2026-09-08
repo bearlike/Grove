@@ -23,7 +23,15 @@ export function subscribeToEventStream(url: string, handlers: EventStreamHandler
     }
   };
 
-  for (const name of ["snapshot", "session_activity", "workspace_changed", "heartbeat", "pane_snapshot"]) {
+  for (const name of [
+    "snapshot",
+    "session_activity",
+    "workspace_changed",
+    "catalog_changed",
+    "workspace_source_changed",
+    "heartbeat",
+    "pane_snapshot",
+  ]) {
     source.addEventListener(name, receive as EventListener);
   }
   source.onopen = (): void => handlers.onOpen?.();

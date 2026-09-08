@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from grove.core import tmux
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.config import GroveConfig
 from grove.core.contracts.requests import CreateWorkspaceRequest
@@ -189,19 +191,121 @@ def test_send_message_mewbo_without_session_id_is_typed_error(
     assert fake_mewbo.messages == []
 
 
-# ─── interrupt ───────────────────────────────────────────────────────────────
+# ─── send_keys ───────────────────────────────────────────────────────────────
 
 
-def test_interrupt_refuses_tmux_hosted_agents(
+@pytest.mark.parametrize("kind", ["claude_code", "codex", "generic"])
+@pytest.mark.parametrize("key", list(tmux.SendKey))
+def test_send_keys_delivers_each_named_key_for_terminal_agents(
+    manager: WorkspaceManager,
+    fake_tmux: FakeTmux,
+    kind: str,
+    key: tmux.SendKey,
+) -> None:
+    """Terminal ownership, not provider semantics, is the capability boundary."""
+    state = _create(manager)
+    manager.store.save(replace(state, agent_kind=kind))
+    events: list[WorkspaceEvent] = []
+    manager.subscribe(events.append)
+
+    manager.send_keys(state.id, key)
+
+    assert fake_tmux.sent_keys == [(f"{state.tmux_session}:agent", [key])]
+    assert [(event.kind, event.detail) for event in events] == [
+        (
+            "control_invoked",
+            {"control": "send_keys", "target": f"{state.tmux_session}:agent", "key": key.value},
+        )
+    ]
+
+
+def test_send_keys_uses_renamed_agent_window_fallback(
     manager: WorkspaceManager, fake_tmux: FakeTmux
 ) -> None:
     state = _create(manager)
+    fake_tmux.windows[state.tmux_session] = ["shell", "renamed-agent"]
 
-    # No safe generic interrupt: a cancel keystroke into an arbitrary CLI
-    # is not a contract, so claude_code/generic always refuse.
+    manager.send_keys(state.id, tmux.SendKey.UP)
+
+    assert fake_tmux.sent_keys == [(f"{state.tmux_session}:renamed-agent", [tmux.SendKey.UP])]
+
+
+@pytest.mark.parametrize("raw", ["C-c", "C-c; new-session", "$(id)"])
+def test_send_keys_refuses_raw_or_malformed_values_before_io(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, raw: str
+) -> None:
+    state = _create(manager)
+
+    with pytest.raises(SteeringUnsupported, match="SendKey enum"):
+        manager.send_keys(state.id, cast(tmux.SendKey, raw))
+
+    assert fake_tmux.sent_keys == []
+    assert fake_tmux.commands == []
+
+
+@pytest.mark.parametrize("shape", ["paused", "offline", "missing-pane"])
+def test_send_keys_refuses_unsteerable_workspace_shapes_before_injection(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, shape: str
+) -> None:
+    state = _create(manager)
+    if shape == "paused":
+        manager.pause(state.id)
+        expected = WorkspaceStateError
+    elif shape == "offline":
+        fake_tmux.sessions.clear()
+        expected = WorkspaceStateError
+    else:
+        fake_tmux.windows[state.tmux_session] = []
+        expected = PaneNotFound
+
+    with pytest.raises(expected):
+        manager.send_keys(state.id, tmux.SendKey.ENTER)
+
+    assert fake_tmux.sent_keys == []
+
+
+def test_send_keys_refuses_remote_mewbo_without_local_injection(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, fake_mewbo: FakeMewboClient
+) -> None:
+    state = _create(manager)
+    _as_mewbo(manager, state)
+
+    with pytest.raises(SteeringUnsupported, match="live terminal"):
+        manager.send_keys(state.id, tmux.SendKey.ESCAPE)
+
+    assert fake_tmux.sent_keys == []
+    assert fake_mewbo.messages == []
+    assert fake_mewbo.interrupts == []
+
+
+# ─── interrupt ───────────────────────────────────────────────────────────────
+
+
+def test_interrupt_claude_code_sends_escape_to_resolved_pane(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = _create(manager)
+    sent: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        "grove.core.tmux.press_escape", lambda target, **_kw: sent.append((target, ["Escape"]))
+    )
+
+    manager.interrupt(state.id)
+
+    assert sent == [(f"{state.tmux_session}:agent", ["Escape"])]
+    assert fake_tmux.sent_texts == []
+
+
+def test_interrupt_refuses_generic_tmux_hosted_agent(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    state = _create(manager)
+    manager.store.save(replace(state, agent_kind="generic"))
+
     with pytest.raises(SteeringUnsupported, match="interrupt"):
         manager.interrupt(state.id)
     assert fake_tmux.sent_texts == []
+    assert fake_tmux.sent_keys == []
 
 
 def test_interrupt_mewbo_kind_interrupts_via_api(

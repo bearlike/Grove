@@ -57,7 +57,7 @@ describe("a workspace with no separate base branch", () => {
           peek={FIXTURE_PEEK}
           activity={null}
           repoRoot={FIXTURE_PEEK.state.repo_root}
-          privileged={{ state: FIXTURE_PEEK.state, onKilled: () => {} }}
+          identity={FIXTURE_PEEK.state}
         />
       </QueryClientProvider>,
     );
@@ -73,11 +73,16 @@ describe("a workspace with no separate base branch", () => {
 
     expect(html).toContain("against the commit this workspace started from");
     // ahead/behind are derived from the base NAME, so with no base they can only
-    // ever report zero — withheld, not printed as a measurement.
-    expect(html).not.toContain(">ahead<");
-    expect(html).not.toContain(">behind<");
-    // The three anchored on `base_commit` are still true and still shown.
-    expect(html).toContain(">dirty<");
+    // ever report zero — withheld, not printed as a measurement. Pinned on the
+    // CELL rather than the label, so a wording change cannot make this pass by
+    // failing to find a string that was never the point.
+    expect(html).not.toContain('data-testid="divergence-ahead"');
+    expect(html).not.toContain('data-testid="divergence-behind"');
+    // The three anchored on `base_commit` are still true and still shown — and
+    // the grid says how many facts it holds, so a withheld pair is one cell
+    // fewer rather than one empty placeholder more.
+    expect(html).toContain('data-testid="divergence-dirty"');
+    expect(html).toContain('data-facts="3"');
   });
 
   it("still prints a real base branch on a normal worktree workspace", () => {

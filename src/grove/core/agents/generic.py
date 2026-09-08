@@ -89,6 +89,11 @@ class GenericAdapter:
         del cwd
         return []
 
+    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+        # No transcripts, so no session can be resolved by id either.
+        del cwd, session_id
+        return None
+
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
         # A bare shell records no conversation, so there is no spine to read —
         # the honest empty answer a content consumer acts on (it emits nothing).

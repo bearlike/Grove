@@ -26,7 +26,6 @@ from datetime import UTC, datetime
 from grove.core.agents import CompactionBoundary, DigestEntry
 from grove.core.agents.claude_code import _Record, _TranscriptParser
 from grove.core.agents.codex import _RolloutLine, _RolloutParser
-from grove.core.contracts.questions import _ENTRY_TEXT_CAP
 from grove.core.contracts.sessions import DigestEntryView
 
 # ── the provider-neutral contract ────────────────────────────────────────────
@@ -345,10 +344,10 @@ def test_the_view_keeps_each_absence_distinguishable() -> None:
     assert view.model_dump()["compaction"]["trigger"] is None
 
 
-def test_the_view_carries_a_real_boundary_whole_and_caps_the_summary() -> None:
-    """A real summary is chat-scale prose, so it takes the shared entry cap
-    rather than the diff-sized one — it rides the same per-turn payload as every
-    other entry and a turn can hold several boundaries."""
+def test_the_view_carries_a_real_boundary_whole_including_the_summary() -> None:
+    """The summary is the ONLY surviving record of the turns the harness threw
+    away, so a reader who scrolls back to it has nowhere else to go — it crosses
+    whole, like every other body on this fetch-on-demand route."""
     at = datetime(2026, 8, 11, 10, 2, 1, tzinfo=UTC)
     view = DigestEntryView.from_entry(
         DigestEntry(
@@ -361,7 +360,7 @@ def test_the_view_carries_a_real_boundary_whole_and_caps_the_summary() -> None:
     assert view.compaction.trigger == "auto"
     assert view.compaction.at == at
     assert view.compaction.dropped_tokens == 627_655
-    assert len(view.compaction.summary) == _ENTRY_TEXT_CAP
+    assert view.compaction.summary == "y" * 30_000
 
 
 def test_every_other_role_leaves_the_payload_null() -> None:

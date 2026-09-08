@@ -643,6 +643,31 @@ class TmuxEntry:
     reasoning, and the same provision-time-fact shape, as :attr:`command`.
     """
 
+    read_only: bool = False
+    """Enter as a VIEWER: ``attach-session -r`` instead of ``new-session -A``.
+
+    The native workspace's arm (see ``HostAttach.read_only``). ``new-session``
+    has no read-only flag, so this is the one entry that does not create on a
+    miss: the caller has established the session is live (``ensure_can_attach``),
+    and a session that raced away is an ordinary attach failure rather than a
+    fresh empty shell somebody could type into.
+    """
+
+    size: str = ""
+    """Starting geometry (``TmuxConfig.detached_size``) for a session this entry
+    CREATES; empty keeps tmux's 80x24 default.
+
+    Only ever applied to a detached start, and the reason is ``-A``: an
+    attaching entry either finds a session (whose size then belongs to the
+    attaching client, which is the whole point of ``window-size latest``) or
+    creates one it is immediately a client of. Passing a geometry there would
+    be Grove overriding the human's own terminal. A DETACHED start has no
+    client and no prospect of one until somebody attaches later, so it is
+    exactly the case that needs a sensible size — and it is the case a
+    container workspace is normally in, since the agent's tmux is started
+    detached and only read through ``capture-pane``.
+    """
+
     def tokens(self, target: Sequence[str]) -> list[str]:
         """The RAW tokens that run *target* under this session.
 
@@ -662,12 +687,17 @@ class TmuxEntry:
         if not self.command:
             return list(target)
         detach = ("-d",) if self.detached else ()
+        geometry = tmux.parse_size(self.size) if self.detached else None
+        size = ("-x", str(geometry[0]), "-y", str(geometry[1])) if geometry else ()
         # `-f` is a SERVER option, so it has to precede the command word rather
         # than ride `new-session`'s own flags. Folding it into `args` keeps the
         # TERM-fallback retry honest for free: `fallback_script` re-emits this
         # same tuple, so the retry cannot lose the config the first attempt had.
         conf = ("-f", self.conf) if self.conf else ()
-        args = (*conf, "new-session", "-A", *detach, "-s", self.session, *target)
+        if self.read_only and not self.detached:
+            args: tuple[str, ...] = (*conf, "attach-session", "-r", "-t", self.session)
+        else:
+            args = (*conf, "new-session", "-A", *detach, *size, "-s", self.session, *target)
         if not self.term_fallback or self.detached:
             return [self.command, *args]
         return ["sh", "-c", self.fallback_script(args), "grove"]

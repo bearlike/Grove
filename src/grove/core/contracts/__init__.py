@@ -23,7 +23,12 @@ from grove.core.contracts.activity import (
     SessionActivityView,
     WorkspaceActivityView,
 )
-from grove.core.contracts.agents import AgentSummaryView
+from grove.core.contracts.agents import AgentSummaryView, ModelOptionView
+from grove.core.contracts.assignment_events import (
+    AssignmentLifecycleEvent,
+    AssignmentTicketEvent,
+    AssignmentTicketIdentity,
+)
 from grove.core.contracts.auth import (
     AuthErrorEnvelope,
     PairingChallengeView,
@@ -40,11 +45,27 @@ from grove.core.contracts.branch_plan import (
     RootBranch,
     TrackRemoteBranch,
 )
+from grove.core.contracts.diagrams import (
+    DiagramDocumentView,
+    DiagramOpenRequest,
+    DiagramPreviewUploadRequest,
+    DiagramPreviewView,
+    DiagramSessionView,
+    DiagramStopRequest,
+    DiagramUpdateRequest,
+)
+from grove.core.contracts.gallery import (
+    GalleryDocumentView,
+    GalleryItemView,
+    GalleryPreviewUploadRequest,
+    GalleryPreviewView,
+)
 from grove.core.contracts.issueops import (
     IssueOpsAction,
     IssueOpsEvent,
     IssueOpsOutcome,
 )
+from grove.core.contracts.keys import SendKey, SendKeysRequest
 from grove.core.contracts.questions import (
     AgentQuestionOptionView,
     AgentQuestionView,
@@ -127,6 +148,9 @@ __all__ = [
     "AgentQuestionView",
     "AgentSessionView",
     "AgentSummaryView",
+    "AssignmentLifecycleEvent",
+    "AssignmentTicketEvent",
+    "AssignmentTicketIdentity",
     "AttachInstructionView",
     "AuthErrorEnvelope",
     "AutoBranch",
@@ -140,15 +164,27 @@ __all__ = [
     "CreateWorkspaceRequest",
     "DashboardEvent",
     "DashboardSnapshotView",
+    "DiagramDocumentView",
+    "DiagramOpenRequest",
+    "DiagramPreviewUploadRequest",
+    "DiagramPreviewView",
+    "DiagramSessionView",
+    "DiagramStopRequest",
+    "DiagramUpdateRequest",
     "DigestEntryView",
     "DurationConfidence",
     "DurationView",
     "ExistingLocalBranch",
     "FindingKind",
+    "GalleryDocumentView",
+    "GalleryItemView",
+    "GalleryPreviewUploadRequest",
+    "GalleryPreviewView",
     "HostAttachView",
     "IssueOpsAction",
     "IssueOpsEvent",
     "IssueOpsOutcome",
+    "ModelOptionView",
     "MoneyView",
     "NewNamedBranch",
     "PairRequest",
@@ -164,6 +200,8 @@ __all__ = [
     "QuotaStatus",
     "RemapSessionRequest",
     "RootBranch",
+    "SendKey",
+    "SendKeysRequest",
     "SessionActivityView",
     "SessionDetailView",
     "SessionQueryView",

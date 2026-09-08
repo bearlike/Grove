@@ -23,7 +23,6 @@ import os
 
 import typer
 
-from grove.core import build
 from grove.core.container_agent import ContainerAgent
 from grove.tui.cli_complete import Complete
 from grove.tui.cli_workspace import clean_exit, resolve_workspace
@@ -70,8 +69,7 @@ def list_agents(workspace: str = _WORKSPACE_ARG) -> None:
       grove agent list a1b2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         _render(manager.container_agents(state.id))
 
 
@@ -111,8 +109,7 @@ def add_agent(
       grove agent add a1b2 --agent codex --name reviewer
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         started = manager.add_container_agent(
             state.id, agent=agent, name=name, model=model, initial_prompt=prompt
         )
@@ -137,8 +134,7 @@ def kill_agent(
     if not yes:
         typer.confirm(f"end agent {name!r} in this container?", abort=True)
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         manager.kill_container_agent(state.id, name)
     typer.secho(f"ended agent {name}", fg=typer.colors.GREEN)
 
@@ -155,8 +151,7 @@ def peek_agent(
       grove agent peek a1b2 agent-2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         snapshot, _ = manager.peek_pane(state.id, agent=name)
     if not snapshot:
         typer.echo(f"agent {name} has printed nothing yet")
@@ -176,8 +171,7 @@ def message_agent(
       grove agent message a1b2 agent-2 "run the tests"
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         manager.send_message(state.id, text, agent=name)
     typer.secho(f"sent to {name}", fg=typer.colors.GREEN)
 
@@ -193,8 +187,7 @@ def attach_agent(workspace: str = _WORKSPACE_ARG, name: str = _NAME_ARG) -> None
       grove agent attach a1b2 agent-2
     """
     with clean_exit():
-        manager = build()
-        state = resolve_workspace(manager, workspace)
+        manager, state = resolve_workspace(workspace)
         argv = manager.container_agent_argv(state.id, name)
     # Outside clean_exit: exec replaces this process, so it never returns and
     # raises no GroveError — the `grove shell` / `grove attach` convention.

@@ -661,7 +661,7 @@ def test_hook_settings_are_byte_identical_when_daemon_url_is_unset(
     constant renders, so no existing install sees a changed settings file."""
     del fake_tmux
     written = _hook_settings_written(tmp_repo, tmp_path, monkeypatch, {})
-    assert written == ClaudeHook.settings()
+    assert written == ClaudeHook.settings(statusline=True)
 
 
 def test_hook_settings_honor_a_configured_daemon_url(

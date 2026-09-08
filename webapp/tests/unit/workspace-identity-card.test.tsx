@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import { WorkspaceIdentityCard } from "@/components/grove/workspace/identity";
@@ -9,6 +10,12 @@ import { workspace } from "@/tests/fixtures/fleet";
  * supplied, but gives them one shared field-list anatomy. These render tests pin
  * the reader-facing contract rather than the separate cards it replaced.
  */
+function render(card: React.ReactNode): string {
+  return renderToStaticMarkup(
+    <QueryClientProvider client={new QueryClient()}>{card}</QueryClientProvider>,
+  );
+}
+
 describe("WorkspaceIdentityCard", () => {
   it("keeps identity and branch facts in one card", () => {
     const state = {
@@ -18,7 +25,7 @@ describe("WorkspaceIdentityCard", () => {
       runtime_fallback_reason: "Image startup failed.",
     };
 
-    const html = renderToStaticMarkup(<WorkspaceIdentityCard state={state} />);
+    const html = render(<WorkspaceIdentityCard state={state} />);
 
     expect(html).toContain('data-testid="workspace-identity-card"');
     expect(html).toContain("Status");
@@ -40,11 +47,28 @@ describe("WorkspaceIdentityCard", () => {
       base_branch: "HEAD",
     };
 
-    const html = renderToStaticMarkup(<WorkspaceIdentityCard state={state} />);
+    const html = render(<WorkspaceIdentityCard state={state} />);
 
     expect(html).toContain("Placement");
     expect(html).toContain("Root checkout");
     expect(html).toContain("no separate base branch");
     expect(html).not.toContain("HEAD");
+  });
+});
+
+describe("the session mode", () => {
+  it("names the channel Grove's controls take, and both modes are distinct words", () => {
+    const base = workspace({ id: "mode", branch: "main" }).state;
+    const native = render(
+      <WorkspaceIdentityCard state={{ ...base, native: true }} />,
+    );
+    const terminal = render(
+      <WorkspaceIdentityCard state={{ ...base, native: false }} />,
+    );
+    expect(native).toContain('data-testid="workspace-session-mode"');
+    expect(native).toContain("Native session");
+    expect(native).not.toContain("Terminal");
+    expect(terminal).toContain("Terminal");
+    expect(terminal).not.toContain("Native session");
   });
 });

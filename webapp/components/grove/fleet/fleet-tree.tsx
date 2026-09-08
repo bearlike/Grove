@@ -2,11 +2,10 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { MoreHorizontalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { ThreadListSearch } from "@/components/assistant-ui/thread-list";
 import { ConnectionState } from "@/components/elements/connection-state";
 import { ErrorState } from "@/components/elements/error-state";
 import { Button } from "@/components/ui/button";
@@ -14,24 +13,34 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { CardShell } from "@/components/grove/card";
+import { BRANCH_GLYPH } from "@/components/grove/entity";
+import { LoopingText, MarqueePauseButton } from "@/components/grove/overflow-text";
 import { AgentMark } from "@/components/grove/agent-mark";
-import {
-  BranchLabel,
-  PROJECT_MIN_WIDTH,
-  ProjectLabel,
-} from "@/components/grove/entity";
-import { absoluteTime, RelativeTime } from "@/components/grove/relative-time";
+import { WorkingMark } from "@/components/grove/working-loader";
+import { absoluteTime } from "@/components/grove/relative-time";
+import { KillDialog } from "@/components/grove/workspace/kill-dialog";
+import { useWorkspaceActions } from "@/lib/grove/hooks";
 import { FleetFilterMenu } from "./fleet-filter";
+import { ProjectHeading } from "./project-heading";
+import {
+  ProjectContextPicker,
+  projectContextLabel,
+  projectLaunchHref,
+  scopeFleetRows,
+  type ProjectContextController,
+} from "./project-context";
+import { SessionMetadata, SessionMetricDetails } from "./workspace-metrics";
 import {
   RenameWorkspaceDialog,
   type WorkspaceEditField,
@@ -40,160 +49,95 @@ import {
   activeFilterCount,
   agentStateOf,
   filterRows,
-  fleetFacets,
+  fleetGroups,
   lastActivityIso,
-  NO_FILTER,
-  sortedFleetRows,
   type FleetFilter,
 } from "./filter";
-import { agentAccent, agentGlyph, agentLabel, agentTone, phaseGlyph, phaseLabel } from "./tokens";
-import type { AgentState, FleetRow } from "./types";
+import {
+  agentGlyph,
+  agentLabel,
+  attentionLabel,
+  PHASE_BLOCKED_ICON,
+  phaseGlyph,
+  phaseLabel,
+} from "./tokens";
+import type { FleetSearchController } from "./fleet-palette";
+import type { FleetRow } from "./types";
 import type { FleetStream } from "./use-fleet";
 
-/**
- * The trailing mark's colour, read off the SAME two tables `AgentStateBadge`
- * reads — never a second state → hue mapping. `agentAccent` is non-`undefined`
- * exactly for the mid-flight states (`starting`/`working`); `agentTone` is
- * `"destructive"` exactly for the ones that need a human (`waiting`/`blocked`/
- * `error`). A 12px inline glyph cannot carry a filled badge, so this asks for
- * the bare `text-*` sibling of the same token family instead of composing one.
- * Everything else (idle, unknown) stays neutral, per §4.1's "neutral is the
- * default" — the glyph shape is still the first carrier; this is only the
- * second, per §4.7.
- */
-export function activityHue(state: AgentState): string | undefined {
-  if (agentAccent(state) !== undefined) return "text-warning";
-  return agentTone(state) === "destructive" ? "text-destructive" : undefined;
-}
-
-/**
- * The fleet as a flat, reverse-chronological list, in the slot assistant-ui's
- * rail gives `ThreadList`.
- *
- * The anatomy is theirs: the primary "new" action is the FIRST child, search
- * sits directly beneath it, and the rows follow. What changed from the earlier
- * version is that the rows are no longer sectioned by repo — grouping a fleet
- * by project reads as mostly headings, because a workspace is frequently empty
- * and frequently momentary. Recency answers "which one did I mean" better than
- * provenance does, and provenance moved into the filter menu.
- *
- * Collapsed content is hidden with `inert` + opacity rather than unmounted, so
- * the rail's width transition has something to animate against and the list
- * does not re-mount (and re-scroll) on every toggle.
- */
+/** The scoped rail list. Its search/filter controller belongs to the one AppShell that owns both rail mounts. */
 export function FleetTree({
   collapsed,
   stream,
+  project,
+  search,
 }: {
   collapsed: boolean;
   stream: FleetStream;
+  project: ProjectContextController;
+  search: FleetSearchController;
 }): React.ReactNode {
   const pathname = usePathname();
-  const [filter, setFilter] = useState<FleetFilter>(NO_FILTER);
-
-  const rows = useMemo(
-    () => sortedFleetRows(stream.snapshot),
-    [stream.snapshot],
-  );
-  const facets = useMemo(() => fleetFacets(rows), [rows]);
-  const visible = useMemo(() => filterRows(rows, filter), [rows, filter]);
+  const projects = stream.snapshot?.projects ?? [];
+  const rows = search.scopedRows;
+  const visible = search.visibleRows;
+  const groupBy = project.context.kind === "all" ? search.filter.groupBy : "none";
+  const groups = useMemo(() => fleetGroups(visible, groupBy), [visible, groupBy]);
+  const currentRow = search.allRows.find((row) => pathname === `/w/${row.workspace.state.id}`);
+  const outsideContext = currentRow && project.context.kind !== "all" &&
+    !rows.some((row) => row.workspace.state.id === currentRow.workspace.state.id);
+  const showCurrentProject = (): void => {
+    const owner = projects.find((candidate) => candidate.workspaces.some(
+      (workspace) => workspace.state.id === currentRow?.workspace.state.id,
+    ));
+    if (owner) project.selectProject(owner.cwd);
+  };
 
   const loading = stream.isPending && stream.snapshot === undefined;
-  // Same predicate the dashboard uses, so "you have filtered something out"
-  // means one thing in both places rather than being re-derived per surface.
-  const filtering = filter.query.trim() !== "" || activeFilterCount(filter) > 0;
-
-  /**
-   * Whether to offer the instruments that NARROW the list — the search box and
-   * the filter menu. The upstream anatomy this was ported from gates its search
-   * on `hasThreads` for a reason: a control for narrowing a list that does not
-   * exist is chrome pretending to be a control, and here it sat directly above
-   * "No workspaces yet."
-   *
-   * Two things this must NOT be gated on, and both are the difference between a
-   * gate and a trap:
-   *   - NOT `visible.length`. Narrowing to zero would remove the box holding the
-   *     query that did it, so the only way back would be to reload the page.
-   *   - NOT `rows.length` alone. While loading, `rows` is empty, so the row
-   *     would appear the instant the snapshot landed and shove the whole list
-   *     down by 40px. The skeleton stands in for rows we expect to have.
-   */
-  const narrowable = loading || rows.length > 0;
+  const filtering = search.filter.query.trim() !== "" || activeFilterCount(search.filter) > 0;
 
   return (
     <div
       data-testid="fleet-tree"
       className={cn(
-        // `w-full`, never a pixel width, in BOTH states — an earlier version
-        // duplicated the docked aside's own width here, and that duplication is
-        // exactly what let the two drift: the mobile `Sheet` renders this same
-        // tree at close to the full viewport, and a fixed rail width pinned it
-        // to the DESKTOP measure regardless, leaving empty space beside a
-        // column that was still truncating as if it were the narrower one.
-        // `w-full` has no number to drift — it is always exactly whatever the
-        // immediate parent is (the aside on desktop, the sheet's full width on
-        // mobile), by construction rather than by a second literal kept in sync
-        // by hand. THE RAIL'S WIDTH LIVES IN `app-shell.tsx` AND NOWHERE ELSE.
-        //
-        // `gap-1.5` (6px) is the rail's one rhythm — 3x the `gap-0.5` this used
-        // to run at, and the same value the footer in `app-sidebar.tsx` uses,
-        // so the create action, the search row, the states and every workspace
-        // row sit exactly one step apart all the way down. Symmetry is the
-        // point: an even column is what lets a deliberately BIGGER step (the
-        // footer's service line) read as a group break rather than as noise.
-        "relative flex flex-1 flex-col gap-1.5 transition-[padding] duration-200",
-        // `p-3` expanded, matching the footer — the one band of the rail that
-        // was never reported as cramped, so it sets the measure for the rest
-        // rather than a new number being invented. Collapsed keeps `px-2`,
-        // which is not a gutter but an arithmetic fit: 8 + a 32px icon button
-        // + 8 is exactly the 48px icon rail, and `px-3` would push it off
-        // centre.
+        "relative flex flex-1 flex-col gap-3 transition-[padding] duration-200",
         collapsed
-          ? "w-full overflow-hidden px-2 pt-1"
+          ? "w-full overflow-hidden px-2 pt-1 [@media(pointer:coarse)]:px-0.5"
           : "w-full overflow-y-auto p-3",
       )}
     >
-      <NewWorkspaceButton collapsed={collapsed} active={pathname === "/"} />
+      <div hidden={collapsed}>
+        <ProjectContextPicker
+          projects={projects}
+          context={project.context}
+          onSelect={project.selectProject}
+          status={stream.error ? "error" : loading ? "loading" : "ready"}
+        />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <NewWorkspaceButton collapsed={collapsed} href={projectLaunchHref(project.context)} />
+        {collapsed ? null : (
+          <>
+            <FleetFilterMenu
+              variant="sidebar"
+              filter={search.filter}
+              onFilterChange={search.setFilter}
+              facets={search.facets}
+            />
+            <MarqueePauseButton className="size-6 min-h-[24px] min-w-[24px] [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11" />
+          </>
+        )}
+      </div>
 
+      {/* Keep the list intrinsic-height so its overflow cannot bypass the scroller's bottom padding. */}
       <div
         aria-hidden={collapsed}
         inert={collapsed}
         className={cn(
-          // Same `gap-1.5` as the root: this group is a layout wrapper for the
-          // collapse fade, not a section, so the rhythm must not change when it
-          // is crossed — the create action above and the search row below it
-          // are one step apart exactly like two workspace rows are.
-          "flex min-h-0 flex-1 flex-col gap-1.5 transition-opacity duration-150",
+          "flex shrink-0 flex-col gap-3 transition-opacity duration-150",
           collapsed && "pointer-events-none opacity-0",
         )}
       >
-        {narrowable ? (
-          <div className="flex items-center gap-1.5">
-            <div className="min-w-0 flex-1">
-              {/* Full accessible name stays on `aria-label`; the visible
-                  placeholder drops to one word and the type shrinks to the
-                  rail's own scale (`text-xs`, matching the rows below it)
-                  rather than the vendored default `text-sm` — the height
-                  floor (`h-8`, unchanged) is the accessibility contract; the
-                  weight the box carries at that height is a call-site choice,
-                  and this box is chrome instrumenting the list, not content. */}
-              <ThreadListSearch
-                value={filter.query}
-                onValueChange={(query) => setFilter({ ...filter, query })}
-                placeholder="Search"
-                aria-label="Search workspaces"
-                className="text-xs"
-                data-testid="fleet-filter"
-              />
-            </div>
-            <FleetFilterMenu
-              filter={filter}
-              onFilterChange={setFilter}
-              facets={facets}
-            />
-          </div>
-        ) : null}
-
         <ConnectionState phase={stream.phase} className="max-w-none" />
 
         {stream.error ? (
@@ -206,28 +150,38 @@ export function FleetTree({
           />
         ) : null}
 
+        {outsideContext && !loading ? (
+          <div className="flex flex-wrap items-center gap-1 text-xs text-content-tertiary" data-testid="rail-outside-context">
+            <span>Open workspace is outside this view.</span>
+            <Button variant="ghost" size="sm" className="min-h-[28px] px-1" onClick={showCurrentProject}>
+              Show its project
+            </Button>
+          </div>
+        ) : null}
+
         {loading ? <FleetSkeleton /> : null}
 
-        {/* TWO different nothings, and the filtered one needs a way back out.
-            A rail that has narrowed to nothing and offers no exit is a filter
-            that has become a trap — the workspaces are still there, and the
-            only thing standing between the reader and them is a control they
-            may not remember touching. "Create a workspace" is the wrong door
-            for someone whose search simply missed. */}
         {!loading && visible.length === 0 ? (
           <div
             className="flex flex-col items-start gap-2 px-2.5 py-4"
             data-testid="fleet-empty-rail"
           >
             <p className="text-sm text-content-tertiary">
-              {filtering ? "No workspaces match." : "No workspaces yet."}
+              {project.context.kind === "missing"
+                ? "This project is no longer available."
+                : filtering ? "No workspaces match." : "No workspaces yet."}
             </p>
+            {project.context.kind === "missing" ? (
+              <Button variant="outline" size="sm" onClick={() => project.selectProject(null)}>
+                All projects
+              </Button>
+            ) : null}
             {filtering ? (
               <Button
                 variant="outline"
                 size="sm"
                 className="h-7"
-                onClick={() => setFilter(NO_FILTER)}
+                onClick={() => search.setFilter({ ...search.filter, query: "", attentionOnly: false, hiddenStates: [], hiddenProjects: [] })}
                 data-testid="fleet-clear-filter-rail"
               >
                 Clear the filter
@@ -236,53 +190,57 @@ export function FleetTree({
           </div>
         ) : null}
 
-        {visible.map((row) => (
-          <WorkspaceRow
-            key={row.workspace.state.id}
-            row={row}
-            active={pathname === `/w/${row.workspace.state.id}`}
-          />
+        {groups.map((group, index) => (
+          <section key={group.key} aria-label={group.repoName ? `${group.repoName} workspaces` : "Recent workspaces"} className="flex flex-col gap-3" data-testid="fleet-rail-group">
+            {/* A heading needs more room ABOVE it than below, or it reads as
+                belonging to the group it follows. This stack had the opposite:
+                measured at the 80% density root, a separator with `my-1.5`
+                between two `gap-3` section gaps put 34.6px above the label and
+                14.4px below it, so every project name floated between groups
+                rather than titling the one under it. The rule is also
+                redundant now that `--border` is visible — a line plus 20px of
+                padding is two separators doing one job. */}
+            {group.repoName ? (
+              <div className={cn("px-2.5 pb-1.5", index > 0 ? "pt-2" : "pt-0.5")}>
+                <ProjectHeading name={group.repoName} count={group.rows.length} />
+              </div>
+            ) : null}
+            {group.rows.map((row) => (
+              <WorkspaceRow
+                key={row.workspace.state.id}
+                row={row}
+                active={pathname === `/w/${row.workspace.state.id}`}
+                grouped={search.filter.groupBy === "project"}
+              />
+            ))}
+          </section>
         ))}
       </div>
     </div>
   );
 }
 
-/**
- * The rail's primary action, in assistant-ui's own placement: first child of
- * the list, full width when expanded, an icon button when collapsed. The
- * tooltip only mounts while collapsed — with the label visible it would just
- * repeat it.
- *
- * It NAVIGATES to `/` rather than opening the create dialog. Starting a
- * workspace is the landing surface's whole job — a brief you type, with the
- * cascade's answers already on the controls under it — and a modal form asking
- * the same questions in fewer words was the older, narrower door to the same
- * verb. The dialog is still reachable as "More options" from that page, which
- * is where a form belongs relative to the composer it elaborates. Being a
- * destination, it also marks itself when it IS the route, exactly like the
- * workspace rows beneath it.
- */
+/** The rail's primary destination is the landing composer, scoped when one project is selected. */
 function NewWorkspaceButton({
   collapsed,
-  active,
+  href,
 }: {
   collapsed: boolean;
-  active: boolean;
+  href: string;
 }): React.ReactNode {
   const button = (
     <Button
       asChild
-      variant={active ? "secondary" : "ghost"}
+      variant="outline"
       size="sm"
       className={cn(
-        "h-8 justify-start overflow-hidden font-normal transition-all duration-200",
+        "bg-transparent dark:bg-transparent border-edge-control h-6 min-h-[24px] justify-start overflow-hidden font-medium transition-all duration-200 [@media(pointer:coarse)]:min-h-11",
         collapsed
-          ? "w-8 gap-0 px-2 has-[>svg]:px-2"
-          : "w-full gap-2 px-2.5 has-[>svg]:px-2.5",
+          ? "w-6 min-w-[24px] justify-center gap-0 p-1 has-[>svg]:px-1 [@media(pointer:coarse)]:min-w-11"
+          : "min-w-0 flex-1 gap-2 px-2.5 has-[>svg]:px-2.5",
       )}
     >
-      <Link href="/" aria-label="New workspace" data-testid="fleet-create-rail">
+      <Link href={href} aria-label="New workspace" data-testid="fleet-create-rail">
         <PlusIcon className="size-4" />
         <span
           className={cn(
@@ -297,61 +255,56 @@ function NewWorkspaceButton({
   );
 
   return (
-    <TooltipProvider delayDuration={0}>
-      <Tooltip>
-        <TooltipTrigger asChild>{button}</TooltipTrigger>
-        {collapsed ? (
-          <TooltipContent side="right">New workspace</TooltipContent>
-        ) : null}
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      {collapsed ? <TooltipContent side="right">New workspace</TooltipContent> : null}
+    </Tooltip>
   );
 }
 
-/**
- * One workspace. The row leads with its agent's mark — the fleet routinely
- * mixes vendors, and which agent is running is the first thing that decides
- * whether a row is the one you want.
- *
- * The single trailing glyph carries the most urgent thing true of this row:
- * attention first, otherwise how far along it is. A rail this narrow can
- * afford exactly one mark. It now also carries the row's agent-activity
- * state as a SECOND, redundant carrier (`activityHue`) — the glyph's shape
- * still says what happened, colour only says how loudly to look.
- *
- * TWO LINES, NOT THREE. The row shows ONE age — how long since it last did
- * anything — because that is the question a rail exists to answer, and it is
- * also the key these rows are SORTED by, so a right-aligned recency column
- * down the rail exposes the ordering rather than competing with it. Creation
- * time is real but it is never the reason you scan a rail, so it lives in the
- * row's tooltip beside the exact update time. Giving both equal weight would
- * have cost a third line on every row, on the surface with the least width in
- * the app.
- *
- * The age sits on the TITLE line rather than under the entities: the second
- * line is the typed pair, and a third token wedged in beside two glyphs is
- * where the density this rail has been tuned for would go.
- */
+const PHASE_MARK_TONE = {
+  progress: "text-content-tertiary",
+  done: "text-success",
+  blocked: "text-warning",
+} as const;
+
+const ROW_RESTING = "border-surface-edge hover:border-edge-control";
+const ROW_SELECTED = "border-primary hover:border-primary focus-visible:border-primary";
+const ROW_STATES = cn(
+  "bg-transparent",
+  "hover:bg-surface-base dark:hover:bg-surface-base",
+  "active:bg-accent dark:active:bg-accent",
+  "focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+);
+
+/** One workspace navigation card. */
 function WorkspaceRow({
   row,
   active,
+  grouped,
 }: {
   row: FleetRow;
   active: boolean;
+  grouped: boolean;
 }): React.ReactNode {
   const { state, phase } = row.workspace;
+  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [killing, setKilling] = useState(false);
   const [editField, setEditField] = useState<WorkspaceEditField>("title");
+  const { kill } = useWorkspaceActions(state.id);
   const agentState = agentStateOf(row.workspace);
-  const AgentStateIcon = agentGlyph(agentState);
-  const phaseMark = phase ? phaseGlyph(phase.phase, phase.blocked) : null;
-  const rowMarkLabel = row.workspace.needs_attention
-    ? `${agentLabel(agentState)} — needs attention`
-    : phase
-      ? `${phaseLabel(phase.phase)} — step ${phase.index + 1} of ${phase.total}`
-      : agentLabel(agentState);
-  const hue = activityHue(agentState);
+  const AttentionIcon = agentGlyph(agentState);
+  const PhaseIcon = phase ? phaseGlyph(phase.phase) : null;
+  const attentionMarkLabel = row.workspace.needs_attention ? attentionLabel(agentState) : undefined;
+  const phaseMarkLabel = phase
+    ? phase.blocked
+      ? `${phaseLabel(phase.phase)} — blocked: ${phase.note?.trim() || "No reason reported"}`
+      : `${phaseLabel(phase.phase)} — step ${phase.index + 1} of ${phase.total}`
+    : undefined;
+  const phaseText = phase ? phaseLabel(phase.phase) : undefined;
+  const attentionText = row.workspace.needs_attention ? agentLabel(agentState) : undefined;
   const updatedIso = lastActivityIso(row.workspace);
 
   const openEditor = (field: WorkspaceEditField): void => {
@@ -367,109 +320,147 @@ function WorkspaceRow({
   return (
     <>
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-        <div
-          className="group relative"
+        <CardShell
+          className={cn(
+            "group relative min-w-0 border has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring",
+            active ? ROW_SELECTED : cn(ROW_RESTING, "opacity-95 hover:opacity-100 focus-within:opacity-100"),
+          )}
           data-testid="fleet-row"
           data-workspace-id={state.id}
+          data-selected={active ? "true" : "false"}
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
             setMenuOpen(true);
           }}
         >
-          <Button
-            asChild
-            variant={active ? "secondary" : "ghost"}
-            size="sm"
-            className="h-auto w-full justify-start py-2 pr-8 font-normal"
-          >
-            <Link
-              href={`/w/${state.id}`}
-              title={[
-                `${state.title} — ${row.repoName} (${state.agent_name})`,
-                `Created ${absoluteTime(state.created_at)}`,
-                updatedIso ? `Updated ${absoluteTime(updatedIso)}` : null,
-              ]
-                .filter((line) => line !== null)
-                .join("\n")}
-            >
-              <AgentMark agentName={state.agent_name} />
-              <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-                <span className="flex w-full min-w-0 items-baseline gap-2">
-                  {/* `text-sm`, RE-MEASURED against the CURRENT rail, not the one
-                    this used to say. `Frontend UI migration` needs 128px at this
-                    size, and the docked column was 123px when this was written —
-                    against a 260px rail, since grown twice, to 392px. The tightest
-                    realistic column here (icon, gap, a badge, the age column, all
-                    present) is now ~228px even after the wider `p-3` gutter took
-                    8px back — comfortably over. That puts the title a full ramp
-                    step above the entity line beneath it, which is what actually
-                    makes "project and branch smaller" true — pinning both to the
-                    same `text-xs` left no size gap for
-                    a 1px step to read at, so the only lever left was tier, not
-                    size. Moving the TITLE up leaves the entity line free to stay
-                    at the type floor and still read as visibly smaller. */}
-                  <span className="min-w-0 flex-1 truncate text-sm text-content-primary">
-                    {state.title}
-                  </span>
-                  {/* `max-w-16` and `truncate` are not defensive. Before mount this
-                    renders the ABSOLUTE time — that is what makes it hydration-safe
-                    — and an unbounded `8/10/2026, 3:12:07 PM` would crush the title
-                    to nothing on every first paint. Capped, it clips for one frame
-                    and then becomes "2h ago", which needs half the width. */}
-                  <RelativeTime
-                    iso={updatedIso}
-                    className="text-content-tertiary max-w-16 shrink-0 truncate text-xs tabular-nums"
-                  />
-                </span>
-                {/* Typed entities, so no middot — same treatment as the fleet card.
-                  The glyphs already say where one ends and the next begins.
-                  `PROJECT_MIN_WIDTH` on the project only: it is the identifying
-                  half of the pair, so it keeps 8 characters before the branch
-                  beside it may shrink further — see `entity.tsx` for why a
-                  minimum, not a cap, is what lets this same row also fill the
-                  mobile sheet's much wider column without clipping either name. */}
-                <span className="text-content-tertiary flex w-full min-w-0 items-center gap-2 text-xs">
-                  <ProjectLabel
-                    name={row.repoName}
-                    className={PROJECT_MIN_WIDTH}
-                  />
-                  <BranchLabel name={state.branch} />
-                </span>
-              </span>
-              <span
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1",
-                  hue ?? "text-muted-foreground",
-                )}
-                data-testid="fleet-row-mark"
-                data-hue={hue ?? "neutral"}
-                aria-label={rowMarkLabel}
-                title={rowMarkLabel}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Link
+                href={`/w/${state.id}`}
+                aria-current={active ? "page" : undefined}
+                aria-label={`${state.title}. ${row.repoName}. ${state.agent_name}.`}
+                className={cn("block min-w-0 focus-visible:outline-none", ROW_STATES)}
               >
-                {phaseMark ? <span aria-hidden className="text-xs">{phaseMark}</span> : <AgentStateIcon aria-hidden className="size-3" />}
-                <span className="sr-only">{rowMarkLabel}</span>
-              </span>
-            </Link>
-          </Button>
+                {/* `pr-11`, not `pr-10`: the options button is 28px wide and
+                    sits at `right-1.5` (6px), so it occupies the last 34px —
+                    `pr-10` reserved 32 and was always 2px short. Nothing had
+                    landed in that gap until the working mark became the last
+                    item on the line, which is how a latent off-by-two became
+                    visible. Measured, not computed from the class names. */}
+                <header className="surface-header flex min-h-[28px] min-w-0 items-center gap-2 px-2.5 py-1 pr-11 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:pr-14">
+                  <AgentMark agentName={state.agent_name} className="size-5 shrink-0" />
+                  <LoopingText className="min-w-0 flex-1 text-base font-medium text-content-primary">
+                    {state.title}
+                  </LoopingText>
+                  {/* LAST in the title band, so it reads as a property of this
+                      row's name rather than of the marks on the line below —
+                      and it is the one mark here that says something is
+                      happening RIGHT NOW, which is why it moves and they do
+                      not. It sits inside the header's own `pr-10`, so it can
+                      never collide with the options button that reserves that
+                      corner. Rendered only while working: an absent claim takes
+                      no space (design system §7). */}
+                  {agentState === "working" ? (
+                    <WorkingMark className="shrink-0" />
+                  ) : null}
+                  {!grouped ? <span className="sr-only">Project: {row.repoName}</span> : null}
+                </header>
+                <div className="flex min-w-0 flex-col gap-1 px-2.5 py-2 text-sm text-content-secondary">
+                  <SessionMetadata
+                    workspace={row.workspace}
+                    context={
+                      <div className="flex min-w-0 items-center gap-2" data-testid="rail-context">
+                        <span className="flex min-w-0 flex-[0_1_auto] items-center gap-1" data-testid="rail-branch">
+                          <BRANCH_GLYPH aria-hidden className="size-3 shrink-0" />
+                          <span className="sr-only">Branch: </span>
+                          <LoopingText className="min-w-0">{state.branch}</LoopingText>
+                        </span>
+                        {attentionMarkLabel && attentionText ? (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 text-destructive"
+                            data-testid="fleet-row-attention-mark"
+                            aria-label={attentionMarkLabel}
+                          >
+                            <AttentionIcon aria-hidden className="size-3 shrink-0" />
+                            <span>{attentionText}</span>
+                          </span>
+                        ) : null}
+                        {PhaseIcon && phaseMarkLabel && phaseText ? (
+                          <span
+                            className={cn(
+                              "inline-flex shrink-0 items-center gap-1",
+                              phase?.blocked
+                                ? PHASE_MARK_TONE.blocked
+                                : phase?.phase === "done"
+                                  ? PHASE_MARK_TONE.done
+                                  : PHASE_MARK_TONE.progress,
+                            )}
+                            data-testid="fleet-row-phase-mark"
+                            aria-label={phaseMarkLabel}
+                          >
+                            <span aria-hidden className="relative inline-flex size-3 shrink-0 items-center justify-center">
+                              <PhaseIcon className="size-3" />
+                              {phase?.blocked ? (
+                                <PHASE_BLOCKED_ICON className="absolute -right-1 -bottom-1 size-2 text-warning" />
+                              ) : null}
+                            </span>
+                            <span>{phaseText}</span>
+                          </span>
+                        ) : null}
+                      </div>
+                    }
+                  />
+                </div>
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="left" sideOffset={8}>
+              <p>{state.title} — {row.repoName} ({state.agent_name})</p>
+              <p>Branch: {state.branch}</p>
+              {attentionMarkLabel ? <p>{attentionMarkLabel}</p> : null}
+              {phaseMarkLabel ? <p>{phaseMarkLabel}</p> : null}
+              <SessionMetricDetails workspace={row.workspace} />
+              <p>Created {absoluteTime(state.created_at)}</p>
+              {updatedIso ? <p>Updated {absoluteTime(updatedIso)}</p> : null}
+            </TooltipContent>
+          </Tooltip>
+          {active ? (
+            <span
+              aria-hidden
+              data-testid="fleet-row-marker"
+              className="pointer-events-none absolute top-2 bottom-2 left-0 w-0.5 bg-primary"
+            />
+          ) : null}
           <DropdownMenuTrigger asChild>
             <TooltipIconButton
               tooltip="Workspace options"
               aria-label="Workspace options"
-              className="absolute top-1/2 right-1 invisible -translate-y-1/2 group-focus-within:visible group-hover:visible"
+              className="invisible absolute top-px right-1.5 min-h-[28px] min-w-[28px] [@media(pointer:coarse)]:visible [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11 group-focus-within:visible group-hover:visible"
               onClick={stopMenuButtonNavigation}
               onPointerDown={stopMenuButtonNavigation}
             >
               <MoreHorizontalIcon />
             </TooltipIconButton>
           </DropdownMenuTrigger>
-        </div>
+        </CardShell>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => openEditor("title")}>
             Rename…
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => openEditor("description")}>
             Edit description…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={() => {
+              setMenuOpen(false);
+              setKilling(true);
+            }}
+            data-testid="fleet-row-delete"
+          >
+            <Trash2Icon aria-hidden />
+            Delete…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -479,32 +470,46 @@ function WorkspaceRow({
         onOpenChange={setDialogOpen}
         initialFocus={editField}
       />
+      <KillDialog
+        state={state}
+        open={killing}
+        onOpenChange={setKilling}
+        pending={kill.isPending}
+        onConfirm={(deleteBranch) =>
+          kill.mutate(
+            { deleteBranch },
+            {
+              onSuccess: () => {
+                setKilling(false);
+                if (active) router.push("/");
+              },
+            },
+          )
+        }
+      />
     </>
   );
 }
 
-/**
- * Loading rows, shaped like the real ones.
- *
- * Deliberately NOT `SidebarMenuSkeleton`: it randomizes each row's width with
- * `Math.random()`, so the server and the client never agree and React logs a
- * hydration mismatch on every cold load.
- */
+/** Loading rows follow the same card anatomy without shadcn's randomized sidebar skeleton. */
 function FleetSkeleton(): React.ReactNode {
   return (
     <div
-      className="flex flex-col gap-1.5"
+      className="flex flex-col gap-3"
       role="status"
       aria-label="Loading workspaces"
     >
       {Array.from({ length: 5 }, (_, index) => (
-        <div key={index} className="flex h-12 items-center gap-2 px-2.5">
-          <Skeleton className="size-4 shrink-0" />
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <Skeleton className="h-3.5 w-full" />
-            <Skeleton className="h-2.5 w-2/3" />
+        <CardShell key={index} className="min-w-0">
+          <div className="surface-header flex items-center gap-2 px-2.5 py-1">
+            <Skeleton className="size-5 shrink-0" />
+            <Skeleton className="h-5 w-2/3" />
           </div>
-        </div>
+          <div className="flex min-w-0 flex-col gap-1 px-2.5 py-2">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-4 w-full" />
+          </div>
+        </CardShell>
       ))}
     </div>
   );

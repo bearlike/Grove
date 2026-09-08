@@ -1,6 +1,6 @@
 [project]
 name = "grove"
-version = "0.0.8"
+version = "0.0.9"
 description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,6 +28,7 @@ dependencies = [
     "humanize>=4.9,<5",
     "loguru>=0.7,<1",
     "httpx>=0.28.1,<1",
+    "watchfiles>=1.1,<2",
     # A real bash grammar, for attributing a shell tool call's time to the
     # executable that led it. Pure Python, no extension module. Measured over
     # 111,578 real commands: naive first-token attribution is ~31% correct and
@@ -98,8 +99,9 @@ all = [
 grove = "grove.cli:app"
 # Dedicated hot-path entry: Claude spawns one process per hook event per
 # session, so this must not import the Typer/FastAPI stack.
-grove-agent-hook = "grove.core.agents.hook:run_hook_from_stdin"
+grove-agent-hook = "grove.hook_producer:run_hook_from_stdin"
 grove-mcp = "grove.mcp.server:main"
+grove-native-worker = "grove.core.native_worker:main"
 
 [project.urls]
 Homepage = "https://github.com/bearlike/Grove"
@@ -154,7 +156,7 @@ docs = [
     # theme ships a release. Tagged assets are permanent. To upgrade: pick
     # the new tag, update both the tag and the filename here, then
     #     uv lock --upgrade-package mkdocs-shadcn-mewbo
-    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.15.0/mkdocs_shadcn_mewbo-1.15.0-py3-none-any.whl",
+    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl",
     "mkdocstrings[python]",
     "pymdown-extensions>=10.20.1",
 ]

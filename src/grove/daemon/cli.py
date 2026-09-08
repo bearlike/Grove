@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import sys
 
 import typer
@@ -109,24 +110,32 @@ def serve(
 
     async def _run() -> None:
         if print_port and port == 0:
-            # Bind first so we can read the actual picked port, then print
-            # it on a single stdout line. Used by the SDK's LocalTransport
-            # to know where the spawned daemon is listening.
+            # THE PORT IS ANNOUNCED AT BIND, NOT AFTER STARTUP, because those
+            # are different moments and only the first one is bounded. The
+            # socket's number is knowable the instant it is bound; everything
+            # after that is the lifespan, which assembles the runtime and takes
+            # whatever a cold catalog scan on this host takes — measured 1.18s
+            # before the event sources landed and 4.44s after, against the
+            # SDK's 10s budget. Printing after startup made the SDK's timeout a
+            # bet on how busy the machine is, and the loser reports "local
+            # daemon failed to print port within timeout", which names the
+            # wrong thing entirely.
             #
-            # Mirrors uvicorn.Server._serve's preamble: load() materializes
-            # the ASGI app, lifespan_class(config) attaches the lifespan
-            # protocol the underlying startup() call requires. Calling
-            # server.startup() without these raises "Server has no attribute
-            # 'lifespan'" — silently swallowed under asyncio.run, so the
-            # subprocess exits 0 with no stdout.
-            if not config.loaded:
-                config.load()
-            server.lifespan = config.lifespan_class(config)
-            await server.startup()
-            actual_port = server.servers[0].sockets[0].getsockname()[1]
-            print(actual_port, flush=True)
-            await server.main_loop()
-            await server.shutdown()
+            # Binding here rather than letting uvicorn do it is what makes the
+            # announcement early AND still honest: `sockets=` hands over this
+            # exact listener, so the number printed is the one being served.
+            # `listen()` BEFORE the print, or the announcement outruns the
+            # listener: the client connects into the window before uvicorn
+            # adopts the socket and is refused. A listening socket queues
+            # connections in the kernel from this moment, so the early
+            # announcement costs the client nothing — it may connect while the
+            # lifespan is still assembling and simply waits to be accepted.
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, 0))
+            sock.listen()
+            print(sock.getsockname()[1], flush=True)
+            await server.serve(sockets=[sock])
         else:
             if print_port:
                 print(port, flush=True)

@@ -5,81 +5,77 @@ import type { AgentQuestionView, QuestionAnswerItem } from "@/lib/grove/api";
  * the daemon's own validation.
  *
  * One `AskUserQuestion` call is one group, and the daemon dispatches the WHOLE
- * group atomically in a single keystroke sequence. So the POST body always
- * carries exactly one item per question, in the group's order, never a partial
- * group — and this module is the one seam that builds it.
+ * group atomically in a single delivery. So the POST body always carries
+ * exactly one item per question, in the group's order, never a partial group —
+ * and this module is the one seam that builds it.
  */
-
-/** One question's local, not-yet-submitted answer. */
-export type Selection =
-  | { kind: "indexes"; indexes: number[] }
-  | { kind: "text"; text: string };
 
 /**
- * Whether this question will accept an answer the agent did not offer.
+ * One question's local, not-yet-submitted answer: the options picked AND the
+ * sentence typed, never one or the other.
  *
- * SINGLE-SELECT ONLY, and that is the daemon's rule rather than a UI
- * preference: the answer is typed into a tmux pane, and the only verified
- * keystroke path for free text is the picker's synthetic "Type something."
- * option, which exists on a single-select question and nowhere else
- * (`ClaudeCodeAdapter._answer_ops` raises for every other kind, and the manager
- * maps that raise to a 422). Offering the box anywhere else would render an
- * affordance the wire refuses.
+ * This was a union of the two for as long as the answer was driven into the
+ * provider's own picker widget, where free text existed only as a single-select
+ * row labelled "Type something." — so the shape of the answer was dictated by
+ * the shape of that widget. The daemon now dismisses the picker and restates
+ * the whole batch as prose, so "option B, and here is why" is a payload the
+ * wire carries, and a union cannot express it. Two empty-able fields can, and
+ * every reader loses the `kind` branch it used to carry.
  */
-export function acceptsCustomText(question: AgentQuestionView): boolean {
-  return question.kind === "single_select";
+export interface Selection {
+  indexes: number[];
+  text: string;
+}
+
+/** The selection to read from for a question nobody has touched yet. */
+export function selectionOf(current: Selection | undefined): Selection {
+  return current ?? { indexes: [], text: "" };
 }
 
 /**
  * The bytes the daemon rejects outright — written as escapes, never as literal
  * characters, which would be invisible in this source file.
  *
- * The answer is typed into a pane with `send-keys -l`, and the whole grammar
- * rests on a closed key vocabulary: an ESC cancels the question, and a CR acts
- * as an early Enter that desyncs the positional driver. Mirrors
- * `QuestionAnswerItem`'s own validator (`ord < 0x20 or ord == 0x7f`).
+ * Tab (0x09) and line feed (0x0a) are absent from the class because prose
+ * contains them: an answer is no longer typed into a pane, so a line break is
+ * just how people write more than one sentence. Everything else in C0 —
+ * carriage return included — is escape-sequence material, and DEL with it.
+ * Mirrors `QuestionAnswerItem`'s own validator.
  */
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f]/;
 
 /**
  * Why this text cannot be sent, or null when it can.
  *
  * Checking here is what turns a 422 into a sentence beside the field. Nobody
- * can TYPE a control character into a single-line input — pasting a wrapped
- * line is the reachable case, and it is a normal thing to do.
+ * types a control character on purpose — pasting text carrying one is the
+ * reachable case, and it is a normal thing to do.
  */
 export function textError(text: string): string | null {
   if (!text.trim()) return null;
   return CONTROL_CHARACTERS.test(text)
-    ? "Single line only — remove the line breaks or tabs."
+    ? "Remove the control characters — line breaks and tabs are fine, the rest are not."
     : null;
 }
 
 /**
- * Whether the batch needs an explicit Submit rather than sending on the tap
- * that completes it.
+ * One selection → its wire item, or null while it still says nothing.
  *
- * Mirrors the terminal's own grammar: it shows a review step whenever there is
- * more than one question or any multi-select, and a lone single-select submits
- * on its one tap. Diverging here would make the two surfaces disagree about
- * what a tap means.
+ * Both keys may ride together and either may be omitted; only an answer with
+ * neither is refused, which is exactly the daemon's own rule. Text the daemon
+ * would reject yields null rather than a doomed item: the inline message is the
+ * report, and there is nothing to submit until it clears.
  */
-export function needsExplicitSubmit(questions: readonly AgentQuestionView[]): boolean {
-  return questions.length > 1 || questions.some((question) => question.multiselect);
-}
-
-/** One selection → its wire item, or null while still incomplete. */
 export function answerItem(selection: Selection | undefined): QuestionAnswerItem | null {
   if (!selection) return null;
-  if (selection.kind === "text") {
-    const text = selection.text.trim();
-    // A plan is never built from text the daemon will refuse: the inline
-    // message is the report, and there is nothing to submit until it clears.
-    return text && !textError(text) ? { text } : null;
-  }
-  return selection.indexes.length > 0
-    ? { selected_indexes: [...selection.indexes].sort((a, b) => a - b) }
-    : null;
+  const text = selection.text.trim();
+  if (text && textError(text)) return null;
+  const indexes = [...selection.indexes].sort((a, b) => a - b);
+  if (indexes.length === 0 && !text) return null;
+  return {
+    ...(indexes.length > 0 ? { selected_indexes: indexes } : {}),
+    ...(text ? { text } : {}),
+  };
 }
 
 /**
@@ -99,18 +95,43 @@ export function buildAnswerPlan(
   return items;
 }
 
-/** Toggle one option in a selection, respecting whether the question takes many. */
+/**
+ * The group request to deliver after its individual cards are confirmed.
+ *
+ * The UI makes one answer decision and confirmation visible per card, but the
+ * current endpoint only accepts a complete positional group. This predicate is
+ * the seam that prevents a final card's confirmation from posting an earlier
+ * card the user has selected but not yet acknowledged.
+ */
+export function confirmedGroupPlan(
+  questions: readonly AgentQuestionView[],
+  selections: Readonly<Record<string, Selection>>,
+  confirmed: Readonly<Record<string, true>>,
+): QuestionAnswerItem[] | null {
+  const plan = buildAnswerPlan(questions, selections);
+  return plan && questions.every((question) => confirmed[question.id]) ? plan : null;
+}
+
+/**
+ * Toggle one option in a selection, respecting whether the question takes many.
+ *
+ * The free text rides through untouched: picking an option no longer discards
+ * the qualification somebody typed beside it.
+ */
 export function toggleOption(
   current: Selection | undefined,
   index: number,
   multiselect: boolean,
 ): Selection {
-  if (!multiselect) return { kind: "indexes", indexes: [index] };
-  const indexes = current?.kind === "indexes" ? current.indexes : [];
+  const { indexes, text } = selectionOf(current);
+  if (!multiselect) return { indexes: [index], text };
   return {
-    kind: "indexes",
-    indexes: indexes.includes(index)
-      ? indexes.filter((value) => value !== index)
-      : [...indexes, index],
+    indexes: indexes.includes(index) ? indexes.filter((value) => value !== index) : [...indexes, index],
+    text,
   };
+}
+
+/** Replace a selection's free text, keeping whichever options are chosen. */
+export function typeText(current: Selection | undefined, text: string): Selection {
+  return { ...selectionOf(current), text };
 }

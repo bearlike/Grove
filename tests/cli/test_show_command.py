@@ -171,11 +171,11 @@ def test_infer_prefers_most_specific_worktree(
     manager = _FakeManager([root_ws, nested_ws])
 
     monkeypatch.chdir(nested)
-    resolved = resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+    resolved = resolve_or_infer_workspace(None, manager=manager)[1]  # type: ignore[arg-type]
     assert resolved.id == "nestedws"
 
     monkeypatch.chdir(root)
-    resolved = resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+    resolved = resolve_or_infer_workspace(None, manager=manager)[1]  # type: ignore[arg-type]
     assert resolved.id == "rootws"
 
 
@@ -183,7 +183,7 @@ def test_infer_outside_any_worktree_raises(tmp_path: Path, monkeypatch: pytest.M
     manager = _FakeManager([_state("ws", tmp_path / "elsewhere")])
     monkeypatch.chdir(tmp_path)
     with pytest.raises(GroveError, match="run inside a workspace worktree"):
-        resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+        resolve_or_infer_workspace(None, manager=manager)[1]  # type: ignore[arg-type]
 
 
 def test_infer_refuses_an_equal_depth_tie_and_names_the_candidates(
@@ -202,7 +202,7 @@ def test_infer_refuses_an_equal_depth_tie_and_names_the_candidates(
     monkeypatch.chdir(root)
 
     with pytest.raises(GroveError) as excinfo:
-        resolve_or_infer_workspace(manager, None)  # type: ignore[arg-type]
+        resolve_or_infer_workspace(None, manager=manager)[1]  # type: ignore[arg-type]
 
     message = str(excinfo.value)
     assert "2 workspaces share this directory" in message
@@ -223,7 +223,8 @@ def test_infer_still_breaks_a_tie_by_specificity_before_refusing(
     )
 
     monkeypatch.chdir(nested)
-    assert resolve_or_infer_workspace(manager, None).id == "nestedws"  # type: ignore[arg-type]
+    resolved = resolve_or_infer_workspace(None, manager=manager)[1]  # type: ignore[arg-type]
+    assert resolved.id == "nestedws"
 
 
 # ─── WorkspaceInspection renderer (pure, hand-built peek) ─────────────────────

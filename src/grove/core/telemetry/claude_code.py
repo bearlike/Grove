@@ -55,8 +55,19 @@ from grove.core.telemetry.semconv import (
     ChatMessage,
     GenAiAttr,
     LangfuseAttr,
+    filterable_identity,
 )
+from grove.core.telemetry.shell import ToolSource
 from grove.core.trace import SpanRecord
+
+AGENT_KIND: Final = "claude_code"
+"""The Grove agent kind these spans belong to.
+
+Stated rather than read off the resource: :meth:`ClaudeCodeTransform.claims`
+has already decided these spans are Claude Code's, so deriving the kind from an
+attribute an operator can override would let the same spans be claimed as one
+harness and labelled as another.
+"""
 
 
 class ClaudeCodeAttr:
@@ -139,6 +150,13 @@ class _ToolBody:
 
     arguments: Mapping[str, AttributeValue]
     result: str | None
+    resolved: bool = False
+    """Whether a ``tool.output`` event was present at all.
+
+    Separate from ``result`` being non-``None`` because a redacting content
+    policy nulls the text of a call that plainly finished — so the presence of
+    the EVENT is the fact, and its payload is the thing policy may withhold.
+    """
 
 
 @dataclass(slots=True, frozen=True)
@@ -234,7 +252,15 @@ class ClaudeCodeTransform:
             )
             if record is not None:
                 span.name = record.name
-                OtlpAttributes.apply(span, record.attributes)
+                # Grove's launch-time enrichment stamps the workspace's identity
+                # into this agent's OTel RESOURCE, and LangFuse files resource
+                # attributes under `metadata.resourceAttributes`, which its docs
+                # state is not queryable. So the identity arrives correct and
+                # unusable; promoting it per span is what lets an evaluation
+                # rule scope a cohort to one repo, branch or workspace on this
+                # tier the way it already can on the replay tier.
+                identity = filterable_identity(OtlpAttributes.scalars(envelope.resource.attributes))
+                OtlpAttributes.apply(span, {**record.attributes, **identity})
         return released.envelopes
 
     # ─── hierarchy ───────────────────────────────────────────────────────────
@@ -412,7 +438,15 @@ class ClaudeCodeTransform:
         *,
         is_error: bool,
     ) -> SpanRecord:
-        """One ``claude_code.tool`` as an ``execute_tool`` observation, body included."""
+        """One ``claude_code.tool`` as an ``execute_tool`` observation, body included.
+
+        A ``Bash`` call additionally lands as the canonical shell observation —
+        the SAME metadata keys and the same ``command``/``content`` envelope
+        paths the transcript replay produces for a Codex ``exec_command``, which
+        is the whole point of a gateway. ``grove.tool.source`` says which tier
+        wrote it, so an evaluation cohort can hold exactly one record per real
+        invocation when both tiers are live.
+        """
         body = self._body(span, attributes)
         return SpanRecord.tool(
             name=str(attributes.get(ClaudeCodeAttr.TOOL_NAME) or "tool"),
@@ -420,6 +454,9 @@ class ClaudeCodeTransform:
             tool_input=dict(body.arguments) or None,
             tool_output=body.result,
             is_error=is_error,
+            source=ToolSource.NATIVE_OTLP,
+            agent_kind=AGENT_KIND,
+            resolved=body.resolved,
             trace_id=frame.trace_id,
             span_id=frame.span_id,
             parent_span_id=frame.parent_span_id,
@@ -456,8 +493,9 @@ class ClaudeCodeTransform:
         gets no output key, preserving the difference between "returned nothing"
         and "has not returned" that :meth:`SpanRecord.tool` already encodes.
         """
+        resolved = any(event.name == ClaudeCodeSpan.TOOL_OUTPUT_EVENT for event in span.events)
         if self._content == "none":
-            return _ToolBody(arguments={}, result=None)
+            return _ToolBody(arguments={}, result=None, resolved=resolved)
         arguments: dict[str, AttributeValue] = {
             key: value for key, value in attributes.items() if key not in _STRUCTURAL_ATTRS
         }
@@ -470,7 +508,7 @@ class ClaudeCodeTransform:
                     result = str(value)[:ATTR_TEXT_CAP]
                 else:
                     arguments[key] = value
-        return _ToolBody(arguments=arguments, result=result)
+        return _ToolBody(arguments=arguments, result=result, resolved=resolved)
 
 
 class _SpawnTree:

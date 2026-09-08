@@ -16,6 +16,7 @@ import { CardScroll } from "@/components/grove/card";
 import { duration } from "@/components/grove/duration";
 import { UsageSection } from "./section";
 import { HEAD_CELL, LABEL_CELL, LABEL_COL, NUMERIC } from "@/components/grove/table-columns";
+import { UsageCostFigure } from "./cost";
 
 /**
  * Where the work went, by model.
@@ -59,6 +60,7 @@ export function UsageBreakdown({
               <TableRow>
                 <TableHead className={`${LABEL_COL} ${HEAD_CELL}`}>Model</TableHead>
                 <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Sessions</TableHead>
+                <TableHead className={`${NUMERIC} ${HEAD_CELL}`}>Cost</TableHead>
                 {/* The classes, NOT their fold. A single `Tokens` total sat
                     here until the classes joined it, and showing both would
                     restate one magnitude twice — once as a mystery and once
@@ -86,6 +88,9 @@ export function UsageBreakdown({
                   </TableCell>
                   <TableCell className={NUMERIC}>
                     <AbbreviatedNumber value={row.sessions} />
+                  </TableCell>
+                  <TableCell className={NUMERIC}>
+                    <UsageCostFigure cost={row.cost} />
                   </TableCell>
                   <TableCell className={NUMERIC}>{figure(inputTokens(row))}</TableCell>
                   <TableCell className={NUMERIC}>

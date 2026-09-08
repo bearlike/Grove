@@ -21,6 +21,7 @@ from grove.core.agents.hook import (
     run_hook_from_stdin,
 )
 from grove.core.agents.model import AgentActivityState
+from grove.core.agents.native_owner import AskRecorder
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
 
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
@@ -60,8 +61,16 @@ def _event(event: str) -> dict:
         ("SessionStart", AgentActivityState.WORKING),
         ("UserPromptSubmit", AgentActivityState.WORKING),
         ("PostToolUse", AgentActivityState.WORKING),
+        ("PostToolUseFailure", AgentActivityState.WORKING),
+        ("PermissionRequest", AgentActivityState.BLOCKED),
+        ("PermissionDenied", AgentActivityState.WORKING),
+        ("Elicitation", AgentActivityState.BLOCKED),
+        ("ElicitationResult", AgentActivityState.WORKING),
+        ("PreCompact", AgentActivityState.WORKING),
+        ("PostCompact", AgentActivityState.WORKING),
         ("Notification", AgentActivityState.BLOCKED),  # the polling-can't-see signal
         ("Stop", AgentActivityState.WAITING),
+        ("StopFailure", AgentActivityState.WORKING),
         ("SessionEnd", AgentActivityState.IDLE),
         ("SubagentStop", None),  # never flip the main thread on a sub-agent event
         ("WeirdFutureEvent", None),
@@ -624,6 +633,37 @@ def test_drain_folds_a_spooled_payload_through_the_same_state_map(tmp_path: Path
     assert list(spool.glob("*")) == []
 
 
+def test_a_crash_between_claim_and_fold_does_not_strand_the_payload(tmp_path: Path) -> None:
+    """A CLAIM IS NOT A DELIVERY, so a claimed file must stay discoverable.
+
+    `drain` renames each entry to `*.claimed` before folding it, which is what
+    stops two drainers folding one payload. But discovery only globbed
+    `*{SPOOL_SUFFIX}`, so a daemon that died between the rename and the fold
+    left the payload under a name nothing would ever look for again — the event
+    was silently lost, permanently, and no later drain could recover it.
+
+    Reclaiming is safe because the fold is idempotent in the direction that
+    matters: the rename already proved exclusive ownership, and a re-fold of an
+    orphan replays one event whose own timestamp still governs supersession.
+    Losing a Stop forever is strictly worse than folding one twice.
+    """
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    spool.mkdir(parents=True)
+    # Exactly the shape `drain` leaves behind when it dies mid-fold.
+    orphan = spool / "4242-1700000000.json.deadbeef.claimed"
+    orphan.write_text(
+        json.dumps({"hook_event_name": "Stop", "session_id": "s-crash"}), encoding="utf-8"
+    )
+    os.utime(orphan, (NOW.timestamp(), NOW.timestamp()))
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+
+    record = ClaudeHook.read("s-crash", sidecar_dir=tmp_path)
+    assert record is not None
+    assert record.state is AgentActivityState.WAITING
+    assert list(spool.glob("*")) == []
+
+
 def test_drain_folds_in_event_order_so_the_question_machine_holds(tmp_path: Path) -> None:
     """The pending-question lifecycle is a state machine over the prior sidecar,
     so folding out of order would leave a question standing that a later event
@@ -952,3 +992,201 @@ def test_drain_folds_a_spooled_subagent_payload_into_its_own_sidecar(tmp_path: P
     assert rec is not None
     assert rec.state is AgentActivityState.WORKING
     assert rec.started_at == NOW
+
+
+# --- The statusLine arm: context-window pressure -----------------------------
+# Payloads are VERBATIM captures from Claude Code 2.1.270 (2026-09-14), trimmed
+# only by deleting whole sibling keys.
+
+_STATUSLINE_BEFORE_ANY_REQUEST = {
+    "session_id": "abc-123",
+    "cwd": "/home/dev/work",
+    "transcript_path": "/t/abc-123.jsonl",
+    "context_window": {
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "context_window_size": 983616,
+        "current_usage": None,
+        "used_percentage": None,
+        "remaining_percentage": None,
+    },
+}
+
+_STATUSLINE_AFTER_A_TURN = {
+    "session_id": "abc-123",
+    "cwd": "/home/dev/work",
+    "transcript_path": "/t/abc-123.jsonl",
+    "context_window": {
+        "total_input_tokens": 42612,
+        "total_output_tokens": 92,
+        "context_window_size": 983616,
+        "current_usage": {
+            "input_tokens": 2,
+            "output_tokens": 92,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 42610,
+        },
+        "used_percentage": 4,
+    },
+}
+
+
+def test_statusline_before_the_first_request_records_no_window(tmp_path: Path) -> None:
+    """``current_usage: null`` is *not measured yet*, never an empty window."""
+    rec = ClaudeHook.record_statusline(
+        _STATUSLINE_BEFORE_ANY_REQUEST, sidecar_dir=tmp_path, tmux_pane="%7", now=NOW
+    )
+    assert rec is None
+    assert ClaudeHook.read("abc-123", sidecar_dir=tmp_path) is None
+
+
+def test_statusline_after_a_turn_sums_the_four_classes_that_occupy_the_window(
+    tmp_path: Path,
+) -> None:
+    rec = ClaudeHook.record_statusline(
+        _STATUSLINE_AFTER_A_TURN, sidecar_dir=tmp_path, tmux_pane="%7", now=NOW
+    )
+    assert rec is not None and rec.context is not None
+    assert rec.context.size == 983616
+    assert rec.context.used == 2 + 92 + 0 + 42610
+    back = ClaudeHook.read("abc-123", sidecar_dir=tmp_path)
+    assert back is not None and back.context == rec.context
+
+
+def test_statusline_replaces_only_the_window_and_a_later_hook_event_carries_it(
+    tmp_path: Path,
+) -> None:
+    """The window survives every subsequent hook write — and ONLY the window moves.
+
+    A `PreToolUse` after the statusLine must keep the meter (no hook event
+    carries one, so dropping it would blank the meter on every tool call), and
+    the statusLine must not disturb the state the hook events own: the standing
+    BLOCKED stays BLOCKED with its question intact.
+    """
+    question = {
+        "hook_event_name": "PreToolUse",
+        "session_id": "abc-123",
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "toolu_1",
+        "tool_input": {"questions": [{"question": "Pick", "options": [{"label": "A"}]}]},
+    }
+    ClaudeHook.record_event(question, sidecar_dir=tmp_path, tmux_pane="%7", now=NOW)
+    ClaudeHook.record_event(
+        {"hook_event_name": "Notification", "session_id": "abc-123"},
+        sidecar_dir=tmp_path,
+        tmux_pane="%7",
+        now=NOW,
+    )
+    ClaudeHook.record_statusline(
+        _STATUSLINE_AFTER_A_TURN, sidecar_dir=tmp_path, tmux_pane="%7", now=NOW
+    )
+    standing = ClaudeHook.read("abc-123", sidecar_dir=tmp_path)
+    assert standing is not None
+    assert standing.state is AgentActivityState.BLOCKED
+    assert standing.question is not None and standing.question.tool_use_id == "toolu_1"
+    assert standing.context is not None and standing.context.used == 42704
+
+    later = ClaudeHook.record_event(
+        {"hook_event_name": "PreToolUse", "session_id": "abc-123", "tool_name": "Read"},
+        sidecar_dir=tmp_path,
+        tmux_pane="%7",
+        now=NOW + timedelta(seconds=5),
+    )
+    assert later is not None and later.state is AgentActivityState.WORKING
+    assert later.context is not None and later.context.used == 42704
+
+
+def test_the_statusline_flag_selects_the_arm_and_prints_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The entry point on ``--statusline`` folds the window and stays silent.
+
+    Silence is the contract: whatever this prints becomes the terminal's status
+    row, and Grove draws nothing there on a host launch.
+    """
+    monkeypatch.setattr(paths, "agent_sidecar_dir", lambda: tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_STATUSLINE_AFTER_A_TURN)))
+    assert run_hook_from_stdin(["--statusline"]) == 0
+    assert capsys.readouterr().out == ""
+    back = ClaudeHook.read("abc-123", sidecar_dir=tmp_path)
+    assert back is not None and back.context is not None and back.context.size == 983616
+
+
+def test_a_spooled_statusline_payload_folds_through_the_statusline_arm(tmp_path: Path) -> None:
+    """The spool suffix, not the payload, names the arm — a statusLine payload
+    has no ``hook_event_name`` and would otherwise be an ignored event."""
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    (spool / f"1-1{ClaudeHook.STATUSLINE_SPOOL_SUFFIX}").write_text(
+        json.dumps(_STATUSLINE_AFTER_A_TURN), encoding="utf-8"
+    )
+    assert ClaudeHook.drain(sidecar_dir=tmp_path, spool_dir=spool) == 1
+    back = ClaudeHook.read("abc-123", sidecar_dir=tmp_path)
+    assert back is not None and back.context is not None and back.context.used == 42704
+
+
+def test_settings_register_the_statusline_only_when_asked() -> None:
+    """Opt-in at the call site: the container variant already draws its own."""
+    assert "statusLine" not in ClaudeHook.settings(daemon_url=None)
+    with_line = ClaudeHook.settings(daemon_url=None, statusline=True)
+    assert with_line["statusLine"]["type"] == "command"
+    assert "--statusline" in with_line["statusLine"]["command"]
+    assert ClaudeHook.STATUSLINE_SPOOL_SUFFIX in with_line["statusLine"]["command"]
+
+
+def test_a_native_owners_ask_rides_the_spool_into_the_sidecar_as_blocked(tmp_path: Path) -> None:
+    """A headless session's question never fires a hook, so the owner drops it
+    into the spool; the fold records it as the standing question and BLOCKED,
+    and the clearing drop returns the session to WORKING with no question."""
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    asks = AskRecorder(spool)
+    asks.asked("t-lost", "AskUserQuestion", _ASK_INPUT)  # unbound: dropped, never written
+    asks.bind("s-native")
+    asks.asked("t-9", "AskUserQuestion", _ASK_INPUT)
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+    record = ClaudeHook.read("s-native", sidecar_dir=tmp_path)
+    assert record is not None
+    assert record.state is AgentActivityState.BLOCKED
+    assert record.event == "native_ask"
+    assert record.question is not None
+    assert record.question.tool_use_id == "t-9"
+    assert record.question.tool_name == "AskUserQuestion"
+    assert record.question.tool_input == _ASK_INPUT
+
+    asks.resolved()
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+    record = ClaudeHook.read("s-native", sidecar_dir=tmp_path)
+    assert record is not None
+    assert record.question is None
+    assert record.state is AgentActivityState.WORKING
+
+
+def test_native_facts_ride_the_spool_and_merge_field_by_field(tmp_path: Path) -> None:
+    """A `result` frame states cost/TTFT and an `item/completed` states an exit
+    code; each drop replaces only the fields it carries, and the standing
+    question and state are untouched by either."""
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    asks = AskRecorder(spool)
+    asks.bind("s-native")
+    asks.asked("t-1", "AskUserQuestion", _ASK_INPUT)
+    asks.facts(last_exit_code=1)
+    asks.facts(cost_usd=0.42, ttft_ms=1500, turn_duration_ms=5381)
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 3
+    record = ClaudeHook.read("s-native", sidecar_dir=tmp_path)
+    assert record is not None
+    assert record.native is not None
+    assert record.native.last_exit_code == 1  # kept from the earlier drop
+    assert record.native.cost_usd == 0.42
+    assert record.native.ttft_ms == 1500
+    assert record.native.turn_duration_ms == 5381
+    assert record.question is not None and record.question.tool_use_id == "t-1"
+    assert record.state is AgentActivityState.BLOCKED
+
+    # A later hook-shaped write (the question clearing) carries the facts forward.
+    asks.resolved()
+    ClaudeHook.drain(sidecar_dir=tmp_path)
+    record = ClaudeHook.read("s-native", sidecar_dir=tmp_path)
+    assert record is not None and record.question is None
+    assert record.native is not None and record.native.cost_usd == 0.42

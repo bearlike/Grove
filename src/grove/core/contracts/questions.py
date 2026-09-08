@@ -28,7 +28,18 @@ if TYPE_CHECKING:
 # contracts import never drags the httpx-heavy adapter layer in — the engine
 # dataclasses ride ``TYPE_CHECKING`` only. The webapp codegen drift-check is the
 # wire DRY anchor across the boundary.
-AgentQuestionKind = Literal["single_select", "multi_select", "free_text", "confirm"]
+#
+# ``plan_approval`` is the one kind whose answer is a POSITION rather than a
+# payload: it names a row in the agent's own dialog, because approving a plan is
+# a mode transition only that dialog can perform. It is split out from
+# ``confirm`` rather than sharing it because the two take different delivery
+# paths and a client must be able to tell them apart before it renders a
+# control — a kind that meant "optionless yes/no" for one tool and "pick a mode"
+# for another would make the degraded rendering indistinguishable from the right
+# one. Kept in the same closed set so an unknown kind is still impossible.
+AgentQuestionKind = Literal[
+    "single_select", "multi_select", "free_text", "confirm", "plan_approval"
+]
 
 # Per-entry ceiling so one mega-prompt can't ship a multi-MB JSON body; the
 # trailing ellipsis is the trim signal (no separate `truncated` flag). Shared
@@ -90,22 +101,33 @@ class AgentQuestionView(BaseModel):
 
 
 class QuestionAnswerItem(BaseModel):
-    """One question's answer: chosen option indexes XOR free text — exactly one.
+    """One question's answer: chosen option indexes, free text, or both.
 
     ``selected_indexes`` picks predefined options (0-based, in option order);
-    ``text`` is a free-text ("Type something.") answer. No ``kind`` discriminator:
-    a client sends exactly one key, so a ``model_validator`` enforces the XOR
-    rather than a tagged union (a tag the webapp form does not carry). The
-    single-vs-multi and free-text-only-on-single-select rules can't be checked
-    here (they need the question) — the manager checks them against the captured
-    payload.
+    ``text`` is anything the human wanted to say that the options did not
+    cover. **Either may be present and they compose** — "option B, and here is
+    why" is a real answer, and a wire that could only carry one of the two made
+    a human choose between answering the question and qualifying the answer.
 
-    ``text`` is rejected outright if it carries any control byte (ord < 0x20 or
-    0x7f, including tab/newline/ESC). The Claude adapter types ``text``
-    verbatim into the pane via ``send-keys -l``; the whole design rests on a
-    closed key vocabulary (digits, Tab, Enter) driving the picker deterministically,
-    and a raw control byte reopens that surface (ESC cancels the question outright,
-    CR/LF act as an early Enter mid-sequence and desync the positional driver).
+    That composition is what the delivery redesign bought. While an answer was
+    typed into the provider's own picker widget, the shape of the answer was
+    dictated by the shape of that widget: free text existed only as the
+    single-select picker's synthetic "Type something." row, so it was
+    single-select-only and mutually exclusive with a choice. Grove now dismisses
+    the picker and restates the whole batch as prose, so the widget's grammar
+    constrains nothing and neither rule survives.
+
+    An item carrying neither is still refused — an answer that says nothing is a
+    question the human has not answered, and the caller should send no item at
+    all rather than an empty one. The remaining per-question rules (one item per
+    captured question, indexes that name real options) need the question itself,
+    so the manager checks them against the captured payload.
+
+    ``text`` may contain newlines and tabs; every other C0 byte and DEL are
+    refused. The distinction is between prose and terminal control: an ESC in a
+    payload typed into a pane cancels whatever is on screen, and the rest of C0
+    is escape-sequence material, while a line break is just how people write
+    more than one sentence.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -114,11 +136,9 @@ class QuestionAnswerItem(BaseModel):
     text: str | None = None
 
     @model_validator(mode="after")
-    def _exactly_one(self) -> QuestionAnswerItem:
-        has_indexes = self.selected_indexes is not None
-        has_text = self.text is not None
-        if has_indexes == has_text:
-            raise ValueError("each answer sets exactly one of selected_indexes or text")
+    def _says_something(self) -> QuestionAnswerItem:
+        if self.selected_indexes is None and self.text is None:
+            raise ValueError("each answer sets selected_indexes, text, or both")
         if self.selected_indexes is not None:
             if not self.selected_indexes:
                 raise ValueError("selected_indexes must be non-empty")
@@ -127,10 +147,10 @@ class QuestionAnswerItem(BaseModel):
         if self.text is not None:
             if not self.text.strip():
                 raise ValueError("text must be non-blank")
-            if any(ord(c) < 0x20 or ord(c) == 0x7F for c in self.text):
+            if any((ord(c) < 0x20 and c not in "\n\t") or ord(c) == 0x7F for c in self.text):
                 raise ValueError(
-                    "text must not contain control characters (the terminal free-text "
-                    "input is single-line; tab/newline are rejected along with the rest)"
+                    "text must not contain terminal control characters "
+                    "(newlines and tabs are fine; the rest of C0 and DEL are not)"
                 )
         return self
 
@@ -141,8 +161,9 @@ class QuestionAnswerRequest(BaseModel):
     ``tool_use_id`` is the group answer-back address captured at ask-time; the
     daemon requires it to still match the standing capture (409 on a stale id).
     ``answers`` is one item per question, in the captured order; the manager
-    validates length + per-question kind rules against the captured payload
-    (422), then the Claude adapter maps them to deterministic keystrokes.
+    validates the length and the option indexes against the captured payload
+    (422), dismisses the on-screen prompt, and delivers the whole batch back as
+    one Grove-fenced message.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

@@ -77,11 +77,12 @@ def _capture(sidecar_dir: Path, session_id: str, tool_use_id: str = "toolu_1") -
     )
 
 
-def test_answer_question_204_and_drives_keys(
+def test_answer_question_204_dismisses_and_delivers(
     daemon: TestClient, tmp_repo: Path, fake_tmux: FakeTmux, sidecar_dir: Path
 ) -> None:
     ws_id, sid = _create(daemon, tmp_repo)
     _capture(sidecar_dir, sid)
+    fake_tmux.snapshots[next(iter(fake_tmux.windows)) + ":agent"] = "Claude is working"
 
     resp = daemon.post(
         f"/workspaces/{ws_id}/question-answer",
@@ -90,8 +91,55 @@ def test_answer_question_204_and_drives_keys(
 
     assert resp.status_code == 204
     assert resp.content == b""
-    # Index 1 on a lone single-select → the digit "2" (no review step).
-    assert [ops for _t, ops in fake_tmux.sent_keys] == [["2"]]
+    assert fake_tmux.escapes, "the on-screen prompt is dismissed first"
+    ((_target, text),) = fake_tmux.sent_texts
+    assert '<grove-instruction kind="question-answers">' in text
+    assert "A1. Green" in text
+
+
+def test_answer_question_accepts_a_choice_with_a_note_on_a_single_select(
+    daemon: TestClient, tmp_repo: Path, fake_tmux: FakeTmux, sidecar_dir: Path
+) -> None:
+    """Both keys on one item, on a kind that used to accept only one of them —
+    the wire widened when the answer stopped being keystrokes."""
+    ws_id, sid = _create(daemon, tmp_repo)
+    _capture(sidecar_dir, sid)
+
+    resp = daemon.post(
+        f"/workspaces/{ws_id}/question-answer",
+        json={
+            "session_id": sid,
+            "tool_use_id": "toolu_1",
+            "answers": [{"selected_indexes": [0], "text": "and log the choice"}],
+        },
+    )
+
+    assert resp.status_code == 204
+    ((_target, text),) = fake_tmux.sent_texts
+    assert "A1. Blue" in text
+    assert "and log the choice" in text
+
+
+def test_answer_question_accepts_a_multi_line_free_text_answer(
+    daemon: TestClient, tmp_repo: Path, fake_tmux: FakeTmux, sidecar_dir: Path
+) -> None:
+    """Newlines were refused while free text was typed into a single-line
+    picker row. An answer is now prose, and prose has paragraphs."""
+    ws_id, sid = _create(daemon, tmp_repo)
+    _capture(sidecar_dir, sid)
+
+    resp = daemon.post(
+        f"/workspaces/{ws_id}/question-answer",
+        json={
+            "session_id": sid,
+            "tool_use_id": "toolu_1",
+            "answers": [{"text": "first line\nsecond line"}],
+        },
+    )
+
+    assert resp.status_code == 204
+    ((_target, text),) = fake_tmux.sent_texts
+    assert "first line\nsecond line" in text
 
 
 def test_answer_question_unknown_workspace_is_404(daemon: TestClient) -> None:
@@ -123,7 +171,8 @@ def test_answer_question_foreign_session_id_is_409(
     )
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "question_not_pending"
-    assert fake_tmux.sent_keys == []
+    assert fake_tmux.sent_texts == []
+    assert fake_tmux.escapes == []
 
 
 def test_answer_question_stale_tool_use_id_is_409(
@@ -142,7 +191,8 @@ def test_answer_question_stale_tool_use_id_is_409(
     )
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "question_not_pending"
-    assert fake_tmux.sent_keys == []
+    assert fake_tmux.sent_texts == []
+    assert fake_tmux.escapes == []
 
 
 def test_answer_question_no_capture_is_409(
@@ -157,7 +207,8 @@ def test_answer_question_no_capture_is_409(
     )
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "question_not_pending"
-    assert fake_tmux.sent_keys == []
+    assert fake_tmux.sent_texts == []
+    assert fake_tmux.escapes == []
 
 
 def test_answer_question_plan_mismatch_is_422(
@@ -178,7 +229,8 @@ def test_answer_question_plan_mismatch_is_422(
     )
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "question_answer_invalid"
-    assert fake_tmux.sent_keys == []
+    assert fake_tmux.sent_texts == []
+    assert fake_tmux.escapes == []
 
 
 def test_answer_question_structurally_invalid_body_is_422(
@@ -194,15 +246,17 @@ def test_answer_question_structurally_invalid_body_is_422(
         json={"session_id": sid, "tool_use_id": "toolu_1", "answers": [{}]},
     )
     assert resp.status_code == 422
-    assert fake_tmux.sent_keys == []
+    assert fake_tmux.sent_texts == []
+    assert fake_tmux.escapes == []
 
 
 def test_answer_question_control_character_in_text_is_422(
     daemon: TestClient, tmp_repo: Path, fake_tmux: FakeTmux, sidecar_dir: Path
 ) -> None:
-    """An ESC byte in free text would cancel the whole question if typed
+    """An ESC byte in free text would cancel whatever is on screen if typed
     verbatim into the pane — rejected by the wire model before the handler
-    runs, same as any other structurally invalid body."""
+    runs, same as any other structurally invalid body. A newline is fine; ESC
+    is not, and that distinction is the whole rule."""
     ws_id, sid = _create(daemon, tmp_repo)
     _capture(sidecar_dir, sid)
 
@@ -211,4 +265,5 @@ def test_answer_question_control_character_in_text_is_422(
         json={"session_id": sid, "tool_use_id": "toolu_1", "answers": [{"text": "hi\x1bthere"}]},
     )
     assert resp.status_code == 422
-    assert fake_tmux.sent_keys == []
+    assert fake_tmux.sent_texts == []
+    assert fake_tmux.escapes == []

@@ -169,7 +169,14 @@ class UsageScreen(Screen[None]):
         lines.append(_quota_text(quotas))
         lines.append("\nSESSIONS\n", style="bold")
         for row in sessions.rows:
-            lines.append(f"{row.session_id[:12]}  {_tokens(row.tokens)}  {row.provider}\n")
+            line = Text(no_wrap=True, overflow="ellipsis")
+            line.append(f"{row.session_id[:12]}  {_tokens(row.tokens)}  {row.provider}")
+            if row.workspace_title:
+                line.append(f"  {row.workspace_title}")
+            if row.workspace_deleted_at:
+                line.append("  workspace deleted")
+            line.append("\n")
+            lines.append_text(line)
         if message.data.findings.findings:
             lines.append("\nFINDINGS\n", style="bold")
             for finding in message.data.findings.findings[:5]:

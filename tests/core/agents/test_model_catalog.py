@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from grove.core.agents import MODEL_CATALOG_CAP, resolve_models
+from grove.core.agents.registry import CONTEXT_VARIANT_SUFFIX
 
 
 @pytest.fixture
@@ -75,3 +76,62 @@ def test_a_bracketed_gateway_id_survives_the_catalog_untouched() -> None:
         configured=("anthropic-opus-5[1m]", "anthropic-qwen3.8-max-preview[1m]"),
     )
     assert offered == ("anthropic-opus-5[1m]", "anthropic-qwen3.8-max-preview[1m]")
+
+
+@pytest.mark.usefixtures("_no_discovery")
+def test_a_redundant_context_variant_pair_is_offered_once() -> None:
+    """Both halves of `x` / `x[1m]` exist for Claude Code, not for a reader.
+
+    Measured on the reference gateway: all 7 pairs report identical input and
+    output rates and an identical ``max_input_tokens``, so the plain id is the
+    same choice twice. The MARKED id survives because it is the one that names
+    the capability — offering only the plain half would silently take the
+    extended window away from everyone picking off a list.
+    """
+    offered = resolve_models(
+        kind="claude_code",
+        command="claude",
+        configured=(
+            "anthropic-opus-5",
+            "anthropic-opus-5[1m]",
+            "anthropic-glm-5.3",
+            "anthropic-sonnet-5",
+            "anthropic-sonnet-5[1m]",
+        ),
+    )
+
+    assert offered == ("anthropic-opus-5[1m]", "anthropic-glm-5.3", "anthropic-sonnet-5[1m]")
+
+
+@pytest.mark.usefixtures("_no_discovery")
+def test_an_unpaired_id_is_untouched_whichever_half_it_is() -> None:
+    # The fold keys on the PAIR being present, never on the suffix alone: a
+    # catalog that publishes only one half of a model has no redundancy to
+    # remove, and dropping either would delete a model outright.
+    offered = resolve_models(
+        kind="claude_code",
+        command="claude",
+        configured=("anthropic-gpt-6-astra", "anthropic-qwen3.8-max-preview[1m]", "opus"),
+    )
+
+    assert offered == ("anthropic-gpt-6-astra", "anthropic-qwen3.8-max-preview[1m]", "opus")
+
+
+def test_the_fold_runs_before_the_discovery_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Otherwise a catalog of pairs spends half its allowance on duplicates.
+
+    Twelve ids, six pairs: capped first this offers 5 real models (10 rows
+    minus the folded half), folded first it offers all 6.
+    """
+    discovered = tuple(
+        f"gw-model-{i}{suffix}" for i in range(6) for suffix in ("", CONTEXT_VARIANT_SUFFIX)
+    )
+    assert len(discovered) > MODEL_CATALOG_CAP
+    monkeypatch.setattr(
+        "grove.core.agents.claude_code.ClaudeCodeAdapter.available_models",
+        lambda self, command: discovered,
+    )
+
+    offered = resolve_models(kind="claude_code", command="claude", configured=())
+
+    assert offered == tuple(f"gw-model-{i}{CONTEXT_VARIANT_SUFFIX}" for i in range(6))

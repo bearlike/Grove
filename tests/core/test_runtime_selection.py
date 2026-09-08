@@ -619,7 +619,8 @@ def test_the_container_backend_starts_the_agent_inside_the_container_and_no_host
 
     assert created == []
     agent = " ".join(cli.execs[0]["argv"])
-    assert "new-session -A -d -s agent" in agent
+    assert "new-session -A -d" in agent
+    assert "-s agent" in agent
     # The decoration still rides through the `sh -c … "$@"` hand-off, and the
     # agent's death is still inspectable inside the container.
     assert agent.endswith("--session-id abc")
@@ -641,7 +642,8 @@ def test_the_container_backend_also_puts_the_shell_session_in_the_container(
     DevcontainerLaunchBackend(cli=cli).launch(_spec(tmp_path, tmux_command="/grove/tmux/tmux"))
 
     shell = " ".join(cli.execs[1]["argv"])
-    assert "new-session -A -d -s shell" in shell
+    assert "new-session -A -d" in shell
+    assert "-s shell" in shell
 
 
 def test_a_container_with_no_tmux_still_runs_the_agent_in_a_host_pane(

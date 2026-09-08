@@ -72,7 +72,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from loguru import logger
 
@@ -84,6 +84,7 @@ from grove.core.agents.model import (
     AgentQuestion,
     CompactionBoundary,
     ContentBlock,
+    ContextWindow,
     DigestEntry,
     FileEdit,
     FinalResult,
@@ -104,6 +105,7 @@ from grove.core.agents.model import (
     tool_outcomes,
 )
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
+from grove.core.agents.transcript_scope import config_dir_override
 
 # A ``response_item message`` is the human prompt EXCEPT the injected preamble:
 # the first user message wraps ``# AGENTS.md`` instructions and an
@@ -137,6 +139,11 @@ def _parse_timestamp(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
+def _measured_int(value: object) -> TypeGuard[int]:
+    """A reported integer count — ``bool`` is an ``int`` and is NOT one."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _truncate(text: str, cap: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= cap else text[: cap - 1].rstrip() + "…"
@@ -145,16 +152,16 @@ def _truncate(text: str, cap: int) -> str:
 class _CodexHome:
     """Resolves *where* Codex CLI keeps its rollouts.
 
-    Pure path logic + read-only globbing. Reads ``$CODEX_HOME`` live on each call
-    (not at construction) so a test can redirect it per case and production picks
-    up a relocated config dir without a restart.
+    Pure path logic + read-only globbing. Reads the task-local ``CODEX_HOME``
+    override before the process environment on each call, so concurrent profile
+    reads cannot cross sources.
     """
 
     @staticmethod
     def base_dir() -> Path:
-        """``$CODEX_HOME`` (or ``~/.codex``) — the config root the rollouts,
-        prompts, and ``config.toml`` all live under."""
-        raw = os.environ.get("CODEX_HOME", "").strip()
+        """The scoped ``CODEX_HOME``, else its ordinary process-env default."""
+        override = config_dir_override("CODEX_HOME")
+        raw = (override if override is not None else os.environ.get("CODEX_HOME", "")).strip()
         return Path(raw).expanduser() if raw else Path.home() / ".codex"
 
     @classmethod
@@ -1000,19 +1007,60 @@ class _RolloutLine:
         if not isinstance(last, dict):
             return None
 
-        def _int(key: str) -> int | None:
+        def _count(key: str) -> int | None:
             value = last.get(key)
-            return value if isinstance(value, int) else None
+            return (
+                value
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                else None
+            )
 
-        raw_input, cached = _int("input_tokens"), _int("cached_input_tokens")
-        fresh = raw_input - cached if raw_input is not None and cached is not None else raw_input
-        return TokenUsage(
-            input=fresh,
-            output=_int("output_tokens"),
-            cache_creation=_int("cache_write_input_tokens"),
-            cache_read=cached,
-            reasoning=_int("reasoning_output_tokens"),
+        raw_input = _count("input_tokens")
+        cached = _count("cached_input_tokens")
+        # `input_tokens` is inclusive. A missing or internally inconsistent
+        # cache subset cannot establish a fresh-input count; treating either as
+        # zero would turn an unpriced class into an apparent measurement.
+        fresh = (
+            raw_input - cached
+            if raw_input is not None and cached is not None and cached <= raw_input
+            else None
         )
+        usage = TokenUsage(
+            input=fresh,
+            output=_count("output_tokens"),
+            cache_creation=_count("cache_write_input_tokens"),
+            cache_read=cached,
+            reasoning=_count("reasoning_output_tokens"),
+        )
+        return (
+            usage
+            if any(
+                value is not None
+                for value in (
+                    usage.input,
+                    usage.output,
+                    usage.cache_creation,
+                    usage.cache_read,
+                    usage.reasoning,
+                )
+            )
+            else None
+        )
+
+    @property
+    def has_turn_usage_record(self) -> bool:
+        """Whether this is an explicit per-request usage boundary.
+
+        ``last_token_usage`` is Codex's own request-level claim. Its individual
+        counters may still be absent or malformed, but the enclosing object is
+        enough to say that the response immediately before it is finished; a
+        later response must never be folded into that same normalized message.
+        A cumulative-only ``token_count`` is bookkeeping, not such a boundary.
+        """
+        if self.record_type != "event_msg" or self.payload_type != "token_count":
+            return False
+        info = self._payload.get("info")
+        return isinstance(info, dict) and isinstance(info.get("last_token_usage"), dict)
 
     @property
     def usage_tokens(self) -> tuple[int, int] | None:
@@ -1040,6 +1088,34 @@ class _RolloutLine:
 
         return (_int("input_tokens"), _int("output_tokens"))
 
+    @property
+    def context_window(self) -> ContextWindow | None:
+        """``token_count.info`` as the model's window and the last request's spend.
+
+        The SAME record :attr:`usage_tokens` reads, so this costs the parse
+        nothing — and it is on disk for every codex-cli ≥ 0.98 (203 of 217 real
+        rollouts on the reference host, 2026-09-14), which is what retired the
+        app-server read that used to spawn a subprocess for this number.
+
+        ``used`` is ``last_token_usage.input_tokens``: Codex counts cached input
+        INSIDE it (see :meth:`turn_usage`), and cached tokens occupy the window
+        whether or not they are billed, so the inclusive figure is the honest
+        one here even though the cost path nets it. ``None`` whenever either
+        half is missing or non-numeric: a window with no spend, or a spend with
+        no window, cannot say how full anything is.
+        """
+        if self.record_type != "event_msg" or self.payload_type != "token_count":
+            return None
+        info = self._payload.get("info")
+        if not isinstance(info, dict):
+            return None
+        size = info.get("model_context_window")
+        last = info.get("last_token_usage")
+        used = last.get("input_tokens") if isinstance(last, dict) else None
+        if not _measured_int(size) or not _measured_int(used) or size <= 0:
+            return None
+        return ContextWindow(size=size, used=used)
+
 
 class _EventState:
     """Accumulates the ``event_msg``-sourced signals: status + tokens.
@@ -1051,7 +1127,7 @@ class _EventState:
     handled, so the conversation branches only run for non-event lines.
     """
 
-    __slots__ = ("_completed", "_saw_task", "_started", "tokens_in", "tokens_out")
+    __slots__ = ("_completed", "_saw_task", "_started", "context", "tokens_in", "tokens_out")
 
     def __init__(self) -> None:
         self._started: set[str] = set()
@@ -1059,12 +1135,19 @@ class _EventState:
         self._saw_task = False
         self.tokens_in = 0
         self.tokens_out = 0
+        self.context: ContextWindow | None = None
 
     def consume(self, line: _RolloutLine) -> bool:
         usage = line.usage_tokens
         if usage is not None:
             # Cumulative totals: take the latest populated report, never sum.
             self.tokens_in, self.tokens_out = usage
+            # The window rides the same record; the LATEST report wins because
+            # a mid-session model switch moves it, and an older report's number
+            # would describe a model no longer in use.
+            context = line.context_window
+            if context is not None:
+                self.context = context
             return True
         if line.is_task_started:
             self._saw_task = True
@@ -1178,6 +1261,7 @@ class _RolloutParser:
             model=self.model(),
             tokens_in=events.tokens_in,
             tokens_out=events.tokens_out,
+            context=events.context,
             last_event_at=last_event_at,
             started_at=self.created_at(),
         )
@@ -1211,55 +1295,86 @@ class _RolloutParser:
             open_questions[call_id] = questions
 
     def messages(self) -> tuple[AgentMessage, ...]:
-        """The time-sorted rollout lines mapped onto the agentic-loop spine
-        — the ONE representation :meth:`turns` and :meth:`digest` below
-        both project (DRY: one parse, many projections). ``session_meta`` /
-        ``turn_context`` metadata and the ``event_msg`` mirrors map to nothing,
-        except ``token_count``, whose per-turn usage lands on the assistant
-        message it belongs to.
+        """The time-sorted rollout lines mapped onto the agentic-loop spine.
 
-        Codex records usage as its OWN line, written once the model request it
-        reports on has finished, so the owner is the newest assistant message
-        preceding it (the reply, tool call or reasoning that request produced).
-        Consuming the claim (``pending = None``) is what keeps a second report
-        from re-stamping an already-attributed message, and an absent
-        ``token_count`` leaves ``usage`` unset rather than zeroed.
+        Codex splits one response over assistant ``message``, ``reasoning`` and
+        tool-call records, then writes one ``last_token_usage`` record when that
+        response finishes. Those fragments are *one* normalized assistant
+        message: otherwise the usage-owning fragment looks like one generation
+        while its siblings look like unmeasured requests to every spine consumer.
+        A ``last_token_usage`` object is the explicit boundary; without one, a
+        response remains open so genuinely unreported requests stay unknown.
 
-        ``exec_command_end`` (a completed shell call's own duration/exit-status
-        measurement) is the identical shape one step further: it is also an
-        ``event_msg`` sibling of a ``response_item``, so it is pre-scanned once
-        (:meth:`_exec_metrics`) and handed to :meth:`_RolloutLine.to_message`,
-        which stamps it onto the ``tool_result`` block it belongs to by
-        ``call_id`` — never a second pass over ``self._lines``.
+        ``exec_command_end`` is pre-scanned once and applies its native timing to
+        the correlated tool-result block. It does not define a model-response
+        boundary.
         """
         exec_metrics = self._exec_metrics()
         out: list[AgentMessage] = []
+        # Index of the most recent completed-or-in-progress response. Tool results
+        # can legally land between its tool call and the following token count, so
+        # they do not clear this claim; the next response or user turn does.
         pending: int | None = None
-        model = self.model()
+        previous_was_assistant = False
+        # A missing turn_context cannot be repaired from a later session-wide
+        # model: that would price an earlier generation under a model it may not
+        # have used. The session-meta value is admissible only until the first
+        # explicit turn context announces its replacement.
+        model: str | None = None
+        saw_turn_context = False
+
         for line in self._lines:
-            usage = line.turn_usage()
-            if usage is not None:
+            # An explicit `last_token_usage` is Codex's request completion marker.
+            # It closes the accumulated response even when no individual counter
+            # survived normalization: presence of the record, not a nonzero field,
+            # is the structural boundary.
+            if line.has_turn_usage_record:
                 if pending is not None:
-                    out[pending] = replace(out[pending], usage=usage)
+                    usage = line.turn_usage()
+                    if usage is not None:
+                        out[pending] = replace(out[pending], usage=usage)
                     pending = None
+                previous_was_assistant = False
                 continue
-            # `turn_context` announces the model for the turn that FOLLOWS it, so
-            # a session whose model was switched mid-run attributes each half
-            # correctly rather than to whichever value happened to be first.
+
+            # `turn_context` announces the model for the turn that FOLLOWS it.
+            # It is metadata, not part of the response's content.
             turn_model = line.turn_context_model()
             if turn_model is not None:
+                pending = None
+                previous_was_assistant = False
                 model = turn_model
+                saw_turn_context = True
+                continue
+            if not saw_turn_context and line.record_type == "session_meta":
+                payload = line.raw.get("payload")
+                candidate = payload.get("model") if isinstance(payload, dict) else None
+                if isinstance(candidate, str) and candidate:
+                    model = candidate
+
             message = line.to_message(exec_metrics)
             if message is None:
                 continue
             if message.role == "assistant":
-                pending = len(out)
-                # Usage without a model prices to nothing: the cost layer looks
-                # the rate up BY model, so an unnamed generation carries tokens
-                # and no cost however well the price book is configured. Codex
-                # names it per turn; it just never reached the spine.
-                message = replace(message, model=model)
+                if pending is not None and previous_was_assistant:
+                    # Contiguous assistant native records are fragments of the
+                    # same provider response, not independent API requests.
+                    prior = out[pending]
+                    out[pending] = replace(prior, content=prior.content + message.content)
+                else:
+                    out.append(replace(message, model=model))
+                    pending = len(out) - 1
+                previous_was_assistant = True
+                continue
+
+            if message.role == "user":
+                # A new human turn means any unreported prior response remains
+                # genuinely unknown rather than being claimed by a later request.
+                pending = None
+            # A tool result stays between the response and its token-count report.
+            previous_was_assistant = False
             out.append(message)
+
         return tuple(out)
 
     def _exec_metrics(self) -> dict[str, tuple[int | None, int]]:
@@ -1725,6 +1840,27 @@ class CodexAdapter:
             logger.debug("list_sessions({}) failed: {}", cwd, exc)
             return []
         return [self._summarize(sid, path, mtime) for sid, path, mtime, _ in scanned]
+
+    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+        """One known rollout's row, resolved by id through
+        :meth:`locate_transcripts`.
+
+        Codex files rollouts by DATE rather than by cwd, so a rollout is never
+        re-homed the way a Claude Code transcript is and this is not a
+        relocation fix here. It is implemented anyway because the seam is about
+        identity, not about one provider's filing quirk: a caller holding an id
+        gets the same answer from every adapter, and the explorer needs no
+        per-kind branch. Best-effort: ``None`` when nothing is on disk.
+        """
+        paths = self.locate_transcripts(cwd, session_id)
+        if not paths:
+            return None
+        main = paths[0]
+        try:
+            mtime = main.stat().st_mtime
+        except OSError:  # vanished between the glob and the stat
+            return None
+        return self._summarize(session_id, main, mtime)
 
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None

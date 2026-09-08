@@ -104,6 +104,12 @@ class DemoWorkspace(BaseModel):
     tickets: tuple[DemoTicket, ...] = ()
     phase: DemoPhase
     transcript: Transcript | None = None
+    diagram: str | None = None
+    """A `.drawio` asset beside `demo.json`, opened as this workspace's managed
+    diagram so the Diagram tab renders it. The planter copies it to the
+    workspace-relative path Grove's own mockup loop uses, under the untracked
+    attachments directory, and opens it through the engine so the descriptor is
+    the real one (`WorkspaceState.diagram`), never a hand-written record."""
 
     @property
     def ticket_keys(self) -> frozenset[str]:

@@ -9,12 +9,18 @@ and pinned here, plus the manager's opt-in ``--channels`` decoration append.
 
 from __future__ import annotations
 
+import socket
+import threading
 from pathlib import Path
 
 import pytest
 
 from grove.core import channel
+from grove.core.admission import AdmissionLimits, BoundedInbox
 from grove.core.channel import (
+    RECEIVE_ROUTE,
+    ChannelDeliveryLedger,
+    ChannelDeliveryStatus,
     ChannelEndpoint,
     ChannelMessage,
     ChannelPolicy,
@@ -109,47 +115,167 @@ def test_permission_decision_allow_omits_message() -> None:
     assert decision.to_result() == {"behavior": "allow"}
 
 
+# ─── Channel delivery ledger ─────────────────────────────────────────────────
+
+
+def test_delivery_ledger_records_failure_without_message_contents() -> None:
+    ledger = ChannelDeliveryLedger()
+    message = ChannelMessage(content="do not log this", meta={"also": "private"})
+    ledger.record(message, ChannelDeliveryStatus.FAILED)
+    assert ledger.outcomes == ((ChannelDeliveryStatus.FAILED, len(message.content)),)
+
+
+def test_delivery_ledger_records_shutdown_pending_and_in_flight() -> None:
+    ledger = ChannelDeliveryLedger()
+    ledger.record(ChannelMessage(content="pending"), ChannelDeliveryStatus.UNDLVRD_PENDING)
+    ledger.record(ChannelMessage(content="in flight"), ChannelDeliveryStatus.UNDLVRD_IN_FLIGHT)
+    assert ledger.outcomes == (
+        (ChannelDeliveryStatus.UNDLVRD_PENDING, len("pending")),
+        (ChannelDeliveryStatus.UNDLVRD_IN_FLIGHT, len("in flight")),
+    )
+
+
 # ─── ChannelReceiver.handle_body: pure accept/reject ────────────────────────
 
 
-def _receiver(policy: ChannelPolicy, token: str = "secret") -> tuple[ChannelReceiver, list]:
-    delivered: list[ChannelMessage] = []
-    receiver = ChannelReceiver(policy, token, delivered.append)
-    return receiver, delivered
-
-
-def test_receiver_rejects_bad_token() -> None:
-    receiver, delivered = _receiver(ChannelPolicy(()))
+@pytest.mark.asyncio
+async def test_receiver_rejects_bad_token_before_admission() -> None:
+    inbox = BoundedInbox[ChannelMessage](AdmissionLimits())
+    inbox.bind()
+    receiver = ChannelReceiver(ChannelPolicy(()), "secret", inbox, AdmissionLimits())
     status, _ = receiver.handle_body(authorization="Bearer wrong", body=b'{"content":"x"}')
     assert status == 401
-    assert delivered == []
+    assert inbox.stats().items == 0
 
 
-def test_receiver_rejects_invalid_json_and_malformed() -> None:
-    receiver, delivered = _receiver(ChannelPolicy(()))
+@pytest.mark.asyncio
+async def test_receiver_rejects_invalid_json_and_malformed_before_admission() -> None:
+    inbox = BoundedInbox[ChannelMessage](AdmissionLimits())
+    inbox.bind()
+    receiver = ChannelReceiver(ChannelPolicy(()), "secret", inbox, AdmissionLimits())
     assert receiver.handle_body(authorization="Bearer secret", body=b"{oops")[0] == 400
     assert receiver.handle_body(authorization="Bearer secret", body=b'{"no":"content"}')[0] == 400
-    assert delivered == []
+    assert inbox.stats().items == 0
 
 
-def test_receiver_rejects_disallowed_sender() -> None:
-    receiver, delivered = _receiver(ChannelPolicy(("cli",)))
+@pytest.mark.asyncio
+async def test_a_stalled_body_cannot_wedge_the_single_threaded_receiver() -> None:
+    """A half-sent request must cost its own connection, never the channel.
+
+    The receiver is deliberately single-threaded (a channel into a running agent
+    must not spawn a thread per connection), so a client that declares an
+    in-cap Content-Length and then stops sending blocks `rfile.read` with no
+    socket timeout — and every later legitimate delivery queues behind it
+    forever. Bounding the read is what keeps "synchronous handling" from
+    meaning "any local process can silence the channel by opening a socket".
+
+    Driven over a REAL socket: the defect is in the transport, and a direct
+    `handle_body` call never reaches the read that blocks.
+    """
+    inbox = BoundedInbox[ChannelMessage](AdmissionLimits())
+    inbox.bind()
+    receiver = ChannelReceiver(ChannelPolicy(()), "secret", inbox, AdmissionLimits())
+    server, port = receiver.serve(0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        stalled = socket.create_connection(("127.0.0.1", port), timeout=10)
+        try:
+            # Declare a body and never send it.
+            stalled.sendall(
+                f"POST {RECEIVE_ROUTE} HTTP/1.1\r\nHost: x\r\nContent-Length: 12\r\n\r\n".encode()
+            )
+            # A well-behaved client must still be served while that one hangs.
+            good = socket.create_connection(("127.0.0.1", port), timeout=10)
+            try:
+                body = b'{"content":"x"}'
+                good.sendall(
+                    f"POST {RECEIVE_ROUTE} HTTP/1.1\r\nHost: x\r\n"
+                    f"Authorization: Bearer secret\r\n"
+                    f"Content-Length: {len(body)}\r\n\r\n".encode()
+                    + body
+                )
+                good.settimeout(10)
+                assert b" 202 " in good.recv(256), "the stalled peer wedged the channel"
+            finally:
+                good.close()
+        finally:
+            stalled.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_receiver_rejects_disallowed_sender_before_admission() -> None:
+    inbox = BoundedInbox[ChannelMessage](AdmissionLimits())
+    inbox.bind()
+    receiver = ChannelReceiver(ChannelPolicy(("cli",)), "secret", inbox, AdmissionLimits())
     status, _ = receiver.handle_body(
         authorization="Bearer secret", body=b'{"content":"x","sender":"evil"}'
     )
     assert status == 403
-    assert delivered == []
+    assert inbox.stats().items == 0
 
 
-def test_receiver_accepts_and_delivers_permitted_message() -> None:
-    receiver, delivered = _receiver(ChannelPolicy(("cli",)))
-    status, _ = receiver.handle_body(
-        authorization="Bearer secret", body=b'{"content":"go","sender":"cli","meta":{"n":1}}'
+@pytest.mark.asyncio
+async def test_receiver_accepts_ordered_messages_without_coalescing() -> None:
+    inbox = BoundedInbox[ChannelMessage](AdmissionLimits())
+    inbox.bind()
+    receiver = ChannelReceiver(ChannelPolicy(("cli",)), "secret", inbox, AdmissionLimits())
+    for content in ("first", "second"):
+        status, _ = receiver.handle_body(
+            authorization="Bearer secret",
+            body=f'{{"content":"{content}","sender":"cli"}}'.encode(),
+        )
+        assert status == 202
+    first = await inbox.take()
+    second = await inbox.take()
+    assert [first.value.content, second.value.content] == ["first", "second"]
+    assert inbox.stats().coalesced == 0
+    inbox.complete(first)
+    inbox.complete(second)
+
+
+@pytest.mark.asyncio
+async def test_receiver_refuses_overloaded_and_too_large_messages() -> None:
+    limits = AdmissionLimits(max_items=1, max_bytes=32)
+    inbox = BoundedInbox[ChannelMessage](limits)
+    inbox.bind()
+    receiver = ChannelReceiver(ChannelPolicy(()), "secret", inbox, limits)
+    assert receiver.handle_body(authorization="Bearer secret", body=b'{"content":"x"}')[0] == 202
+    assert receiver.handle_body(authorization="Bearer secret", body=b'{"content":"y"}')[0] == 503
+    assert (
+        receiver.handle_body(
+            authorization="Bearer secret", body=b'{"content":"too large for channel"}'
+        )[0]
+        == 413
     )
-    assert status == 202
-    assert len(delivered) == 1
-    assert delivered[0].content == "go"
-    assert delivered[0].meta == {"n": 1}
+    pending = inbox.close()
+    assert [delivery.value.content for delivery in pending] == ["x"]
+
+
+@pytest.mark.asyncio
+async def test_receiver_refuses_when_inbox_is_not_ready_or_closed() -> None:
+    inbox = BoundedInbox[ChannelMessage](AdmissionLimits())
+    receiver = ChannelReceiver(ChannelPolicy(()), "secret", inbox, AdmissionLimits())
+    assert receiver.handle_body(authorization="Bearer secret", body=b'{"content":"x"}')[0] == 503
+    inbox.bind()
+    inbox.close()
+    assert receiver.handle_body(authorization="Bearer secret", body=b'{"content":"x"}')[0] == 503
+
+
+@pytest.mark.asyncio
+async def test_receiver_refuses_content_length_before_reading_body() -> None:
+    limits = AdmissionLimits(max_bytes=10)
+    inbox = BoundedInbox[ChannelMessage](limits)
+    inbox.bind()
+    receiver = ChannelReceiver(ChannelPolicy(()), "secret", inbox, limits)
+    assert receiver.acquire_request(content_length="11") == (413, "message too large")
+    assert receiver.acquire_request(content_length="malformed") == (400, "invalid content length")
+    assert receiver.acquire_request(content_length="10") is None
+    receiver.release_request()
 
 
 # ─── settings declaration + endpoint record + token ─────────────────────────

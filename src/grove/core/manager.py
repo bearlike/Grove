@@ -13,10 +13,14 @@ then re-raised as GroveError so callers can render a toast.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import json
 import os
 import re
+import secrets
+import shlex
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
@@ -28,6 +32,7 @@ from loguru import logger
 
 from grove.core import channel, native, paths, permission, tmux
 from grove.core.agents import (
+    PLAN_APPROVAL_FIRST_ROW,
     AgentAdapter,
     AgentQuestion,
     AnswerSelection,
@@ -39,20 +44,32 @@ from grove.core.agents import (
     resolve_models,
 )
 from grove.core.agents.brief import AgentBrief
-from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.hook import DEFAULT_DAEMON_LOOPBACK_URL, ClaudeHook, PendingQuestion
+from grove.core.agents.transcript_scope import config_dir_scope
+from grove.core.attachments import Attachment, AttachmentStore
 from grove.core.config import AgentKind, AgentSpec, GroveConfig, load_config
 from grove.core.container_agent import ContainerAgent, ContainerAgentEntry
 from grove.core.container_decor import DecorPayload, DecorPlan
 from grove.core.container_policy import AgentSharePlan
 from grove.core.container_runtime import ContainerLifecycle, ContainerLiveness, ContainerState
 from grove.core.container_tmux import ContainerPaneLiveness, ContainerTmux, PaneReading
+from grove.core.contracts.attachments import AttachmentView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import AutoBranch, BranchMode, ResolvedBranch
+from grove.core.contracts.diagrams import (
+    DiagramDocumentView,
+    DiagramOpenRequest,
+    DiagramPreviewUploadRequest,
+    DiagramPreviewView,
+    DiagramSessionView,
+    DiagramStopRequest,
+    DiagramUpdateRequest,
+)
 from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import TicketRef, TicketSelector
 from grove.core.devcontainer import DevcontainerCli
+from grove.core.diagrams import DiagramFiles, DiagramPreview, DiagramPreviewFiles
 from grove.core.env_source import EnvSource
 from grove.core.errors import (
     AgentSessionNotFound,
@@ -61,6 +78,8 @@ from grove.core.errors import (
     BranchNotFound,
     CapabilityUnavailable,
     ContainerError,
+    DiagramConflict,
+    DiagramUnavailable,
     EnvSourceError,
     GroveError,
     MewboError,
@@ -70,11 +89,11 @@ from grove.core.errors import (
     ResumeNotSupported,
     SteeringUnsupported,
     TicketNotAttached,
-    TmuxError,
     WorkspaceNotFound,
     WorkspaceStateError,
 )
 from grove.core.git import GitRepo
+from grove.core.instructions import GroveInstruction
 from grove.core.launch import (
     AgentExit,
     DevcontainerLaunchBackend,
@@ -133,6 +152,7 @@ EventKindStr = Literal[
     "updated",
     "message_sent",
     "question_answered",
+    "attachment_added",
     "control_invoked",
     "error",
     "offline_detected",
@@ -320,6 +340,11 @@ class WorkspaceManager:
         self._container_provisioner: ContainerProvisioner | None = None
         self._container_backend: LaunchBackend | None = None
         self._container_liveness: ContainerLiveness | None = None
+        # The daemon owns maintained runtime sources. A standalone manager keeps
+        # its one-shot read path until that owner explicitly binds its cache.
+        self._runtime_container_liveness: Callable[[str], ContainerState | None] | None = None
+        self._runtime_host_tmux_liveness: Callable[[str], bool | None] | None = None
+        self._runtime_host_tmux_activity: Callable[[str], datetime | None] | None = None
         # The agent-pane half of container liveness: "is the agent
         # alive inside the container", memoized on its own longer window
         # because it costs four times an inspect. Built lazily, so a host-only
@@ -329,6 +354,8 @@ class WorkspaceManager:
         # an httpx.MockTransport / fake env reaches every provider.
         self._ticket_registry = ticket_registry
         self._git = GitRepo(repo_root)
+        self._diagram_files = DiagramFiles()
+        self._diagram_preview_files = DiagramPreviewFiles()
         self._subs: list[Callable[[WorkspaceEvent], None]] = []
         # Last reconciled status per workspace ID — drift events fire only
         # when the status actually changes, so a subscriber that refreshes
@@ -336,6 +363,23 @@ class WorkspaceManager:
         self._last_reconciled_status: dict[str, WorkspaceStatus] = {}
 
     # ─── identity / accessors ──────────────────────────────────────────────
+
+    def bind_runtime_liveness(
+        self,
+        *,
+        container: Callable[[str], ContainerState | None],
+        host_tmux: Callable[[str], bool | None],
+        host_tmux_activity: Callable[[str], datetime | None],
+    ) -> None:
+        """Use daemon-maintained runtime facts instead of render-path probes.
+
+        The source owner supplies an explicit initial witness before binding; a
+        ``None`` result remains an unreadable boundary, never an absence claim.
+        Standalone managers deliberately retain the existing direct probes.
+        """
+        self._runtime_container_liveness = container
+        self._runtime_host_tmux_liveness = host_tmux
+        self._runtime_host_tmux_activity = host_tmux_activity
 
     @property
     def repo_root(self) -> Path:
@@ -413,6 +457,252 @@ class WorkspaceManager:
 
     def get(self, workspace_id: str) -> WorkspaceState:
         return self._store.get(workspace_id)
+
+    def reconciled(self, workspace_id: str) -> WorkspaceState:
+        """One workspace with its persisted intent promoted, exactly as ``list`` does.
+
+        The single-workspace counterpart to ``list``, and it exists because a
+        per-workspace read is now the ORDINARY path rather than a special case:
+        an event-driven projection refreshes one row at a time, where the old
+        poll rebuilt the fleet through ``list`` and got reconciliation for free.
+        Reading ``get`` there published the RAW persisted status — so a
+        container mid-build showed RUNNING instead of PROVISIONING, and every
+        other computed status (ORPHANED, OFFLINE) was equally unreachable for
+        any workspace the projection had already seen.
+
+        Status is the first element of ``WorkspaceActivity.fingerprint``, which
+        is what made this invisible: the row still changed, still emitted, and
+        still looked alive — it was simply answering with a different question's
+        answer. ``_maybe_emit_status_drift`` fires here too, so a drift observed
+        through one row is reported exactly as one observed through the fleet.
+        """
+        persisted = self._store.get(workspace_id)
+        promoted = self._reconcile_status(persisted)
+        self._maybe_emit_status_drift(persisted, promoted)
+        return promoted
+
+    # ─── diagram collaboration ──────────────────────────────────────────────
+
+    def open_diagram(self, workspace_id: str, request: DiagramOpenRequest) -> DiagramDocumentView:
+        """Begin one revisioned collaboration over an existing worktree diagram.
+
+        The descriptor is persisted only after the file has been safely opened.
+        Reopening the active path is idempotent; opening another path is refused
+        rather than silently abandoning a browser that can still autosave.
+        """
+        with self._diagram_operation_lock(workspace_id):
+            state = self._store.get(workspace_id)
+            with self._diagram_files.locked(Path(state.worktree_path), request.path) as target:
+                existing = self._store.get(workspace_id).diagram
+                if (
+                    existing is not None
+                    and existing.mode == "active"
+                    and existing.path != request.path
+                ):
+                    raise DiagramConflict("active collaboration owns another path; stop it first")
+                contents = self._diagram_files.contents(target)
+                if (
+                    existing is not None
+                    and existing.mode == "active"
+                    and existing.path == request.path
+                ):
+                    descriptor = existing
+                else:
+                    descriptor = DiagramSessionView(
+                        path=request.path, session_id=self._mint_diagram_session_id(), mode="active"
+                    )
+                    self._store.update_diagram_descriptor(
+                        workspace_id, expected=existing, replacement=descriptor
+                    )
+                    self._emit("updated", workspace_id, {"diagram_changed": "true"})
+                return DiagramDocumentView(
+                    diagram=descriptor, revision=contents.revision, xml=contents.xml
+                )
+
+    @staticmethod
+    def _mint_diagram_session_id() -> str:
+        """Mint one opaque 32-hex collaboration generation at the manager boundary."""
+        return secrets.token_hex(16)
+
+    @contextlib.contextmanager
+    def _diagram_operation_lock(self, workspace_id: str) -> Iterator[None]:
+        """Serialize all descriptor mutations for one workspace before file locks."""
+        lock_root = paths.ensure_dir(paths.user_state_path().parent / "diagram-operations")
+        with paths.exclusive_lock(lock_root / workspace_id):
+            yield
+
+    def read_diagram(self, workspace_id: str) -> DiagramDocumentView:
+        """Return the current persisted document, never a browser-side draft."""
+        with self._diagram_operation_lock(workspace_id):
+            state = self._store.get(workspace_id)
+            if state.diagram is None:
+                raise DiagramUnavailable("workspace has no diagram descriptor")
+            with self._diagram_files.locked(
+                Path(state.worktree_path), state.diagram.path
+            ) as target:
+                descriptor = self._store.get(workspace_id).diagram
+                if descriptor is None or descriptor.path != state.diagram.path:
+                    raise DiagramConflict("diagram descriptor changed while reading; retry")
+                contents = self._diagram_files.contents(target)
+                return DiagramDocumentView(
+                    diagram=descriptor, revision=contents.revision, xml=contents.xml
+                )
+
+    def update_diagram(
+        self, workspace_id: str, request: DiagramUpdateRequest
+    ) -> DiagramDocumentView:
+        """Replace the active document only when its generation and bytes match."""
+        with self._diagram_operation_lock(workspace_id):
+            state = self._store.get(workspace_id)
+            if state.diagram is None:
+                raise DiagramUnavailable("workspace has no diagram descriptor")
+            with self._diagram_files.locked(
+                Path(state.worktree_path), state.diagram.path
+            ) as target:
+                descriptor = self._store.get(workspace_id).diagram
+                if descriptor is None or descriptor.path != state.diagram.path:
+                    raise DiagramConflict("diagram descriptor changed while updating; retry")
+                if descriptor.session_id != request.session_id:
+                    raise DiagramConflict(
+                        "diagram session is stale; reopen or read the current document"
+                    )
+                if descriptor.mode != "active":
+                    raise DiagramConflict(
+                        "diagram collaboration is read-only; reopen before updating"
+                    )
+                contents = self._diagram_files.replace(
+                    target, expected_revision=request.expected_revision, xml=request.xml
+                )
+                return DiagramDocumentView(
+                    diagram=descriptor, revision=contents.revision, xml=contents.xml
+                )
+
+    def stop_diagram(self, workspace_id: str, request: DiagramStopRequest) -> DiagramDocumentView:
+        """Fence an active collaboration and retain the document as read-only."""
+        with self._diagram_operation_lock(workspace_id):
+            state = self._store.get(workspace_id)
+            if state.diagram is None:
+                raise DiagramUnavailable("workspace has no diagram descriptor")
+            with self._diagram_files.locked(
+                Path(state.worktree_path), state.diagram.path
+            ) as target:
+                descriptor = self._store.get(workspace_id).diagram
+                if descriptor is None or descriptor.path != state.diagram.path:
+                    raise DiagramConflict("diagram descriptor changed while stopping; retry")
+                if descriptor.session_id != request.session_id:
+                    raise DiagramConflict(
+                        "diagram session is stale; cannot stop a reopened collaboration"
+                    )
+                contents = self._diagram_files.contents(target)
+                if contents.revision != request.expected_revision:
+                    raise DiagramConflict(
+                        "diagram revision is stale; read the current document before stopping"
+                    )
+                if descriptor.mode == "active":
+                    descriptor = descriptor.model_copy(update={"mode": "read_only"})
+                    self._store.update_diagram_descriptor(
+                        workspace_id,
+                        expected=state.diagram,
+                        replacement=descriptor,
+                    )
+                    self._emit("updated", workspace_id, {"diagram_changed": "true"})
+                return DiagramDocumentView(
+                    diagram=descriptor, revision=contents.revision, xml=contents.xml
+                )
+
+    def save_diagram_preview(
+        self, workspace_id: str, request: DiagramPreviewUploadRequest
+    ) -> DiagramPreviewView:
+        """Save a browser-rendered first-page PNG only for the current document.
+
+        The attachment is intentionally stored only after the active descriptor
+        and raw diagram bytes both match the browser's echoed session/revision.
+        The operation lock makes that pair, attachment publication, and a
+        concurrent stop/reopen one serialized transaction.
+        """
+        with self._diagram_operation_lock(workspace_id):
+            state = self._store.get(workspace_id)
+            descriptor = state.diagram
+            if descriptor is None:
+                raise DiagramUnavailable("open the Diagram tab, wait for a render, then retry")
+            if descriptor.session_id != request.session_id:
+                raise DiagramConflict(
+                    "diagram preview session is stale; wait for the current render"
+                )
+            with self._diagram_files.locked(Path(state.worktree_path), descriptor.path) as target:
+                current = self._store.get(workspace_id).diagram
+                if current != descriptor:
+                    raise DiagramConflict("diagram descriptor changed while saving preview; retry")
+                contents = self._diagram_files.contents(target)
+                if contents.revision != request.expected_revision:
+                    raise DiagramConflict(
+                        "diagram preview revision is stale; wait for the current render"
+                    )
+                try:
+                    png = base64.b64decode(request.content_base64, validate=True)
+                except binascii.Error as exc:
+                    raise WorkspaceStateError("diagram preview must be base64 PNG data") from exc
+                self._diagram_preview_files.validate_png(png)
+                self._diagram_preview_files.ensure_root(state.worktree_path)
+                self._git.ensure_excluded(*AttachmentStore.EXCLUDES)
+                try:
+                    attachment = AttachmentStore.store(
+                        state.worktree_path, "diagram-preview.png", png
+                    )
+                except ValueError as exc:
+                    raise GroveError(str(exc)) from exc
+                except OSError as exc:
+                    raise GroveError(f"could not store diagram preview: {exc}") from exc
+                preview = self._diagram_preview_files.publish(
+                    state.worktree_path,
+                    workspace_id,
+                    session_id=descriptor.session_id,
+                    revision=contents.revision,
+                    attachment=attachment,
+                )
+                self._emit(
+                    "attachment_added", state.id, {"name": attachment.name, "bytes": str(len(png))}
+                )
+                return self._diagram_preview_view(state, preview, png)
+
+    def read_diagram_preview(self, workspace_id: str) -> DiagramPreviewView:
+        """Return the current revision's browser-rendered first-page PNG only."""
+        with self._diagram_operation_lock(workspace_id):
+            state = self._store.get(workspace_id)
+            descriptor = state.diagram
+            if descriptor is None:
+                raise DiagramUnavailable("open the Diagram tab, wait for a render, then retry")
+            with self._diagram_files.locked(Path(state.worktree_path), descriptor.path) as target:
+                current = self._store.get(workspace_id).diagram
+                if current != descriptor:
+                    raise DiagramConflict("diagram descriptor changed while reading preview; retry")
+                contents = self._diagram_files.contents(target)
+                preview = self._diagram_preview_files.read(state.worktree_path, workspace_id)
+                if (
+                    preview.session_id != descriptor.session_id
+                    or preview.revision != contents.revision
+                ):
+                    raise DiagramUnavailable(
+                        "diagram preview is pending for the current revision; "
+                        "open the Diagram tab, wait, then retry"
+                    )
+                png = self._diagram_preview_files.read_png(preview)
+                return self._diagram_preview_view(state, preview, png)
+
+    def _diagram_preview_view(
+        self, state: WorkspaceState, preview: DiagramPreview, png: bytes
+    ) -> DiagramPreviewView:
+        """Adapt a safely resolved private preview into the fetch-on-demand wire view."""
+        return DiagramPreviewView(
+            session_id=preview.session_id,
+            revision=preview.revision,
+            attachment=AttachmentView(
+                id=preview.attachment.id,
+                name=preview.attachment.name,
+                path=self._attachment_path(state, preview.attachment),
+            ),
+            content_base64=base64.b64encode(png).decode("ascii"),
+        )
 
     def _apply_ticket_branch(
         self, resolved: ResolvedBranch, request: CreateWorkspaceRequest
@@ -653,6 +943,11 @@ class WorkspaceManager:
                 # site that can fail loudly for a missing file or a failing
                 # command is the same transaction that rolls the workspace back.
                 container_env=self._container_env(state),
+                mailbox_socket=(
+                    Path(os.environ["GROVE_MAILBOX_SOCKET"])
+                    if state.native and os.environ.get("GROVE_MAILBOX_SOCKET")
+                    else None
+                ),
             )
         except ContainerError as exc:
             self._record_provision_failure(state, exc, started=started, log_path=log_path)
@@ -918,6 +1213,14 @@ class WorkspaceManager:
                     f"agent kind {agent.kind or 'generic'!r} cannot resume a session by id; "
                     "resume is supported only for claude_code and codex agents"
                 )
+            if agent.native_for(request.native):
+                # Refused here, first, so the ref is never resolved for a launch
+                # that could not honour it: the owned worker starts its own
+                # session; the terminal launch (`native: false`) continues one.
+                raise ResumeNotSupported(
+                    f"agent {agent.name!r} would own a fresh native session; resume the "
+                    "transcript with the terminal launch instead"
+                )
             try:
                 resume_listing = self._session_explorer().resolve(resume_session_id)
             except GroveError as exc:
@@ -938,6 +1241,16 @@ class WorkspaceManager:
         decision = self._resolver().resolve(requested=request.runtime, repo_root=self._repo_root)
         if decision.notice:
             logger.info("{}", decision.notice)
+
+        # The rest of the saved `defaults` section, resolved once, here, beside
+        # the runtime decision that already worked this way — an omitted field
+        # means "whatever the cascade says", and the cascade's answer is the one
+        # `WorkspaceDefaultsView` shows every create form. Resolving in the
+        # engine rather than in each client is what stops a client that trusts
+        # this contract (the web composer does, by design: it sends only the
+        # fields the user touched) from silently discarding the user's answer.
+        model = request.model or self._cfg.defaults.model
+        skip_init = self._cfg.default_skip_init if request.skip_init is None else request.skip_init
 
         ts = WorkspaceIdentity.timestamp()
         resolved = request.branch_plan.resolve(self._cfg, request.title, ts)
@@ -1014,7 +1327,11 @@ class WorkspaceManager:
             # Resolved from the cascade exactly like `runtime` and persisted for
             # the same reason: it is applied at every launch, so the answer has
             # to be the one this workspace was created under.
-            brief=self._cfg.brief.enabled if request.brief is None else request.brief,
+            brief=self._cfg.default_brief if request.brief is None else request.brief,
+            # Same shape as `brief`: decided by the roster entry at create and
+            # persisted, because every steer verb below reads the record, not
+            # the config, to know whether a pane or a control channel is there.
+            native=self._native_for(agent, decision.runtime, request.native),
             # Arm 3, recorded as a create-time fact: the resolver hands back a
             # `config_path` only when it substituted Grove's packaged default
             # for a repo that had no `.devcontainer/`. Persisted rather than
@@ -1067,6 +1384,24 @@ class WorkspaceManager:
         # per-agent layout landed may still be carrying.
         self._git.ensure_excluded(*PhaseFile.EXCLUDES)
 
+        # Attachments land HERE — after the worktree exists and before anything
+        # composes the prompt that names them. Both halves of that are forced:
+        # the store writes under the worktree, and `_brief_prompt` below turns
+        # `request.initial_prompt` into the launch argv, so a block appended
+        # after this point would never reach the agent.
+        #
+        # Rolled back rather than reported, because the failure is not local to
+        # the file: the prompt names every attachment, so a create that stored
+        # three of four would launch an agent against a path that is not there.
+        # The rollback also takes the stored bytes with the worktree, so there
+        # is nothing orphaned to clean up.
+        try:
+            create_prompt = self._store_create_attachments(state, request)
+        except GroveError as exc:
+            self._rollback_create(state)
+            self._emit("error", state.id, {"phase": "attachments", "error": str(exc)})
+            raise
+
         # `skip_init` is a per-create override of `init_script.enabled`; either
         # one being off — or an `applies_to` that doesn't cover this workspace's
         # runtime — means the script never runs and the outcome is SKIPPED.
@@ -1076,7 +1411,7 @@ class WorkspaceManager:
         # default for root workspaces, which auto-check skip in the UI. `state`
         # already carries the resolved runtime (decided above, before any side
         # effect), so the gate sees the EFFECTIVE runtime including a fallback.
-        init_enabled = self._init_enabled(state, skip=request.skip_init)
+        init_enabled = self._init_enabled(state, skip=skip_init)
         init_log = paths.init_log_path(state.id)
         init_started = _utcnow()
         init = _InitRun()
@@ -1131,7 +1466,7 @@ class WorkspaceManager:
                 agent,
                 worktree=agent_cwd,
                 title=request.title,
-                model=request.model,
+                model=model,
                 resume_session_id=resume_session_id,
             )
         except MewboError as exc:
@@ -1148,14 +1483,15 @@ class WorkspaceManager:
         # session-id flag to the tool's resume form (`--resume` / `resume <uuid>`).
         # One briefed prompt for BOTH delivery sites: composing it twice is how
         # the launch argv and the remote dispatch come to disagree.
-        initial_prompt = self._brief_prompt(state, agent, request.initial_prompt)
+        initial_prompt = self._brief_prompt(state, agent, create_prompt)
         launch_decoration = self._compose_launch(
             agent,
             agent_session_id,
             state=state,
             initial_prompt=initial_prompt,
-            model=request.model,
+            model=model,
             resume=resume_session_id is not None,
+            native=state.native,
         )
 
         try:
@@ -1344,12 +1680,19 @@ class WorkspaceManager:
         """
         if state.runtime is not Runtime.CONTAINER or state.container is None:
             return None
+        if self._runtime_container_liveness is not None:
+            return self._runtime_container_liveness(state.container.container_id)
         if self._container_liveness is None:
             self._container_liveness = ContainerLiveness(docker_bin=self._cfg.container.docker_bin)
         return self._container_liveness.state_of(state.container)
 
     def pause(self, workspace_id: str, *, force: bool = False) -> WorkspaceState:
         state = self._store.get(workspace_id)
+        if state.native:
+            raise WorkspaceStateError(
+                "a native session cannot be paused: the owned provider process "
+                "holds its conversation; respawn or kill it instead"
+            )
         # Asked BEFORE any side effect, which is the entire fix: git's own
         # refusal fires at step three, by which point the session is dead and the
         # container stopped, and neither is undone. `force` means the user has
@@ -1420,7 +1763,7 @@ class WorkspaceManager:
         # (they live under the encoded-cwd projects folder), so the check is valid.
         resume = agent.kind in _RESUMABLE_KINDS and self._pinned_session_materialized(agent, state)
         launch_decoration = self._compose_launch(
-            agent, state.agent_session_id, state=state, resume=resume
+            agent, state.agent_session_id, state=state, resume=resume, native=state.native
         )
 
         worktree = Path(state.worktree_path)
@@ -2054,16 +2397,23 @@ class WorkspaceManager:
         The container argv is composed from the SAME
         :class:`~grove.core.container_agent.ContainerAgentEntry` that starts the
         agent, so the way in cannot drift from the way it was launched.
+
+        A NATIVE workspace attaches READ-ONLY on both arms: its pane is Grove's
+        worker printing the session's protocol frames, so a person can watch
+        the wire but a stray keystroke can never reach — or kill — the one
+        process holding the control channel. Steering goes through the verbs.
         """
         state = self._reconcile_status(self._store.get(workspace_id))
         ensure_can_attach(state)
-        entry = self._container_entry(state, session=self._cfg.container.tmux.session)
+        entry = self._container_entry(
+            state, session=self._cfg.container.tmux.session, read_only=state.native
+        )
         if entry is not None:
-            return ContainerAttach(argv=tuple(entry.argv(detached=False)))
-        return tmux.attach_instruction(state.tmux_session)
+            return ContainerAttach(argv=tuple(entry.argv(detached=False)), read_only=state.native)
+        return tmux.attach_instruction(state.tmux_session, read_only=state.native)
 
     def _container_entry(
-        self, state: WorkspaceState, *, session: str
+        self, state: WorkspaceState, *, session: str, read_only: bool = False
     ) -> ContainerAgentEntry | None:
         """The in-container entry for *session*, or ``None`` if there is no tmux there.
 
@@ -2084,6 +2434,7 @@ class WorkspaceManager:
             cwd=state.agent_cwd,
             session=session,
             cli=self._devcontainer(),
+            read_only=read_only,
         )
 
     # ─── several agents in one container ────────────────────────────────────
@@ -2316,7 +2667,124 @@ class WorkspaceManager:
             )
         return spec
 
-    def send_message(self, workspace_id: str, text: str, *, agent: str = "") -> None:
+    def _store_create_attachments(
+        self, state: WorkspaceState, request: CreateWorkspaceRequest
+    ) -> str | None:
+        """Store a create's attachments and return the prompt that names them.
+
+        The create-time twin of :meth:`add_attachment`, and deliberately NOT a
+        loop over it: that method resolves a workspace from the store, and this
+        one runs mid-create against a record whose reconciled status the store
+        would refuse. It shares everything that matters — the same
+        :class:`AttachmentStore`, the same namespace translation, the same
+        Grove-fenced block — so a file attached at create and one attached to a
+        later message are indistinguishable to the agent.
+
+        Returns ``request.initial_prompt`` untouched when there is nothing to
+        attach, so a create without files is byte-identical to what it was
+        before this existed. **A prompt-less create carrying files still gets
+        the block**: the person attached them and asked for a workspace, so the
+        files ARE the message, and this is the one place where composing a
+        prompt is reporting what happened rather than inventing a task.
+
+        Loud, like the upload route — a create whose files did not land must not
+        report success and hand the agent paths to nothing.
+        """
+        if not request.attachments:
+            return request.initial_prompt
+        self._git.ensure_excluded(*AttachmentStore.EXCLUDES)
+        stored: list[tuple[str, str, int]] = []
+        for upload in request.attachments:
+            try:
+                data = base64.b64decode(upload.content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise GroveError(f"attachment {upload.name!r} is not valid base64: {exc}") from exc
+            try:
+                saved = AttachmentStore.store(state.worktree_path, upload.name, data)
+            except ValueError as exc:
+                raise GroveError(str(exc)) from exc
+            except OSError as exc:
+                raise GroveError(
+                    f"could not store attachment in {state.worktree_path}: {exc}"
+                ) from exc
+            self._emit("attachment_added", state.id, {"name": saved.name, "bytes": str(len(data))})
+            stored.append((saved.name, self._attachment_path(state, saved), saved.size))
+        return GroveInstruction.append(
+            request.initial_prompt or "", GroveInstruction.attachments(stored)
+        )
+
+    def add_attachment(self, workspace_id: str, name: str, data: bytes) -> AttachmentView:
+        """Store one file for this workspace and say where the AGENT will find it.
+
+        Attachments land under the worktree (``.grove/attachments/``) for one
+        reason that decides everything else: the worktree is the only directory
+        a host process and a containerized agent both see, so a host temp
+        directory would be an address half the fleet could not open. The
+        translation into the agent's namespace is the same re-rooting
+        ``GROVE_PHASE_FILE`` gets, and it happens HERE rather than in the store
+        because only the workspace record knows whether there is a container to
+        translate for.
+
+        The git exclude is re-asserted on every upload rather than only at
+        create. That is not defensiveness: a workspace that predates this
+        feature has no such exclude, and its first attachment is the moment an
+        untracked file starts blocking its own ``pause`` and ``kill``.
+
+        Loud by contract, unlike the read paths: an over-size payload
+        (``GroveError``) or an unwritable worktree must never report success and
+        leave the agent pointed at a file that is not there.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        self._git.ensure_excluded(*AttachmentStore.EXCLUDES)
+        try:
+            stored = AttachmentStore.store(state.worktree_path, name, data)
+        except ValueError as exc:
+            raise GroveError(str(exc)) from exc
+        except OSError as exc:
+            raise GroveError(f"could not store attachment in {state.worktree_path}: {exc}") from exc
+        self._emit("attachment_added", state.id, {"name": stored.name, "bytes": str(len(data))})
+        return AttachmentView(
+            id=stored.id, name=stored.name, path=self._attachment_path(state, stored)
+        )
+
+    @staticmethod
+    def _attachment_path(state: WorkspaceState, attachment: Attachment) -> str:
+        """*attachment*'s path as the workspace's own agent would open it.
+
+        The ``_phase_env`` rule, applied to a second artifact under the same
+        worktree: a container gets its own re-rooted path off the folder it
+        reported, never a host path Grove translated by guesswork. A container
+        that reported no workspace folder falls back to the host path here
+        rather than to nothing — unlike the phase file, where an unusable path
+        would send a WRITE somewhere unread, an unusable path in a prompt is a
+        file the agent fails to open and says so.
+        """
+        container = state.container
+        if container is None or not container.remote_workspace_folder:
+            return str(attachment.path)
+        return container.container_path(worktree=Path(state.worktree_path), path=attachment.path)
+
+    def _attachment_block(self, state: WorkspaceState, ids: Sequence[str]) -> str:
+        """The Grove-fenced attachment list for *ids*, or ``""`` if none resolve.
+
+        An id naming nothing is skipped rather than refused: the file may have
+        gone with a ``pause`` that removed the worktree, and dropping a message
+        a human typed because one of its attachments expired is the worse
+        failure. The block states what it found; the agent sees exactly the
+        files it can actually open.
+        """
+        found: list[tuple[str, str, int]] = []
+        for attachment_id in ids:
+            stored = AttachmentStore.resolve(state.worktree_path, attachment_id)
+            if stored is None:
+                logger.warning("attachment {} not found for workspace {}", attachment_id, state.id)
+                continue
+            found.append((stored.name, self._attachment_path(state, stored), stored.size))
+        return GroveInstruction.attachments(found)
+
+    def send_message(
+        self, workspace_id: str, text: str, *, agent: str = "", attachments: Sequence[str] = ()
+    ) -> None:
         """Type ``text`` into the workspace's agent pane and submit it.
 
         Grove's follow-up/steer surface for tmux-hosted agents.
@@ -2325,6 +2793,13 @@ class WorkspaceManager:
         to the adapter arm; the session must be live (OFFLINE/PAUSED →
         typed ``WorkspaceStateError``); a pane must resolve via the same
         ``pane_target`` policy peek captures from (None → ``PaneNotFound``).
+
+        ``attachments`` names files already uploaded through
+        :meth:`add_attachment`. They are appended to the human's own text as a
+        Grove-fenced block naming each file and its path — the agent reads a
+        file with the tools it already has, so an attachment needs an address
+        rather than a new capability. The client sends IDS, never paths: a path
+        supplied by a caller is a caller choosing what the agent opens.
 
         ``agent`` names one of the ADDITIONAL agents a container may host;
         empty is the workspace's own agent and every gate below is
@@ -2339,15 +2814,18 @@ class WorkspaceManager:
         secrets and events fan out to every subscriber and log sink.
         """
         state = self._reconcile_status(self._store.get(workspace_id))
+        text = GroveInstruction.append(text, self._attachment_block(state, attachments))
         if agent:
             self._container_tmux_or_refuse(state, session=agent)
         elif state.agent_kind is not None and state.agent_kind in _REMOTE_STEERED_KINDS:
             self._steer_remote(state, "message", text)
             return
-        if not agent and not self._launch_backend.provides_pane:
-            # Paneless runtime: no tmux pane to type into, so deliver over
+        if not agent and self._steers_natively(state):
+            # No tmux pane to type into (a native session's pane shows the
+            # worker's output; a paneless runtime has none), so deliver over
             # the agent's native channel instead of raising. Same
             # dispatch-point pattern as the remote arm — one seam, not a fork.
+            state = self._revive_for_steer(state)
             self._steer_native(state, "message", text)
             return
         ensure_can_steer(state)
@@ -2364,31 +2842,112 @@ class WorkspaceManager:
             {"target": pane.display, "text_length": str(len(text))},
         )
 
-    def interrupt(self, workspace_id: str) -> None:
-        """Interrupt the workspace's agent, where its adapter supports it.
+    def _revive_for_steer(self, state: WorkspaceState) -> WorkspaceState:
+        """Respawn a native workspace whose owner is gone, so a message lands.
 
-        Today no tmux-hosted kind does: an Escape or C-c keystroke into an
-        arbitrary CLI is not a contract — it might cancel a prompt, kill a
-        shell job, or do nothing, and the provider-boundary rule forbids
-        guessing per-tool key bindings. So claude_code/generic refuse with
-        ``SteeringUnsupported``. The mewbo arm (a real API interrupt) goes
-        through the same ``_steer_remote`` dispatch point as send_message.
+        A native session's owner is an ordinary process: a reboot, an OOM kill
+        or a crashed worker takes it, and every steer verb then answers "no
+        connected native owner" (409) until somebody runs `respawn` by hand.
+        That refusal is honest and it is a dead end for the one action a person
+        actually wants — the conversation is intact on disk, `respawn` now
+        CONTINUES it (see `respawn`), so the remedy is mechanical and Grove can
+        simply take it.
+
+        Scoped deliberately narrow. **Only a message**, never `interrupt` or
+        `set_model`: those name something the dead session was doing, so
+        reviving to deliver them would answer a question about a process that
+        no longer exists. **Only when OFFLINE and no owner is connected** —
+        a disconnected worker may simply be reconnecting. Explicit respawn also
+        permits runtime promotion, which must never be triggered by a lost link.
+        And **best-effort**: a
+        respawn that fails leaves the original refusal to be raised by the
+        steer itself, which is a better error than whatever went wrong here.
         """
-        state = self._store.get(workspace_id)
+        if (
+            not state.native
+            or state.status is not WorkspaceStatus.OFFLINE
+            or self._native_owner_connected(state)
+        ):
+            return state
+        logger.info("workspace {} has no native owner; respawning to steer", state.id)
+        try:
+            revived = self.respawn(state.id)
+        except GroveError as exc:
+            logger.warning("auto-respawn for {} failed: {}", state.id, exc)
+            return state
+        self._emit("respawned", state.id, {"reason": "steer_revived"})
+        return revived
+
+    def _native_owner_connected(self, state: WorkspaceState) -> bool:
+        """Whether a native owner is reachable for ``state`` right now.
+
+        Asked of the steer client rather than of the record, because the record
+        cannot know: `WorkspaceState.native` says what this workspace IS, and
+        the question here is whether its worker is still on the other end. A
+        client with no such probe answers ``True`` so nothing is ever restarted
+        on a capability Grove could not check.
+        """
+        probe = getattr(self._native_steer(), "owner_connected", None)
+        return True if probe is None else bool(probe(state))
+
+    def send_keys(self, workspace_id: str, key: tmux.SendKey) -> None:
+        """Deliver one named key, without interpreting what the application does.
+
+        Unlike interrupt's provider-level intent, this requires a live terminal.
+        The caller names only a workspace and a closed enum member: pane and
+        server resolution stay identical to peek and ordinary message delivery.
+        Remote agents must not receive keys in an unrelated local shell.
+        """
+        if not isinstance(key, tmux.SendKey):
+            raise SteeringUnsupported("send keys requires a SendKey enum member")
+        state = self._reconcile_status(self._store.get(workspace_id))
+        if state.agent_kind in _REMOTE_STEERED_KINDS or self._steers_natively(state):
+            raise SteeringUnsupported("send keys requires the agent's live terminal")
+        ensure_can_steer(state)
+        pane = self._agent_pane(state)
+        if pane is None:
+            raise PaneNotFound(
+                f"no tmux pane resolved for workspace {state.id} "
+                f"(session {state.tmux_session!r} reports no windows)"
+            )
+        pane.send_keys((key,), settle_ms=self._cfg.tmux.steer_settle_ms)
+        self._emit(
+            "control_invoked",
+            state.id,
+            {"control": "send_keys", "target": pane.display, "key": key.value},
+        )
+
+    def interrupt(self, workspace_id: str) -> None:
+        """Interrupt one supported agent without sending a process signal.
+
+        Claude Code's REPL routes Escape to its abort controller, the same path
+        its native remote-control interrupt frame uses. A pending permission
+        prompt instead takes its ``onAbort()`` path, so Escape's effect is
+        deliberately state-dependent. SIGINT is never used: Claude Code has no
+        interactive SIGINT handler and the signal can kill the session. Other
+        tmux-hosted kinds retain ``SteeringUnsupported`` rather than receiving a
+        guessed cancel key.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
         if state.agent_kind is not None and state.agent_kind in _REMOTE_STEERED_KINDS:
             self._steer_remote(state, "interrupt")
             return
-        if not self._launch_backend.provides_pane:
-            # Paneless runtime: no pane to signal, so route the interrupt
-            # over the native channel instead of raising. Best-effort — a
-            # native interrupt primitive is still landing (stream-json control),
-            # but this no longer refuses the op the way the old capability gap did.
+        if self._steers_natively(state):
             self._steer_native(state, "interrupt")
             return
-        raise SteeringUnsupported(
-            f"agent kind {state.agent_kind or 'generic'!r} has no safe interrupt: "
-            "injecting a cancel keystroke into an arbitrary CLI is not a contract"
-        )
+        if self.effective_kind(state) != "claude_code":
+            raise SteeringUnsupported(
+                f"agent kind {state.agent_kind or 'generic'!r} has no safe interrupt: "
+                "injecting a cancel keystroke into an arbitrary CLI is not a contract"
+            )
+        ensure_can_steer(state)
+        pane = self._agent_pane(state)
+        if pane is None:
+            raise PaneNotFound(
+                f"no tmux pane resolved for workspace {state.id} "
+                f"(session {state.tmux_session!r} reports no windows)"
+            )
+        pane.press_escape()
 
     def _steer_remote(
         self,
@@ -2419,62 +2978,99 @@ class WorkspaceManager:
         else:
             self._mewbo().interrupt(session_id)
 
+    def _steers_natively(self, state: WorkspaceState) -> bool:
+        """Does steering for ``state`` go to a control channel rather than a pane?
+
+        Two runtimes answer yes: a native workspace (Grove owns the session and
+        a worker relays controls to the provider) and a paneless launch backend.
+        Every pane-shaped verb reads this one predicate, so the two cannot be
+        gated differently by accident.
+        """
+        return state.native or not self._launch_backend.provides_pane
+
+    def _question_session_id(self, state: WorkspaceState) -> str | None:
+        """The session whose standing ask `answer_question` may address.
+
+        The minted id for a Claude workspace; for a native CODEX workspace —
+        which mints nothing — the discovered primary, resolved the way the
+        per-request todo read resolves it, so the id the activity stream
+        published beside the question is the one the answer is checked against.
+        """
+        if state.agent_session_id or not state.native:
+            return state.agent_session_id
+        return self._todo_session_id(state)
+
     def _steer_native(
         self,
         state: WorkspaceState,
-        op: Literal["message", "interrupt"],
+        op: Literal["message", "interrupt", "set_model", "answer"],
         text: str | None = None,
     ) -> None:
-        """THE single dispatch point for paneless (headless) agents.
+        """THE single dispatch point for agents steered over a native channel.
 
-        The ``_steer_remote`` mirror for a runtime that has no tmux pane
-        (``provides_pane`` False): deliver over the agent's native channel
-        instead of typing into a pane. Best-effort like the client it delegates to
-        — a delivery failure logs and returns, never raising into the caller's
-        path (steering a paneless runtime is fire-and-forget, not a transaction).
-        The audit event mirrors the tmux/remote arms (target + text length, never
-        content). A workspace with no recorded session (a generic detached shell)
-        has nothing to steer — the same ``AgentSessionNotFound`` as the remote arm.
+        The ``_steer_remote`` mirror for a workspace with no pane to type into:
+        a native session (the worker holds the provider's control channel) or a
+        paneless runtime (the Grove channel receiver). Messages are best-effort
+        like the client they delegate to; ``interrupt`` and ``set_model`` raise
+        the client's typed refusal, because a control that silently did nothing
+        is the bug this arm replaced. The audit event mirrors the tmux/remote
+        arms (target + text length, never content).
         """
-        session_id = state.agent_session_id
-        if not session_id:
-            raise AgentSessionNotFound(
-                f"workspace {state.id} has no recorded agent session to steer natively"
-            )
+        target = f"native:{state.id}"
         if op == "message":
-            self._native_steer().send_message(session_id, text or "")
+            self._native_steer().send_message(state, text or "")
             self._emit(
-                "message_sent",
-                state.id,
-                {"target": f"native:{session_id}", "text_length": str(len(text or ""))},
+                "message_sent", state.id, {"target": target, "text_length": str(len(text or ""))}
             )
+        elif op == "interrupt":
+            self._native_steer().interrupt(state)
+        elif op == "answer":
+            self._native_steer().answer(state, text or "")
         else:
-            self._native_steer().interrupt(session_id)
+            self._native_steer().set_model(state, text or "")
+            self._emit("control_invoked", state.id, {"control": "model", "target": target})
 
     def answer_question(self, workspace_id: str, request: QuestionAnswerRequest) -> None:
-        """Drive a pending ``AskUserQuestion`` to resolution by keystroke.
+        """Answer a pending question by DISMISSING it and restating the batch as text.
 
-        Dispatch semantics, like ``send_message``: this returns as soon as the
-        keystrokes are sent — the resolution (the ``tool_result``) lands later and
-        streams via the transcript + the PostToolUse sidecar clear. Gates, in
-        order: the workspace must exist (``WorkspaceNotFound`` → 404);
-        ``session_id`` must be the session Grove minted for this workspace's pane
-        (``QuestionNotPending`` → 409, else a foreign or cross-workspace
-        session_id could steer keystrokes into the wrong pane); a captured
-        question for ``session_id`` must still match ``tool_use_id``
+        Grove used to drive the provider's own question widget by keystroke, and
+        the cost of that was structural rather than incidental. A picker is a
+        stateful TUI, so a digit's meaning depends on what is currently painted;
+        every provider paints something different; and a batch of four questions
+        with a tab strip and one shared Submit has no keystroke grammar that a
+        second provider shares. The measured failure was the worst possible
+        shape — answers silently mapped onto the *wrong* questions while the
+        request reported success.
+
+        So the widget is not driven at all. Escape takes the provider's own
+        cancel route, the whole batch is rendered into one Grove-fenced message,
+        and that message goes down the ordinary steering path. What is left is
+        provider-neutral by construction: every agent Grove can steer can be
+        sent Escape and a line of text, which is why this now works for Codex
+        and for whatever ships next, where the keystroke grammar worked for
+        exactly one build of one tool.
+
+        Dispatch semantics, like ``send_message``: this returns once the message
+        is delivered, and the agent's actual response lands later on the
+        transcript. Gates, in order: the workspace must exist
+        (``WorkspaceNotFound`` → 404); ``session_id`` must be the session Grove
+        minted for this workspace's pane (``QuestionNotPending`` → 409, else a
+        foreign session_id could steer into the wrong pane); a captured question
+        for ``session_id`` must still match ``tool_use_id``
         (``QuestionNotPending`` → 409, the human may have answered in the
-        terminal); the plan must fit the captured questions (``QuestionAnswerInvalid``
-        → 422); a pane must resolve (``PaneNotFound`` → 409).
+        terminal); the plan must fit the captured questions
+        (``QuestionAnswerInvalid`` → 422); a pane must resolve
+        (``PaneNotFound`` → 409).
 
         The capture is re-checked immediately before the send to *shrink* — never
-        close — the terminal race: if the human answers between our check and our
-        keystrokes, the extra keys land in the freshly-reset composer as harmless
-        literal text, never as a second answer to a question that is gone. The
-        keystroke grammar itself lives in the Claude adapter (the provider
-        boundary); the manager only orchestrates and maps errors.
+        close — the terminal race. Losing that race is now benign in a way it
+        never was under keystrokes: if the human answered a moment earlier, the
+        Escape hits a composer that has nothing to cancel and the text arrives as
+        an ordinary steering message, which is a duplicate answer rather than a
+        wrong one.
         """
         state = self._reconcile_status(self._store.get(workspace_id))
-        if request.session_id != state.agent_session_id:
+        if request.session_id != self._question_session_id(state):
             raise QuestionNotPending(
                 f"session {request.session_id!r} is not the agent session bound to "
                 f"workspace {state.id}'s pane (expected {state.agent_session_id!r})"
@@ -2487,13 +3083,28 @@ class WorkspaceManager:
             AnswerSelection(indexes=tuple(a.selected_indexes or ()), text=a.text)
             for a in request.answers
         ]
-        if not self._launch_backend.provides_pane:
-            # Paneless runtime: no pane to keystroke the picker, so
-            # render the answer to text and deliver it over the native channel.
-            # The keystroke grammar's picker-only rejections (confirm / optionless
-            # free-text / multiSelect+text) don't apply — plain text can answer
-            # any question — so this arm skips `build_answer_keys` deliberately.
-            self._steer_native(state, "message", native.render_answer(questions, selections))
+        mismatch = AgentQuestion.plan_mismatch(questions, selections)
+        if mismatch is not None:
+            raise QuestionAnswerInvalid(mismatch)
+        if state.native:
+            # The owner holds the provider's own ask (a `can_use_tool`, a
+            # `requestUserInput`, an approval), so the answer is delivered as
+            # STRUCTURE — the provider's answer frame — never as prose: the
+            # tool's result IS the human's choice, and restating it as a
+            # message would leave the ask standing.
+            self._steer_native(
+                state,
+                "answer",
+                json.dumps(
+                    {
+                        "session_id": request.session_id,
+                        "tool_use_id": pending.tool_use_id,
+                        "answers": [
+                            {"indexes": list(a.indexes), "text": a.text} for a in selections
+                        ],
+                    }
+                ),
+            )
             self._emit(
                 "question_answered",
                 state.id,
@@ -2504,19 +3115,43 @@ class WorkspaceManager:
                 },
             )
             return
-        try:
-            ops = ClaudeCodeAdapter.build_answer_keys(questions, selections)
-        except ValueError as exc:
-            raise QuestionAnswerInvalid(str(exc)) from exc
+        if any(question.selects_a_mode for question in questions):
+            self._answer_by_selection(state, pending, request.session_id, selections)
+            return
+        message = GroveInstruction.answers(questions, selections)
+        if self._steers_natively(state):
+            # No pane: nothing to dismiss and nowhere to type, so the same
+            # rendered message goes over the agent's native channel.
+            # One renderer, two transports — which is the point of rendering at
+            # all rather than driving a widget.
+            self._steer_native(state, "message", message)
+            self._emit(
+                "question_answered",
+                state.id,
+                {
+                    "target": f"native:{request.session_id}",
+                    "tool_use_id": pending.tool_use_id,
+                    "answers": str(len(selections)),
+                },
+            )
+            return
+        ensure_can_steer(state)
         pane = self._agent_pane(state)
         if pane is None:
             raise PaneNotFound(
                 f"no tmux pane resolved for workspace {state.id} "
                 f"(session {state.tmux_session!r} reports no windows)"
             )
-        # Re-check the capture right before the send to shrink the terminal race.
         self._pending_capture(request.session_id, request.tool_use_id)
-        pane.send_keys(ops, settle_ms=self._cfg.tmux.steer_settle_ms)
+        pane.press_escape()
+        # `settle_before` is load-bearing rather than defensive: the composer
+        # that receives this text does not exist until the question widget above
+        # it has finished tearing down, and text typed into that gap is dropped.
+        pane.send_text(
+            message,
+            settle_ms=self._cfg.tmux.steer_settle_ms,
+            settle_before=True,
+        )
         self._emit(
             "question_answered",
             state.id,
@@ -2524,6 +3159,78 @@ class WorkspaceManager:
                 "target": pane.display,
                 "tool_use_id": pending.tool_use_id,
                 "answers": str(len(selections)),
+            },
+        )
+
+    def _answer_by_selection(
+        self,
+        state: WorkspaceState,
+        pending: PendingQuestion,
+        session_id: str,
+        selections: Sequence[AnswerSelection],
+    ) -> None:
+        """Answer a plan approval by LANDING ON ITS ROW, never by prose.
+
+        The measured reason this exists (Claude Code 2.1.270, 2026-09-13):
+        approving a plan is a *mode transition*, performed inside
+        ``ExitPlanMode``'s own body, whose destination is whichever row the
+        human selects. Nothing outside the dialog can perform it — a
+        ``PreToolUse`` or ``PermissionRequest`` hook returning ``allow`` fires
+        correctly and is then ignored, leaving the dialog up and the session in
+        plan mode. Worse, the prose path *actively rejects*: its opening Escape
+        records ``User rejected Claude's plan`` and the sentence after it is read
+        as a brand-new task, while the daemon answered 204.
+
+        So Grove drives the one control that works, and does it the narrowest way
+        that can be right:
+
+        - **Position, never label.** ``Down`` per index then ``Enter``, counting
+          from the dialog's first row. The rendered text is not a contract (it
+          moved between two builds one version apart); the row order is the part
+          that holds, and Grove never reads the pane to find a row.
+        - **No Escape.** Escape is this dialog's *reject*, so the dismissal that
+          every other answer opens with would destroy the thing being approved.
+        - **Nothing typed.** A row is chosen with arrows, so no text enters a
+          modal composer and the whole paste/vim-mode hazard is absent.
+        - **One re-check, then commit.** The capture is re-read immediately
+          before the keys go out to shrink the terminal race. It cannot close it:
+          if the human answers in the terminal first, these keys land on whatever
+          replaced the dialog. That is the honest residual cost of driving a
+          widget, and it is why this path is confined to the one question that
+          has no other channel.
+
+        Delivered is not answered, exactly like steering: the agent's own
+        ``tool_result`` (``User has approved your plan.``) is the confirmation,
+        and it arrives on the transcript.
+        """
+        if self._steers_natively(state):
+            raise SteeringUnsupported(
+                "approving a plan needs the agent's own dialog, which this "
+                "runtime has no pane to display — answer it in the session itself"
+            )
+        ensure_can_steer(state)
+        pane = self._agent_pane(state)
+        if pane is None:
+            raise PaneNotFound(
+                f"no tmux pane resolved for workspace {state.id} "
+                f"(session {state.tmux_session!r} reports no windows)"
+            )
+        # `plan_mismatch` has already refused anything but exactly one index on a
+        # mode-selecting question, so this is a total read rather than a guess.
+        chosen = selections[0].indexes[0]
+        keys: list[tmux.SendOp] = [tmux.SendKey.DOWN] * (chosen - PLAN_APPROVAL_FIRST_ROW)
+        keys.append(tmux.SendKey.ENTER)
+        self._pending_capture(session_id, pending.tool_use_id)
+        pane.send_keys(keys, settle_ms=self._cfg.tmux.steer_settle_ms, settle_before=True)
+        self._emit(
+            "question_answered",
+            state.id,
+            {
+                "target": pane.display,
+                "tool_use_id": pending.tool_use_id,
+                "answers": str(len(selections)),
+                "option": str(chosen + 1),
+                "delivery": "selection",
             },
         )
 
@@ -2913,6 +3620,14 @@ class WorkspaceManager:
         cleaned = model.strip()
         if not cleaned:
             raise CapabilityUnavailable("cannot switch to an empty model id")
+        state = self._reconcile_status(self._store.get(workspace_id))
+        if self.effective_kind(state) in _CONTROL_KINDS and self._steers_natively(state):
+            # A native session takes the provider's own control verb
+            # (stream-json `set_model` / app-server `thread/settings/update`)
+            # rather than a slash command typed as prose — same id, forwarded
+            # verbatim, but acknowledged by the protocol instead of the screen.
+            self._steer_native(state, "set_model", cleaned)
+            return
         self._deliver_control(workspace_id, f"model {cleaned}")
 
     def _deliver_control(self, workspace_id: str, invocation: str) -> None:
@@ -2959,7 +3674,7 @@ class WorkspaceManager:
         return pending
 
     def respawn(self, workspace_id: str) -> WorkspaceState:
-        """Recreate the tmux session for an OFFLINE workspace.
+        """Recover a missing session or explicitly restart a host-native owner.
 
         OFFLINE means the persisted intent is RUNNING but the tmux session
         has vanished externally (the Grove user closed it, the host rebooted,
@@ -3012,12 +3727,30 @@ class WorkspaceManager:
                 "use kill to clean up the stranded record"
             )
 
-        # Respawn starts a *new* agent session (the old process vanished), so mint
-        # a fresh id — a new transcript/remote session, not a continuation.
-        # resume() keeps the id; this is the deliberate other branch. Generic
-        # agents (no persisted id) stay untracked.
-        respawn_session_id: str | None = None
-        if state.agent_session_id:
+        # Respawn CONTINUES a session whose transcript already exists, and mints
+        # a fresh one only when there is nothing to continue.
+        #
+        # The old shape always minted, on the reasoning that "the old process
+        # vanished". That is true of the PROCESS and false of the CONVERSATION:
+        # the session lives in the transcript file, not in the dead child, and
+        # `claude -p --resume <id>` / `codex app-server` + `thread/resume` both
+        # continue it — measured on 2.1.270 and 0.154.0, a resumed session
+        # recalls a codeword set before its owner exited, and Claude's resume
+        # keeps the same id and file. So a respawn after a crashed worker,
+        # a reboot or a `kill -9` now picks the work back up where it stopped
+        # instead of starting an amnesiac agent in the same worktree.
+        #
+        # `_pinned_session_materialized` is the same predicate `resume()` gates
+        # on, for the same reason: a pinned id with no transcript is a dead
+        # pointer, and asking a provider to resume one fails the launch where
+        # minting simply starts.
+        respawn_session_id: str | None = state.agent_session_id or None
+        resume = bool(
+            respawn_session_id
+            and agent.kind in _RESUMABLE_KINDS
+            and self._pinned_session_materialized(agent, state)
+        )
+        if state.agent_session_id and not resume:
             try:
                 respawn_session_id = self._mint_agent_session_id(
                     agent, worktree=state.agent_cwd, title=state.title
@@ -3025,7 +3758,9 @@ class WorkspaceManager:
             except MewboError as exc:
                 self._emit("error", state.id, {"phase": "respawn.agent_session", "error": str(exc)})
                 raise
-        launch_decoration = self._compose_launch(agent, respawn_session_id, state=state)
+        launch_decoration = self._compose_launch(
+            agent, respawn_session_id, state=state, native=state.native, resume=resume
+        )
 
         init_changes: dict[str, object] = {}
         if state.placement is Placement.WORKTREE and self._cfg.init_script.run_on_resume:
@@ -3059,8 +3794,9 @@ class WorkspaceManager:
         # the promotion the user was told to run dies after the container is up.
         # Best-effort: a session that is already gone is the normal case.
         if self._launch_backend.provides_pane:
-            with contextlib.suppress(TmuxError):
-                tmux.kill_session(state.tmux_session)
+            # Stop the old writer before another process resumes its transcript.
+            # An absent session is already a no-op; a failed stop must be loud.
+            tmux.kill_session(state.tmux_session, wait_for_exit=state.native)
 
         try:
             transcript_context = self._launch(state, agent, launch_decoration)
@@ -3363,38 +4099,19 @@ class WorkspaceManager:
             return tuple(get_adapter(kind).locate_transcripts(cwd, state.agent_session_id))
 
     @staticmethod
-    @contextlib.contextmanager
-    def transcript_config_dir_scope(kind: str, config_dir: str | None) -> Iterator[None]:
-        """Point ``kind``'s config-dir env var at ``config_dir`` for one read.
+    def transcript_config_dir_scope(
+        kind: str, config_dir: str | None
+    ) -> contextlib.AbstractContextManager[None]:
+        """Apply ``kind``'s root override for one adapter read.
 
-        Filesystem adapters resolve ``CLAUDE_CONFIG_DIR``/``CODEX_HOME``
-        ambiently from ``os.environ`` on every call — never a parameter, since
-        threading one through would be adapter parsing, off-limits here —
-        so honoring a workspace's ``transcript_context.config_dir`` override
-        means scoping the process env around the read itself. A no-op (and
-        the true default-behavior path) when there is no override
-        (``config_dir is None``) or ``kind`` has no config-dir env
-        (``TranscriptContext.CONFIG_DIR_ENV`` — mewbo/generic). Restores the
-        prior value (or its absence) on exit. Best-effort like every adapter
-        read; callers should hold this for the shortest span — one locate/read
-        call, never across a whole request — since the env is process-global.
-
-        Reads the same kind→var map ``TranscriptContext.for_launch`` writes
-        from, so the scope can never look up a var the launch didn't record.
+        Filesystem adapters resolve their roots from the task-local helper
+        before consulting ``os.environ``.  This preserves the established
+        signature and ``None`` no-op behavior without process-global mutation:
+        executor workers reading different workspace profiles cannot cross-read
+        each other's transcripts.  An empty string remains an explicit clearing
+        override, matching the existing scope contract.
         """
-        var = TranscriptContext.CONFIG_DIR_ENV.get(kind)
-        if config_dir is None or var is None:
-            yield
-            return
-        prior = os.environ.get(var)
-        os.environ[var] = config_dir
-        try:
-            yield
-        finally:
-            if prior is None:
-                os.environ.pop(var, None)
-            else:
-                os.environ[var] = prior
+        return config_dir_scope(TranscriptContext.CONFIG_DIR_ENV.get(kind), config_dir)
 
     def transcript_scope(self, state: WorkspaceState) -> contextlib.AbstractContextManager[None]:
         """THE scope every adapter read for ``state`` must run inside.
@@ -3535,13 +4252,18 @@ class WorkspaceManager:
         return self._mewbo_client
 
     def _native_steer(self) -> native.NativeSteerClient:
-        """The paneless-steering client: injected (tests) or built once.
+        """The pane-less steering client: injected, or built once per process shape.
 
-        Default is the channel-backed :class:`~grove.core.native.ChannelSteerClient`
-        — the ``_mewbo`` pattern for the native (non-tmux) delivery path.
+        The daemon injects its coordinator-backed client so a route reaches the
+        owner worker in-process. Any other process (CLI, TUI) has no road to
+        the worker except the daemon, so the default is
+        :class:`~grove.core.native.DaemonSteerClient` at the configured hook
+        URL — the ``_mewbo`` pattern for the native delivery path.
         """
         if self._native_steer_client is None:
-            self._native_steer_client = native.ChannelSteerClient()
+            self._native_steer_client = native.DaemonSteerClient(
+                self._cfg.hooks.daemon_url or DEFAULT_DAEMON_LOOPBACK_URL
+            )
         return self._native_steer_client
 
     def _launch(
@@ -3605,10 +4327,35 @@ class WorkspaceManager:
         packages the assembled command as structured data for the backend.
         """
         env = self._launch_env(state, agent)
+        command = agent.command
+        if state.native:
+            # Deferred: the launch module mints credentials through the auth
+            # store, which a manager that only ever reads never needs.
+            from grove.core.native_launch import NativeLaunch  # noqa: PLC0415
+
+            share = self._share_plan(state, agent)
+            # Mailbox decoration carries its initial prompt separately; the
+            # native owner receives provider argv without a trailing task.
+            initial_prompt, *native_decoration = decoration
+            mailbox = NativeLaunch.prepare(
+                workspace_id=state.id,
+                provider=agent.kind,
+                command=(*shlex.split(agent.command), *native_decoration),
+                initial_prompt=initial_prompt,
+                container=state.runtime is Runtime.CONTAINER,
+                config_root=share.host_config_dir if share else None,
+                container_config_root=str(share.container_config_dir) if share else None,
+                # The hook spool, at its HOST path: the same directory a
+                # containerized hook spools into, bind-mounted at its own
+                # absolute path, so one string resolves on both sides.
+                ask_spool_dir=paths.agent_hook_spool_dir(),
+            )
+            command = shlex.join(mailbox.command)
+            decoration = list(mailbox.decoration)
         return LaunchSpec(
             session_name=state.tmux_session,
             cwd=state.agent_cwd,
-            command=agent.command,
+            command=command,
             decoration=tuple(decoration),
             env=env,
             # The inherited half of the telemetry reservation. `_launch_env`
@@ -3765,6 +4512,30 @@ class WorkspaceManager:
             }
         )
 
+    @staticmethod
+    def _native_for(agent: AgentSpec, runtime: Runtime, choice: bool | None = None) -> bool:
+        """Can THIS create own the session natively, given where it will run?
+
+        ``choice`` is the request's per-launch answer (``None`` = the roster
+        entry's own ``native``), resolved through `AgentSpec.native_for` so the
+        kind gate is applied in exactly one place. A container owner reaches
+        the daemon only through the private mailbox socket the daemon mounts
+        (`GROVE_MAILBOX_SOCKET`); without one the worker would boot, fail to
+        register, and the workspace would sit with no agent at all — after a
+        minutes-long provision. The terminal launch is the honest degrade, said
+        once here rather than failing at launch.
+        """
+        if not agent.native_for(choice):
+            return False
+        if runtime is Runtime.CONTAINER and not os.environ.get("GROVE_MAILBOX_SOCKET"):
+            logger.warning(
+                "agent {!r} is native but GROVE_MAILBOX_SOCKET is unset; a container "
+                "cannot reach the daemon, so this workspace runs the interactive terminal",
+                agent.name,
+            )
+            return False
+        return True
+
     def _briefed_by_hook(self, state: WorkspaceState, agent: AgentSpec) -> bool:
         """Can THIS launch's hook deliver the first-turn brief?
 
@@ -3809,11 +4580,22 @@ class WorkspaceManager:
         return {} if rendered is None else {AgentBrief.PATH_ENV: str(rendered)}
 
     def _brief_text(self, state: WorkspaceState) -> str:
-        """This workspace's brief: Grove's own, plus whatever the cascade adds.
+        """This workspace's brief: Grove's own, its own specification, then the cascade's.
 
         The one composer, so the hook road and the initial-prompt road cannot
         hand an agent two different briefs — which is exactly the drift that
         would go unnoticed, since a given workspace only ever takes one of them.
+
+        **The specification exists because the brief's central claim was
+        deniable without it.** "You are in a Grove workspace" is unfalsifiable
+        from inside a ROOT-placement workspace: the agent is standing in an
+        ordinary repository checkout on an ordinary branch, with no
+        ``.worktrees/`` in the path and nothing else to corroborate the note, so
+        the reasonable reading is that the note is boilerplate about somebody
+        else's situation. Naming the placement, the branch, the runtime and the
+        phase file turns it into a claim the agent can check against what it
+        sees — and every one of those facts is already on the record, so this
+        costs a render rather than a read.
 
         ``self_naming`` is gated on an empty description rather than on how the
         title was made: title generation happens in the CLIENT (``grove create``
@@ -3821,9 +4603,50 @@ class WorkspaceManager:
         without a new request field threaded through every caller — and the
         description is the better question anyway.
         """
-        return AgentBrief.compose(
-            appended=self._cfg.brief.instructions,
-            unnamed=self._cfg.brief.self_naming and not (state.description or "").strip(),
+        return GroveInstruction.workspace(
+            AgentBrief.compose(
+                appended=self._cfg.brief.instructions,
+                unnamed=self._cfg.brief.self_naming and not (state.description or "").strip(),
+            ),
+            self._brief_facts(state),
+        )
+
+    @staticmethod
+    def _brief_facts(state: WorkspaceState) -> tuple[tuple[str, str], ...]:
+        """This workspace's own specification, as label/value pairs for the brief.
+
+        Every value is read off the persisted record, never re-derived: the
+        point is to tell the agent what Grove BELIEVES about it, which is what
+        every dashboard, ticket comment and sibling agent is also reading. A
+        fact Grove does not hold renders as nothing rather than as a guess —
+        ``GroveInstruction.workspace`` drops an empty value.
+
+        Placement carries a sentence rather than a word because it is the fact
+        that was being misread: "root" alone reads as a directory layout detail,
+        where the sentence says outright that an ordinary-looking checkout is
+        still a Grove workspace.
+        """
+        placement = (
+            "the repository root itself — Grove created no separate worktree, so this is a "
+            "Grove workspace even though the path looks like an ordinary checkout"
+            if state.placement is Placement.ROOT
+            else f"a dedicated worktree at {state.worktree_path}"
+        )
+        return (
+            ("id", state.id),
+            ("title", state.title),
+            ("description", (state.description or "").strip()),
+            ("repository", str(state.repo_root)),
+            ("branch", f"{state.branch} (from {state.base_branch})"),
+            ("placement", placement),
+            ("runtime", state.runtime.value),
+            ("agent", state.agent_name),
+            # Through `_phase_env` rather than `PhaseFile.path_for`, so the brief
+            # names the same path the agent's own environment does — including a
+            # container's re-rooted one, and including the deliberate silence
+            # when a container reported no workspace folder to re-root against.
+            ("phase file", WorkspaceManager._phase_env(state, None).get(PhaseFile.PATH_ENV, "")),
+            ("attached tickets", ", ".join(ref.key for ref in state.ticket_refs)),
         )
 
     def _brief_prompt(
@@ -3896,7 +4719,7 @@ class WorkspaceManager:
             )
         }
 
-    def _compose_launch(
+    def _compose_launch(  # noqa: PLR0912 — provider launch modes remain explicit
         self,
         agent: AgentSpec,
         session_id: str | None,
@@ -3905,8 +4728,15 @@ class WorkspaceManager:
         initial_prompt: str | None = None,
         model: str | None = None,
         resume: bool = False,
+        native: bool = False,
     ) -> _Argv:
         """Full argv appended to the agent command at launch, for a known session id.
+
+        `native` (the persisted `WorkspaceState.native`, passed by the three
+        PRIMARY launch sites and never by an added container agent) selects the
+        owned-session shape: the prompt rides first as the worker's own task and
+        no Grove control file follows, because the worker holds the control
+        channel itself.
 
         `state` is here for the control files alone: every Grove-written
         control path is resolved through the workspace's OWN launch backend, so
@@ -3951,6 +4781,23 @@ class WorkspaceManager:
         rides every launch path (create/resume/respawn) uniformly.
         """
         adapter = get_adapter(agent.kind)
+        if native:
+            # Explicitly separate the task from provider argv at the launch seam.
+            # No Channels or permission-relay flags enter this owned input path.
+            owned: _Argv = list(adapter.model_decoration(model)) if model else []
+            if agent.kind == "claude_code" and session_id is not None:
+                # `--resume <id>` on the owned `claude -p` stream CONTINUES the
+                # same session and file (measured 2.1.270: a codeword set before
+                # the owner exited is recalled after it), which is what lets
+                # `respawn` pick a crashed native session back up instead of
+                # starting an amnesiac one in the same worktree. A CREATE still
+                # refuses to resume, and that gate stays in `create()` where the
+                # request is: there the choice is a caller's, here it is the
+                # engine's own recovery and the transcript is already on disk.
+                owned = [*adapter.launch_decoration(session_id, resume=resume), *owned]
+            if agent.tools_offline:
+                owned = [*owned, *adapter.offline_decoration()]
+            return [initial_prompt or "", *owned]
         decoration: _Argv = []
         # Every Grove control file below crosses into the runtime's namespace
         # through ONE seam. Resolved once here, per launch: the backend
@@ -4164,11 +5011,14 @@ class WorkspaceManager:
         """
         path = paths.agent_hooks_settings_path()
         daemon_url = self._cfg.hooks.daemon_url or DEFAULT_DAEMON_LOOPBACK_URL
+        # The statusLine arm rides the SAME file: it is the one channel on which
+        # Claude Code states the context window, and it replaces the user's own
+        # statusline for this launch only — `--settings` scopes it to the pane
+        # Grove opened, never to the user's `settings.json`.
+        settings = ClaudeHook.settings(daemon_url=daemon_url, statusline=True)
         try:
             paths.ensure_dir(path.parent)
-            path.write_text(
-                json.dumps(ClaudeHook.settings(daemon_url=daemon_url), indent=2), encoding="utf-8"
-            )
+            path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("could not write hook settings; launching without push status: {}", exc)
             return None
@@ -4257,6 +5107,10 @@ class WorkspaceManager:
         same question `list()` already answered.
         """
         return self._pane_target(state)
+
+    def pane_for(self, state: WorkspaceState) -> tmux.TmuxPane | None:
+        """Resolve the shared pane identity and transport for event observation."""
+        return self._agent_pane(state)
 
     def _pane_target(self, state: WorkspaceState) -> str | None:
         pane = self._agent_pane(state)
@@ -4506,15 +5360,85 @@ class WorkspaceManager:
             # transcript/adapter — the remote-adapter precedent where the pane is
             # not authoritative. The worktree/ORPHANED check above still applies.
             return _with_status(state, WorkspaceStatus.ACTIVE)
-        if not tmux.has_session(state.tmux_session):
+        # The maintained cache SUPPLEMENTS the probe; it does not replace it.
+        # A fact is present only for a session currently in the runtime source's
+        # scope, and a workspace is out of scope for a real interval after its
+        # own create (the lifecycle edge crosses a thread-safe inbox). Treating
+        # that absence as an answer froze every such workspace at its persisted
+        # intent, so it never reached a LIVE status and every steer against it
+        # was refused as pane_not_found. `None` means "no event coverage for
+        # this session", which is exactly when the direct probe must still run.
+        session_alive = (
+            self._runtime_host_tmux_liveness(state.tmux_session)
+            if self._runtime_host_tmux_liveness is not None
+            else None
+        )
+        # A NEGATIVE witness is a claim about the PAST, so it is confirmed
+        # rather than believed. The witness is an observation from a moment that
+        # has passed, and a tmux session can be created again under the same
+        # name — which `respawn` and a create reusing a freed name both do. So
+        # `False` reported a workspace whose session is alive right now as
+        # OFFLINE, and every steer against it was refused `pane_not_found`
+        # until some unrelated event happened to refresh the witness.
+        #
+        # Both branches now agree with the rule this block already stated: the
+        # cache SUPPLEMENTS the probe, it does not replace it. The cost is one
+        # `has_session` on the path that was about to report a dead workspace,
+        # never on the healthy one — a live witness still short-circuits.
+        if session_alive is not True and not tmux.has_session(state.tmux_session):
             return self._status_without_a_viewport(state)
+        if self._native_owner_exited(state):
+            return _with_status(state, WorkspaceStatus.OFFLINE)
 
         threshold = self._cfg.tmux.activity_threshold_seconds
-        target = self._pane_target_for_running(state)
-        age = tmux.pane_activity_seconds_ago(target) if target else None
+        # Same supplement-not-replace rule as the liveness read above: an
+        # absent activity instant means this session has produced no output
+        # EVENT yet, which is true of every session between its create and its
+        # first frame — so fall through to the direct probe rather than
+        # reporting a fresh, working agent as IDLE.
+        activity = (
+            self._runtime_host_tmux_activity(state.tmux_session)
+            if self._runtime_host_tmux_activity is not None
+            else None
+        )
+        if activity is not None:
+            age: float | None = (_utcnow() - activity).total_seconds()
+        else:
+            target = self._pane_target_for_running(state)
+            age = tmux.pane_activity_seconds_ago(target) if target else None
         if age is not None and age <= threshold:
             return _with_status(state, WorkspaceStatus.ACTIVE)
         return _with_status(state, WorkspaceStatus.IDLE)
+
+    def _native_owner_exited(self, state: WorkspaceState) -> bool:
+        """Whether a NATIVE workspace's owner process has died in a live session.
+
+        A live tmux session is evidence about the SESSION, not about what runs
+        inside it — and for a native workspace those are different processes.
+        The worker exits (a crash, an OOM kill, a daemon that revoked its
+        credential) and tmux keeps the session, so the pane falls back to a
+        shell and the workspace reconciled ACTIVE, then decayed to IDLE. That
+        was wrong in the one direction that costs a user something: `respawn`
+        is gated on OFFLINE, so the one verb that rebuilds the session was
+        hidden by the one status a dead worker could not produce, and the
+        Controls card offered Pause and Kill for a session that was already
+        gone.
+
+        OFFLINE is reused rather than a new status for the reason the container
+        arm already reuses it (see :meth:`_reconcile_status`): it means *the
+        runtime hosting the agent is gone, the worktree is intact, respawn is
+        the remedy*, which is exactly true here — and since `respawn` now
+        CONTINUES a native session, that remedy also keeps the conversation.
+
+        Gated on `native` so a terminal workspace is untouched, and read from
+        the SAME `agent_exit` seam the activity blend uses, so "the agent died"
+        has one definition. Absence means "has not exited", so a slow start
+        takes this branch never rather than rarely.
+        """
+        if not state.native:
+            return False
+        exit_record = self.agent_exit(state)
+        return exit_record is not None
 
     def _status_without_a_viewport(self, state: WorkspaceState) -> WorkspaceState:
         """The status of a workspace whose HOST tmux session is gone.

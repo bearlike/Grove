@@ -103,6 +103,11 @@ describe("PROJECT_MIN_WIDTH", () => {
   it("overrides the shared min-w-0 rather than stacking a losing duplicate", () => {
     const html = renderToStaticMarkup(<ProjectLabel name="Grove" className={PROJECT_MIN_WIDTH} />);
     expect(html).toContain(PROJECT_MIN_WIDTH);
-    expect(html).not.toMatch(/class="[^"]*\bmin-w-0\b/);
+    // Scoped to the WRAPPER's own class list. `min-w-0` deeper in the tree is
+    // correct and required — the label's text is a `LoopingText`, whose
+    // viewport must be allowed to shrink inside the floor the wrapper holds.
+    // Asserting over the whole markup was only ever true by accident.
+    const wrapper = html.slice(0, html.indexOf(">"));
+    expect(wrapper).not.toMatch(/\bmin-w-0\b/);
   });
 });

@@ -22,6 +22,7 @@ from grove.core.activity import ActivityService, DashboardDelta
 from grove.core.config import GroveConfig
 from grove.core.contracts.activity import DashboardEvent
 from grove.core.contracts.views import WorkspacePaneView
+from grove.core.pane_events import PaneSnapshot
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
@@ -130,7 +131,8 @@ async def _first_sse_frame(app: FastAPI, path: str) -> tuple[dict[str, Any], str
             chunks.append(message["body"])
             got_first.set()
 
-    await asyncio.wait_for(app(scope, receive, send), timeout=10)
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(app(scope, receive, send), timeout=10)
     text = b"".join(chunks).decode()
     return start, text.split("\n\n", 1)[0]
 
@@ -151,28 +153,15 @@ def test_pane_endpoint_unknown_workspace_404(client: TestClient) -> None:
 # ─── GET /workspaces/{id}/pane/stream (the live focused-pane push) ───────────
 
 
-async def test_pane_stream_emits_pane_snapshot_first(tmp_state_dir: Path) -> None:
+async def test_pane_stream_refuses_workspace_without_live_pane(tmp_state_dir: Path) -> None:
     store = JsonWorkspaceStore()
     store.save(_state("a1", str(tmp_state_dir / "repo-a")))
     app = build_app(cfg=daemon_test_config(), store=store)
 
     start, frame_text = await _first_sse_frame(app, "/workspaces/a1/pane/stream")
 
-    assert start["status"] == 200
-    headers = {k.decode(): v.decode() for k, v in start["headers"]}
-    assert headers["content-type"].startswith("text/event-stream")
-    assert headers["x-accel-buffering"] == "no"
-
-    frame = frame_text.splitlines()
-    assert next(item for item in frame if item.startswith("event:")) == "event: pane_snapshot"
-    payload = json.loads(
-        next(item for item in frame if item.startswith("data:"))[len("data:") :].strip()
-    )
-    assert payload["kind"] == "pane_snapshot"
-    # PAUSED fixture → no live pane, but the frame still carries the view so the
-    # client can drop "connecting…" (best-effort: ansi is None, never a raise).
-    assert payload["pane"]["workspace_id"] == "a1"
-    assert payload["pane"]["ansi"] is None
+    assert start["status"] == 409
+    assert json.loads(frame_text)["detail"]["error"] == "pane_not_found"
 
 
 def test_pane_stream_unknown_workspace_404(client: TestClient) -> None:
@@ -191,24 +180,18 @@ def test_pane_stream_requires_auth(tmp_state_dir: Path) -> None:
 async def test_pane_streamer_diff_guards_and_keepalives() -> None:
     """Changed pane → a pane_snapshot event; unchanged → None (keepalive beat)."""
     t = datetime.now(tz=UTC)
-    captures = iter(
-        [
-            ("frame-1", t),  # first tick always emits (sentinel)
-            ("frame-1", t),  # unchanged → keepalive
-            ("frame-2", t),  # changed → emit
-            (None, None),  # changed to empty → emit (ansi None)
-        ]
-    )
 
-    async def capture() -> tuple[str | None, datetime | None]:
-        return next(captures)
+    class Subscription:
+        async def events(self):
+            for ansi, at in (("frame-1", t), ("frame-1", t), ("frame-2", t), (None, None)):
+                yield PaneSnapshot(ansi, at)
 
-    async def _no_sleep(_: float) -> None:
-        return None
+        async def aclose(self):
+            pass
 
     seqs = iter([10, 11, 12])
     streamer = _PaneStreamer(
-        workspace_id="w", capture=capture, next_seq=lambda: next(seqs), sleep=_no_sleep
+        workspace_id="w", subscription=Subscription(), next_seq=lambda: next(seqs)
     )
     gen = streamer.events()
     e1, e2, e3, e4 = [await anext(gen) for _ in range(4)]
@@ -393,13 +376,13 @@ def test_openapi_documents_activity_routes_and_views(client: TestClient) -> None
 # ─── _SseHub fan-out / replay (deterministic, no event loop needed) ─────────
 
 
-def test_hub_fanout_drops_oldest_when_queue_full(tmp_path: Path) -> None:
+def test_hub_fanout_resnapshots_when_queue_full(tmp_path: Path) -> None:
     hub = _SseHub(_service(tmp_path), queue_size=2)
     queue = hub.register()
-    for seq in (1, 2, 3, 4):
-        hub._publish(_event(seq))  # full at 2 → oldest evicted
-    delivered = [queue.get_nowait().seq for _ in range(queue.qsize())]
-    assert delivered == [3, 4]
+    for seq in (1, 2, 3):
+        hub._publish(_event(seq))
+    assert queue.qsize() == 1
+    assert queue.get_nowait().kind == "snapshot"
 
 
 def test_hub_replay_window(tmp_path: Path) -> None:
@@ -424,9 +407,7 @@ async def test_hub_bridges_poll_deltas_to_queue(tmp_path: Path) -> None:
     queue = hub.register()
 
     service.poll_once()  # first poll: fingerprint changed from empty → emits a delta
-    await asyncio.sleep(0)  # let the scheduled _publish run on the loop
-
-    event = queue.get_nowait()
+    event = await asyncio.wait_for(queue.get(), timeout=1)
     assert event.kind in ("session_activity", "workspace_changed")
     assert event.seq >= 1
     hub.stop()

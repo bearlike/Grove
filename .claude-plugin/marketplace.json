@@ -9,8 +9,8 @@
     {
       "name": "grove",
       "displayName": "Grove",
-      "version": "1.2.0",
-      "description": "Grove's own skills, published from the repository that implements them. Four skills: using-grove (orchestrate a fleet of isolated agent workspaces from outside \u2014 CLI verbs, MCP tool ids, ticket and PR linking and the live status comment it turns on), working-in-grove (report task phase from inside a workspace and keep every attached ticket current), configuring-grove (the config cascade, agents, init scripts, containers, ticket providers and the issue-ops mirror), and reinstalling-grove (when an update did not take).",
+      "version": "1.3.0",
+      "description": "Grove's own skills, published from the repository that implements them: fleet orchestration, in-workspace reporting and native mailbox workers, configuration, reinstalling, and collaborative diagrams.",
       "author": {
         "name": "bearlike"
       },

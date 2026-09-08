@@ -18,10 +18,12 @@ Deliberately absent: ``/message`` and ``/interrupt`` wrappers — the follow-up
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
 from loguru import logger
+
+if TYPE_CHECKING:
+    import httpx
 
 from grove.core.config import MewboConfig
 from grove.core.errors import MewboError
@@ -47,7 +49,16 @@ class MewboClient:
         *,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        import httpx  # noqa: PLC0415 — deferred: only a mewbo-kind agent ever constructs this
+
         api_key = os.environ.get(cfg.api_key_env, "")
+        # Remembered so an auth failure can NAME the missing variable. Sending
+        # no header at all is the honest thing to do (a deployment may not
+        # require one), but it makes the resulting 401 describe the server's
+        # opinion rather than the local cause — and the local cause is almost
+        # always a daemon whose systemd environment never carried the key.
+        self._api_key_env = cfg.api_key_env
+        self._has_key = bool(api_key)
         headers = {"X-API-KEY": api_key} if api_key else {}
         self._http = httpx.Client(
             base_url=cfg.base_url,
@@ -177,6 +188,8 @@ class MewboClient:
         params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """One wire round-trip; every failure mode narrows to MewboError."""
+        import httpx  # noqa: PLC0415 — deferred, see `__init__`
+
         try:
             response = self._http.request(method, path, json=json_body, params=params)
         except httpx.HTTPError as exc:  # timeout, connect failure, protocol error
@@ -184,7 +197,7 @@ class MewboClient:
         if response.status_code >= 400:
             raise MewboError(
                 f"mewbo {method} {path} returned {response.status_code}: "
-                f"{self._error_reason(response)}"
+                f"{self._error_reason(response)}{self._auth_hint(response.status_code)}"
             )
         if not response.content:
             return {}
@@ -193,6 +206,21 @@ class MewboClient:
         except ValueError as exc:
             raise MewboError(f"mewbo {method} {path} returned malformed JSON") from exc
         return data if isinstance(data, dict) else {}
+
+    def _auth_hint(self, status: int) -> str:
+        """Name the unset variable when an auth failure is locally explained.
+
+        Only for 401/403 and only when Grove sent no key: a rejected key that
+        IS present is the server's answer about that key, and appending a
+        local hint there would send the reader to fix the wrong thing.
+        """
+        if status not in {401, 403} or self._has_key:
+            return ""
+        return (
+            f" (Grove sent no API key: {self._api_key_env} carries no value in "
+            "this process — a service-managed daemon reads its environment at "
+            "start, so exporting it in a shell does not reach it)"
+        )
 
     @staticmethod
     def _error_reason(response: httpx.Response) -> str:

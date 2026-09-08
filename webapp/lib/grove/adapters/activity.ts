@@ -221,6 +221,9 @@ export type StreamAction =
   | { kind: "resync"; workspaceId: string }
   /** The steer queue's DEPTH moved; re-read `GET /workspaces/{id}/queue`. */
   | { kind: "queue_changed"; workspaceId: string }
+  /** Owned catalog sources changed; re-read the catalog and diagram gallery. */
+  | { kind: "catalog_changed" }
+  | { kind: "source_changed"; workspaceId: string }
   /** The frame says only that something moved; re-read `/activity`. */
   | { kind: "refetch" }
   /** Nothing to do — a keepalive, or a frame for another stream. */
@@ -329,6 +332,10 @@ export function streamAction(
   snapshot: DashboardSnapshotView | null,
   event: DashboardEvent,
 ): StreamAction {
+  if (event.kind === "catalog_changed") return { kind: "catalog_changed" };
+  if (event.kind === "workspace_source_changed" && event.workspace_id) {
+    return { kind: "source_changed", workspaceId: event.workspace_id };
+  }
   if (event.kind === "heartbeat" || event.kind === "pane_snapshot") return { kind: "ignore" };
   if (event.kind === "snapshot") {
     return event.snapshot ? { kind: "adopt", snapshot: event.snapshot } : { kind: "ignore" };

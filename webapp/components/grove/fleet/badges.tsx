@@ -1,6 +1,7 @@
-import { CircleCheckIcon, ListTodoIcon, TriangleAlertIcon } from "lucide-react";
+import { CircleCheckIcon, ListTodoIcon, RadioIcon, TriangleAlertIcon } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge as NativeBadge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Explain } from "@/components/grove/glossary";
 import {
@@ -19,6 +20,7 @@ import {
   agentGlyph,
   agentLabel,
   agentTone,
+  PHASE_BLOCKED_ICON,
   phaseGlyph,
   phaseLabel,
   progressAccent,
@@ -32,6 +34,11 @@ import {
   statusTone,
 } from "./tokens";
 import type { AgentState, Runtime, TaskPhase, TodoProgress, WorkspaceStatus } from "./types";
+
+/** One compact density for the whole fleet badge family; upstream owns its shape. */
+function Badge({ className, ...props }: React.ComponentProps<typeof NativeBadge>): React.ReactNode {
+  return <NativeBadge className={cn("h-5 gap-1 px-1.5 py-0", className)} {...props} />;
+}
 
 /**
  * The marks for Grove's three status axes plus runtime, each one a `Badge`.
@@ -135,6 +142,7 @@ export function PhaseBadge({
 }): React.ReactNode {
   if (!phase) return null;
   const tip = phaseTooltip(phase, ticket);
+  const PhaseIcon = phaseGlyph(phase.phase);
   return (
     <Tooltip>
       {/*
@@ -155,14 +163,22 @@ export function PhaseBadge({
       */}
       <TooltipTrigger asChild>
         <Badge
-          variant={phase.blocked ? "destructive" : "outline"}
+          variant="outline"
+          className={cn(
+            phase.blocked ? "text-warning" : phase.phase === "done" ? "text-success" : undefined,
+          )}
           tabIndex={0}
           data-testid="phase-badge"
           data-phase={phase.phase}
           data-blocked={phase.blocked || undefined}
           aria-label={tip.aria}
         >
-          <span aria-hidden>{phaseGlyph(phase.phase, phase.blocked)}</span>
+          <span aria-hidden className="relative inline-flex size-3.5 items-center justify-center">
+            <PhaseIcon className="size-3.5" />
+            {phase.blocked ? (
+              <PHASE_BLOCKED_ICON className="absolute -right-1 -bottom-1 size-2 text-warning" />
+            ) : null}
+          </span>
           <span className="tabular-nums">
             {phaseLabel(phase.phase)} {phase.index + 1}/{phase.total}
           </span>
@@ -255,12 +271,39 @@ export function RuntimeBadge({
 }
 
 /**
+ * Which channel Grove drives this workspace over — a fixed property decided at
+ * create, so it takes the same `outline` treatment as runtime and sits beside
+ * it. Only the OWNED case is marked: the terminal is what a workspace was for
+ * years, and marking both would put two marks on every card to say one thing.
+ */
+export function OwnedSessionBadge({ native }: { native: boolean }): React.ReactNode {
+  if (!native) return null;
+  return (
+    <Badge variant="outline" data-testid="owned-session-badge">
+      <RadioIcon aria-hidden />
+      <Explain term="native_session">Native</Explain>
+    </Badge>
+  );
+}
+
+/** A native owner that ended, with its engine-recorded reason one hover away. */
+export function ExitedSessionBadge({ reason }: { reason: string | null }): React.ReactNode {
+  if (!reason) return null;
+  return (
+    <Badge variant="destructive" title={reason} data-testid="exited-session-badge">
+      <TriangleAlertIcon aria-hidden />
+      Session ended
+    </Badge>
+  );
+}
+
+/**
  * The agent's own checklist, as a fraction — and the ONE quantity on this card
  * that earns a hue.
  *
  * §6 draws the line this sits on: an aggregate is a MAGNITUDE and a single
  * claim is a POSITION. `PhaseBadge` above reports a position, so it spends no
- * tone on how far along it is and says so in shape (`○ ◔ ◑ ◕ ● ✓`); this is a
+ * tone on how far along it is and says so in its phase-icon silhouette; this is a
  * completion over a batch, which is the same fact `in flight`/`done` names on
  * every other axis, counted instead of stated. So amber while it runs, green
  * when it is all in, and — via `progressAccent` — NOTHING at zero, because
@@ -314,13 +357,13 @@ export function TodoBadge({ todo }: { todo: TodoProgress }): React.ReactNode {
  * `ticketStateColour` agrees with it in hue, which is §4.7's rule (shape first,
  * colour second) and the forge convention every developer already reads.
  *
- * The chip itself is therefore `outline` on every ticket, unlike the Info tab's
- * `TicketRow`, which spends `ticketStatusTone` on a badge holding the tracker's
- * own WORD. The two surfaces are not inconsistent: there the badge IS the state
- * mark, here the badge is the identity and the glyph is the state mark. What
- * that buys is the row's whole tone budget — a card with five tickets renders
- * five untoned chips, so §6's three-toned cap is never in play on a row whose
- * length the user controls.
+ * The chip itself is therefore `outline` on every ticket, and the Info tab's
+ * `TicketRow` reaches the same place by a different route: there the state is
+ * the coloured WORD on the row's tracker line, with this same glyph beside it.
+ * Neither surface spends a badge tone on tracker state, which is what buys the
+ * row its whole tone budget — a card with five tickets renders five untoned
+ * chips, so §6's three-toned cap is never in play on a row whose length the
+ * user controls.
  *
  * The label is `provider#id` rather than `ticketIdLabel`'s forge spelling
  * because `matchesQuery` searches on exactly this string: what a reader sees on
@@ -345,7 +388,7 @@ export function TicketChip({ ticket }: { ticket: TicketRef }): React.ReactNode {
   // makes one layer down.
   return ticket.url ? (
     <Badge variant="outline" asChild data-testid="ticket-chip" data-state={state}>
-      <a href={ticket.url} target="_blank" rel="noreferrer" title={ticket.title ?? label}>
+      <a href={ticket.url} target="_blank" rel="noopener noreferrer" title={ticket.title ?? label}>
         {body}
       </a>
     </Badge>

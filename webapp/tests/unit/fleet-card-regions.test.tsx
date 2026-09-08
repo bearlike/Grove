@@ -97,15 +97,18 @@ describe("the card body is named regions, not one flow", () => {
     // The defect this replaces: the ticket set and the counter set were the
     // same row, so "which region is this figure in" had no answer.
     expect(regions(card(busy))).toEqual([
+      "card-status",
       "card-marks",
-      "card-task",
+      "card-checklist",
+      "card-ledger",
       "card-metrics",
       "card-tickets",
+      "card-footer",
     ]);
 
     // A card with nothing attached keeps the ORDER and drops the regions with
     // nothing in them — it is shorter, not differently arranged.
-    expect(regions(card(quiet))).toEqual(["card-marks", "card-metrics"]);
+    expect(regions(card(quiet))).toEqual(["card-status", "card-marks", "card-ledger", "card-metrics", "card-footer"]);
   });
 
   it("keeps every ticket out of the counter row", () => {
@@ -133,7 +136,7 @@ describe("the card body is named regions, not one flow", () => {
       state: { ...failed.state, error_detail: "the agent exited 127" },
     });
 
-    expect(regions(html)).toEqual(["card-marks", "card-error", "card-metrics"]);
+    expect(regions(html)).toEqual(["card-status", "card-marks", "card-error", "card-ledger", "card-metrics", "card-footer"]);
     expect(html).toContain('role="alert"');
   });
 });
@@ -151,8 +154,8 @@ describe("the todo count is the one figure that carries a hue", () => {
     );
 
   it("reads amber in flight and green complete", () => {
-    expect(todo(2, 5)).toContain("bg-warning");
-    expect(todo(5, 5)).toContain("bg-success");
+    expect(todo(2, 5)).not.toContain("bg-warning");
+    expect(todo(5, 5)).toContain("text-success");
   });
 
   it("stays neutral before anything has been done", () => {
@@ -218,7 +221,7 @@ describe("the accents reach the badges, and only where the table says", () => {
   it("accents exactly the in-flight agent states", () => {
     for (const state of IN_FLIGHT) {
       const html = renderToStaticMarkup(<AgentStateBadge state={state} />);
-      expect(html, state).toContain("bg-warning");
+      expect(html, state).toContain("text-content-secondary");
     }
     for (const state of RESTING) {
       const html = renderToStaticMarkup(<AgentStateBadge state={state} />);
@@ -239,7 +242,7 @@ describe("the accents reach the badges, and only where the table says", () => {
     ];
     for (const status of statuses) {
       const html = renderToStaticMarkup(<StatusBadge status={status} />);
-      if (status === "provisioning") expect(html, status).toContain("bg-warning");
+      if (status === "provisioning") expect(html, status).toContain("text-content-secondary");
       else expect(html, status).not.toContain("bg-warning");
     }
   });
@@ -257,6 +260,35 @@ describe("the accents reach the badges, and only where the table says", () => {
         (row.match(/data-variant="(default|destructive|secondary)"/g) ?? []).length +
         (row.match(/bg-warning|bg-success/g) ?? []).length;
       expect(toned, `${state}: ${row}`).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe("a working card says so beside its status", () => {
+  /** Every agent state that is NOT working — the mark must appear on none. */
+  const RESTING: readonly AgentState[] = [
+    "waiting",
+    "blocked",
+    "idle",
+    "error",
+    "unknown",
+  ];
+
+  it("marks a working card after its status badge, and only a working one", () => {
+    // ORDER IS THE POINT: the badge is a standing fact, the mark is what is
+    // happening now. Compared by INDEX rather than by asserting both exist,
+    // because "present somewhere" passes just as well with the mark first.
+    const html = card(workspace({ id: "w-working", state: "working" }));
+    const badge = html.indexOf('data-slot="badge"');
+    const mark = html.indexOf('data-testid="working-mark"');
+    expect(badge).toBeGreaterThanOrEqual(0);
+    expect(mark).toBeGreaterThan(badge);
+
+    // And it is gated: every other agent state draws no mark at all. Absence is
+    // not a state — the rule the card's other marks already follow.
+    for (const state of RESTING) {
+      expect(card(workspace({ id: `w-${state}`, state })), state)
+        .not.toContain('data-testid="working-mark"');
     }
   });
 });

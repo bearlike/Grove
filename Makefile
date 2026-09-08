@@ -64,7 +64,7 @@ docs-screenshots:  ## Regenerate the framed TUI PNG screenshots from the live TU
 # chained onto the capture that produces it so the two cannot drift apart.
 # `webapp-home-mobile.png` is deliberately absent: it feeds the phone mockup,
 # which supplies its own device shell.
-FRAMED_SHOTS := $(addprefix docs/img/screenshots/,webapp-home.png webapp-composer.png webapp-sessions.png webapp-workspace.png webapp-usage.png webapp-usage-detail.png webapp-pair-device.png webapp-pair-code.png)
+FRAMED_SHOTS := $(addprefix docs/img/screenshots/,webapp-home.png webapp-composer.png webapp-sessions.png webapp-workspace.png webapp-annotate.png webapp-diagram-split.png webapp-diagram.png webapp-diagram-palette.png webapp-usage.png webapp-usage-detail.png webapp-pair-device.png webapp-pair-code.png)
 
 docs-webapp-screenshots: webapp-build  ## Regenerate the web dashboard PNG screenshots (needs webapp/.next)
 	$(UV) run python -m tools.screenshots.webapp_capture
@@ -134,25 +134,47 @@ release-check: lint test build uvx-smoke  ## Full pre-release gauntlet
 # hence its own WEBAPP_NPM_BIN rather than assuming the shell's npm resolves
 # to a new enough Node.
 
+# Auto-detect grove + npm binaries; user can override for nvm/asdf setups.
+# `grove-mcp` is a separate console script from `grove`, so it gets its own
+# lookup — an install with the lean `[daemon]` extra ships one and not the other.
+#
+# These sit ABOVE their first consumer on purpose. `WEBAPP_NODE_BIN_DIR` and
+# `WEBAPP_NPM` are `:=`, which expands immediately, so a definition placed
+# below them reads as empty and the recipe loses its command entirely.
+GROVE_BIN ?= $(shell command -v grove 2>/dev/null)
+MCP_BIN   ?= $(shell command -v grove-mcp 2>/dev/null)
+NPM_BIN   ?= $(shell command -v npm 2>/dev/null)
+NODE_BIN_DIR := $(if $(NPM_BIN),$(dir $(NPM_BIN)),)
+
 WEBAPP_DIR ?= $(CURDIR)/webapp
 WEBAPP_NPM_BIN ?= $(NPM_BIN)
 WEBAPP_NODE_BIN_DIR := $(if $(WEBAPP_NPM_BIN),$(dir $(WEBAPP_NPM_BIN)),)
 
+# Naming the npm does NOT choose the Node that runs it. Every npm is a
+# `#!/usr/bin/env node` shim, so a Node 22 npm invoked from a shell whose PATH
+# leads with Node 20 executes under Node 20 — `npm -v` reports 10.9.8 while
+# `process.versions.node` is v20.x. That mismatch is what produced a wall of
+# EBADENGINE warnings while WEBAPP_NPM_BIN looked correctly set, and it is the
+# same class of bug as the stale-surface rule this file's header describes:
+# the override was honoured and still had no effect. Put the chosen npm's own
+# bin dir FIRST on PATH so the shim resolves its sibling node.
+WEBAPP_NPM := PATH="$(WEBAPP_NODE_BIN_DIR:/=):$$PATH" $(WEBAPP_NPM_BIN)
+
 .PHONY: webapp-install webapp-build webapp-dev webapp-test webapp-gate
 webapp-install:  ## Install webapp Node deps (npm ci)
-	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) ci
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM) ci
 
 webapp-build: webapp-install  ## Build webapp for production (required before `systemd` w/ webapp)
-	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) run build
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM) run build
 
 webapp-dev:  ## Run webapp dev server (LAN-reachable on :3000)
-	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) run dev
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM) run dev
 
 webapp-test:  ## Run webapp unit + component tests
-	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) test
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM) test
 
 webapp-gate:  ## Run webapp's full gate (typecheck, registry drift, styling, tests)
-	cd $(WEBAPP_DIR) && $(WEBAPP_NPM_BIN) run gate
+	cd $(WEBAPP_DIR) && $(WEBAPP_NPM) run gate
 
 # ─── systemd (Linux user-scope) ─────────────────────────────────────────────
 #
@@ -175,13 +197,8 @@ webapp-gate:  ## Run webapp's full gate (typecheck, registry drift, styling, tes
 SYSTEMD_USER_DIR ?= $(HOME)/.config/systemd/user
 SYSTEMD_TEMPLATE_DIR := $(CURDIR)/packaging/systemd
 
-# Auto-detect grove + npm binaries; user can override for nvm/asdf setups.
-# `grove-mcp` is a separate console script from `grove`, so it gets its own
-# lookup — an install with the lean `[daemon]` extra ships one and not the other.
-GROVE_BIN ?= $(shell command -v grove 2>/dev/null)
-MCP_BIN   ?= $(shell command -v grove-mcp 2>/dev/null)
-NPM_BIN   ?= $(shell command -v npm 2>/dev/null)
-NODE_BIN_DIR := $(if $(NPM_BIN),$(dir $(NPM_BIN)),)
+# GROVE_BIN / MCP_BIN / NPM_BIN / NODE_BIN_DIR are defined with the webapp
+# block above, which consumes them in immediately-expanded assignments.
 
 # PATH baked into the daemon unit. Defaults to the invoking shell's PATH so
 # pyenv/nvm/asdf-managed toolchains stay visible to init scripts under

@@ -6,10 +6,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from grove.core.config import GroveConfig
+import pytest
+
+from grove.core.config import GroveConfig, UsagePricingConfig
 from grove.core.contracts.usage import BillingAccountView, SubscriptionWindowView, UsageFilters
 from grove.core.registry import RepoRegistry
 from grove.core.usage import UsageService
+from grove.core.usage.pricing_sources import PricingCatalog
 from grove.core.usage.quota import QuotaCollector
 
 
@@ -28,6 +31,9 @@ class _Quota:
 
     def snapshot(self) -> tuple[BillingAccountView, ...]:
         return next(self._snapshots)
+
+    def refresh(self) -> tuple[BillingAccountView, ...]:
+        return self.snapshot()
 
     def close(self) -> None:
         pass
@@ -122,5 +128,52 @@ def test_configured_busy_timeout_reaches_the_live_connection(tmp_path: Path) -> 
     try:
         conn = service._store.connect()  # no public accessor; wiring-only check
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 9_000
+    finally:
+        service.close()
+
+
+def test_refresh_reprices_unchanged_rows_and_all_consumers_share_book(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded = UsagePricingConfig.model_validate({"models": {"priced": {"input": 1}}})
+    refreshed = UsagePricingConfig.model_validate({"models": {"priced": {"input": 3}}})
+    calls: list[str] = []
+
+    def load(_catalog: PricingCatalog) -> UsagePricingConfig:
+        calls.append("load")
+        return loaded
+
+    def refresh(_catalog: PricingCatalog) -> UsagePricingConfig:
+        calls.append("refresh")
+        return refreshed
+
+    monkeypatch.setattr(PricingCatalog, "load", load)
+    monkeypatch.setattr(PricingCatalog, "refresh", refresh)
+    service = UsageService(
+        cfg=GroveConfig.model_validate({"usage": {"enabled": False}}),
+        registry=cast(RepoRegistry, cast(Any, object())),
+        db_path=tmp_path / "usage.sqlite3",
+        quota=cast(QuotaCollector, cast(Any, _Quota([()]))),
+    )
+    try:
+        with service._store.write() as conn:
+            conn.execute(
+                "INSERT INTO sources(source_id,provider,root,label,health) "
+                "VALUES('source','claude_code','profile','profile','ok')"
+            )
+            conn.execute(
+                "INSERT INTO sessions(session_id,source_id,provider,models,fresh_input,"
+                "cache_read,cache_creation,output) VALUES('session','source','claude_code',"
+                "'[\"priced\"]',1000000,0,0,0)"
+            )
+        before = service.summary(UsageFilters())
+        assert before.cost is not None and before.cost.amount == "1.000000"
+        assert calls == ["load"]
+        assert service._projector._prices is service._query.prices is service._series._prices
+        service.refresh(force=False)
+        after = service.summary(UsageFilters())
+        assert after.cost is not None and after.cost.amount == "3.000000"
+        assert service._store.scalar("SELECT cost_amount FROM sessions") == "3.000000"
+        assert calls == ["load", "refresh"]
     finally:
         service.close()

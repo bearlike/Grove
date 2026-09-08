@@ -1,10 +1,12 @@
 import type {
   AgentSummaryView,
+  AttachmentView,
   BranchInfo,
   CommitSummaryView,
   CreateWorkspaceRequest,
   DashboardSnapshotView,
   HealthView,
+  ModelOptionView,
   ProvisionProgressView,
   QuestionAnswerItem,
   SessionControlsView,
@@ -25,12 +27,44 @@ import type {
   UsageSummaryView,
   WhoamiView,
   WorkspaceDiffView,
+  WorkspaceHistoryView,
   WorkspacePaneView,
   WorkspacePeekView,
   WorkspaceQueueView,
   WorkspaceStateView,
+  GalleryDocumentView,
+  GalleryItemView,
+  GalleryPreviewUploadRequest,
+  GalleryPreviewView,
 } from "./types";
+import type { WorkspacePanelView } from "./panels";
+import type {
+  DiagramDocumentView,
+  DiagramOpenRequest,
+  DiagramPreviewUploadRequest,
+  DiagramPreviewView,
+  DiagramStopRequest,
+  DiagramUpdateRequest,
+} from "./diagrams";
 import type { components } from "./types.gen";
+
+/**
+ * Base64 for a byte array, in chunks.
+ *
+ * The one-liner — `btoa(String.fromCharCode(...bytes))` — spreads one argument
+ * per byte and overflows the call stack far below the 32 MiB the daemon
+ * accepts, so it fails on exactly the files the limit was written for. Chunking
+ * is the standard escape. Exported because it is the only pure part of an
+ * upload and therefore the only part worth pinning.
+ */
+export function base64FromBytes(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK));
+  }
+  return btoa(binary);
+}
 
 export class GroveProtocolError extends Error {
   override readonly name = "GroveProtocolError";
@@ -51,7 +85,10 @@ type WorkspaceDefaultsSaveView =
   components["schemas"]["WorkspaceDefaultsSaveView"];
 type DefaultsScope = components["schemas"]["DefaultsScope"];
 type SharePolicyView = components["schemas"]["SharePolicyView"];
-type SharePolicyUpdateRequest = components["schemas"]["SharePolicyUpdateRequest"];
+type SharePolicyUpdateRequest =
+  components["schemas"]["SharePolicyUpdateRequest"];
+type SendKey = components["schemas"]["SendKey"];
+type SendKeysRequest = components["schemas"]["SendKeysRequest"];
 type SessionOptions = { limit?: number; candidates?: boolean };
 type UsageSessionOptions = {
   sort: string;
@@ -103,6 +140,139 @@ export class GroveClient {
    */
   async getWorkspaceTodo(id: string): Promise<TodoListView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/todo`);
+  }
+  /**
+   * What the agent's own control surface measured and its transcript cannot say
+   * — a command's real exit code and duration, the model's context window.
+   *
+   * `/todo`'s sibling in refusal (404 `agent_session_not_found`) but NOT in cost:
+   * this spawns a subprocess daemon-side, so it is read on open and on demand and
+   * is deliberately given no poll interval. `supported: false` is the ordinary
+   * answer — only a Codex agent opted into `app_server` reports anything, and
+   * Claude Code publishes no such surface at all.
+   */
+  /**
+   * Every name this workspace has held, every progress claim it reported, and
+   * every ticket it was attached to — from a store that outlives the workspace.
+   *
+   * An EMPTY view is the ordinary answer, not a failure: recording is
+   * forward-only, so a workspace created before this shipped has nothing. The
+   * 404 means the workspace itself is unknown, exactly like `/todo`'s.
+   *
+   * Read on demand and given no poll interval. Nothing on `/events` carries
+   * these rows, but they only change when the agent reports a NEW claim — and
+   * the claim it is reporting right now is already on the Task card, live.
+   */
+  async getWorkspaceHistory(id: string): Promise<WorkspaceHistoryView> {
+    return this.get(`/workspaces/${encodeURIComponent(id)}/history`);
+  }
+  async getWorkspacePanels(id: string): Promise<WorkspacePanelView[]> {
+    return this.get(`/workspaces/${encodeURIComponent(id)}/panels`);
+  }
+  /**
+   * The workspace's diagram — the latest bytes ON DISK, never a browser draft.
+   *
+   * 404s when the workspace has no descriptor or the file has gone; the tab is
+   * mounted from the descriptor on the workspace record, so that is a real
+   * state rather than a race.
+   */
+  /**
+   * `signal` is how a read is SEQUENCED against a write.
+   *
+   * A GET issued before a PUT answers after it with pre-write bytes, and no
+   * amount of comparing revisions afterwards can tell that apart from somebody
+   * else having written the file — the two are identical on the wire. The
+   * caller therefore cancels the in-flight read before it writes, so the stale
+   * answer is never delivered rather than being detected and discarded.
+   */
+  async getDiagram(
+    id: string,
+    repo: string,
+    signal?: AbortSignal,
+  ): Promise<DiagramDocumentView> {
+    return this.get(`${this.diagramPath(id)}${this.repoSuffix(repo)}`, signal);
+  }
+  async openDiagram(
+    id: string,
+    repo: string,
+    request: DiagramOpenRequest,
+  ): Promise<DiagramDocumentView> {
+    return this.postJson(
+      `${this.diagramPath(id)}${this.repoSuffix(repo)}`,
+      request,
+    );
+  }
+  /**
+   * Replace the file, only if `expected_revision` is still what is on disk.
+   *
+   * Conditional by construction: a stale revision answers 409 and writes
+   * nothing, which is what makes two browsers — or a browser and an agent —
+   * safe without a merge. `session_id` fences a write issued before a stop or a
+   * reopen retired that collaboration.
+   */
+  async updateDiagram(
+    id: string,
+    repo: string,
+    request: DiagramUpdateRequest,
+  ): Promise<DiagramDocumentView> {
+    return this.putJson(
+      `${this.diagramPath(id)}${this.repoSuffix(repo)}`,
+      request,
+    );
+  }
+  async stopDiagram(
+    id: string,
+    repo: string,
+    request: DiagramStopRequest,
+  ): Promise<DiagramDocumentView> {
+    return this.postJson(
+      `${this.diagramPath(id)}/stop${this.repoSuffix(repo)}`,
+      request,
+    );
+  }
+  /** A rendered first page is keyed to the exact acknowledged document revision. */
+  async saveDiagramPreview(
+    id: string,
+    request: DiagramPreviewUploadRequest,
+  ): Promise<DiagramPreviewView> {
+    return this.postJson(`${this.diagramPath(id)}/preview`, request);
+  }
+  async getDiagramPreview(id: string): Promise<DiagramPreviewView> {
+    return this.get(`${this.diagramPath(id)}/preview`);
+  }
+  /**
+   * The host-wide diagram gallery: every `.drawio` in a known repo's worktrees.
+   * Items are addressed by an opaque id the daemon minted — never a path.
+   */
+  async getGallery(): Promise<GalleryItemView[]> {
+    return this.get("/gallery");
+  }
+  async getGalleryDocument(id: string): Promise<GalleryDocumentView> {
+    return this.get(`/gallery/${encodeURIComponent(id)}`);
+  }
+  async getGalleryPreview(id: string): Promise<GalleryPreviewView> {
+    return this.get(`/gallery/${encodeURIComponent(id)}/preview`);
+  }
+  /** A first-page PNG the browser rendered, fenced to the content digest it depicts. */
+  async saveGalleryPreview(
+    id: string,
+    request: GalleryPreviewUploadRequest,
+  ): Promise<GalleryPreviewView> {
+    return this.postJson(`/gallery/${encodeURIComponent(id)}/preview`, request);
+  }
+  /**
+   * `repo` is REQUIRED on every diagram route, unlike the other workspace
+   * reads on this client.
+   *
+   * The daemon resolves the configured project before it touches the
+   * filesystem and refuses a workspace identity that does not belong to it, so
+   * the parameter is part of the check rather than a convenience.
+   */
+  private repoSuffix(repo: string): string {
+    return `?repo=${encodeURIComponent(repo)}`;
+  }
+  private diagramPath(id: string): string {
+    return `/workspaces/${encodeURIComponent(id)}/diagram`;
   }
   async getCommits(id: string): Promise<CommitSummaryView[]> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/commits`);
@@ -195,11 +365,53 @@ export class GroveClient {
       model,
     });
   }
-  async sendMessage(id: string, text: string): Promise<void> {
-    return this.post(`/workspaces/${encodeURIComponent(id)}/message`, { text });
+  /**
+   * Steer the agent, optionally naming files already stored by
+   * {@link uploadAttachment}.
+   *
+   * `attachments` carries IDS, never paths: the engine appends the block that
+   * names each file and resolves the path the agent will actually read it at,
+   * which for a containerized workspace is not a path this client has ever
+   * seen.
+   */
+  async sendMessage(
+    id: string,
+    text: string,
+    attachments: string[] = [],
+  ): Promise<void> {
+    return this.post(`/workspaces/${encodeURIComponent(id)}/message`, {
+      text,
+      attachments,
+    });
+  }
+
+  /**
+   * Store one file in the workspace's attachment directory.
+   *
+   * The bytes cross as base64 inside JSON, which the daemon's own contract
+   * argues for from the other side and this side confirms: the BFF proxy at
+   * `app/api/grove/[...path]` reads every request body as text, so a multipart
+   * binary body would arrive corrupted. Uploading is its own request precisely
+   * so a file that fails does not take a typed message down with it.
+   */
+  async uploadAttachment(
+    id: string,
+    name: string,
+    file: Blob,
+  ): Promise<AttachmentView> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return this.postJson(`/workspaces/${encodeURIComponent(id)}/attachments`, {
+      name,
+      content_base64: base64FromBytes(bytes),
+    });
   }
   async interrupt(id: string): Promise<void> {
     return this.post(`/workspaces/${encodeURIComponent(id)}/interrupt`);
+  }
+  /** Deliver one named tmux key to the workspace's live agent pane. */
+  async sendKey(id: string, key: SendKey): Promise<void> {
+    const request: SendKeysRequest = { key };
+    return this.post(`/workspaces/${encodeURIComponent(id)}/keys`, request);
   }
 
   async answerQuestion(
@@ -261,6 +473,18 @@ export class GroveClient {
   async listAgents(repo: string): Promise<AgentSummaryView[]> {
     return this.get(`/agents?repo=${encodeURIComponent(repo)}`);
   }
+  /**
+   * One agent's model catalog with the name and context window each row draws.
+   *
+   * The enriched read beside `listAgents`, whose `models` stays a tuple of bare
+   * ids. `agent` omitted asks for the repo's first configured agent, which is
+   * what an untouched create form has selected.
+   */
+  async listModels(repo: string, agent?: string | null): Promise<ModelOptionView[]> {
+    const query = new URLSearchParams({ repo });
+    if (agent) query.set("agent", agent);
+    return this.get(`/models${this.suffix(query)}`);
+  }
   async getWorkspaceDefaults(repo: string): Promise<WorkspaceDefaultsView> {
     return this.get(`/defaults?repo=${encodeURIComponent(repo)}`);
   }
@@ -280,7 +504,10 @@ export class GroveClient {
     repo: string,
     policy: SharePolicyUpdateRequest,
   ): Promise<SharePolicyView> {
-    return this.putJson(`/share-policy?repo=${encodeURIComponent(repo)}`, policy);
+    return this.putJson(
+      `/share-policy?repo=${encodeURIComponent(repo)}`,
+      policy,
+    );
   }
 
   /** The trackers this repo may be asked about; `configured` is the credentials signal. */
@@ -388,8 +615,8 @@ export class GroveClient {
     return value ? `?${value}` : "";
   }
 
-  private async get<T>(path: string): Promise<T> {
-    return this.json<T>(await this.fetch("GET", path));
+  private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return this.json<T>(await this.fetch("GET", path, undefined, signal));
   }
   private async post(path: string, body?: unknown): Promise<void> {
     await this.fetch("POST", path, body);
@@ -411,9 +638,11 @@ export class GroveClient {
     method: HttpMethod,
     path: string,
     body?: unknown,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const response = await fetch(`${GroveClient.basePath}${path}`, {
       method,
+      ...(signal === undefined ? {} : { signal }),
       headers: {
         accept: "application/json",
         ...(body === undefined ? {} : { "content-type": "application/json" }),

@@ -44,15 +44,14 @@ class TicketProviderRegistry:
     injects an ``httpx.MockTransport`` so a provider's I/O methods run against a
     fake wire.
 
-    **Nothing here captures a credential**, which is what makes it safe for a
-    ``WorkspaceManager`` to cache this registry for a daemon's whole life: each
-    provider holds the ``env`` MAPPING and looks its own ``token_env`` up per
-    request. In production that mapping is a
-    :class:`~grove.core.tickets.credentials.TicketEnv`, which reads the section's
-    ``env_file`` / ``env_command`` first (so a credential produced after the
-    process started is found) and the process environment second. ``repo_root``
-    is what a repo-relative ``env_file`` resolves against — the same repo whose
-    cascade produced ``cfg``.
+    Providers receive one shared ``env`` mapping and look up their own
+    ``token_env`` through it. In production the registry owns the
+    :class:`~grove.core.tickets.credentials.TicketEnv` snapshot for this repo;
+    ``refresh_credentials`` and ``invalidate_credentials`` are the explicit
+    source-rotation seam, while ``close`` clears it. An injected plain mapping
+    remains the test seam and has no credential lifecycle. ``repo_root`` is what
+    a repo-relative ``env_file`` resolves against — the same repo whose cascade
+    produced ``cfg``.
     """
 
     def __init__(
@@ -64,6 +63,9 @@ class TicketProviderRegistry:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         resolved_env = env if env is not None else TicketEnv(cfg, repo_root=repo_root)
+        self._credentials: TicketEnv | None = (
+            resolved_env if isinstance(resolved_env, TicketEnv) else None
+        )
         providers: dict[TicketProviderName, TicketProvider] = {}
         if cfg.gitea.enabled:
             providers["gitea"] = GiteaProvider(cfg.gitea, env=resolved_env, transport=transport)
@@ -148,11 +150,23 @@ class TicketProviderRegistry:
             )
         return TicketSelector(provider=candidates[0].name, id=link.id, kind=link.kind)
 
+    def invalidate_credentials(self) -> None:
+        """Mark the owned credential source stale after an external rotation edge."""
+        if self._credentials is not None:
+            self._credentials.invalidate()
+
+    def refresh_credentials(self) -> int | None:
+        """Refresh the owned credential source now, returning its generation."""
+        return self._credentials.refresh() if self._credentials is not None else None
+
     def close(self) -> None:
+        """Release transports and clear the registry-owned credential snapshot."""
         for provider in self._providers.values():
             close = getattr(provider, "close", None)
             if callable(close):
                 close()
+        if self._credentials is not None:
+            self._credentials.close()
 
 
 __all__ = ["TicketProviderRegistry"]

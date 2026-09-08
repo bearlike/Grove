@@ -116,6 +116,7 @@ export function useUpdateWorkspace(
 
 type SharePolicyView = components["schemas"]["SharePolicyView"];
 type SharePolicyUpdateRequest = components["schemas"]["SharePolicyUpdateRequest"];
+type SendKey = components["schemas"]["SendKey"];
 
 /** Replace a project's complete share policy, including its passcode state. */
 export function useSaveSharePolicy(
@@ -174,22 +175,38 @@ export function useRemapSession(
  * agent that was actually idle and processed the message immediately instead of
  * queueing it.
  */
+export interface SendMessageInput {
+  text: string;
+  /**
+   * Attachment IDS from `uploadAttachment`, never paths.
+   *
+   * The engine appends the block naming each file and resolves the path the
+   * agent reads it at; a path chosen here would be a host path a containerized
+   * agent cannot open.
+   */
+  attachments?: string[];
+}
+
 export function useSendMessage(
   workspaceId: string,
-): UseMutationResult<void, Error, string, WorkspaceQueueView | undefined> {
+): UseMutationResult<void, Error, SendMessageInput, WorkspaceQueueView | undefined> {
   const queryClient = useQueryClient();
   const key = groveKeys.queue(workspaceId);
 
   return useMutation({
-    mutationFn: (text: string) => groveClient.sendMessage(workspaceId, text),
-    onMutate: async (text: string) => {
+    mutationFn: ({ text, attachments }: SendMessageInput) =>
+      groveClient.sendMessage(workspaceId, text, attachments ?? []),
+    onMutate: async ({ text }: SendMessageInput) => {
       await queryClient.cancelQueries({ queryKey: key });
       const previous = queryClient.getQueryData<WorkspaceQueueView>(key);
+      // The optimistic row is the TEXT the user typed. The daemon's own
+      // attachment block is appended engine-side, so guessing it here would put
+      // a queue row on screen that never matches what comes back.
       const next = withOptimisticSend(previous, text, new Date().toISOString());
       if (next) queryClient.setQueryData<WorkspaceQueueView>(key, next);
       return previous;
     },
-    onError: (_error, _text, previous) => {
+    onError: (_error, _input, previous) => {
       if (previous) queryClient.setQueryData(key, previous);
     },
     onSettled: () => {
@@ -235,6 +252,15 @@ export function useInterrupt(
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: groveKeys.activity });
     },
+  });
+}
+
+/** Deliver one named key to a workspace pane; the daemon owns capability checks. */
+export function useSendKey(
+  workspaceId: string,
+): UseMutationResult<void, Error, SendKey> {
+  return useMutation({
+    mutationFn: (key: SendKey) => groveClient.sendKey(workspaceId, key),
   });
 }
 

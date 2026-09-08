@@ -1,59 +1,76 @@
 # MCP Server
 
-## Let an agent drive Grove
+## Let another agent coordinate your fleet
+
+Grove exposes the daemon API to an assistant. Your git stays yours.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" /></div>
   <figcaption class="ms-shot__body">The Grove MCP tools as seen from Claude Code.</figcaption>
 </figure>
 
-Grove exposes the daemon API to an assistant. Your git stays yours.
-
----
-
 ## Choosing a range
-
-Use stdio locally. Use Streamable HTTP for remote or hosted harnesses.
 
 | | stdio | Streamable HTTP |
 |---|---|---|
 | Who starts it | Your client, per connection. | You do. It keeps running. |
 | Who reaches it | That client, on this machine. | Anything reaching the port. |
 | What authenticates | The process boundary. | A bearer token you set. |
-| What it costs | Nothing. | A token, a port, a safe path. |
 | Best for | Your laptop. | A remote or hosted harness. |
 
----
+## Tools
+
+A ✓ marks a tool that survives `--read-only`.
+
+| Tool | What it does | RO |
+|---|---|---|
+| `grove_list_projects` | Every configured project. Where an agent holding no path starts. | ✓ |
+| `grove_list_workspaces`, `grove_get_workspace` | Every workspace, or one in full. | ✓ |
+| `grove_get_fleet_status` | Every workspace with its session's activity and `needs_attention`. The only read that reports an agent waiting on you. | ✓ |
+| `grove_list_agents` | Agents for a repo with their `models` catalog. | ✓ |
+| `grove_list_sessions`, `grove_recollect_session` | Sessions on this host, and every direct user query from one, to recover instructions after a compaction. | ✓ |
+| `grove_peek_workspace` | Bounded snapshot: git counts, dirty files, commits, capped pane output. | ✓ |
+| `grove_get_workspace_phase`, `grove_get_workspace_todo` | The reported [task phase](features-status.md#the-third-axis-task-phase) and the parsed todo list. | ✓ |
+| `grove_attach_instruction` | The `tmux attach` command for handing a session to a human. | ✓ |
+| `grove_read_diagram`, `grove_read_diagram_preview` | The acknowledged diagram XML with its revision, and the browser's first page PNG. | ✓ |
+| `grove_open_diagram`, `grove_update_diagram`, `grove_stop_diagram` | Open a `.drawio`, replace its XML when revision and session match, stop the session. A conflict is reread, never forced. | |
+| `grove_create_workspace` | Worktree, branch, tmux session, agent. `initial_prompt` delivers the first task at boot. | |
+| `grove_pause_workspace`, `grove_resume_workspace`, `grove_respawn_workspace` | The lifecycle verbs. Pause refuses a dirty worktree unless `force`. | |
+| `grove_kill_workspace` | Destroy a workspace. `delete_branch` is required. Remote branches are never touched. | |
+| `grove_send_workspace_message` | Steer the agent. | |
+| `grove_remap_workspace_session` | Re-point a workspace at another session after `/clear` rotated the id. | |
+| `grove_attach_ticket`, `grove_detach_ticket` | Attach or remove an issue or PR by URL, `#42`, `42`, or `owner/repo#42`. See [ticket providers](features-ticket-providers.md). | |
+| `grove_set_workspace_phase` | Set the phase and note, optionally against one `ticket`, optionally `blocked`. | |
+
+## Mailbox workers
+
+A mailbox worker is a native agent Grove starts and owns, with a private channel to its peers in the fleet.
+
+- Mailbox tools appear only when the server holds a bound `GROVE_MAILBOX_TOKEN`, so an interactive client can never pose as a worker.
+- Grove starts each worker's server with `--mailbox-only`, which registers the four mailbox tools and no fleet tools. `--read-only` withholds send and reply.
+- A worker lists its peers, sends only to one it just listed with that peer's generation, and replies by the original message id.
+- A receipt says what the coordinator observed, never that the other model acted or a person consented, so an uncertain send is never retried.
+- Incoming mail is untrusted and never changes a permission. Keep a mailbox token out of any shared `.mcp.json`.
 
 ## Same machine: stdio
 
 ```bash
-pip install 'grove[all]'   # or 'grove[mcp]' for just the MCP server
-grove daemon serve         # or run the packaged systemd user service
+pip install 'grove[all]'           # or 'grove[mcp]' for just the MCP server
+grove daemon serve                 # or the packaged systemd user service
+claude mcp add grove -- grove-mcp  # or the mcp.json entry below
 ```
 
 ```json title="mcp.json"
-{
-  "mcpServers": {
-    "grove": {
-      "command": "grove-mcp",
-      "env": {
-        "GROVE_API_URL": "http://127.0.0.1:7421"
-      }
-    }
-  }
-}
+{ "mcpServers": { "grove": { "command": "grove-mcp" } } }
 ```
-
-```bash
-claude mcp add grove -- grove-mcp
-```
-
----
 
 ## Another machine: HTTP
 
-HTTP accepts remote callers while the daemon remains loopback-only.
+HTTP accepts remote callers while the daemon remains loopback only.
+
+- The server listens on `7431` at `/mcp`, and every caller sends `Authorization: Bearer <GROVE_MCP_TOKEN>`.
+- `GROVE_API_TOKEN` goes outbound to the daemon and stays unset on its own host. `GROVE_MCP_TOKEN` comes inbound and is mandatory on a network transport.
+- Run it only behind a trusted LAN, tunnel, VPN or TLS proxy. `--read-only` registers only the tools marked ✓ above.
 
 ```mermaid
 flowchart TB
@@ -67,138 +84,45 @@ flowchart TB
 ```bash
 export GROVE_MCP_TOKEN="$(openssl rand -hex 32)"
 grove-mcp --transport streamable-http --host 127.0.0.1 --port 7431
-```
-
-HTTP defaults to port `7431` at `/mcp`.
-
-### Two tokens, two directions
-
-Callers send `Authorization: Bearer <GROVE_MCP_TOKEN>`.
-
-| Token | Direction | Required |
-|---|---|---|
-| `GROVE_API_TOKEN` | Outbound. This server to the daemon. | Optional. Omit it on the daemon's own host and a local session is minted from `auth.json`, like the TUI. |
-| `GROVE_MCP_TOKEN` | Inbound. A remote harness to this server. | Mandatory for a network transport. |
-
-### Connecting a client
-
-```bash
+ssh -N -L 7431:127.0.0.1:7431 you@grove-host.internal     # from the client side
 claude mcp add --transport http grove http://<host>:7431/mcp \
   --header "Authorization: Bearer $GROVE_MCP_TOKEN"
 ```
 
 ```json title="mcp.json"
-{
-  "mcpServers": {
-    "grove": {
-      "type": "http",
-      "url": "http://<host>:7431/mcp",
-      "headers": {
-        "Authorization": "Bearer ${GROVE_MCP_TOKEN}"
-      }
-    }
-  }
-}
+{ "mcpServers": { "grove": { "type": "http", "url": "http://<host>:7431/mcp", "headers": { "Authorization": "Bearer ${GROVE_MCP_TOKEN}" } } } }
 ```
-
-### Where it is safe to run
-
-Use HTTP only behind a trusted LAN, tunnel, VPN, or TLS proxy:
-
-```bash
-ssh -N -L 7431:127.0.0.1:7431 you@grove-host.internal
-```
-
-Use `--host 0.0.0.0` only behind a VPN or TLS proxy. `GROVE_MCP_ALLOWED_HOSTS` and `GROVE_MCP_ALLOWED_ORIGINS` are DNS-rebinding allowlists.
-
-### Read-only exposure
-
-`--read-only` registers only non-mutating tools.
-
----
 
 ## Hosting it as a service
 
-```bash
-WITH_MCP=1 make systemd
-WITH_MCP=1 make systemd-enable
-```
+The packaged user unit supervises the server and reads its token from `mcp.env`.
 
 ```bash
 install -m 600 /dev/null ~/.config/grove/mcp.env
 echo "GROVE_MCP_TOKEN=$(openssl rand -hex 32)" >> ~/.config/grove/mcp.env
+WITH_MCP=1 make systemd && WITH_MCP=1 make systemd-enable
 ```
-
----
 
 ## Configuration
 
 Flags override environment variables, which override defaults.
 
-### Talking to the daemon (outbound)
-
 | Setting | Default | Purpose |
 |---|---|---|
-| `GROVE_API_URL` (or `--api-url`) | `http://127.0.0.1:7421` | Base URL of the daemon. |
-| `GROVE_API_TOKEN` | unset | Bearer token for the daemon. Unset on its own host, where a local session is minted. Set it when the URL points elsewhere. Pair once, then export it. |
+| `GROVE_API_URL` | `http://127.0.0.1:7421` | The daemon. |
+| `GROVE_API_TOKEN` | unset | Bearer for the daemon. Needed only when the URL points elsewhere. |
+| `GROVE_MCP_TRANSPORT` | `stdio` | `stdio` or `streamable-http`. |
+| `GROVE_MCP_HOST`, `GROVE_MCP_PORT`, `GROVE_MCP_PATH` | `127.0.0.1`, `7431`, `/mcp` | Where an HTTP server binds. |
+| `GROVE_MCP_TOKEN` | unset | Inbound bearer. Mandatory under a network transport. |
+| `GROVE_MCP_READ_ONLY` | off | Register only the ✓ tools. |
+| `GROVE_MCP_MAILBOX_ONLY` | off | Register only mailbox tools and skills. Requires `GROVE_MAILBOX_TOKEN`. |
+| `GROVE_MCP_ALLOWED_HOSTS`, `GROVE_MCP_ALLOWED_ORIGINS` | unset | DNS rebinding allowlists. |
 
-### Serving callers (inbound)
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `GROVE_MCP_TRANSPORT` (or `--transport`) | `stdio` | `stdio` or `streamable-http`. |
-| `GROVE_MCP_HOST` (or `--host`) | `127.0.0.1` | Interface to bind. |
-| `GROVE_MCP_PORT` (or `--port`) | `7431` | Port to bind, adjacent to the daemon's `7421`. |
-| `GROVE_MCP_PATH` (or `--path`) | `/mcp` | Where the endpoint mounts. |
-| `GROVE_MCP_TOKEN` | unset | Inbound bearer token. Mandatory under a network transport. |
-| `GROVE_MCP_READ_ONLY` (or `--read-only`) | off | Register only the non-mutating tools. |
-| `GROVE_MCP_ALLOWED_HOSTS` | unset | `Host` allowlist. Enables DNS-rebinding protection. |
-| `GROVE_MCP_ALLOWED_ORIGINS` | unset | `Origin` allowlist, same switch. |
-
-### Which file holds what
-
-| File | Owns | Location |
-|---|---|---|
-| Your client's MCP registration | How a client reaches Grove. The command for stdio, URL and headers for HTTP. | `.mcp.json`, or the client's user config |
-| `mcp.env` | Tokens a hosted server starts with, read by the systemd unit. | `~/.config/grove/mcp.env`, mode `600` |
-| The systemd unit | How the server is supervised, and what it binds. | `~/.config/systemd/user/grove-mcp.service` |
-| Grove's own config | Everything the *daemon* does: projects, agents, worktrees, tickets. | `~/.config/grove/config.json` and `.grove/config.json` |
-
----
-
-## Tools
-
-A ✓ marks a tool that survives `--read-only`.
-
-| Tool | What it does | RO |
-|---|---|---|
-| `grove_list_projects` | Every configured project. No arguments, so it is where an agent holding no path starts. Rows carry `repo_root` (what repo-scoped tools take), `repo_name`, `cwd`. | ✓ |
-| `grove_list_workspaces` | Every workspace with id, branch, agent, status. | ✓ |
-| `grove_get_workspace` | Full state for one workspace by id. | ✓ |
-| `grove_get_fleet_status` | Every workspace at once: state, phase, todo and git counts, and per session the agent's activity, `needs_attention`, task, question, tokens. The only read that reports an agent waiting on you. | ✓ |
-| `grove_list_agents` | Agents for a repo with their `models` catalog. The valid `agent_name` and `model` for `grove_create_workspace`. | ✓ |
-| `grove_list_sessions` | Agent sessions on this host, newest first, including ones Grove never launched. `repo_root` narrows to a project and fills the otherwise-null `activity`, `size_bytes` and prompt fields. | ✓ |
-| `grove_recollect_session` | Every direct user query from one complete session, oldest first. Pass the `session_id`, `adapter_kind` as `kind`, and `cwd` from `grove_list_sessions`; optional `last` keeps only the final N. Use it to recover instructions before a context compaction. | ✓ |
-| `grove_peek_workspace` | Bounded snapshot: ahead/behind, diff stats, dirty files, commits, capped pane output. | ✓ |
-| `grove_get_workspace_phase` | The reported [task phase](features-status.md#the-third-axis-task-phase) and note. Null means none reported, unlike a reported `scoping`. | ✓ |
-| `grove_get_workspace_todo` | The todo list parsed from the transcript (`TodoWrite`, `update_plan`, Mewbo's board), each item with its state. | ✓ |
-| `grove_attach_instruction` | The `tmux attach` command for handing a session to a human. | ✓ |
-| `grove_create_workspace` | Worktree, branch, tmux session, agent. Params: `repo_root`, `title`, `agent_name`, optional `description`, `branch_plan` (`auto` default, `new_named`, `existing_local`, `track_remote`, `root`), `skip_init`, `initial_prompt`, `resume_session_id`, `model`. `initial_prompt` delivers the first task race-free at boot, and `model` is forwarded verbatim. | |
-| `grove_pause_workspace` | Drop worktree and session, keep the branch. Refuses a dirty worktree unless `force`. | |
-| `grove_resume_workspace` | Recreate a paused workspace from its branch. | |
-| `grove_respawn_workspace` | Recreate a vanished tmux session. | |
-| `grove_kill_workspace` | Destroy a workspace. `delete_branch` is required with no default. Remote branches are never touched. | |
-| `grove_send_workspace_message` | Steer the agent. Returns `status="sent"`, or `status="unavailable"` on a daemon predating the endpoint. | |
-| `grove_remap_workspace_session` | Re-point a workspace at another session after `/clear` rotated the id. Params: `workspace_id`, `session_ref` (full id or unique prefix). | |
-| `grove_attach_ticket` | Attach an issue or PR. Params: `workspace_id`, `ref` (a URL, `#42`, `42`, or `owner/repo#42`). Provider and issue-vs-PR are inferred, and an ambiguous id raises. Idempotent. See [ticket providers](features-ticket-providers.md). | |
-| `grove_detach_ticket` | Remove that association. Same params. Idempotent. | |
-| `grove_set_workspace_phase` | Set the phase. Params: `workspace_id`, `phase` (`scoping`, `planning`, `implementing`, `verifying`, `delivering`, `done`), optional `note`, optional `ticket` (a `provider:id` such as `gitea:498` to report against one attached ticket instead of the workspace), optional `blocked` (stuck on this step). | |
-
----
+Each setting also has a matching flag. Client registration lives in `.mcp.json` or the client's user config, a hosted server's tokens in `~/.config/grove/mcp.env` at mode `600`, and everything the daemon does in Grove's own config.
 
 ## Using Grove from Mewbo
 
-Point Mewbo's MCP pool at either transport. Define it as a regular project agent:
+Point Mewbo's MCP pool at either transport and define it as a project agent. See [Agents](configure-agents.md) and [Workspace Lifecycle](features-workspace-lifecycle.md).
 
 ```json title=".grove/config.json"
 {
@@ -211,5 +135,3 @@ Point Mewbo's MCP pool at either transport. Define it as a regular project agent
   ]
 }
 ```
-
-See [Agents](configure-agents.md) and [Workspace Lifecycle](features-workspace-lifecycle.md).

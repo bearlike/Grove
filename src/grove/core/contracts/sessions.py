@@ -9,6 +9,16 @@ payload must stay small. Same ``from_*`` + ``frozen=True`` pattern as
 ``activity.py``, with the engine dataclasses imported under ``TYPE_CHECKING``
 only.
 
+**Nothing here trims text.** Every body — an assistant turn, a user prompt, a
+tool call's request and result, a diff, a compaction summary — crosses whole.
+The bound a client wants is on TURNS (``last=`` / ``after_turn=``), which it
+asks for explicitly and can splice; a character cap is a bound the server
+applies silently to the one thing the reader opened the transcript to read. A
+response the reader can't trust to be complete is worse than a large one, and
+this route is the only place the complete text exists — the ~1 Hz digest
+(``activity.py``, capped at 200/500 chars by every adapter) is the surface that
+pays for brevity, and it stays capped.
+
 ``transcript_path`` never crosses the wire — a client identifies a session by
 id, and the file layout is host-private. The session's ``cwd`` and its resolved
 ``repo_root`` DO cross (Session Catalog): the views-never-expose rule is about
@@ -26,11 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from grove.core.contracts.activity import AgentActivityView
-from grove.core.contracts.questions import (
-    _ENTRY_TEXT_CAP,
-    AgentQuestionView,
-    _truncate,
-)
+from grove.core.contracts.questions import AgentQuestionView
 from grove.core.contracts.usage import DurationView
 
 if TYPE_CHECKING:
@@ -46,20 +52,6 @@ if TYPE_CHECKING:
         ToolCall,
     )
     from grove.core.sessions import CatalogEntry, ProjectContext, SessionListing, SessionQuery
-
-# A diff is legitimately bigger than a chat line — a generous ceiling well
-# above ``_ENTRY_TEXT_CAP`` (4000) so an ordinary file edit never truncates,
-# while still bounding the pathological case (a multi-MB generated file).
-_FILE_EDIT_TEXT_CAP = 100_000
-
-# A tool body sits BETWEEN the two, and the reason is multiplicity rather than
-# size: a turn holds one or two diffs and routinely holds dozens of tool calls,
-# so this cap multiplies where ``_FILE_EDIT_TEXT_CAP`` does not. 16 KB carries an
-# ordinary ``Read`` of a few hundred lines or a long ``Bash`` output whole, and
-# bounds a 40-call turn at ~1.3 MB instead of ~8 MB. Applied to the result body
-# and, recursively, to every string inside the request — a tool's bulk is always
-# in a string value (a file body, a patch, a command), never in its structure.
-_TOOL_BODY_CAP = 16_000
 
 # Mirrors ``grove.core.agents.TodoStatus``. Duplicated (not imported) so the
 # contracts package never drags the engine in at runtime — the webapp codegen
@@ -119,8 +111,8 @@ class FileEditView(BaseModel):
         return cls(
             path=e.path,
             display_path=cls._relativize(e.path, anchor),
-            old_text=_truncate(e.old_text, _FILE_EDIT_TEXT_CAP),
-            new_text=_truncate(e.new_text, _FILE_EDIT_TEXT_CAP),
+            old_text=e.old_text,
+            new_text=e.new_text,
         )
 
     @staticmethod
@@ -167,7 +159,7 @@ class TodoListView(BaseModel):
         return cls(
             items=[
                 TodoItemView(
-                    content=_truncate(i.content, _ENTRY_TEXT_CAP),
+                    content=i.content,
                     status=i.status,
                     active_form=i.active_form,
                 )
@@ -190,11 +182,9 @@ class CompactionView(BaseModel):
     session-running total Claude Code's transcript actually stores.
 
     ``summary`` is ``""`` (never null) when the harness carries no readable
-    replacement text — Codex encrypts it — and is capped at the shared
-    ``_ENTRY_TEXT_CAP`` rather than given a diff-sized ceiling of its own: a real
-    summary measured 13.9-55.3 KB on-host, and this rides the same per-turn
-    payload as every other entry, so an uncapped one would ship tens of KB per
-    boundary for text a reader skims.
+    replacement text — Codex encrypts it. It crosses whole (13.9-55.3 KB on-host,
+    measured): a compaction summary is the ONLY surviving record of the turns the
+    harness discarded, so a reader who scrolls back to it has nowhere else to go.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -210,40 +200,8 @@ class CompactionView(BaseModel):
             trigger=c.trigger,
             at=c.at,
             dropped_tokens=c.dropped_tokens,
-            summary=_truncate(c.summary, _ENTRY_TEXT_CAP),
+            summary=c.summary,
         )
-
-
-def _cap_strings(value: Any, cap: int) -> tuple[Any, bool]:
-    """*value* with every string inside it truncated to *cap*, plus whether
-    anything was trimmed.
-
-    A tool's request is arbitrary provider JSON, so the bound has to be applied
-    through the structure rather than to a serialized blob — a client renders
-    the arguments as fields, and collapsing them to a capped string would trade
-    one honest bound for an unreadable payload. Non-string leaves pass through:
-    their size is bounded by the structure, and rewriting a number would be
-    changing the request rather than trimming it.
-    """
-    if isinstance(value, str):
-        return (value, False) if len(value) <= cap else (_truncate(value, cap), True)
-    if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        trimmed = False
-        for key, item in value.items():
-            capped, hit = _cap_strings(item, cap)
-            out[str(key)] = capped
-            trimmed = trimmed or hit
-        return out, trimmed
-    if isinstance(value, list):
-        items: list[Any] = []
-        trimmed = False
-        for item in value:
-            capped, hit = _cap_strings(item, cap)
-            items.append(capped)
-            trimmed = trimmed or hit
-        return items, trimmed
-    return value, False
 
 
 class ToolCallView(BaseModel):
@@ -260,11 +218,15 @@ class ToolCallView(BaseModel):
     ``tool_use_id`` is the correlation key, so several calls issued in one
     assistant turn stay individually addressable however they interleave.
 
-    Both bodies are BOUNDED and say so: ``input_truncated`` / ``result_truncated``
-    are explicit rather than left to the trailing ellipsis ``_truncate`` writes,
-    because an ellipsis inside a command's own output is indistinguishable from
-    output the tool actually produced — the one place this package's usual trim
-    signal is not enough.
+    Both bodies cross WHOLE, and the pair of ``*_truncated`` flags that used to
+    ride here is gone rather than pinned to ``False``. A tool body is the case
+    that argued hardest for a cap — a turn holds dozens of calls where it holds
+    one or two diffs, so the cost multiplied — and it is also the case where a
+    cap was least honest: an ellipsis inside a command's own output is
+    indistinguishable from output the tool actually produced, which is why the
+    flags had to exist at all. A reader diffing a config, counting test failures
+    or reading the tail of a build log needs the bytes the tool returned, not a
+    prefix of them, and this route is where those bytes live.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -273,29 +235,42 @@ class ToolCallView(BaseModel):
     tool_use_id: str
     status: Literal["running", "ok", "error"]
     input: dict[str, Any] | None = None
-    input_truncated: bool = False
     result: str | None = None
-    result_truncated: bool = False
     duration_ms: int | None = None
 
     @classmethod
     def from_call(cls, c: ToolCall) -> ToolCallView:
-        capped_input, input_truncated = _cap_strings(c.input, _TOOL_BODY_CAP)
-        result = None if c.result is None else _truncate(c.result, _TOOL_BODY_CAP)
         return cls(
             name=c.name,
             tool_use_id=c.tool_use_id,
             status=c.status,
-            input=capped_input,
-            input_truncated=input_truncated,
-            result=result,
-            result_truncated=result is not None and result != c.result,
+            input=c.input,
+            result=c.result,
             duration_ms=c.duration_ms,
         )
 
 
+class MailboxMessageView(BaseModel):
+    """An agent mailbox envelope; absent identities were not recorded.
+
+    ``kind`` is what lets a client tell a real agent-to-agent handoff (``peer``
+    — Grove's own mailbox, two named workspaces) from a harness notice that
+    merely normalizes to the same four fields. It defaults to ``notice`` so an
+    older daemon's payload decodes as the conservative case rather than
+    claiming a handoff it never observed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    sender: str | None
+    recipient: str | None
+    subject: str | None
+    body: str
+    kind: Literal["peer", "notice"] = "notice"
+
+
 class DigestEntryView(BaseModel):
-    """Wire mirror of ``grove.core.agents.DigestEntry`` (text capped).
+    """Wire mirror of ``grove.core.agents.DigestEntry``.
 
     ``question``/``file_edit``/``todo``/``compaction`` are set only for their
     matching role (``"question"``/``"file_edit"``/``"todo"``/``"compaction"``) —
@@ -332,17 +307,27 @@ class DigestEntryView(BaseModel):
     todo: TodoListView | None = None
     tool: ToolCallView | None = None
     compaction: CompactionView | None = None
+    mailbox: MailboxMessageView | None = None
 
     @classmethod
     def from_entry(cls, e: DigestEntry, anchor: str | None = None) -> DigestEntryView:
         return cls(
             role=e.role,
-            text=_truncate(e.text, _ENTRY_TEXT_CAP),
+            text=e.text,
             question=AgentQuestionView.from_question(e.question) if e.question else None,
             file_edit=FileEditView.from_edit(e.file_edit, anchor) if e.file_edit else None,
             todo=TodoListView.from_todo(e.todo) if e.todo else None,
             tool=ToolCallView.from_call(e.tool) if e.tool else None,
             compaction=CompactionView.from_compaction(e.compaction) if e.compaction else None,
+            mailbox=MailboxMessageView(
+                sender=e.mailbox.sender,
+                recipient=e.mailbox.recipient,
+                subject=e.mailbox.subject,
+                body=e.mailbox.body,
+                kind=e.mailbox.kind,
+            )
+            if e.mailbox
+            else None,
         )
 
 
@@ -373,7 +358,7 @@ class SessionTurnView(BaseModel):
     @classmethod
     def from_turn(cls, t: SessionTurn, anchor: str | None = None) -> SessionTurnView:
         return cls(
-            user_text=_truncate(t.user_text, _ENTRY_TEXT_CAP),
+            user_text=t.user_text,
             started_at=t.started_at,
             entries=[DigestEntryView.from_entry(e, anchor) for e in t.entries],
             sent_at=t.sent_at,
@@ -620,8 +605,9 @@ class QueuedMessageView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     text: str
-    """The message as the user wrote it, capped at the shared entry cap — a
-    queued prompt is a chat line, not a diff."""
+    """The message as the user wrote it, whole. This is a fetch-on-demand read
+    (the ~1 Hz tick carries only a COUNT), and a queue entry the user cannot read
+    back in full is one they cannot decide whether to cancel."""
 
     sent_at: datetime | None = None
     """When it was SUBMITTED, which is not when it will be delivered. Null when
@@ -633,14 +619,9 @@ class QueuedMessageView(BaseModel):
 
     @classmethod
     def from_message(cls, m: QueuedMessage) -> QueuedMessageView:
-        """Wire mirror of ``grove.core.agents.QueuedMessage``.
-
-        The cap this class's ``text`` promises is applied HERE rather than at
-        the route, so every producer of this shape honours it — a cap enforced
-        at one call site is a cap the second call site does not have.
-        """
+        """Wire mirror of ``grove.core.agents.QueuedMessage``."""
         return cls(
-            text=_truncate(m.text, _ENTRY_TEXT_CAP),
+            text=m.text,
             sent_at=m.sent_at,
             position=m.position,
         )
@@ -722,11 +703,10 @@ class SessionControlsView(BaseModel):
 class SessionQueryView(BaseModel):
     """Wire mirror of one full-text direct user query.
 
-    This deliberately does not reuse ``SessionTurnView``: turns carry an
-    unbounded collection of entries and cap each chat-sized body, while a
-    recollection is the much smaller list of times a human directly typed. Its
-    text is uncapped because recovering the complete instruction is this
-    endpoint's purpose.
+    This deliberately does not reuse ``SessionTurnView``: a turn carries the
+    whole exchange around a prompt, while a recollection is just the list of
+    times a human directly typed — the shape you want when the point is to
+    recover instructions a compaction has since taken out of the agent's context.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -852,19 +832,21 @@ class SessionDetailView(BaseModel):
         — 28.9% of a 3,810,728-byte response — all but one of them stale
         (see the daemon CLAUDE.md's ``/turns`` section for the full figures).
 
-        **Lossless, not a cap — deliberately carries no ``*_truncated``
-        signal.** Every other bound in this module (``_TOOL_BODY_CAP``, the
-        file-edit ceiling) trims a single fact that is still wanted whole,
-        so the trim needs a flag saying a byte range was withheld. A
-        superseded board is not that: it is fully and unconditionally
-        replaced by the next ``TodoWrite``, so an older entry contributes
-        nothing a client could ever act on once a newer one exists in the
-        SAME response — there is no "restore this" a truncation flag would
-        promise. It mirrors ``CompactionView``'s own digest projection
-        (payload nulled, role and text kept) rather than inventing a new
-        idiom, and the client that wants the CURRENT board in full already
-        has the honest source for it: ``GET /workspaces/{id}/todo`` (the
-        todo axis is pull-only — see ``grove.core``'s manager docs for why).
+        **This is the module's ONLY remaining reduction, and it survives the
+        no-truncation rule because it withholds no bytes.** Nothing else here
+        trims text: a cap drops a fact still wanted whole, which is why the
+        caps went. A superseded board is not that. It is fully and
+        unconditionally replaced by the next ``TodoWrite``, so once a newer
+        one exists in the SAME response an older one is nothing a client could
+        act on — and the bytes are still in the response regardless, because
+        ``.tool.input`` carries that very ``TodoWrite``'s arguments verbatim on
+        the same entry. Nulling ``.todo`` drops a redundant SECOND rendering of
+        a list the response already holds, not the list. It mirrors
+        ``CompactionView``'s own digest projection (payload nulled, role and
+        text kept) rather than inventing a new idiom, and the client that wants
+        the CURRENT board already has the honest source:
+        ``GET /workspaces/{id}/todo`` (the todo axis is pull-only — see
+        ``grove.core``'s manager docs for why).
 
         **The ENTRY survives — only ``.todo`` is nulled.** ``role``/``text``
         (``TodoList.summary``, a one-line progress digest) stay, so this

@@ -10,8 +10,8 @@ name: Docs
 on:
   push:
     branches: [main, current]
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
+  # pull_request:
+  #  types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 permissions:
@@ -39,6 +39,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # Icon SVGs are fetched from api.iconify.design while the site builds,
+      # so this takes a third-party rate limiter off the deploy path entirely.
+      # The theme already batches those requests down to one per icon set, and
+      # degrades rather than failing when they are throttled; this is the belt
+      # to that braces. Keyed on mkdocs.yml because that is where the icon
+      # names live, so adding one re-fetches instead of serving a stale set.
+      - name: Cache resolved icons
+        uses: actions/cache@v4
+        with:
+          path: .cache/iconify
+          key: iconify-${{ hashFiles('mkdocs.yml') }}
+          restore-keys: iconify-
 
       - name: Install dependencies
         run: |

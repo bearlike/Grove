@@ -35,12 +35,12 @@ only with a measurement.
 The SQLite file under the state dir is derived wholly from transcripts Grove can
 re-read. Three consequences follow, and they are why this subsystem is small:
 
-- **A schema-version mismatch REBUILDS; there are no migrations.** Migration
-  code is the most dangerous code in a persistence layer, and here it would
-  guard data reproducible in seconds. `_schema.SCHEMA_VERSION` must be bumped on
-  any column change — a forgotten bump is a cache serving one shape while the
-  code reads another, which surfaces as inexplicably empty cards rather than as
-  an error.
+- **Each schema has its own cache filename; newer schemas are never downgraded.**
+  Old binaries cannot learn a newly added guard, so a shared filename lets a
+  stale process delete a newer cache. The schema-versioned default path isolates
+  those binaries; an explicit path containing a newer schema is refused without
+  deletion. Older schemas can still rebuild rather than migrate. Bump
+  `_schema.SCHEMA_VERSION` when columns or their meaning change.
 - **Deleting the file is always safe**, so retention and purge are ordinary
   operations rather than data loss.
 - **No lock discipline from `paths.exclusive_lock`.** SQLite in WAL mode owns
@@ -192,6 +192,7 @@ host's two corpora; re-open one only with a new measurement.
   (several hundred each — a blanket "skip one word" is what produces them), and
   a plausibility refusal for `$AAPT`, `*"status":"failed"*`, `#` and `-z`.
   Every one of those is now honestly `unattributed`.
+- **The tool-name set and the command-key table left this package: they are facts about PROVIDER SHAPES, and the telemetry export needs the same answer.** `SHELL_TOOL_NAMES` and the key extraction now live in [agents/shell.py](../agents/CLAUDE.md) (`ShellCall.of`), which the projector, the ranking query and the canonical shell observation all read — two private copies of one table is how a harness added to one consumer stays invisible to the other. What stays here is unchanged: bashlex, the builtins, the prefix grammars and the normalization config, because those answer *which executable led the line*, not *is this a shell call at all*.
 - **bashlex's grammar is a fact about bash; only NORMALIZATION is config.**
   `usage.commands` owns basename folding, the version-suffix pattern and the
   alias map, per the mechanism-not-policy rule. The version pattern requires a
@@ -223,6 +224,66 @@ host's two corpora; re-open one only with a new measurement.
   `attrs_json` MEAN for shell rows, and an unbumped cache would serve the card
   an empty range — indistinguishable from a quiet week. **Bump
   `SCHEMA_VERSION` for a change in a column's meaning, not only its type.**
+
+## A DISPOSABLE cache cannot hold a fact nothing can recompute — ATTACH one that can
+
+`sessions.workspace_id` had been written since the column existed and read by
+nothing: `SELECT s.*` pulled it into memory and `_session` dropped it. The
+feature it was waiting for is a NAME — and a name is the one thing this package
+must not store, for the reason its own licence gives. **Every property that
+makes this cache safe is fatal to a durable fact**: the filename carries
+`SCHEMA_VERSION` and `_open` drops the file on a bump (6→7 has already
+happened), `_apply_retention` deletes rows past `usage.retention_days`, and
+"deleting the file is always safe" is only true while every column is
+re-derivable. A title is re-derivable exactly while its workspace exists, and
+`kill` deleting that record is the NORMAL end of a task — measured 2026-09-14 on
+the reference host, **2 of the 10 stored workspace ids already named workspaces
+that no longer existed.**
+
+So the durable half lives in `core/workspace_history.py` (`paths.quota_state_path`
+and `session_turns_path` are the same argument, already settled twice) and
+`_connect_prepared` ATTACHes it as `history`. **The coupling is one-directional
+and that is what preserves this package's licence:** the cache reads that file,
+nothing there reads the cache, so deleting the cache is still always safe and a
+bump here still costs nothing. `query.py` LEFT JOINs it, gated on
+`UsageStore.history_attached`, and `_optional` reads the three name columns —
+because a store that could not attach serves rows WITHOUT them, and indexing a
+missing key on a `sqlite3.Row` raises `IndexError` rather than answering `None`.
+Absent must read as absent, never as a 500.
+
+- **ATTACHING a file puts its tables in the HOST's namespace, so name them as if
+  the host's were their siblings.** SQLite resolves an unqualified table name
+  across main and every attached schema, so a second `meta` there SHADOWS this
+  cache's own whenever main has none yet — i.e. a fresh cache. Measured before
+  the rename: the cache read the attached file's version, concluded
+  `schema 1 != 7`, and dropped and rebuilt itself **on every startup**. The
+  durable file's table is `workspace_history_meta`.
+- **`ATTACH` on a missing path CREATES an empty database, so the attacher must
+  materialize the schema first.** A lazily-connecting store means merely
+  constructing one leaves the file absent; the ATTACH then succeeds against a
+  schema with none of the tables the join names, and it fails at QUERY time
+  where the cause is invisible. Measured: 24 usage tests failing with
+  `no such table: history.workspace_names`. Hence `ensure_schema()` before the
+  ATTACH — and the general form is that **a lazy initializer and a consumer that
+  needs the artifact NOW are a producer/ordering bug wearing a different hat**,
+  the same shape as the control-file mount ordering in [core](../CLAUDE.md).
+
+## `_workspace_index` keyed on a MINTED id, so the column was ~2% filled
+
+The write path had the same defect the todo axis already paid for: a projection
+keyed on a *minted* `agent_session_id` silently excludes every provider that
+cannot be launched with one. Measured on the reference cache: **10 of 545 rows
+carried a workspace, and 0 of 215 Codex rows** — Codex mints nothing, so it
+could never match, and the adapter tests stayed green because the adapter was
+never the broken part. It now resolves minted-id first, then cwd behind a KIND
+GATE, which is `SessionCatalog._workspace_maps`'s rule.
+
+**That rule is duplicated here rather than shared, and the reason is the guard
+rather than laziness:** `_workspace_maps` has no per-repo exception isolation,
+while this refresh must survive one repo with an unreadable config cascade
+(`except Exception: continue` per root). Promoting the guard into `sessions.py`
+is the honest fix if a third caller ever appears; until then the two key sets
+must be kept in step, and the comment at each end says so.
 
 ## Attribution has five dimensions and they do not collapse
 
@@ -272,13 +333,15 @@ drill-in.
 - **A provider total is authoritative for headline totals, not a token class.**
   Codex's cumulative input/output belongs in `provider_total`; it must not be
   relabelled fresh input. Class breakdowns remain nullable and separate.
-- **A range cost is all-or-unknown.** Price every included session from current
-  config at query time; if any row lacks a unique priced model or token evidence,
-  return null and mark cost unavailable for that selection. A partial sum or a
-  priced model with all-null counts is not `$0` and is not a complete total.
-  Every class with a non-zero configured rate must be measured: output-only
-  Codex evidence cannot silently price missing input as zero. Refresh sortable
-  cache columns when startup pricing changes so cost order and display agree.
+- **A complete range cost is all-or-unknown; a known subtotal is a different
+  measurement.** Keep `cost` null when any selected session cannot be fully
+  priced. Publish an explicitly partial known estimate with priced/selected
+  session counts rather than making supported costs invisible. Both use the
+  same selected population, never the browser's capped recent-session list.
+  Multiple models require per-model generation evidence, not a whole-session
+  token total copied under each model. Every charged class must be measured;
+  missing rates and counts stay unknown, while explicit zero remains zero.
+  Refresh sortable cache columns when pricing changes so order and display agree.
 - **Every grouped aggregate is complete-or-null, not merely `SUM`-shaped.**
   SQLite ignores null inputs to `SUM`, so provider/account/project/model rows
   must compare each measurement's count with the group count before summing;
@@ -288,9 +351,10 @@ drill-in.
   session crossing midnight contributes timestamped generation/tool evidence
   to each corresponding day; range listings use event existence rather than
   `last_event_at`. Aggregate token totals are all-or-null when a contributing
-  session has no token evidence. Codex's cumulative total can only attach to its
-  final normalized generation because the adapter exposes no per-message usage;
-  never invent an intra-session split.
+  session has no token evidence. Codex's cumulative provider total attaches
+  only to its final normalized generation. Separately reported per-request
+  token classes may be attributed by the adapter; never distribute the
+  cumulative total over requests or invent an intra-session split.
 - **A CALENDAR BUCKET HAS NO NULL, so complete-or-null degrades there into
   complete-or-ABSENT — which is a positive false claim, not a withheld one.**
   `activity` skipped any day where one contributing session lacked the
@@ -314,6 +378,46 @@ drill-in.
 - **Model metrics require single-model attribution.** Switched-model sessions
   remain visible in the audit table, but whole-session totals must not be copied
   into every model row or concentration cohort.
+- **A discovery scope is not source identity.** An adapter may search its
+  configured profile and the default profile together. Attribute each reference
+  to the actual transcript root before deduplicating, not to the scope that
+  happened to discover it. Otherwise fallback history becomes one copy per
+  configured profile and every warning repeats under opaque workspace labels.
+  Keep `(provider, actual root, session id)` distinct; equal session ids alone
+  do not prove two real profiles are the same source. An identity correction
+  requires a derived-cache version bump because repricing cannot repair the
+  old duplicated rows. Source degradation details survive successful siblings
+  in the same refresh and clear only when the source recovers.
+- **Pricing discovery is explicit configuration, not ambient credential
+  discovery.** Only declared endpoint/key-env pairs may fetch model metadata.
+  Normalize and persist rates, never credentials or deployment payloads; reads
+  consume that local snapshot and refresh owns bounded network I/O. Manual
+  prices override fetched data, explicit aliases resolve names, and conflicting
+  deployments or absent rates cannot become arbitrary prices or free tokens.
+  Gateway prices are current estimates, not historical invoices. Subscription
+  marginal pricing and public API equivalent pricing must not be silently mixed.
+- **THE SNAPSHOT IS NOT ONLY A PRICE BOOK — `max_input_tokens` rides the same
+  response, and a second consumer reads it WITHOUT a second fetch.** A model
+  picker wants the context window; `/v1/model/info` publishes it beside the
+  rates (78 of 89 models on the reference host), so `context_windows()` is a
+  read of the cache the refresh already writes rather than a new endpoint,
+  credential, TTL or file. The coupling runs one way — `core/model_catalog.py`
+  reads this package and nothing here knows a picker exists — which keeps this
+  cache's own licence intact. Two rules the addition had to obey: a window
+  parses TOLERANTLY (a malformed entry contributes nothing rather than failing
+  the fetch, because a price snapshot must not be lost over a display column),
+  and conflicting sources DROP the model exactly as prices do.
+  - **ADDING A FIELD TO A CACHED SNAPSHOT NEEDS A VERSION BUMP, and the reason
+    is the same "absence must not masquerade as measurement" rule this package
+    is built on.** A version-1 file has no `context_windows` key, so every model
+    in it reads as *no window published* — indistinguishable from a gateway that
+    genuinely does not publish one, and only the first is repairable. Measured
+    live: a daemon running older code rewrote the shared file at version 1 with
+    0 windows, and the guard correctly refused to serve it rather than reporting
+    78 real windows as absent. `_SNAPSHOT_VERSION` forces the re-fetch.
+    **The fingerprint over the INPUT answers "did the source change"; the
+    version answers "did the QUESTION change"** — the `TurnCountCache` shape
+    rule in [contracts](../contracts/CLAUDE.md), arriving through a new door.
 - **Activity discovery and subscription quota selection are intentionally
   different.** Historical activity projects every normalized transcript Grove
   can reach. Quota may touch live credentials and provider endpoints, so only

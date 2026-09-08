@@ -8,10 +8,12 @@ workspace and the poll walks the whole host every couple of seconds.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,6 +40,47 @@ def daemon(
     app = build_app(cfg=daemon_test_config(), store=store)
     with TestClient(app) as client:
         yield client
+
+
+def _await_activity_row(
+    daemon: TestClient,
+    workspace_id: str,
+    *,
+    status: str | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Poll ``/activity`` until the projection carries this workspace (at *status*).
+
+    The snapshot is an event-driven projection, not a per-request scan: a create
+    and a direct store write are both applied by the source owner on its own
+    task, so a read taken in the same breath legitimately precedes them. Waiting
+    is the honest assertion — the contract is that the row ARRIVES, not that it
+    is already there — and an explicit timeout keeps a genuine never-arrives
+    from passing as a slow one.
+
+    Waiting on the STATUS rather than merely on the row's presence matters for
+    the same reason: a workspace mutated behind the daemon's back is already in
+    the projection under its previous status, so a presence-only wait returns
+    the stale row immediately and asserts against the value it was racing.
+    """
+    deadline = time.monotonic() + timeout
+    seen: str | None = None
+    while True:
+        snapshot = daemon.get("/activity").json()
+        for group in snapshot["projects"]:
+            for row in group["workspaces"]:
+                if row["state"]["id"] != workspace_id:
+                    continue
+                seen = row["state"]["status"]
+                if status is None or seen == status:
+                    return cast("dict[str, Any]", row)
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"workspace {workspace_id} never reached the activity projection"
+                f"{f' at status {status!r} (last saw {seen!r})' if status else ''} "
+                f"within {timeout}s"
+            )
+        time.sleep(0.05)
 
 
 def _create_ws(daemon: TestClient, tmp_repo: Path) -> str:
@@ -135,11 +178,7 @@ def test_the_activity_snapshot_carries_the_provisioning_facts(
         )
     )
 
-    snapshot = daemon.get("/activity").json()
-    rows = [w for g in snapshot["projects"] for w in g["workspaces"] if w["state"]["id"] == ws_id]
-
-    assert len(rows) == 1
-    state = rows[0]["state"]
+    state = _await_activity_row(daemon, ws_id, status="provisioning")["state"]
     assert state["status"] == "provisioning"
     assert state["provision_status"] == "provisioning"
     assert state["provision_started_at"] is not None

@@ -10,32 +10,45 @@ title: Grove
     your agent. It owns everything around it, and every workspace reports to the ticket you filed.
   </p>
   <div class="ms-cta-row">
-    <a class="ms-btn ms-btn--primary" href="getting-started/">Install &amp; first workspace</a>
-    <a class="ms-btn ms-btn--secondary" href="use-tui/">Take the tour</a>
-    <a class="ms-btn ms-btn--ghost" href="https://github.com/bearlike/Grove">Source on GitHub</a>
+    <a class="ms-btn ms-btn--primary" href="getting-started/">
+      <iconify-icon icon="lucide:download" width="18" height="18" aria-hidden="true"></iconify-icon>
+      Install &amp; first workspace
+    </a>
+    <a class="ms-btn ms-btn--secondary" href="use-tui/">
+      <iconify-icon icon="lucide:compass" width="18" height="18" aria-hidden="true"></iconify-icon>
+      Take the tour
+    </a>
+    <a class="ms-btn ms-btn--ghost" href="https://github.com/bearlike/Grove">
+      <iconify-icon icon="lucide:github" width="18" height="18" aria-hidden="true"></iconify-icon>
+      Source on GitHub
+    </a>
   </div>
 </div>
 
-<div class="ms-pills" aria-label="What makes Grove different">
+<div class="ms-pills" aria-label="Your agentic development environment">
   <span class="ms-pill">
-    <iconify-icon class="ms-pill__icon" icon="lucide:git-branch" width="14" height="14" aria-hidden="true"></iconify-icon>
-    One agent, one worktree, one window
+    <iconify-icon class="ms-pill__icon" icon="lucide:bot" width="14" height="14" aria-hidden="true"></iconify-icon>
+    Bring your agents
   </span>
   <span class="ms-pill">
-    <iconify-icon class="ms-pill__icon" icon="lucide:box" width="14" height="14" aria-hidden="true"></iconify-icon>
-    Containers by default
+    <iconify-icon class="ms-pill__icon" icon="lucide:users" width="14" height="14" aria-hidden="true"></iconify-icon>
+    Shared team configuration
+  </span>
+  <span class="ms-pill">
+    <iconify-icon class="ms-pill__icon" icon="lucide:container" width="14" height="14" aria-hidden="true"></iconify-icon>
+    Isolated agent workspaces
   </span>
   <span class="ms-pill">
     <iconify-icon class="ms-pill__icon" icon="lucide:ticket" width="14" height="14" aria-hidden="true"></iconify-icon>
-    Work arrives from your tracker
+    Issue driven workflows
   </span>
   <span class="ms-pill">
-    <iconify-icon class="ms-pill__icon" icon="lucide:smartphone" width="14" height="14" aria-hidden="true"></iconify-icon>
-    Terminal, browser, or another agent
+    <iconify-icon class="ms-pill__icon" icon="lucide:pencil-ruler" width="14" height="14" aria-hidden="true"></iconify-icon>
+    Shared diagrams and annotations
   </span>
   <span class="ms-pill">
-    <iconify-icon class="ms-pill__icon" icon="lucide:check-check" width="14" height="14" aria-hidden="true"></iconify-icon>
-    Claude Code and Codex
+    <iconify-icon class="ms-pill__icon" icon="lucide:activity" width="14" height="14" aria-hidden="true"></iconify-icon>
+    Agent activity monitoring
   </span>
 </div>
 
@@ -85,6 +98,18 @@ title: Grove
     </div>
     <div class="swiper-slide">
       <figure>
+        <img loading="lazy" src="img/screenshots/webapp-diagram.png" alt="A Grove workspace's Diagram tab filling the work pane, with an architecture diagram the agent drew rendered in the embedded draw.io editor and marked Saved">
+        <figcaption>Diagrams. An agent draws a mockup or an architecture spec in draw.io, Grove validates the XML, you approve the picture.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="img/screenshots/webapp-annotate.png" alt="A Grove workspace page with the agent transcript on the left and the image annotation pane open beside it, holding an aerial photo of a crosswalk with every pedestrian boxed and labelled in the marker.js editor">
+        <figcaption>Annotation. Paste a screenshot, box what matters, and the agent is handed the marked-up copy.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
         <img loading="lazy" src="img/screenshots/webapp-sessions.png" alt="Grove's host-wide session catalog: searchable agent sessions with project, model, turn count, recency and context usage columns">
         <figcaption>Session catalog. Search every recorded agent session on the host, including work Grove did not launch.</figcaption>
       </figure>
@@ -121,11 +146,12 @@ title: Grove
 
 ## What is Grove? { .ms-h2-icon data-icon="target" }
 
-Each agent gets a **workspace** of its own. One git worktree, one branch, one tmux window, and by
-default a container.
-
-Two agents in one checkout otherwise overwrite each other's files and fight over one branch. Grove
-passes your tool's flags through untouched and manages everything around it.
+- **Writing the code stopped being the slow part.** Deciding what to build did. More agents can build in parallel but shared checkouts cause conflicts and laptops limit capacity. Grove adds IDE tools around those agents without replacing them. It manages their workspaces and runtimes and gives you tools to guide their work.
+- **Give each task its own workspace.** Each agent gets its own worktree and branch in a separate window. Agents report progress phases for the workspace and each attached ticket independently. You can see what is being planned, built or verified across the fleet.
+- **Choose how each agent runs.** Run agents on your host with the environment they normally inherit. Or use a [container](features-containers.md) defined by your repository's `.devcontainer/`. It provides separate services and ports with resource limits. Use that isolation for runs with agent permission checks disabled.
+- **Choose where the work runs.** Tests, builds and scripts compete for CPU and memory across concurrent workspaces. Move those workloads off your laptop when it slows down. Reuse the container configuration on a shared team machine or serverless cloud infrastructure.
+- **Let the tracker start the work.** Assign an issue and Grove starts a workspace for it. Progress returns to [the same ticket](issue-ops.md). Follow the task where you defined it.
+- **Show it instead of describing it.** Mark up a [screenshot](features-attachments.md) or collaborate with the agent on a [diagram](features-diagrams.md). Approve the diagram or mockup and attach it to a ticket. Then coordinate your fleet around it.
 
 ## Choose your surface { .ms-h2-icon data-icon="route" }
 
@@ -137,119 +163,146 @@ Every workspace is reachable from all four.
     <iconify-icon icon="lucide:terminal" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Terminal</span>
-  <span class="ms-card__body">Create, attach, pause and kill in one keypress, beside a live peek rail.</span>
+  <span class="ms-card__body">Manage multiple coding agents without leaving your terminal. Switch between workspaces and inspect live output to see which agent needs you.</span>
 </a>
 <a class="ms-card" href="use-webapp/">
   <span class="ms-card__icon">
     <iconify-icon icon="lucide:layout-panel-top" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Web dashboard</span>
-  <span class="ms-card__body">The whole fleet in one grid, from any device.</span>
+  <span class="ms-card__body">Manage your agents from any device and track their transcripts and task progress. Review diagrams and annotate screenshots to show what needs changing.</span>
 </a>
 <a class="ms-card" href="issue-ops/">
   <span class="ms-card__icon">
     <iconify-icon icon="lucide:ticket" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Your tracker</span>
-  <span class="ms-card__body">Assign an issue on Linear, GitHub or Gitea and a workspace starts.</span>
+  <span class="ms-card__body">Delegate work from Linear, GitHub or Gitea without opening another tool. Assign an issue to start a workspace and follow its phase and checklist on the same ticket.</span>
 </a>
 <a class="ms-card" href="use-mcp/">
   <span class="ms-card__icon">
     <iconify-icon icon="lucide:plug" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Another agent</span>
-  <span class="ms-card__body">Claude Code and Codex steer workspaces themselves, over MCP.</span>
+  <span class="ms-card__body">Give an orchestrating agent the tools to delegate across isolated workspaces. Through MCP it can launch agents, inspect their progress and send follow ups while you retain oversight.</span>
 </a>
 </div>
 
-## The ticket you filed is the ticket you check { .ms-h2-icon data-icon="flow" }
-
-A workspace treats its issue as the spec. One comment, rewritten as the work moves, carries the agent's
-phase, what it has finished and the pull request it opened.
-
 ## What you get { .ms-h2-icon data-icon="grid" }
 
+Built for the founder or lead who wants a whole team running agents the same way, and able to see what every one of them did.
+
 <div class="ms-grid ms-grid--3">
-  <a class="ms-card" href="features-containers/">
-    <span class="ms-card__icon">
-      <iconify-icon icon="lucide:box" width="20" height="20" aria-hidden="true"></iconify-icon>
-    </span>
-    <span class="ms-card__title">A stack per agent</span>
-    <span class="ms-card__body">Docker in Docker, so permissions off bounds the blast radius.</span>
-  </a>
-  <a class="ms-card" href="use-webapp/#working-in-a-session">
-    <span class="ms-card__icon">
-      <iconify-icon icon="lucide:columns-3" width="20" height="20" aria-hidden="true"></iconify-icon>
-    </span>
-    <span class="ms-card__title">Transcript, terminal, diff</span>
-    <span class="ms-card__body">Steer while it works, answer questions inline, watch the diff grow.</span>
-  </a>
-  <a class="ms-card" href="use-webapp/">
-    <span class="ms-card__icon">
-      <iconify-icon icon="lucide:sliders-horizontal" width="20" height="20" aria-hidden="true"></iconify-icon>
-    </span>
-    <span class="ms-card__title">A model per workspace</span>
-    <span class="ms-card__body">Each agent exposes its own catalog. Cheap for scaffolding, strong for the refactor.</span>
-  </a>
   <a class="ms-card" href="features-cascade/">
     <span class="ms-card__icon">
       <iconify-icon icon="lucide:layers" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
-    <span class="ms-card__title">Principles, versioned</span>
-    <span class="ms-card__body">One committed config carries agents, setup and container policy. Six layers override it locally.</span>
+    <span class="ms-card__title">Shared configuration</span>
+    <span class="ms-card__body">A committed <code>.grove/config.json</code> carries the agents, models, setup and container policy every workspace starts from. Each engineer overrides locally, and a workspace picks its own model without touching the shared file.</span>
   </a>
-  <a class="ms-card" href="features-workspace-lifecycle/">
+  <a class="ms-card" href="features-telemetry/">
     <span class="ms-card__icon">
-      <iconify-icon icon="lucide:rotate-ccw" width="20" height="20" aria-hidden="true"></iconify-icon>
+      <iconify-icon icon="lucide:waypoints" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
-    <span class="ms-card__title">Session recovery</span>
-    <span class="ms-card__body">Sessions re-adopt across daemon restarts. A stale pointer remaps in a click.</span>
+    <span class="ms-card__title">Agent monitoring</span>
+    <span class="ms-card__body">Every turn becomes one trace with its model calls, tool calls, latency and cost, in Langfuse or any OTLP backend. Usage, subscription windows and a year of spend come from transcripts on your own disk.</span>
   </a>
-  <a class="ms-card" href="features-notifications/">
+  <a class="ms-card" href="features-containers/">
     <span class="ms-card__icon">
-      <iconify-icon icon="lucide:bell" width="20" height="20" aria-hidden="true"></iconify-icon>
+      <iconify-icon icon="lucide:box" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
-    <span class="ms-card__title">Push notifications</span>
-    <span class="ms-card__body">Get pinged when an agent finishes a turn or needs an answer.</span>
+    <span class="ms-card__title">Isolated containers</span>
+    <span class="ms-card__body">Each agent runs in the repository's own devcontainer with resource and egress ceilings, so permissions off is safe and twenty agents cannot saturate one machine. Sessions survive restarts and re-adopt on their own.</span>
+  </a>
+  <a class="ms-card" href="features-diagrams/">
+    <span class="ms-card__icon">
+      <iconify-icon icon="lucide:pencil-ruler" width="20" height="20" aria-hidden="true"></iconify-icon>
+    </span>
+    <span class="ms-card__title">Shared diagrams</span>
+    <span class="ms-card__body">A UI mockup or an architecture spec lives as one draw.io file both of you edit, with revision checks. Grove validates the XML and you approve the picture before code exists.</span>
+  </a>
+  <a class="ms-card" href="features-attachments/">
+    <span class="ms-card__icon">
+      <iconify-icon icon="lucide:image-plus" width="20" height="20" aria-hidden="true"></iconify-icon>
+    </span>
+    <span class="ms-card__title">Image annotation</span>
+    <span class="ms-card__body">Drop a screenshot or a file into either composer, draw on the image, and the agent is handed a path inside its own worktree. The day to day handoffs your agent harness leaves out.</span>
+  </a>
+  <a class="ms-card" href="use-mcp/">
+    <span class="ms-card__icon">
+      <iconify-icon icon="lucide:plug" width="20" height="20" aria-hidden="true"></iconify-icon>
+    </span>
+    <span class="ms-card__title">Remote access</span>
+    <span class="ms-card__body">The same fleet from a terminal, a browser on any device, a tracker comment, or another agent over MCP. One daemon on loopback, a pairing handshake, and push notifications when an agent needs you.</span>
   </a>
 </div>
 
-## Install { .ms-h2-icon data-icon="plug" }
+<span id="install"></span>
+<span id="explore-the-docs"></span>
 
-Grove needs `git`, `tmux`, and Docker for a container workspace. It installs as `grove` on your PATH.
+## From first workspace to a whole fleet { .ms-h2-icon data-icon="route" }
 
-```bash
-uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
-uv tool upgrade grove        # update on demand
+Start with one agent, share your setup with the team and choose how you manage the work.
 
-cd path/to/your/repo
-grove config init            # scaffold .grove/config.json
-grove                        # launch the TUI
-```
-
-No uv? See [Get Started](getting-started.md) for `pipx`, `pip` and every install path.
-
-## Explore the docs { .ms-h2-icon data-icon="book" }
-
-<div class="ms-grid ms-grid--3">
-  <a class="ms-card" href="getting-started/">
-    <span class="ms-card__title">Get Started</span>
-    <span class="ms-card__body">Install and first run.</span>
-  </a>
-  <a class="ms-card" href="use-tui/">
-    <span class="ms-card__title">Use</span>
-    <span class="ms-card__body">TUI, CLI, web dashboard, pairing, workflow.</span>
-  </a>
-  <a class="ms-card" href="configure-project/">
-    <span class="ms-card__title">Configure</span>
-    <span class="ms-card__body">Projects, agents, init scripts, the cascade.</span>
-  </a>
-  <a class="ms-card" href="features-containers/">
-    <span class="ms-card__title">Capabilities</span>
-    <span class="ms-card__body">Containers, lifecycle, issue ops, notifications.</span>
-  </a>
-  <a class="ms-card" href="develop-architecture/">
-    <span class="ms-card__title">Developer reference</span>
-    <span class="ms-card__body">Architecture, public API, contributing.</span>
-  </a>
+<div class="ms-lifecycle">
+  <div class="ms-step">
+    <p class="ms-step__title">Install</p>
+    <div class="ms-step__links">
+      <p class="ms-card__body">Set up Grove and launch your first isolated workspace.</p>
+      <ul class="ms-step__links">
+        <li><a href="getting-started/">Get Started</a></li>
+        <li><a href="getting-started/#prerequisites">Prerequisites</a></li>
+        <li><a href="configure-project/">Project setup</a></li>
+        <li><a href="troubleshooting/">Troubleshooting</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="ms-step">
+    <p class="ms-step__title">Configure</p>
+    <div class="ms-step__links">
+      <p class="ms-card__body">Choose your agents and share workspace defaults across the team.</p>
+      <ul class="ms-step__links">
+        <li><a href="configure-agents/">Agents and models</a></li>
+        <li><a href="configure-init-scripts/">Init scripts</a></li>
+        <li><a href="issue-ops/">Issue ops</a></li>
+        <li><a href="configure-reference/">Configuration reference</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="ms-step">
+    <p class="ms-step__title">Use</p>
+    <div class="ms-step__links">
+      <p class="ms-card__body">Run your fleet and follow its work from the surface that suits you.</p>
+      <ul class="ms-step__links">
+        <li><a href="use-tui/">Terminal tour</a></li>
+        <li><a href="use-cli/">CLI commands</a></li>
+        <li><a href="use-webapp/">Web dashboard</a></li>
+        <li><a href="use-mcp/">MCP server</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="ms-step">
+    <p class="ms-step__title">Capabilities</p>
+    <div class="ms-step__links">
+      <p class="ms-card__body">Contain each agent's environment and make its work easier to review.</p>
+      <ul class="ms-step__links">
+        <li><a href="features-catalog/">Capability catalog</a></li>
+        <li><a href="features-containers/">Containerized agents</a></li>
+        <li><a href="features-diagrams/">Diagram collaboration</a></li>
+        <li><a href="features-attachments/">Attachments and annotation</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="ms-step">
+    <p class="ms-step__title">Developers</p>
+    <div class="ms-step__links">
+      <p class="ms-card__body">Build on Grove's public API or contribute to the engine and its clients.</p>
+      <ul class="ms-step__links">
+        <li><a href="develop-architecture/">Architecture</a></li>
+        <li><a href="develop-public-api/">Public API</a></li>
+        <li><a href="develop-principles/">Engineering principles</a></li>
+        <li><a href="develop-contributing/">Contributing</a></li>
+      </ul>
+    </div>
+  </div>
 </div>

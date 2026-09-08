@@ -1,4 +1,13 @@
-"""Workspace create-form defaults: user-first cascade and scoped persistence."""
+"""Workspace create defaults: user-first cascade, scoped persistence, and the
+one resolution both a create and a create FORM read.
+
+The second half of this file exists because those two used to be different
+code. `WorkspaceDefaultsView` honoured `defaults.runtime`; the engine read
+`container.enabled`, which defaults to True — so a user whose saved default was
+`host` was shown Host by every form and handed a container by every create that
+did not repeat the resolution client-side. Each test below pins one field of
+that agreement.
+"""
 
 from __future__ import annotations
 
@@ -10,11 +19,18 @@ import pytest
 from grove.core import paths as paths_mod
 from grove.core.config import (
     DefaultsScope,
+    GroveConfig,
     WorkspaceDefaults,
     load_config,
     save_workspace_defaults,
 )
+from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.views import WorkspaceDefaultsView
 from grove.core.errors import ConfigError
+from grove.core.manager import WorkspaceManager
+from grove.core.store import JsonWorkspaceStore
+from grove.core.workspace import Runtime
+from tests.conftest import FakeCli, FakePreflight, FakeTmux
 
 
 def test_user_default_field_outranks_project_without_hiding_other_project_default(
@@ -167,3 +183,149 @@ def test_unknown_defaults_field_fails_config_load(tmp_state_dir: Path, tmp_repo:
 
     with pytest.raises(ConfigError, match="defaults"):
         load_config(tmp_repo, env={})
+
+
+# ─── the engine and the form resolve one answer ─────────────────────────────
+
+
+def _cfg(tmp_path: Path, **defaults: object) -> GroveConfig:
+    """A config whose CONTAINER SECTION IS ON — the shipped default, and the
+    only setting under which the drift these tests pin was reachable."""
+    return GroveConfig.model_validate(
+        {
+            "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
+            "tmux": {"session_prefix": "test-"},
+            "container": {"enabled": True},
+            "init_script": {"enabled": True, "shell": "bash", "inline": "true"},
+            "agents": [{"name": "claude", "command": "claude", "kind": "claude_code"}],
+            "defaults": defaults,
+        }
+    )
+
+
+def _manager(tmp_repo: Path, cfg: GroveConfig, tmp_path: Path) -> WorkspaceManager:
+    cli = FakeCli()
+    return WorkspaceManager(
+        repo_root=tmp_repo,
+        cfg=cfg,
+        store=JsonWorkspaceStore(path=tmp_path / "state.json"),
+        devcontainer_cli=cli,
+        preflight=FakePreflight(devcontainer_cli=cli),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("saved", "expected"),
+    [("host", Runtime.HOST), ("container", Runtime.CONTAINER), (None, Runtime.CONTAINER)],
+)
+def test_a_create_naming_no_runtime_takes_the_saved_default_over_container_enabled(
+    saved: str | None, expected: Runtime, tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """`defaults.runtime` outranks `container.enabled` for an unopinionated create.
+
+    The `None` row is the load-bearing control: with no saved answer the section
+    default still decides, so this honours a preference rather than disabling
+    containers-by-default.
+    """
+    cfg = _cfg(tmp_path, runtime=saved) if saved else _cfg(tmp_path)
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="unopinionated")
+    )
+
+    assert state.runtime is expected
+    # Not a fallback: nothing was unavailable, the user simply said so.
+    assert state.runtime_fallback_reason is None
+
+
+def test_an_explicit_runtime_still_beats_the_saved_default(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Precedence order is unchanged — a request that names a field wins."""
+    cfg = _cfg(tmp_path, runtime="host")
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="explicit", runtime=Runtime.CONTAINER)
+    )
+
+    assert state.runtime is Runtime.CONTAINER
+
+
+@pytest.mark.parametrize("saved", ["host", "container"])
+def test_the_form_view_reports_exactly_what_an_untouched_create_does(
+    saved: str, tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The drift pin: the view a form displays and the runtime a create records
+    are one answer, asserted against each other rather than each against a
+    literal — a literal on both sides is what let them agree in the test and
+    disagree in production."""
+    cfg = _cfg(tmp_path, runtime=saved)
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="agreement")
+    )
+
+    assert WorkspaceDefaultsView.from_config(cfg).runtime == state.runtime.value
+
+
+def test_a_create_naming_no_model_forwards_the_saved_one_to_the_agent(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """A saved model reaches the launch argv, which is the only place it does
+    anything — omitting the field used to drop it silently."""
+    cfg = _cfg(tmp_path, runtime="host", model="anthropic-opus-5[1m]")
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="modelled")
+    )
+
+    decorations = dict(fake_tmux.launch_decorations)
+    assert decorations[state.tmux_session][-2:] == ["--model", "anthropic-opus-5[1m]"]
+
+
+def test_with_no_saved_model_the_agent_is_launched_with_no_model_flag_at_all(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The control for the test above, and the fact every create FORM has to
+    agree with: with nothing saved and nothing requested, Grove names no model
+    and the tool picks its own. A pill that displays a catalog entry here is
+    naming something that will not be used."""
+    cfg = _cfg(tmp_path, runtime="host")
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="unmodelled")
+    )
+
+    assert "--model" not in dict(fake_tmux.launch_decorations)[state.tmux_session]
+
+
+def test_a_create_naming_no_skip_init_takes_the_saved_one(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """`skip_init` is `None`, not `False`, precisely so this is expressible."""
+    cfg = _cfg(tmp_path, runtime="host", skip_init=True)
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="uninitialised")
+    )
+
+    assert state.init_status is not None
+    assert state.init_status.value == "skipped"
+
+
+def test_a_create_asking_for_the_init_script_still_gets_it(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """`skip_init=False` is a real answer, not the absence of one."""
+    cfg = _cfg(tmp_path, runtime="host", skip_init=True)
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="initialised", skip_init=False)
+    )
+
+    assert state.init_status is not None
+    assert state.init_status.value != "skipped"
+
+
+def test_a_saved_model_id_is_held_to_the_same_rule_as_a_requested_one() -> None:
+    """The saved default now becomes an argv token, so a flag-shaped id has to
+    be refused where it is DEFINED — the wire's pattern alone protected only
+    callers who sent the field."""
+    with pytest.raises(ValueError, match="invalid model id"):
+        WorkspaceDefaults(model="--dangerously-skip-permissions")
+
+    # And a real gateway id, brackets and all, still validates.
+    assert WorkspaceDefaults(model="anthropic-opus-5[1m]").model == "anthropic-opus-5[1m]"

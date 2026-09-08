@@ -334,6 +334,7 @@ class TmuxLaunchBackend(HostNamespaceBackend):
             spec.session_name,
             cwd=spec.cwd,
             history_limit=spec.cfg.tmux.history_limit,
+            size=spec.cfg.tmux.detached_size,
         )
         tmux.build_workspace_layout(
             spec.session_name,
@@ -481,7 +482,10 @@ class DevcontainerLaunchBackend:
             ]
         )
         tmux.create_session(
-            spec.session_name, cwd=spec.cwd, history_limit=spec.cfg.tmux.history_limit
+            spec.session_name,
+            cwd=spec.cwd,
+            history_limit=spec.cfg.tmux.history_limit,
+            size=spec.cfg.tmux.detached_size,
         )
         # The pane runs `devcontainer exec … -- <command>`; the adapter
         # decoration is appended by build_workspace_layout exactly as for a host

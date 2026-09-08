@@ -48,6 +48,8 @@ const PORTED_FILES: Record<string, string> = {
   // takes only `data`, so there is no prop to pass the scale through.
   "components/grove/usage/activity-heatmap.tsx": "components/assistant-ui/heat-graph.tsx",
   "components/grove/workspace/pending-question.tsx": "components/elements/elicitation-form.tsx",
+  // The native timeline has no trigger or row-body slots for tool disclosures.
+  "components/grove/workspace/tool-timeline.tsx": "components/elements/tool-timeline.tsx",
 };
 
 /** Utilities whose value is a colour. */
@@ -85,10 +87,32 @@ const RULES: { pattern: RegExp; reason: string }[] = [
  * which would at worst hide a violation rather than invent one.
  */
 function stripComments(source: string): string {
-  const blank = (text: string): string => text.replace(/[^\n]/g, " ");
   return source
     .replace(/\/\*[\s\S]*?\*\//g, blank)
     .replace(/(^|[^:])\/\/[^\n]*/g, (match, lead: string) => lead + blank(match.slice(lead.length)));
+}
+
+/** Blank out text, preserving every line break and column. */
+const blank = (text: string): string => text.replace(/[^\n]/g, " ");
+
+/**
+ * Blank out the VALUE of a `variant` prop, for the same reason comments are
+ * blanked: it flags the person complying with the rule.
+ *
+ * A vendored component's variants are upstream vocabulary, and several are
+ * named after the look they produce — `elements`' `GenerationLoader` takes
+ * `variant="rounded"`, which is a radius decision made upstream and CHOSEN
+ * here, not invented here. That is the composition this linter exists to
+ * encourage, and it read as a radius utility purely because the rules match
+ * text rather than class attributes.
+ *
+ * Deliberately only `variant`, and only a literal: `className` must keep every
+ * one of its bytes scanned, and an expression could hold anything.
+ */
+function stripVariantValues(source: string): string {
+  return source.replace(/(\bvariant=")([^"\n]*)(")/g, (_, open: string, value: string, close: string) =>
+    open + blank(value) + close,
+  );
 }
 
 function walk(dir: string): string[] {
@@ -112,7 +136,7 @@ function main(): void {
       ported.push(`${key}  ← ${upstream}`);
       continue;
     }
-    const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+    const lines = stripVariantValues(stripComments(readFileSync(file, "utf8"))).split("\n");
     lines.forEach((line, i) => {
       for (const { pattern, reason } of RULES) {
         for (const match of line.matchAll(pattern)) {

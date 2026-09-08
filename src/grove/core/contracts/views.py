@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from grove.core.config import BranchMode, GroveConfig
 from grove.core.container_runtime import ContainerRuntimeState
+from grove.core.contracts.diagrams import DiagramSessionView
 from grove.core.contracts.tickets import TicketRef
 from grove.core.tmux import AttachInstruction, ContainerAttach, HostAttach
 from grove.core.workspace import (
@@ -44,6 +45,22 @@ if TYPE_CHECKING:
     # which pulls in the manager and the store; a runtime import here would drag
     # both into every contracts import. ``from_project`` duck-types instead.
     from grove.core.registry import Project
+
+
+class WorkspacePanelView(BaseModel):
+    """One panel currently resolvable for an authenticated workspace response.
+
+    The response carries only the browser-facing proxy URL — never the service,
+    compose project, container id, or internal address it resolved through. The
+    omitted configuration is an ownership-sensitive implementation detail, while
+    this small view is exactly what a tab strip needs to render an iframe.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    title: str
+    url: str
 
 
 class WorkspaceStateView(BaseModel):
@@ -100,6 +117,20 @@ class WorkspaceStateView(BaseModel):
     # workspace whose image ships no in-container tmux, so the agent runs bare
     # and dies with the client that launched it.
     runtime_no_tmux: bool = False
+    # Grove owns the agent session on its native protocol (interrupt, model
+    # switch and answers go to the provider's control channel, never a pane).
+    # Defaults False so a pre-native client decodes an older payload unchanged.
+    native: bool = False
+    telemetry_session_id: str = ""
+    """The id every trace this workspace produces is keyed by — the Langfuse
+    SESSION that reassembles Grove's replay and the harness's own spans into
+    one run (:attr:`WorkspaceState.telemetry_session_id`).
+
+    On the wire because it is the ONE value a browser needs to build a link
+    into the operator's Langfuse and cannot derive: it is the harness's own
+    session id where the harness has one and the tmux session where it does
+    not (codex mints nothing), and only the engine knows which. Empty string
+    for a pre-field payload, never a fabricated id."""
     # The public share link's capability token, or None when the workspace is
     # private (the default). It rides THIS view — an authenticated-only shape —
     # rather than a route of its own, because the only client that needs it is
@@ -123,6 +154,11 @@ class WorkspaceStateView(BaseModel):
     # a link whose pinned session has drifted from the workspace's current one
     # is the state a user needs to see in order to decide whether to re-pin.
     share_session_id: str | None = None
+    # Resolved at the daemon edge instead of from the stored state: containment
+    # relies on live Docker membership, so a persisted list would turn a stopped
+    # service into a stale promise. Empty means no configured panel is available.
+    panels: list[WorkspacePanelView] = []
+    diagram: DiagramSessionView | None = None
 
     @classmethod
     def from_state(cls, s: WorkspaceState) -> WorkspaceStateView:
@@ -145,11 +181,13 @@ class WorkspaceStateView(BaseModel):
             init_status=s.init_status,
             init_duration_ms=s.init_duration_ms,
             branch_provenance=s.branch_provenance,
+            telemetry_session_id=s.telemetry_session_id,
             placement=s.placement,
             runtime=s.runtime,
             runtime_fallback_reason=s.runtime_fallback_reason,
             runtime_default_config=s.runtime_default_config,
             runtime_no_tmux=s.runtime_no_tmux,
+            native=s.native,
             provision_status=s.provision_status,
             provision_duration_ms=s.provision_duration_ms,
             provision_started_at=s.provision_started_at,
@@ -157,6 +195,7 @@ class WorkspaceStateView(BaseModel):
             container=s.container,
             share_token=s.share_token,
             share_session_id=s.share_session_id,
+            diagram=s.diagram,
             # TicketRef is frozen/immutable; the list is copied so the view can
             # never alias and mutate the engine record's refs.
             ticket_refs=list(s.ticket_refs),
@@ -315,6 +354,10 @@ class HostAttachView(BaseModel):
     kind: Literal["host"] = "host"
     tmux_session: str
     inside_outer_tmux: bool
+    read_only: bool = False
+    """A native workspace: the pane is Grove's worker printing protocol frames,
+    so the attach is a viewer (``-r``) and keystrokes never reach it. Defaults
+    ``False`` so an older daemon's payload decodes as the writable attach it is."""
 
     def attach_argv(self) -> list[str]:
         """The argv a FRESH pty runs to attach (the daemon's xterm.js bridge).
@@ -324,11 +367,15 @@ class HostAttachView(BaseModel):
         about to fork. The variant still carries the flag because a wire client
         that hands the user a command to paste needs to warn them (MCP does).
         """
-        return ["tmux", "attach", "-t", self.tmux_session]
+        return ["tmux", "attach", *(("-r",) if self.read_only else ()), "-t", self.tmux_session]
 
     @classmethod
     def from_instruction(cls, a: HostAttach) -> HostAttachView:
-        return cls(tmux_session=a.tmux_session, inside_outer_tmux=a.inside_outer_tmux)
+        return cls(
+            tmux_session=a.tmux_session,
+            inside_outer_tmux=a.inside_outer_tmux,
+            read_only=a.read_only,
+        )
 
 
 class ContainerAttachView(BaseModel):
@@ -338,6 +385,8 @@ class ContainerAttachView(BaseModel):
 
     kind: Literal["container"] = "container"
     argv: tuple[str, ...]
+    read_only: bool = False
+    """The argv already attaches as a viewer; see :attr:`HostAttachView.read_only`."""
 
     def attach_argv(self) -> list[str]:
         """The argv a fresh pty runs — already complete; see :class:`ContainerAttach`."""
@@ -345,7 +394,7 @@ class ContainerAttachView(BaseModel):
 
     @classmethod
     def from_instruction(cls, a: ContainerAttach) -> ContainerAttachView:
-        return cls(argv=a.argv)
+        return cls(argv=a.argv, read_only=a.read_only)
 
 
 #: Wire-level discriminated union mirroring ``grove.core.tmux.AttachInstruction``.
@@ -455,16 +504,24 @@ class WorkspaceDefaultsView(BaseModel):
 
     @classmethod
     def from_config(cls, cfg: GroveConfig) -> WorkspaceDefaultsView:
-        """Resolve create-form answers from one repo's fully merged config."""
+        """Resolve create-form answers from one repo's fully merged config.
+
+        Every resolution here is the ENGINE's own (``GroveConfig.default_*``),
+        never a second copy: this view's whole promise is that it shows what an
+        untouched create will do, and it can only keep that promise by asking
+        the same code the create asks. It answered `runtime` from its own copy
+        of the rule once, and drifted from it the day `defaults.runtime` landed
+        in the config and not in the resolver.
+        """
         defaults = cfg.defaults
         return cls(
             agent=defaults.agent,
-            runtime=defaults.runtime or ("container" if cfg.container.enabled else "host"),
-            brief=cfg.brief.enabled if defaults.brief is None else defaults.brief,
+            runtime=cfg.default_runtime,
+            brief=cfg.default_brief,
             model=defaults.model,
             branch_mode=defaults.branch_mode or "auto",
             base_ref=defaults.base_ref,
-            skip_init=defaults.skip_init or False,
+            skip_init=cfg.default_skip_init,
             agent_cwds=tuple(
                 AgentCwdView(label=label, path=path)
                 for label, path in cfg.agent_cwds.entries.items()
@@ -548,6 +605,16 @@ class WhoamiView(BaseModel):
     field can never point at a host with no matching credentials. ``None``
     covers "telemetry off" and "credentials incomplete" alike; a client has no
     use for distinguishing them, since both mean render no button."""
+    langfuse_project_id: str | None = None
+    """The project the configured Langfuse credentials belong to, resolved from
+    Langfuse's own API (a key pair names exactly one project and the config
+    never does).
+
+    Present only alongside ``langfuse_host``, because a deep link needs both:
+    `{host}/project/{id}/sessions/{session}`. ``None`` when telemetry is off,
+    the credentials are partial, or Langfuse could not be reached — all of
+    which mean the same thing to a client, which is to link no further than
+    the host it already has."""
 
 
 __all__ = [

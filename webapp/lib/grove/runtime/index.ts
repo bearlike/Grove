@@ -21,6 +21,28 @@ export type {
 
 export { sessionThreadList, sessionTitle } from "./thread-list";
 
+export {
+  ATTACHMENT_ACCEPT,
+  attachmentError,
+  attachmentIds,
+  attachmentKind,
+  completeAttachment,
+  groveAttachmentAdapter,
+  MAX_ATTACHMENT_BYTES,
+} from "./attachments";
+
+export {
+  acknowledgeComposerDraft,
+  beginComposerDraftSubmission,
+  flushComposerDraft,
+  readComposerDraft,
+  rejectComposerDraftSubmission,
+  sameComposerDraft,
+  useComposerDraft,
+  writeComposerDraft,
+} from "./draft";
+export type { ComposerDraft, ComposerDraftAttachment } from "./draft";
+
 export { refusalNotice } from "./notice";
 export type { SteeringAction } from "./notice";
 

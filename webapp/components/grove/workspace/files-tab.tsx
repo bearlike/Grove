@@ -3,10 +3,11 @@
 import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
 import { FileDiffIcon, ScissorsIcon } from "lucide-react";
 
-import { Badge } from "@/components/assistant-ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { FileRowSummary } from "./file-row";
-import { EmptyState, EmptyStateGreeting } from "@/components/elements/empty-state";
 import { CardDisclosure } from "@/components/grove/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceDiff } from "@/lib/grove/hooks";
 import {
@@ -17,6 +18,7 @@ import {
   type FilesSource,
 } from "./files-source";
 import { CardGrid, SectionCard } from "@/components/grove/card";
+import type { PanelTab } from "./selectors";
 
 /**
  * `DiffViewer` only ever renders inside `FileDiffRow`'s `CardDisclosure`,
@@ -29,7 +31,9 @@ import { CardGrid, SectionCard } from "@/components/grove/card";
  * same reason: most rows in a large diff are never opened.
  */
 const LazyDiffViewer = lazy(() =>
-  import("@/components/assistant-ui/diff-viewer").then((m) => ({ default: m.DiffViewer })),
+  import("@/components/assistant-ui/diff-viewer").then((m) => ({
+    default: m.DiffViewer,
+  })),
 );
 
 /**
@@ -41,12 +45,18 @@ const LazyDiffViewer = lazy(() =>
  * have I not committed" and "what has this branch done"; neither summarises the
  * other.
  */
-export function FilesTab({ workspaceId }: { workspaceId: string }) {
+export function FilesTab({
+  workspaceId,
+  onNavigate,
+}: {
+  workspaceId: string;
+  onNavigate?: (tab: PanelTab) => void;
+}) {
   const { data, isLoading } = useWorkspaceDiff(workspaceId);
   const source = useMemo(() => filesSource(data), [data]);
 
   if (isLoading && !data) return <FilesSkeleton />;
-  return <FilesView source={source} />;
+  return <FilesView source={source} onNavigate={onNavigate} />;
 }
 
 /**
@@ -99,9 +109,15 @@ export function FilesSkeleton() {
  * silently hiding the rest. Rendering a diff only when its row is opened
  * removes both problems: the cap is gone because there is nothing left to cap.
  */
-export function FilesView({ source }: { source: FilesSource }) {
+export function FilesView({
+  source,
+  onNavigate,
+}: {
+  source: FilesSource;
+  onNavigate?: (tab: PanelTab) => void;
+}) {
   if (source.kind === "unavailable") return <NoDiff reason={source.reason} />;
-  if (source.kind === "clean") return <CleanTree />;
+  if (source.kind === "clean") return <CleanTree onNavigate={onNavigate} />;
 
   const totals = totalsOf(source.entries);
   const count = source.entries.length;
@@ -113,7 +129,10 @@ export function FilesView({ source }: { source: FilesSource }) {
         title={`${count} changed file${count === 1 ? "" : "s"}`}
         description="Uncommitted changes in the working tree, as git reports them."
         action={
-          <span className="font-mono text-xs tabular-nums" data-testid="file-edit-totals">
+          <span
+            className="font-mono text-xs tabular-nums"
+            data-testid="file-edit-totals"
+          >
             <span className="text-success">+{totals.additions}</span>{" "}
             <span className="text-destructive">−{totals.deletions}</span>
           </span>
@@ -129,7 +148,8 @@ export function FilesView({ source }: { source: FilesSource }) {
             data-testid="diff-truncated"
           >
             <ScissorsIcon className="size-3.5 shrink-0" aria-hidden />
-            The diff was too large to send whole. These files are complete; later ones are missing.
+            The diff was too large to send whole. These files are complete;
+            later ones are missing.
           </p>
         )}
 
@@ -147,20 +167,16 @@ export function FilesView({ source }: { source: FilesSource }) {
 }
 
 /** A clean tree — git answered, and the answer is "nothing". */
-function CleanTree() {
+function CleanTree({ onNavigate }: { onNavigate?: (tab: PanelTab) => void }) {
   return (
-    <CardGrid
-      className="place-content-center justify-items-center"
-      data-testid="files-tab"
-      data-source="clean"
-    >
-      <EmptyState className="gap-2">
-        <EmptyStateGreeting className="text-xl">No uncommitted changes.</EmptyStateGreeting>
-        <p className="max-w-prose text-center text-xs text-muted-foreground">
-          The working tree matches the last commit. The Changes tab shows what this branch has
-          committed so far.
-        </p>
-      </EmptyState>
+    <CardGrid data-testid="files-tab" data-source="clean">
+      <MeasuredEmpty
+        title="Working tree is clean"
+        detail="The working tree matches the last commit."
+        onNavigate={onNavigate}
+        target="changes"
+        link="View Changes"
+      />
     </CardGrid>
   );
 }
@@ -174,18 +190,19 @@ function CleanTree() {
 function NoDiff({ reason }: { reason: DiffUnavailableReason }) {
   return (
     <CardGrid
-      className="place-content-center justify-items-center"
       data-testid="files-tab"
       data-source="unavailable"
       data-reason={reason}
     >
-      <EmptyState className="gap-2">
-        <EmptyStateGreeting className="text-xl">No diff available here.</EmptyStateGreeting>
-        <p className="max-w-prose text-center text-xs text-muted-foreground">{REASONS[reason]}</p>
-        <Badge variant="muted" size="sm" className="font-mono">
+      <MeasuredEmpty
+        title="No diff available here"
+        detail={REASONS[reason]}
+        link="Check workspace status"
+      >
+        <Badge variant="outline" className="font-mono">
           {reason}
         </Badge>
-      </EmptyState>
+      </MeasuredEmpty>
     </CardGrid>
   );
 }
@@ -199,9 +216,48 @@ const REASONS: Record<DiffUnavailableReason, string> = {
     "This workspace's worktree is gone from disk, so there is nothing to diff. Respawning the workspace recreates it.",
   not_a_repo:
     "This workspace is not a git repository, so there is no diff to show. Everything else about the workspace still works.",
-  git_failed: "git could not read this working tree. The daemon log has the underlying error.",
+  git_failed:
+    "git could not read this working tree. The daemon log has the underlying error.",
   unknown: "Grove could not reach the daemon for this workspace's diff.",
 };
+
+/** Measured absences share one alert anatomy rather than borrowing chat-thread empty state. */
+function MeasuredEmpty({
+  title,
+  detail,
+  onNavigate,
+  target,
+  link,
+  children,
+}: {
+  title: string;
+  detail: string;
+  onNavigate?: (tab: PanelTab) => void;
+  target?: PanelTab;
+  link?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <Alert>
+      <FileDiffIcon aria-hidden />
+      <AlertTitle>{title}</AlertTitle>
+      <AlertDescription>
+        <p className="text-xs text-content-tertiary">{detail}</p>
+        {onNavigate && target && link && (
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs"
+            onClick={() => onNavigate(target)}
+          >
+            {link}
+          </Button>
+        )}
+        {children}
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 /**
  * One file: a path and its tallies always, the diff only while open.
@@ -230,7 +286,12 @@ function FileDiffRow({ entry }: { entry: FileDiffEntry }) {
       {/* `showIcon` off: the row above carries the coloured type icon, and the
           vendored header's own badge is the monochrome chip it replaces. */}
       <Suspense fallback={<RawPatch patch={entry.patch} />}>
-        <LazyDiffViewer patch={entry.patch} viewMode="unified" size="sm" showIcon={false} />
+        <LazyDiffViewer
+          patch={entry.patch}
+          viewMode="unified"
+          size="sm"
+          showIcon={false}
+        />
       </Suspense>
     </CardDisclosure>
   );

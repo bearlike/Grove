@@ -649,3 +649,65 @@ def test_turns_for_matches_turns(
     explorer = SessionExplorer(manager)
     listing = explorer.resolve("1111")
     assert explorer.turns_for(listing, last=5) == explorer.turns("1111", last=5)
+
+
+def _relocate_transcript(claude_home: Path, path: Path, folder_cwd: Path) -> Path:
+    """Move an existing transcript into the folder Claude Code would encode for
+    ``folder_cwd``, preserving its content and mtime — the on-disk shape of a
+    session that entered a native ``.claude/worktrees/`` checkout mid-run.
+
+    Measured on the reference host: Claude Code re-homes the whole transcript
+    under the worktree it entered, while every record's own ``cwd`` keeps
+    naming the directory that record was written in. So the folder encodes a
+    directory the session may never have recorded, and no cwd the workspace
+    knows encodes back to it.
+    """
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(folder_cwd)
+    folder.mkdir(parents=True, exist_ok=True)
+    moved = folder / path.name
+    stat = path.stat()
+    moved.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    path.unlink()
+    os.utime(moved, (stat.st_mtime, stat.st_mtime))
+    return moved
+
+
+def test_for_workspace_finds_minted_session_after_transcript_relocation(
+    manager: WorkspaceManager, claude_home: Path
+) -> None:
+    """A minted session whose transcript Claude Code re-homed under a native
+    worktree folder still lists — the relocation must not make it unreadable.
+
+    This is the `/turns` 404 reproduced at the engine seam: the cwd-encoded
+    folder scan cannot see the moved file, so the workspace listed NO sessions
+    at all while the dashboard kept advertising the minted id off the store
+    record. Resolution by identity (the UUID glob) is what recovers it.
+    """
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="relocated"))
+    assert state.agent_session_id is not None
+    worktree = Path(state.worktree_path)
+    written = _write_transcript(
+        claude_home,
+        state.agent_session_id,
+        worktree,
+        mtime=2_000,
+        prompt="born at the worktree root",
+        born_at=state.created_at + timedelta(seconds=1),
+    )
+    # The session enters `.claude/worktrees/<name>/` and Claude Code re-homes
+    # the transcript there. Nothing in `transcript_scan_cwds` encodes to it.
+    moved = _relocate_transcript(claude_home, written, worktree / ".claude" / "worktrees" / "feat")
+    assert moved.is_file()
+    assert not written.exists()
+
+    listings = SessionExplorer(manager).for_workspace(state.id)
+
+    ids = [ls.summary.session_id for ls in listings]
+    assert ids == [state.agent_session_id]
+    listing = listings[0]
+    assert listing.provenance == "grove_launched"
+    assert listing.workspace_id == state.id
+    # The row must be a real parse of the moved file, not a synthesized stub:
+    # its content is what the turns route serves.
+    assert listing.summary.transcript_path == moved
+    assert SessionExplorer(manager).turns_for(listing)

@@ -1,5 +1,5 @@
 site_name: Grove
-site_description: The terminal workspace manager for AI coding agents. Run a forest of them in parallel, and watch from your phone when you step away.
+site_description: The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.
 repo_url: https://github.com/bearlike/Grove
 repo_name: bearlike/Grove
 site_url: https://bearlike.github.io/Grove/
@@ -25,6 +25,15 @@ theme:
   versions_root: Grove
   show_version_switcher: true
   show_build_info: true
+
+  # The Copy page menu (theme v1.26.0) links each page's Markdown source under
+  # `repo_url`, and without this it infers the branch from the checkout. That
+  # yields `main`, which is the Gitea branch: github.com/bearlike/Grove
+  # publishes only `current`, so every View as Markdown / Open in ChatGPT /
+  # Open in Claude link 404s. Measured: .../raw/main/docs/getting-started.md
+  # is 404, .../raw/current/... is 200. This tracks the MIRROR's branch, so it
+  # follows the publish branch rather than whatever is checked out here.
+  source_ref: current
 
   # OFF because it renders INSIDE the masthead. The H1 label and the first H2
   # are one unit the theme spaces at 4px; the updated-date row lands between
@@ -101,9 +110,11 @@ theme:
     "Agent Activity & Sessions": lucide:activity
     "Telemetry & Tracing": lucide:waypoints
     "Push Notifications": lucide:bell
-    "Peek Rail": lucide:eye
     "Status Semantics": lucide:circle-dot
     "Configuration Cascade": lucide:layers
+    "Diagram Collaboration": lucide:shapes
+    "Attachments & Annotation": lucide:paperclip
+    "Capability Catalog": lucide:list-checks
 
     Architecture: lucide:blocks
     "Public API": lucide:book-open-text
@@ -191,12 +202,6 @@ nav:
   - Home: index.md
   - User Guide:
       - Get Started: getting-started.md
-      - Configure:
-          - Project Setup: configure-project.md
-          - Agents: configure-agents.md
-          - Init Scripts: configure-init-scripts.md
-          - Ticket Providers: configure-ticket-providers.md
-          - Configuration Reference: configure-reference.md
       - Use:
           - TUI Tour: use-tui.md
           - CLI: use-cli.md
@@ -206,6 +211,9 @@ nav:
           - Issue Ops: issue-ops.md
           - Daily Workflow: use-workflow.md
       - Capabilities:
+          - Capability Catalog: features-catalog.md
+          - Attachments & Annotation: features-attachments.md
+          - Diagram Collaboration: features-diagrams.md
           - Workspace Lifecycle: features-workspace-lifecycle.md
           - Containerized Agents: features-containers.md
           - Branch Provenance: features-branch-provenance.md
@@ -213,9 +221,14 @@ nav:
           - Agent Activity & Sessions: features-activity.md
           - Telemetry & Tracing: features-telemetry.md
           - Push Notifications: features-notifications.md
-          - Peek Rail: features-peek.md
           - Status Semantics: features-status.md
           - Configuration Cascade: features-cascade.md
+      - Configure:
+          - Project Setup: configure-project.md
+          - Agents: configure-agents.md
+          - Init Scripts: configure-init-scripts.md
+          - Ticket Providers: configure-ticket-providers.md
+          - Configuration Reference: configure-reference.md
       - Troubleshooting: troubleshooting.md
   - Developer Reference:
       - Architecture: develop-architecture.md

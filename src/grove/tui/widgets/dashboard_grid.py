@@ -6,7 +6,7 @@ repo as a wall of tiles — the "what is every agent doing right now" view.
 
 Two widgets live here:
 
-* ``DashboardCard`` — one tile rendering a ``WorkspaceActivity``. Idle tiles are
+* ``DashboardCard`` — one tile rendering a ``WorkspaceActivityView``. Idle tiles are
   *compact* (glyph · title · age / branch · agent · state / diff · counts); live
   tiles are *promoted* — taller, with the agent's task summary, token usage, and
   a live, fit-to-cell tmux pane tail filling the extra space. Root-placement
@@ -40,10 +40,11 @@ from textual.containers import Grid
 from textual.reactive import reactive
 from textual.widgets import Static
 
-from grove.core.activity import WorkspaceActivity
-from grove.core.agents import AgentActivity, AgentActivityState
-from grove.core.phase import PhaseReport
-from grove.core.workspace import Placement, WorkspaceState
+from grove.core.agents import AgentActivityState
+from grove.core.contracts.activity import AgentActivityView, WorkspaceActivityView
+from grove.core.contracts.phase import PhaseView
+from grove.core.contracts.views import WorkspaceStateView
+from grove.core.workspace import Placement
 from grove.tui._status import (
     BLOCKED_GLYPH,
     agent_state_color,
@@ -100,7 +101,12 @@ _PROMOTED_STATES: Final[frozenset[AgentActivityState]] = frozenset(
 )
 
 
-def is_promoted(activity: WorkspaceActivity) -> bool:
+def _primary(activity: WorkspaceActivityView) -> AgentActivityView | None:
+    """Return the primary session activity from the shared dashboard contract."""
+    return activity.sessions[0].activity if activity.sessions else None
+
+
+def is_promoted(activity: WorkspaceActivityView) -> bool:
     """Whether a tile is promoted (taller, with a live pane tail) vs. compact.
 
     The single promotion rule — consumed by the grid's row-span layout, the card
@@ -109,7 +115,7 @@ def is_promoted(activity: WorkspaceActivity) -> bool:
     attention state (working / waiting / blocked / error); idle / offline /
     starting / untracked tiles stay compact.
     """
-    primary = activity.primary
+    primary = _primary(activity)
     return primary is not None and primary.state in _PROMOTED_STATES
 
 
@@ -118,7 +124,7 @@ class DashboardCard(Static):
 
     Body is a single Static rendered via Rich ``Text`` — same one-widget-per-tile
     discipline as ``WorkspaceCard``. The tile re-renders only when its underlying
-    ``WorkspaceActivity`` fingerprint changes (diff guard on plain text) or when
+    ``WorkspaceActivityView`` fingerprint changes (diff guard on plain text) or when
     its focused/pane state changes, so a wall of idle tiles costs ~zero repaints
     per tick.
 
@@ -156,7 +162,7 @@ class DashboardCard(Static):
     # ticks render the canonical static appearance.
     pulse_frame: reactive[int] = reactive(0, layout=False)
 
-    def __init__(self, activity: WorkspaceActivity) -> None:
+    def __init__(self, activity: WorkspaceActivityView) -> None:
         super().__init__()
         self._activity = activity
         # The most recent live pane capture for THIS tile, or None when the
@@ -169,7 +175,7 @@ class DashboardCard(Static):
         return self._activity.state.id
 
     @property
-    def activity(self) -> WorkspaceActivity:
+    def activity(self) -> WorkspaceActivityView:
         return self._activity
 
     @property
@@ -181,7 +187,7 @@ class DashboardCard(Static):
         self.set_class(self._activity.needs_attention, "-attention")
         self._repaint()
 
-    def set_activity(self, activity: WorkspaceActivity) -> None:
+    def set_activity(self, activity: WorkspaceActivityView) -> None:
         """Swap the tile's data and repaint if anything visible changed.
 
         The diff guard inside ``_repaint`` short-circuits when the rendered
@@ -208,7 +214,7 @@ class DashboardCard(Static):
     def watch_pulse_frame(self, _frame: int) -> None:
         # Only the WORKING heartbeat reads the pulse — every other tile renders
         # identical bytes per frame and the diff guard would no-op anyway.
-        primary = self._activity.primary
+        primary = _primary(self._activity)
         if primary is not None and primary.state == AgentActivityState.WORKING:
             self._repaint()
 
@@ -265,14 +271,14 @@ class DashboardGrid(Grid):
     # header band above each group's tiles instead. Grouping order is preserved
     # by populate so a group's tiles stay contiguous.
 
-    def __init__(self, activities: list[WorkspaceActivity] | None = None) -> None:
+    def __init__(self, activities: list[WorkspaceActivityView] | None = None) -> None:
         super().__init__()
         # Cards are created eagerly so they can be yielded from ``compose`` —
         # mounting them in compose (rather than a post-mount ``mount_all``)
         # sidesteps the async-mount race a caller hits when it mounts the grid
         # and immediately populates it. ``populate`` is still available for an
         # in-place rebuild after construction.
-        self._pending: list[WorkspaceActivity] = list(activities or [])
+        self._pending: list[WorkspaceActivityView] = list(activities or [])
         self._cards: list[DashboardCard] = []
 
     def compose(self) -> ComposeResult:
@@ -293,7 +299,7 @@ class DashboardGrid(Grid):
                 return card
         return None
 
-    def populate(self, activities: list[WorkspaceActivity]) -> None:
+    def populate(self, activities: list[WorkspaceActivityView]) -> None:
         """Rebuild the tile wall in place from ``activities`` (display order).
 
         N is small (the whole fleet, typically < 30); incremental diffing isn't
@@ -349,7 +355,7 @@ class DashboardGrid(Grid):
 
 
 def _render_card_body(
-    activity: WorkspaceActivity,
+    activity: WorkspaceActivityView,
     *,
     dark: bool,
     now: datetime | None = None,
@@ -382,7 +388,7 @@ def _render_card_body(
     if now is None:
         now = datetime.now(tz=UTC)
     s = activity.state
-    primary = activity.primary
+    primary = _primary(activity)
     agent_state = primary.state if primary is not None else AgentActivityState.UNKNOWN
     promoted = is_promoted(activity)
     body_rows = (_PROMOTED_ROWS if promoted else _COMPACT_ROWS) * _GRID_ROW_UNIT - _BORDER_ROWS
@@ -456,8 +462,8 @@ def _render_card_body(
 
 def _append_identity(
     text: Text,
-    s: WorkspaceState,
-    primary: AgentActivity | None,
+    s: WorkspaceStateView,
+    primary: AgentActivityView | None,
     *,
     promoted: bool,
     now: datetime,
@@ -467,7 +473,7 @@ def _append_identity(
     branch_hex: str,
     agent_hex: str,
     muted_hex: str,
-    phase: PhaseReport | None,
+    phase: PhaseView | None,
     dark: bool,
 ) -> None:
     """Rows 1-2 of a tile: the identity block both shapes share.
@@ -524,7 +530,7 @@ def _append_identity(
             text.append(f" {BLOCKED_GLYPH}", style=f"bold {blocked_color(dark=dark)}")
 
 
-def _summary(primary: AgentActivity | None) -> str | None:
+def _summary(primary: AgentActivityView | None) -> str | None:
     """The agent's own one-line summary, interpreter-first.
 
     Prefers ``interpreted_status`` — the slot a future external-LLM interpreter
@@ -538,8 +544,8 @@ def _summary(primary: AgentActivity | None) -> str | None:
 
 def _append_stats(
     text: Text,
-    activity: WorkspaceActivity,
-    primary: AgentActivity | None,
+    activity: WorkspaceActivityView,
+    primary: AgentActivityView | None,
     *,
     promoted: bool,
     add_hex: str,

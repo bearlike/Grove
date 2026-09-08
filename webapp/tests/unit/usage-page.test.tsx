@@ -161,11 +161,33 @@ describe("UsageActivity", () => {
 });
 
 describe("UsageCost", () => {
-  it("states the absence once, with the reason and the degraded source", () => {
-    const html = render(<UsageCost summary={SUMMARY} failed={false} />);
-    expect(html.match(/not measured/g)).toHaveLength(1);
-    expect(html).toContain("price table");
-    expect(html).toContain(".claude is degraded");
+  it("renders a complete estimate when the summary has one", () => {
+    const html = render(<UsageCost summary={{ ...SUMMARY, cost: { amount: "12.50", currency: "USD", provenance: "estimated" } }} failed={false} />);
+
+    expect(html).toContain("$12.50");
+    expect(html).toContain("Complete estimate");
+  });
+
+  it("renders the known priced subtotal without passing it off as complete", () => {
+    const partial = {
+      ...SUMMARY,
+      cost_breakdown: {
+        known_cost: { amount: "0", currency: "USD", provenance: "estimated" },
+        priced_sessions: 2,
+        total_sessions: 5,
+      },
+    } as UsageSummaryView;
+    const html = render(<UsageCost summary={partial} failed={false} />);
+
+    expect(html).toContain("$0.00");
+    expect(html).toContain("Known partial");
+    expect(html).toContain("2 of 5 sessions priced");
+    expect(html).not.toContain("Complete estimate");
+  });
+
+  it("distinguishes no matching sessions from unavailable prices", () => {
+    expect(render(<UsageCost summary={{ ...SUMMARY, sessions: 0 }} failed={false} />)).toContain("no sessions");
+    expect(render(<UsageCost summary={SUMMARY} failed={false} />)).toContain("unavailable");
   });
 });
 

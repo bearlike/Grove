@@ -14,7 +14,7 @@ import json
 import httpx
 
 from grove.client import BackendConfig, GroveClient
-from grove.core.contracts.activity import DashboardSnapshotView
+from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 
 _ACTIVITY_BODY: dict[str, object] = {
     "generated_at": "2026-07-31T00:00:00Z",
@@ -115,6 +115,53 @@ async def test_get_activity_issues_a_bare_get_with_no_params() -> None:
     assert captured[0].url.path == "/activity"
     assert dict(captured[0].url.params) == {}
     assert isinstance(snapshot, DashboardSnapshotView)
+
+
+async def test_activity_events_parses_authenticated_sse_snapshot() -> None:
+    captured: list[httpx.Request] = []
+    frame = (
+        "event: snapshot\n"
+        f"data: {json.dumps({'kind': 'snapshot', 'seq': 7, 'snapshot': _ACTIVITY_BODY})}\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, content=frame, headers={"content-type": "text/event-stream"})
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        event = await anext(client.activity_events(last_event_id=6))
+    finally:
+        await client.close()
+
+    assert captured[0].url.path == "/events"
+    assert captured[0].headers["last-event-id"] == "6"
+    assert isinstance(event, DashboardEvent)
+    assert event.kind == "snapshot"
+    assert event.snapshot is not None and event.snapshot.total_workspaces == 1
+
+
+async def test_pane_events_uses_workspace_stream_path() -> None:
+    frame = (
+        "event: pane_snapshot\n"
+        'data: {"kind":"pane_snapshot","seq":7,"workspace_id":"ws-1",'
+        '"pane":{"workspace_id":"ws-1","ansi":"frame",'
+        '"taken_at":"2026-07-31T00:00:00Z"}}\n\n'
+    )
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, content=frame, headers={"content-type": "text/event-stream"})
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        event = await anext(client.pane_events("ws-1"))
+    finally:
+        await client.close()
+
+    assert captured[0].url.path == "/workspaces/ws-1/pane/stream"
+    assert event.pane is not None and event.pane.ansi == "frame"
 
 
 async def test_get_activity_carries_the_phase_and_agent_axes() -> None:

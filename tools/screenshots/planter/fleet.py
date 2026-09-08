@@ -17,11 +17,13 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from tools.screenshots.fixture import DemoWorkspace, DemoWorld
+from tools.screenshots.fixture import DEMO_PATH, DemoWorkspace, DemoWorld
 
 from grove.core import tmux as tmux_mod
+from grove.core.attachments import AttachmentStore
 from grove.core.config import GroveConfig
 from grove.core.contracts.branch_plan import NewNamedBranch
+from grove.core.contracts.diagrams import DiagramOpenRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import TicketRef
 from grove.core.manager import WorkspaceManager
@@ -36,6 +38,10 @@ from .history import HistoryPlanter
 from .repo import GitTree
 from .tmux import DemoTmux
 from .usage import UsageCacheWarmer
+
+DIAGRAM_DIR = "arch-diagram"
+"""The attachments subdirectory a seeded diagram is seated in, mirroring the
+path the mockup skill tells an agent to draw under."""
 
 
 @dataclass(slots=True)
@@ -92,16 +98,18 @@ class FleetPlanter:
         # written last is the one the subscription card reports from — and only
         # a live session's windows have a reset in the future. Planted the other
         # way round, the card reads `stale`.
-        HistoryPlanter(
+        history = HistoryPlanter(
             corpus=self._world.history,
             tempo=self._world.tempo,
             claude=self._claude,
             codex=self._codex,
-        ).plant(work)
+        )
+        history.plant(work)
 
         self._git_shape(created)
-        self._transcripts(created)
+        self._transcripts(created, history)
         self._phases(created)
+        self._diagrams(created, managers)
 
         self._config.publish()
         UsageCacheWarmer(cfg=self._cfg, store=self._store).warm()
@@ -149,13 +157,19 @@ class FleetPlanter:
             if entry.ahead:
                 tree.commit_ahead(entry.title)
 
-    def _transcripts(self, created: list[tuple[WorkspaceState, DemoWorkspace]]) -> None:
+    def _transcripts(
+        self, created: list[tuple[WorkspaceState, DemoWorkspace]], history: HistoryPlanter
+    ) -> None:
         """Plant every Claude and Codex session's recorded turns.
 
         Codex mints no session id of its own (see
         ``src/grove/core/agents/codex.py``), so Grove finds it purely through
         discovery — the rollout's birth just has to postdate `created_at`, which
         a fresh `datetime.now()` plus a small safety margin guarantees.
+
+        A turn's declared ``burst`` is filled from the history corpus here, by
+        the same planter that draws the backfill, so a live session's call mix
+        matches the year of history behind it.
         """
         for state, entry in created:
             if entry.transcript is None:
@@ -164,7 +178,7 @@ class FleetPlanter:
                 self._claude.plant(
                     cwd=Path(state.worktree_path),
                     session_id=state.agent_session_id,
-                    transcript=entry.transcript,
+                    transcript=history.burst(entry.transcript, seed=state.agent_session_id),
                     model=self._world.models["claude_code"],
                     base=self._world.base_time,
                 )
@@ -193,6 +207,37 @@ class FleetPlanter:
             PhaseFile.write(worktree, key, entry.phase.phase, entry.phase.note)
             for claim in entry.phase.tickets:
                 PhaseFile.write(worktree, key, claim.phase, claim.note, ticket=claim.ticket)
+
+    def _diagrams(
+        self,
+        created: list[tuple[WorkspaceState, DemoWorkspace]],
+        managers: dict[str, WorkspaceManager],
+    ) -> None:
+        """Seat each declared diagram and open it through the engine.
+
+        The file goes where the `mocking-up-in-grove` skill draws one, under
+        the untracked attachments directory, so the Diagram tab shows the path
+        a real mockup carries. Opening through `open_diagram` rather than
+        writing the descriptor by hand is what makes the tab live: the daemon
+        serves the same session id and revision a browser would autosave
+        against, so the capture exercises the real collaboration loop.
+        """
+        for state, entry in created:
+            if entry.diagram is None:
+                continue
+            source = DEMO_PATH.with_name(entry.diagram)
+            relative = f"{AttachmentStore.RELDIR}/{DIAGRAM_DIR}/{source.name}"
+            target = Path(state.worktree_path) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+            managers[entry.repo].open_diagram(state.id, DiagramOpenRequest(path=relative))
+            # `open_diagram` bumps `updated_at`, and `list()` sorts newest-first
+            # within a status tier, so the diagram workspace floated above the
+            # fixture's declared newest entry and became the TUI's default
+            # selection — every TUI shot changed subject. Pin the timestamp
+            # back to creation so declaration order stays the fleet order.
+            opened = self._store.get(state.id)
+            self._store.save(replace(opened, updated_at=state.updated_at))
 
     @staticmethod
     def _take_offline(created: list[tuple[WorkspaceState, DemoWorkspace]]) -> None:

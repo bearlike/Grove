@@ -1,0 +1,40 @@
+# OpenTelemetry Collector sits between Claude Code and Langfuse so native spans
+# carry token fields Langfuse can price. Deploy this as a Portainer stack, with
+# host-specific values in the Portainer stack environment rather than this file.
+services:
+  otel-collector:
+    # contrib, not core: the core image lacks the OTTL transform processor.
+    image: otel/opentelemetry-collector-contrib:0.140.1
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      LANGFUSE_OTLP_ENDPOINT: ${LANGFUSE_OTLP_ENDPOINT:?set in Portainer stack environment}
+      LANGFUSE_BASIC_AUTH: ${LANGFUSE_BASIC_AUTH:?set in Portainer stack environment}
+    volumes:
+      - type: bind
+        source: ${OTEL_COLLECTOR_CONFIG_PATH:?set to the host path for config.yaml}
+        target: /etc/otelcol-contrib/config.yaml
+        read_only: true
+    ports:
+      # Host-process agents use the published receiver. Containers need a
+      # reachable host gateway rather than their own loopback address.
+      - "4318:4318"
+      - "4317:4317"
+    networks:
+      - telemetry
+    labels:
+      # The pinned transform must not silently change under an auto-updater.
+      com.centurylinklabs.watchtower.enable: "false"
+    # The contrib image is distroless, so it cannot run a shell or HTTP client
+    # for Docker healthchecks. Check the published receiver and exporter
+    # externally; a binary version command only proves the executable exists.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+networks:
+  telemetry:
+    name: ${OTEL_COLLECTOR_NETWORK:?set to an existing external Docker network}
+    external: true

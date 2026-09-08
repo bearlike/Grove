@@ -17,6 +17,7 @@ from typing import cast
 
 import typer
 
+from grove._skills import SkillLibrary
 from grove.core.agents import onboarding
 from grove.core.agents.onboarding import (
     TOOLS,
@@ -50,7 +51,7 @@ _STATUS_COLOR = {
 
 skills_app = typer.Typer(
     name="skills",
-    help="Install the bundled Grove fleet-orchestration skill for Claude Code / Codex.",
+    help="Discover with list --details, read with show NAME, or install for Claude/Codex.",
     no_args_is_help=True,
 )
 mcp_app = typer.Typer(
@@ -144,6 +145,36 @@ def skills_install(
             actions=["skill"], targets=targets, agents=resolve_agents(agent), repo_root=repo_root
         )
     render_outcomes(outcomes)
+
+
+@skills_app.command("list")
+def skills_list(
+    details: bool = typer.Option(
+        False, "--details", help="Show purpose, triggers and learning links."
+    ),
+) -> None:
+    """List installed skills; use --details to choose a workflow, then skills show NAME."""
+    if details:
+        for skill in SkillLibrary.catalog():
+            typer.echo(
+                f"{skill.name}\n  {skill.description}\n  Read: {skill.cli}\n  MCP: {skill.resource}"
+            )
+        return
+    for name in SkillLibrary.names():
+        typer.echo(name)
+
+
+@skills_app.command("show")
+def skills_show(
+    name: str = typer.Argument(..., help="Bundled skill name from `grove skills list`."),
+) -> None:
+    """Print one complete bundled SKILL.md without installing it."""
+    with clean_exit():
+        try:
+            text = SkillLibrary.read(name)
+        except ValueError as exc:
+            raise GroveError(str(exc)) from exc
+    typer.echo(text, nl=False)
 
 
 @mcp_app.command("install")

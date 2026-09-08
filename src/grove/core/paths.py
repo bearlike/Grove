@@ -50,6 +50,7 @@ _QUOTA_STATE_FILE = "quota-state.json"
 _SHARE_POLICIES_FILE = "share-policies.json"
 _TELEMETRY_LEDGER_FILE = "telemetry-exports.sqlite3"
 _SESSION_TURNS_FILE = "session-turns.json"
+_WORKSPACE_HISTORY_FILE = "workspace-history.sqlite3"
 
 
 def ensure_dir(path: Path) -> Path:
@@ -168,7 +169,17 @@ def usage_db_path() -> Path:
     no lock discipline from ``exclusive_lock``: SQLite in WAL mode owns its own
     concurrency, and the file has exactly one writer path.
     """
-    return Path(user_state_dir(_APP_NAME)) / _USAGE_DB_FILE
+    # A filename per schema also isolates already-running older binaries, which
+    # cannot learn a new downgrade guard and otherwise delete the newer cache.
+    from grove.core.usage._schema import SCHEMA_VERSION  # noqa: PLC0415
+
+    filename = Path(_USAGE_DB_FILE)
+    return Path(user_state_dir(_APP_NAME)) / f"{filename.stem}-v{SCHEMA_VERSION}{filename.suffix}"
+
+
+def usage_pricing_path() -> Path:
+    """Normalized model-rate snapshots shared by usage readers and refreshers."""
+    return usage_db_path().with_name("usage-pricing.json")
 
 
 def quota_state_path() -> Path:
@@ -209,6 +220,32 @@ def session_turns_path() -> Path:
     Contains ids, transcript fingerprints and integers; no prompt, no content.
     """
     return Path(user_state_dir(_APP_NAME)) / _SESSION_TURNS_FILE
+
+
+def workspace_history_path() -> Path:
+    """Durable names, progress claims and final tickets per workspace.
+
+    Beside the workspace state rather than inside ``usage.sqlite3`` for the
+    reason ``quota_state_path`` gives: that cache is derived wholly from
+    transcripts and is DISPOSED of — its filename carries the schema version,
+    ``_open`` drops the file outright on any version change, and
+    ``_apply_retention`` deletes rows past ``usage.retention_days``. A title is
+    re-derivable for a LIVE workspace and gone forever once ``kill`` removes its
+    record, so holding it there would wipe the one fact that cannot be rebuilt,
+    which is precisely the loss this store exists to prevent. Deliberately NOT
+    schema-versioned in its filename for the same reason: a version bump here
+    must migrate, never discard.
+
+    The usage cache ATTACHes this file to answer "which workspace did this
+    session belong to, and what was it called" in SQL. That direction is the
+    only coupling — nothing here reads the cache, so deleting the cache is
+    still always safe.
+
+    Contains workspace ids, operator-authored titles and descriptions, repo
+    roots, phase claims with their notes, and ticket refs. No credential, no
+    prompt, no transcript content.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _WORKSPACE_HISTORY_FILE
 
 
 def telemetry_ledger_path() -> Path:

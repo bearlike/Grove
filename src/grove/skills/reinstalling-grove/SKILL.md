@@ -25,8 +25,20 @@ is pull, then refresh each surface that needs it.
 |---|---|---|
 | **Package — CLI + TUI** | the `grove` command and its Textual UI | a fresh `grove` invocation (editable install) OR a `uv tool install --reinstall` when deps changed |
 | **Daemon** | `grove daemon serve`, the loopback HTTP + tmux service (default `127.0.0.1:7421`) | **service restart** (it is long-lived) |
+| **Native workers** | per-workspace tmux processes owning headless Claude Code / Codex app-server | deliberately **survive daemon restarts**; worker code changes apply on the next workspace launch |
 | **Webapp** | the Next.js dashboard (default `:3000`) | **rebuild `.next` THEN restart** the webapp service |
 | **MCP server** (opt-in) | `grove-mcp` (MCP client → `grove-mcp` → daemon REST → core), in one of **two** transports | depends entirely on the transport — see below |
+
+**Do not restart healthy native workspaces as part of an update.** The tmux worker
+owns the provider subprocess and reconnects to the new daemon; the daemon's
+`KillMode=process` preserves it. Its already-loaded worker code is not hot-reloaded.
+Report worker-side fixes as effective for new launches, and for an exited
+workspace after Respawn. Continuing saved conversation history depends on the
+provider and the pinned session having materialized; it is not preservation of an
+in-flight tool or generation. Arrange any live-worker replacement separately
+with the operator rather than killing a session to make a deployment look current.
+A host reboot or stopped container also ends execution; daemon restart durability
+does not promise process survival across either event.
 
 The MCP server is the one surface whose answer depends on how it is running,
 and getting this wrong is silent rather than loud.

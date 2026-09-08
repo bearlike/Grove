@@ -33,8 +33,15 @@ from __future__ import annotations
 
 from typing import Final
 
-SCHEMA_VERSION: Final = 5
+SCHEMA_VERSION: Final = 7
 """Bumped whenever any statement below changes.
+
+Version 7 groups Codex response fragments at their request-level usage boundary.
+Old generation rows cannot be corrected by repricing their partial token counts.
+
+Version 6 attributes discovered transcripts to their actual profile root rather
+than the configured scan's root. Rebuilding removes rows previously duplicated
+under fallback discovery scopes; repricing alone cannot repair their identity.
 
 A mismatch rebuilds rather than migrates. Bump this on ANY column change — a
 forgotten bump is a cache serving one shape while the code reads another, which

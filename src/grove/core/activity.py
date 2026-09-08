@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock, RLock
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
@@ -38,6 +39,7 @@ from grove.core.agents import (
     SessionProvenance,
     TodoList,
     get_adapter,
+    tool_outcomes,
 )
 from grove.core.agents.base import AgentAdapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter
@@ -47,7 +49,9 @@ from grove.core.agents.hook import (
     HookRecord,
     SubagentHookRecord,
 )
+from grove.core.agents.session_registry import NativeClaudeSession, NativeSessionRegistry
 from grove.core.contracts.usage import DurationView, GenerationLatencyView, TokenClassesView
+from grove.core.errors import WorkspaceNotFound
 from grove.core.git import GitRepo
 from grove.core.launch import AgentExit
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
@@ -55,11 +59,12 @@ from grove.core.phase import PhaseReport
 from grove.core.registry import RepoRegistry
 from grove.core.session_duration import duration_of, generation_latency_of
 from grove.core.workspace import CommitSummary, WorkspaceState, WorkspaceStatus
+from grove.core.workspace_history import WorkspaceHistoryStore
 
 if TYPE_CHECKING:
     from grove.core.agents import AgentMessage
 
-DeltaKind = Literal["workspace_changed", "session_activity"]
+DeltaKind = Literal["workspace_changed", "session_activity", "workspace_source_changed"]
 
 
 # ─── engine IR (in-process; the contracts.activity Views mirror these) ──────
@@ -483,8 +488,17 @@ class ActivityService:
     the manager keeps side effects at the boundary.
     """
 
-    def __init__(self, *, registry: RepoRegistry) -> None:
+    def __init__(
+        self,
+        *,
+        registry: RepoRegistry,
+        history: WorkspaceHistoryStore | None = None,
+    ) -> None:
         self._registry = registry
+        # The durable record of what each workspace CLAIMED. Injected for tests;
+        # built lazily otherwise, so constructing a service touches no file.
+        self._history = history
+        self._history_resolved = history is not None
         self._subs: list[Callable[[DashboardDelta], None]] = []
         # Repos whose manager bus we've already bridged, so re-scanning for new
         # repos never double-subscribes.
@@ -509,10 +523,298 @@ class ActivityService:
         # parallel dicts fed by three separate reads until the cost was
         # measured; ``_SpineFacts`` carries that measurement.
         self._spine_cache: dict[str, tuple[int, _SpineFacts]] = {}
+        self._projection_lock = RLock()
+        self._bootstrap_lock = Lock()
+        self._projection: DashboardSnapshot | None = None
+        self._projection_seq = 0
+        self._rows: dict[str, WorkspaceActivity] = {}
+        self._session_workspaces: dict[str, set[str]] = {}
+        self._registry_unsub = registry.subscribe_managers(self._bridge_manager)
+
+    def _bridge_manager(self, root: Path, manager: WorkspaceManager) -> None:
+        if root not in self._bridged:
+            self._bridge_unsubs.append(manager.subscribe(self._bridge_callback(str(root))))
+            self._bridged.add(root)
 
     # ─── snapshot ──────────────────────────────────────────────────────────
 
     def snapshot(self) -> DashboardSnapshot:
+        """Read the maintained projection, bootstrapping it if nobody has yet.
+
+        ORDINARILY THIS IS A PURE READ: the runtime owner bootstraps at startup
+        and every later change arrives as an event, so the projection is already
+        there and this takes the lock and returns. The fallback exists because
+        the alternative for an unbootstrapped projection is answering with an
+        EMPTY FLEET — indistinguishable on the wire from a host that genuinely
+        has no workspaces, which is the one answer a maintained projection must
+        never invent.
+
+        Building it here rather than blocking startup is what keeps daemon
+        readiness independent of fleet size: `/healthz` reads no projection, and
+        a caller that does read one is the caller that should wait for it.
+        `bootstrap` is idempotent under its own lock, so concurrent first
+        readers do one scan between them, not one each.
+        """
+        with self._projection_lock:
+            if self._projection is not None:
+                return self._projection
+        self.bootstrap()
+        with self._projection_lock:
+            if self._projection is None:
+                return DashboardSnapshot(projects=(), generated_at=_utcnow())
+            return self._projection
+
+    def snapshot_with_cursor(self) -> tuple[DashboardSnapshot, int]:
+        """Capture state and its applied watermark under the same publication lock.
+
+        THE BOOTSTRAP HAPPENS BEFORE THE LOCK, NEVER INSIDE IT. `snapshot` may
+        now build the projection on demand, and building it takes
+        `_bootstrap_lock` and then `_projection_lock` (through
+        `apply_reconcile`). Calling it while already holding `_projection_lock`
+        inverted that order, and two threads — one bootstrapping, one reading a
+        cursor — deadlocked the whole daemon: every request including `/healthz`
+        hung, because the loop thread was among them.
+
+        Bootstrapping first costs nothing in the steady state (the projection
+        exists, so it is one uncontended lock round-trip) and the pair stays
+        atomic, because the snapshot and the sequence are still read together
+        under one acquisition below.
+        """
+        self.bootstrap()
+        with self._projection_lock:
+            if self._projection is None:
+                return DashboardSnapshot(projects=(), generated_at=_utcnow()), self._projection_seq
+            return self._projection, self._projection_seq
+
+    def bootstrap(self) -> DashboardSnapshot:
+        """Build initial state once before accepting source events or readers."""
+        with self._bootstrap_lock:
+            if self._projection is not None:
+                return self.snapshot()
+            return self.reconcile()
+
+    def prepare_reconcile(self) -> DashboardSnapshot:
+        """Read the authoritative fleet snapshot without mutating the projection."""
+        return self._collect_snapshot()
+
+    def reconcile(self) -> DashboardSnapshot:
+        """Synchronously recover the projection for non-runtime callers."""
+        snapshot = self.prepare_reconcile()
+        self.apply_reconcile(snapshot, emit=False)
+        return snapshot
+
+    def apply_reconcile(  # noqa: PLR0912
+        self, snapshot: DashboardSnapshot, *, emit: bool
+    ) -> None:
+        """Publish a prepared snapshot and report every row changed by recovery.
+
+        Collection runs off-loop. This owner-side half keeps persistence and event
+        publication fenced to a live runtime generation, and makes a lost source
+        edge visible to already-connected SSE clients rather than only to a
+        later full snapshot reader.
+        """
+        deltas: list[DashboardDelta] = []
+        current = {row.state.id: row for group in snapshot.projects for row in group.workspaces}
+        with self._projection_lock:
+            previous = self._rows
+            for row in current.values():
+                self._persist_transition(row)
+            self._rows = current
+            self._projection = snapshot
+            self._session_workspaces.clear()
+            for row in current.values():
+                self._index_sessions(row)
+            current_sessions = set(self._session_workspaces)
+            for row in previous.values():
+                for session_id in self._row_session_ids(row):
+                    if session_id not in current_sessions:
+                        self._settled.pop(session_id, None)
+                        self._spine_cache.pop(session_id, None)
+            removed = set(previous) - set(current)
+            for workspace_id in removed:
+                self._last_fingerprint.pop(workspace_id, None)
+            if emit:
+                for workspace_id, previous_row in previous.items():
+                    if workspace_id not in current:
+                        deltas.append(
+                            DashboardDelta(
+                                kind="workspace_changed",
+                                seq=self.next_seq(),
+                                workspace_id=workspace_id,
+                                repo_root=previous_row.state.repo_root,
+                                detail={"event": "killed"},
+                            )
+                        )
+                for workspace_id, current_row in current.items():
+                    old = previous.get(workspace_id)
+                    if old is None or old.fingerprint != current_row.fingerprint:
+                        deltas.append(
+                            DashboardDelta(
+                                kind="session_activity",
+                                seq=self.next_seq(),
+                                workspace_id=workspace_id,
+                                repo_root=current_row.state.repo_root,
+                                workspace=current_row,
+                            )
+                        )
+            if deltas:
+                self._projection_seq = deltas[-1].seq
+            elif self._projection_seq == 0:
+                self._projection_seq = self.next_seq()
+        for delta in deltas:
+            self._emit(delta)
+
+    def workspace_keys_for_session(self, session_id: str) -> tuple[tuple[str, str], ...]:
+        with self._projection_lock:
+            return tuple(
+                (self._rows[key].state.repo_root, key)
+                for key in self._session_workspaces.get(session_id, ())
+            )
+
+    def _index_sessions(self, row: WorkspaceActivity) -> None:
+        if row.state.agent_session_id:
+            self._session_workspaces.setdefault(row.state.agent_session_id, set()).add(row.state.id)
+        for session in row.sessions:
+            self._session_workspaces.setdefault(session.session.session_id, set()).add(row.state.id)
+
+    def prepare_workspace_refresh(
+        self, repo_root: str, workspace_id: str
+    ) -> WorkspaceActivity | None:
+        """Read one current row without mutating the projection.
+
+        ``reconciled`` rather than ``get``, because the row published here is
+        the SAME row the bootstrap builds through ``list`` — and ``list``
+        promotes each persisted intent to its displayed status. Reading the raw
+        record instead put the persisted value on the wire for every workspace
+        the projection refreshed one at a time, so a container mid-build
+        reported RUNNING rather than PROVISIONING and the computed statuses
+        were unreachable. Status is the fingerprint's first element, so the row
+        still changed and still emitted; it was answering a different question.
+        """
+        mgr = self._registry.get(Path(repo_root))
+        try:
+            state = mgr.reconciled(workspace_id)
+        except WorkspaceNotFound:
+            return None
+        return self._workspace_activity(mgr, state)
+
+    def apply_workspace_refresh(
+        self, repo_root: str, workspace_id: str, row: WorkspaceActivity | None
+    ) -> None:
+        """Publish the owner-approved result of one prepared workspace read."""
+        if row is None:
+            self.remove_workspace(repo_root, workspace_id)
+            return
+        self._persist_transition(row)
+        with self._projection_lock:
+            previous = self._rows.get(workspace_id)
+            self._remove_session_index(workspace_id, evict=False)
+            self._rows[workspace_id] = row
+            self._index_sessions(row)
+            self._replace_projection_row(repo_root, workspace_id, row)
+            if previous is not None and previous.fingerprint == row.fingerprint:
+                return
+            self._projection_seq = self.next_seq()
+            delta = DashboardDelta(
+                kind="session_activity",
+                seq=self._projection_seq,
+                workspace_id=workspace_id,
+                repo_root=repo_root,
+                workspace=row,
+            )
+        self._emit(delta)
+
+    def source_changed(self, repo_root: str, workspace_id: str) -> None:
+        """Invalidate content queries even when activity counters stayed equal."""
+        self._emit(
+            DashboardDelta(
+                kind="workspace_source_changed",
+                seq=self.next_seq(),
+                workspace_id=workspace_id,
+                repo_root=repo_root,
+            )
+        )
+
+    def refresh_workspace(self, repo_root: str, workspace_id: str) -> None:
+        """Synchronously refresh one key for non-runtime callers."""
+        self.apply_workspace_refresh(
+            repo_root, workspace_id, self.prepare_workspace_refresh(repo_root, workspace_id)
+        )
+
+    def _persist_transition(self, row: WorkspaceActivity) -> None:
+        previous = self._rows.get(row.state.id)
+        if previous is None or (
+            previous.phase != row.phase or previous.state.ticket_refs != row.state.ticket_refs
+        ):
+            self._record_history(row.state, row.phase)
+
+    def remove_workspace(self, repo_root: str, workspace_id: str) -> None:
+        with self._projection_lock:
+            self._remove_session_index(workspace_id)
+            previous = self._rows.pop(workspace_id, None)
+            self._last_fingerprint.pop(workspace_id, None)
+            self._replace_projection_row(repo_root, workspace_id, None)
+            if previous is None:
+                return
+            self._projection_seq = self.next_seq()
+            delta = DashboardDelta(
+                kind="workspace_changed",
+                seq=self._projection_seq,
+                workspace_id=workspace_id,
+                repo_root=repo_root,
+                detail={"event": "killed"},
+            )
+        self._emit(delta)
+
+    @staticmethod
+    def _row_session_ids(row: WorkspaceActivity) -> set[str]:
+        sessions = {session.session.session_id for session in row.sessions}
+        if row.state.agent_session_id:
+            sessions.add(row.state.agent_session_id)
+        return sessions
+
+    def _remove_session_index(self, workspace_id: str, *, evict: bool = True) -> None:
+        previous = self._rows.get(workspace_id)
+        if previous is None:
+            return
+        sessions = self._row_session_ids(previous)
+        for session_id in sessions:
+            ids = self._session_workspaces.get(session_id)
+            if ids is None:
+                continue
+            ids.discard(workspace_id)
+            if not ids:
+                del self._session_workspaces[session_id]
+                if evict:
+                    self._settled.pop(session_id, None)
+                    self._spine_cache.pop(session_id, None)
+
+    def _replace_projection_row(
+        self, repo_root: str, workspace_id: str, row: WorkspaceActivity | None
+    ) -> None:
+        groups = list(self._projection.projects) if self._projection is not None else []
+        target = str(Path(repo_root) / row.state.project_subpath) if row is not None else None
+        found = False
+        for index, group in enumerate(groups):
+            rows = tuple(item for item in group.workspaces if item.state.id != workspace_id)
+            if row is not None and group.cwd == target:
+                rows = (*rows, row)
+                found = True
+            groups[index] = replace(group, workspaces=rows)
+        if row is not None and not found:
+            groups.append(
+                ProjectGroup(
+                    repo_root=repo_root,
+                    repo_name=Path(repo_root).name,
+                    cwd=target or repo_root,
+                    workspaces=(row,),
+                )
+            )
+        self._projection = DashboardSnapshot(
+            projects=tuple(sorted(groups, key=lambda group: group.cwd)), generated_at=_utcnow()
+        )
+
+    def _collect_snapshot(self) -> DashboardSnapshot:
         """One grouped-by-project picture across every known repo.
 
         Reuses ``RepoRegistry.known_roots()`` + per-manager ``list()`` (which
@@ -581,7 +883,6 @@ class ActivityService:
 
     def subscribe(self, callback: Callable[[DashboardDelta], None]) -> Callable[[], None]:
         """Register a delta callback. Returns an unsubscribe handle (idempotent)."""
-        self._ensure_bridged()
         self._subs.append(callback)
 
         def _unsub() -> None:
@@ -613,45 +914,35 @@ class ActivityService:
         ]
 
     def poll_once(self) -> None:
-        """Recompute activity, emit a ``session_activity`` delta per changed workspace.
+        """Compatibility entry for explicit reconciliation, not recurring discovery.
 
-        The edge (daemon lifespan task / TUI ticker) calls this on a slow
-        interval; transcript and pane changes aren't lifecycle events, so this is
-        what streams them. Membership changes (create/kill) arrive promptly via
-        the bridged manager bus; this catches the in-place activity drift.
+        Delegates to ``apply_reconcile(emit=True)`` rather than diffing itself.
+        The earlier shape snapshotted ``_rows``, called ``reconcile()`` — which
+        REPLACES ``_rows`` on its way through ``apply_reconcile`` — and then
+        compared against a baseline that had already been overwritten, so it
+        emitted nothing and every notification trigger driven by an explicit
+        poll went silent. ``apply_reconcile`` already owns the diff, the
+        removal deltas and the cursor, so the second copy could only ever be
+        the wrong one.
         """
-        self._ensure_bridged()
-        fresh: dict[str, tuple[object, ...]] = {}
-        for root in self._registry.known_roots():
-            try:
-                mgr = self._registry.get(root)
-            except Exception as exc:  # best-effort: never break the poll
-                logger.warning("activity: project {} unreadable, not polled: {}", root, exc)
-                continue
-            for state in mgr.list():
-                row = self._workspace_activity(mgr, state)
-                fingerprint = row.fingerprint
-                fresh[state.id] = fingerprint
-                if self._last_fingerprint.get(state.id) != fingerprint:
-                    self._emit(
-                        DashboardDelta(
-                            kind="session_activity",
-                            seq=self.next_seq(),
-                            workspace_id=state.id,
-                            repo_root=str(root),
-                            workspace=row,
-                        )
-                    )
-        self._last_fingerprint = fresh
+        self.apply_reconcile(self.prepare_reconcile(), emit=True)
 
     def close(self) -> None:
         """Tear down all manager-bus bridges and subscribers (daemon shutdown)."""
         for unsub in self._bridge_unsubs:
             with contextlib.suppress(Exception):
                 unsub()
+        self._registry_unsub()
         self._bridge_unsubs.clear()
         self._bridged.clear()
         self._subs.clear()
+        with self._projection_lock:
+            self._rows.clear()
+            self._session_workspaces.clear()
+            self._projection = None
+            self._settled.clear()
+            self._spine_cache.clear()
+            self._git_cache.clear()
 
     # ─── per-workspace computation ─────────────────────────────────────────
 
@@ -1087,6 +1378,9 @@ class ActivityService:
             paths = adapter.locate_transcripts(cwd, session_id)
             transcript = adapter.parse_activity(cwd, session_id)
             spine = self._session_spine_facts(adapter, cwd, session_id)
+            native = (
+                NativeSessionRegistry.for_session(session_id) if kind == "claude_code" else None
+            )
         # Remote adapters surface state with no local file, so "materialized"
         # can't mean "a file exists" — UNKNOWN-and-fileless is the only true
         # STARTING window.
@@ -1106,6 +1400,12 @@ class ActivityService:
             remote=pane_not_authoritative,
             now=now,
         )
+        # Claude Code's pid-keyed registry reports the live interactive pane's
+        # native busy/idle status.  It corroborates the tmux dimension only: an
+        # absent/stale record leaves today's transcript+tmux blend untouched, and
+        # it has no BLOCKED state, so the hook sidecar must still outrank it.
+        if native is not None:
+            blended = self._with_native_status(blended, native)
         # Push-status override: a sidecar from the managed hook is the
         # authoritative signal — it sees BLOCKED (permission prompt) and the clean
         # waiting/done split that polling can't. It outranks the poll until the
@@ -1135,6 +1435,16 @@ class ActivityService:
         # the state override above and cross-checked against the transcript so a
         # resolved batch never lingers on the stream.
         questions = self._pending_questions(mgr, kind, state, cwd, session_id, sidecar, transcript)
+        # The window has two sources, one per provider, and the sidecar wins
+        # where it speaks: Codex's parser reads it off the rollout, Claude's
+        # transcript never carries it and only the statusLine arm of the hook
+        # sidecar does. A sidecar with none leaves the parser's answer alone.
+        if sidecar is not None and sidecar.context is not None:
+            transcript = replace(transcript, context=sidecar.context)
+        # Stream facts exist only for a native session and only on its sidecar;
+        # a terminal session's transcript never carries them, so `None` stands.
+        if sidecar is not None and sidecar.native is not None:
+            transcript = replace(transcript, native=sidecar.native)
         live = self._live_counters(state=blended, transcript=transcript)
         session = AgentSession(
             session_id=session_id,
@@ -1278,21 +1588,42 @@ class ActivityService:
     ) -> bool:
         """Whether the transcript already carries a resolving result for ``tool_use_id``.
 
-        Claude Code flushes the ``AskUserQuestion`` tool_use and its ``tool_result``
-        together only after the human answers or Esc-cancels, so the presence of
-        that group in the parsed turns means the question is no longer pending
-        either way. Best-effort: a failed read can't confirm resolution, so we
-        treat it as still pending (the answer path re-checks before it acts)."""
+        Native providers can flush the question before its answer; unrelated
+        subagent activity must not turn question presence into resolution.
+        Empty and cancelled results still resolve the call. A failed read
+        cannot confirm resolution, so the capture remains pending.
+        """
         try:
-            turns = adapter.read_turns(worktree, session_id)
+            messages = adapter.read_messages(worktree, session_id)
         except Exception as exc:  # best-effort: never break the snapshot
-            logger.debug("activity question-resolution read_turns({}) failed: {}", session_id, exc)
+            logger.debug(
+                "activity question-resolution read_messages({}) failed: {}", session_id, exc
+            )
             return False
-        return any(
-            e.question is not None and e.question.group_id == tool_use_id
-            for t in turns
-            for e in t.entries
-        )
+        return tool_use_id in tool_outcomes(messages)
+
+    def _history_store(self) -> WorkspaceHistoryStore:
+        """The durable claim record, built on first use."""
+        if not self._history_resolved:
+            self._history = WorkspaceHistoryStore()
+            self._history_resolved = True
+        assert self._history is not None
+        return self._history
+
+    def _record_history(self, state: WorkspaceState, phase: PhaseReport | None) -> None:
+        """Persist this tick's phase claim and attached tickets, best-effort.
+
+        Swallows everything: this rides the ~1 Hz snapshot for every workspace
+        on the host, so a failure here must cost one history row rather than a
+        dashboard — the same contract `peek` has. The store logs its own write
+        failures, so this only catches what construction itself can raise.
+        """
+        try:
+            store = self._history_store()
+            store.record_progress(state.id, phase)
+            store.record_tickets(state.id, state.ticket_refs)
+        except Exception as exc:
+            logger.debug("activity history({}) failed: {}", state.id, exc)
 
     @staticmethod
     def _blend(
@@ -1365,6 +1696,21 @@ class ActivityService:
             return AgentActivityState.WORKING
         return AgentActivityState.IDLE
 
+    @staticmethod
+    def _with_native_status(
+        blended: AgentActivityState, native: NativeClaudeSession
+    ) -> AgentActivityState:
+        """Apply native busy/idle evidence without reclassifying a transcript.
+
+        Native status answers the dimension the workspace status estimates.  It
+        cannot make an unmaterialized or terminal/error transcript live, and it
+        deliberately has no say over ``BLOCKED``; that state remains exclusive to
+        the hook sidecar, which is applied after this corroboration.
+        """
+        if blended not in (AgentActivityState.WORKING, AgentActivityState.IDLE):
+            return blended
+        return AgentActivityState.WORKING if native.status == "busy" else AgentActivityState.IDLE
+
     def _settle(
         self, session_id: str, fresh: AgentActivityState, now: datetime
     ) -> AgentActivityState:
@@ -1423,8 +1769,7 @@ class ActivityService:
                 # even reached.
                 logger.warning("activity: project {} not bridged: {}", key, exc)
                 continue
-            self._bridge_unsubs.append(mgr.subscribe(self._bridge_callback(str(key))))
-            self._bridged.add(key)
+            self._bridge_manager(key, mgr)
 
     def _bridge_callback(self, repo_root: str) -> Callable[[WorkspaceEvent], None]:
         def _on_event(event: WorkspaceEvent) -> None:

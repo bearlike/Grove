@@ -48,6 +48,9 @@ function workspaceState(spec: WorkspaceSpec): WorkspaceState {
     runtime: "host",
     runtime_default_config: false,
     runtime_no_tmux: false,
+    native: false,
+    telemetry_session_id: "",
+    panels: [],
   };
 }
 

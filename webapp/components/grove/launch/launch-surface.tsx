@@ -1,29 +1,29 @@
 "use client";
 
-import { Maximize2Icon } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useRef, useState } from "react";
+import { Suspense } from "react";
 
 import {
-  Composer,
   ComposerActions,
-  ComposerBar,
+  ComposerBody,
+  ComposerFrame,
   ComposerSend,
   ComposerToolbar,
-} from "@/components/elements/composer";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+  ExpandedComposer,
+} from "@/components/grove/composer";
+import { useCloseAnnotationOnUnmount } from "@/components/grove/annotation";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { BrandMark } from "@/components/grove/brand-mark";
+import { Textarea } from "@/components/ui/textarea";
+import { AppLogo } from "@/components/grove/app-logo";
 import { useCreateWorkspaceUi } from "@/components/grove/fleet/create-store";
 import { useFleetSnapshot } from "@/components/grove/fleet/use-fleet";
+import {
+  LaunchAttachFiles,
+  LaunchAttachmentChips,
+} from "@/components/grove/launch/composer-files";
+import { LaunchPillGroup } from "@/components/grove/launch/control-pill";
 import { LaunchControlRow } from "@/components/grove/launch/controls/control-row";
+import { ModelPill } from "@/components/grove/launch/controls/model-pill";
 import { LaunchDerivedTitle } from "@/components/grove/launch/derived-title";
 import {
   LaunchStateProvider,
@@ -31,13 +31,16 @@ import {
   useLaunchControls,
 } from "@/components/grove/launch/launch-state";
 import { customModelError } from "@/lib/grove/adapters/launch";
+import { useOnboardingDemands, useOnboardingUi } from "@/components/grove/onboarding";
 import { useLaunchSubmit, type LaunchSubmit } from "@/lib/grove/runtime/launch";
 
 /** The blank task brief that starts a new Grove workspace. */
 export function LaunchSurface(): React.ReactNode {
   return (
     <LaunchStateProvider>
-      <LaunchSurfaceContent />
+      <Suspense>
+        <LaunchSurfaceContent />
+      </Suspense>
     </LaunchStateProvider>
   );
 }
@@ -48,46 +51,26 @@ function LaunchSurfaceContent(): React.ReactNode {
   const fleet = useFleetSnapshot();
   const noProjects = !fleet.isPending && !fleet.isError && fleet.data?.projects.length === 0;
   const launch = useLaunchSubmit();
-  // The composer is MOVED between two mount points, never rendered twice: a
-  // second copy would mean two editors, two tab stops and two accessible
-  // names for one draft. That is only safe because the draft and every control
-  // value live above this component (`useLaunchSubmit`, `LaunchStateProvider`),
-  // so the remount carries nothing with it.
-  const [expanded, setExpanded] = useState(false);
-  const inlineInput = useRef<HTMLTextAreaElement | null>(null);
-
-  // Radix restores focus to the element that opened the dialog, and that
-  // element is inside the composer we just unmounted — so its ref points at a
-  // node that no longer exists and focus would fall to the body. Put it back on
-  // the freshly remounted inline textarea instead.
-  const restoreFocus = useCallback((event: Event) => {
-    event.preventDefault();
-    requestAnimationFrame(() => inlineInput.current?.focus());
-  }, []);
-
-  const composer = (
-    <LaunchComposer
-      disabled={noProjects}
-      launch={launch}
-      expanded={expanded}
-      onExpand={() => setExpanded(true)}
-      inputRef={inlineInput}
-    />
-  );
+  const openTour = useOnboardingUi((state) => state.setOpen);
+  // The staged files die with this route, and so must any pane editing one.
+  useCloseAnnotationOnUnmount();
+  // The tour stages its sample image and writes its example briefs through
+  // this page's own composer API; see `use-onboarding-demands.ts`.
+  useOnboardingDemands(launch);
 
   return (
     <main
       className="flex min-h-0 flex-1 flex-col"
       data-testid={LAUNCH_TESTIDS.page}
       // Only the measure. The composer's own surface, radius and padding come
-      // from the vendored `ComposerBar`, so re-declaring `--composer-*` here
+      // from the shared `ComposerBody`, so re-declaring `--composer-*` here
       // would be this file having an opinion about a look it does not own.
       //
-      // 52rem, not the transcript's 44rem: this surface carries six labelled
-      // controls under the textarea where a reply composer carries none, and at
-      // 44rem they could only fit by hiding half their values behind glyphs.
-      // It stays well under the 78rem reading measure — this is a form, not
-      // prose.
+      // 52rem, not the transcript's 44rem: this surface carries a configuration
+      // shelf under the bar where a reply composer carries none, and at 44rem
+      // its four spelled-out values could only fit by hiding half of them
+      // behind glyphs. It stays well under the 78rem reading measure — this is
+      // a form, not prose.
       style={{ ["--thread-max-width" as string]: "52rem" }}
     >
       {/*
@@ -98,50 +81,95 @@ function LaunchSurfaceContent(): React.ReactNode {
         brief is typed — anchoring it slightly high is what keeps it from
         drifting down the screen while you write.
       */}
-      <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col justify-center gap-4 px-4 pb-16 md:pb-24">
-        <div
-          className="flex items-center justify-center gap-2 text-sm font-medium"
-          data-testid={LAUNCH_TESTIDS.brand}
-        >
-          <BrandMark className="size-6" />
-          <span>Grove</span>
+      <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col justify-center gap-6 px-4 pb-16 md:pb-24">
+        {/*
+          The welcome block is the field's own stacking context, so the texture
+          sits behind the mark AND the greeting with no z-index anywhere: the
+          field is the first child and out of flow, everything after it is in
+          flow and therefore paints over it.
+        */}
+        <div className="relative flex flex-col items-center gap-3">
+          {/*
+            Texture, and nothing a screen reader could use — `aria-hidden`
+            keeps a nameless region from being announced between the brand and
+            the greeting, which is the one piece of noise a landing page cannot
+            afford. The class is a HOOK: the hairlines, the radial fade and
+            `pointer-events: none` all belong to the theme. What the caller
+            owns is the measure, because the theme's mask is `closest-side` and
+            has no size of its own — a field with no box renders nothing at
+            all. It is deliberately wider than the text it sits behind so the
+            fade lands on empty space rather than mid-sentence.
+          */}
+          <span aria-hidden className="launch-brand-field absolute -inset-x-24 -top-16 bottom-0" />
+          {/*
+            THE APP ICON, not the bare mark: this is the one place in the app
+            where the logo stands alone above a blank page with nothing else
+            identifying the product, which is exactly the job the tiled icon
+            does on a dock and a home screen. `size-12` rather than the mark's
+            `size-10` because the tile's own padding insets the wheel, so the
+            two read at the same optical weight only when the tile is larger.
+          */}
+          <AppLogo className="relative size-12" data-testid={LAUNCH_TESTIDS.brand} />
+          <div className="relative flex flex-col items-center gap-1 text-center">
+            <h1
+              className="text-content-primary text-2xl font-semibold"
+              data-testid={LAUNCH_TESTIDS.headline}
+            >
+              Welcome back.
+            </h1>
+            {/*
+              Two tiers rather than one line doing both jobs. A single heading
+              carrying the greeting AND the question makes them compete for the
+              one emphasis this page has; the question is what the composer
+              below answers, so it takes the supporting tier and hands the
+              emphasis to the editor.
+            */}
+            <p className="text-content-secondary text-base">
+              What would you like to build and improve today?
+            </p>
+          </div>
         </div>
-        <h1
-          className="text-content-primary text-center text-2xl font-semibold"
-          data-testid={LAUNCH_TESTIDS.headline}
-        >
-          What would you like to work on?
-        </h1>
-        {expanded ? null : composer}
-        <Dialog open={expanded} onOpenChange={setExpanded}>
-          <DialogContent
-            // Only layout is overridden at the call site; the vendored dialog
-            // keeps its own surface, radius and close affordance. `dvh` rather
-            // than `vh` so a mobile keyboard shrinks the box instead of pushing
-            // the send button under it.
-            className="flex h-[90dvh] max-h-[90dvh] w-[calc(100vw-2rem)] flex-col gap-4 sm:max-w-3xl"
-            onCloseAutoFocus={restoreFocus}
-            data-testid={LAUNCH_TESTIDS.expanded}
+        {/*
+          ONE PILL GROUP AROUND THE WHOLE COMPOSER, spanning the toolbar and the
+          shelf. `LaunchPillGroup` holds a single `openKind`, and that single
+          key IS the exclusion rule — opening the model menu closes the project
+          menu. Two groups would give the two halves of one composer independent
+          open states, so both menus would stand open and the second would cover
+          the first. Nothing throws; the control underneath simply stops being
+          clickable.
+        */}
+        <LaunchPillGroup>
+          <ExpandedComposer
+            title="Write the brief"
+            description="Room for the whole thing. Every control keeps the choice you made."
+            testId="launch"
+            expandLabel="Expand"
           >
-            <DialogHeader>
-              {/*
-                Deliberately NOT "Task brief": that is the textarea's own
-                accessible name, and Radix labels the dialog from this title, so
-                reusing it gives one screen reader two different things called
-                the same thing inside each other.
-              */}
-              <DialogTitle>Write the brief</DialogTitle>
-              <DialogDescription>
-                Room for the whole thing. Every control keeps the choice you made.
-              </DialogDescription>
-            </DialogHeader>
-            {composer}
-          </DialogContent>
-        </Dialog>
+            {(expanded, inputRef, expandControl) => (
+              <LaunchComposer
+                disabled={noProjects}
+                launch={launch}
+                expanded={expanded}
+                inputRef={inputRef}
+                expandControl={expandControl}
+              />
+            )}
+          </ExpandedComposer>
+        </LaunchPillGroup>
         {launch.error ? (
           <p className="text-sm" data-testid={LAUNCH_TESTIDS.error}>
             <span className="text-destructive">Couldn’t create workspace. </span>
             <span className="text-content-secondary">{launch.error.message}</span>
+          </p>
+        ) : null}
+        {/*
+          A refusal gets the error slot's treatment and NOT its lead sentence:
+          nothing was attempted, so "Couldn't create workspace" would name a
+          failure that never happened.
+        */}
+        {launch.refusal ? (
+          <p className="text-sm" data-testid={LAUNCH_TESTIDS.refusal}>
+            <span className="text-destructive">{launch.refusal}</span>
           </p>
         ) : null}
         {noProjects ? (
@@ -159,11 +187,20 @@ function LaunchSurfaceContent(): React.ReactNode {
           className="flex items-center justify-center gap-1"
           data-testid={LAUNCH_TESTIDS.footerLinks}
         >
+          {/*
+            The full form, and the reason the shelf can stay short. Brief, base
+            ref, skip-init and save-as-defaults have no pill and are not
+            supposed to get one — a shelf that carries every knob is the
+            nine-field modal again, wearing a different shape.
+          */}
           <Button variant="ghost" size="sm" onClick={() => openCreate(values.repoRoot ?? "")}>
             More options
           </Button>
           <Button variant="ghost" size="sm" asChild>
             <Link href="/fleet">Go to fleet</Link>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => openTour(true)} data-testid="launch-take-tour">
+            Take the tour
           </Button>
         </div>
       </div>
@@ -172,55 +209,72 @@ function LaunchSurfaceContent(): React.ReactNode {
 }
 
 /**
- * The task brief, built from the vendored `elements/composer` slots.
+ * The task brief, in the anatomy both composers now share.
  *
- * Everything structural — the paper shell, the toolbar's `justify-between`
- * row, the action group, the send button's arrow↔stop swap — is imported
- * rather than restyled. The bar consumes the design system's raised-surface
- * tuple at the composition seam so its boundary holds in either theme.
+ * Reads top to bottom as what is attached, what you are writing, what you can
+ * do with it: native chips above the editor, the editor, then the toolbar with
+ * attach on the left and model, expand and send on the right. The split in that
+ * toolbar is by KIND — attaching is an input to the message, the three on the
+ * right act on it.
  *
- * The textarea is the ONE hand-written element, and it is why this surface no
- * longer mounts an assistant-ui runtime. `ComposerInput` is a single-line
- * `<input>` and a task brief is a paragraph, so the previous answer was to
- * borrow `ComposerPrimitive.Input` — which dragged in `AssistantRuntimeProvider`
- * and silently broke EVERY client-side navigation away from this route (see
- * `useLaunchSubmit` for the measurement). A textarea costs a dozen lines; the
- * runtime cost a message list, a thread and a converter this surface never had
- * any use for, plus the bug.
+ * BELOW the bar, outside it, sits the configuration shelf. Writing and
+ * configuring are different acts, and while the pills lived inside the bar they
+ * competed with the brief for the same paper and shoved the send button around
+ * as they wrapped. A sibling shelf lets the writing surface be one thing.
+ *
+ * The editor is the vendored `Textarea` and this surface still mounts no
+ * assistant-ui runtime. That pairing is the whole point: `ComposerInput` is a
+ * single-line `<input>` and a task brief is a paragraph, so the previous answer
+ * was to borrow `ComposerPrimitive.Input` — which dragged in
+ * `AssistantRuntimeProvider` and silently broke EVERY client-side navigation
+ * away from this route (see `useLaunchSubmit` for the measurement).
  */
 function LaunchComposer({
   disabled,
   launch,
   expanded,
-  onExpand,
   inputRef,
+  expandControl,
 }: {
   readonly disabled: boolean;
   readonly launch: LaunchSubmit;
   readonly expanded: boolean;
-  readonly onExpand: () => void;
   readonly inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  readonly expandControl: React.ReactNode;
 }): React.ReactNode {
   const { values } = useLaunchControls();
   const customModelInvalid =
     values.customModel && customModelError(values.model ?? "") !== null;
 
   return (
-    <Composer
+    <ComposerFrame
       className={expanded ? "flex min-h-0 max-w-none flex-1 flex-col" : "max-w-none"}
       data-testid={LAUNCH_TESTIDS.composer}
     >
-      <ComposerBar
-        className={
-          expanded
-            ? "bg-surface-raised border-surface-edge surface-raised flex min-h-0 flex-1 flex-col border"
-            : "bg-surface-raised border-surface-edge surface-raised border"
-        }
-      >
-        <textarea
+      {/*
+        The 11px padding and the 1px border that place the send edge 12px in
+        belong to `ComposerBody` and are not restated here — both composers
+        measure that inset, so it has exactly one owner.
+      */}
+      <ComposerBody className={expanded ? "flex min-h-0 flex-1 flex-col" : undefined}>
+        <LaunchAttachmentChips
+          files={launch.attachments}
+          pendingReAdd={launch.pendingReAdd}
+          onRemove={launch.removeFile}
+          onReplace={(index, file) => void launch.replaceFile(index, file)}
+        />
+        <Textarea
           ref={inputRef}
           value={launch.prompt}
           onChange={(event) => launch.setPrompt(event.target.value)}
+          onPaste={(event) => {
+            // Match ComposerPrimitive.Input's native file-paste path without
+            // mounting a runtime on the landing page. Text-only paste is untouched.
+            const files = Array.from(event.clipboardData.files);
+            if (disabled || files.length === 0) return;
+            event.preventDefault();
+            void launch.addFiles(files);
+          }}
           onKeyDown={(event) => {
             // Enter sends, Shift+Enter breaks the line. `isComposing` guards an
             // IME candidate window, where Enter commits a character rather than
@@ -230,15 +284,18 @@ function LaunchComposer({
             launch.submit();
           }}
           placeholder="Describe the work you want to do..."
-          // min-h-24/max-h-64 is the one sizing delta from the vendored reply
+          // The vendored Textarea is a standalone form field and brings its own
+          // border, background and focus ring; inside the composer bar the BAR
+          // is the field, so those are dropped and only its sizing behaviour is
+          // kept. min-h-24/max-h-64 is the one range delta from the reply
           // composer: this box is the whole screen, not a line under a
-          // conversation that already carries the context. Expanded, it fills
-          // the dialog instead of capping — the whole point of expanding is
-          // that the brief is longer than the cap.
+          // conversation that already carries the context. Expanded it fills
+          // the dialog instead of capping — the point of expanding is that the
+          // brief is longer than the cap.
           className={
             expanded
-              ? "placeholder:text-foreground/35 min-h-0 w-full flex-1 resize-none bg-transparent px-3 text-[15px] outline-none"
-              : "placeholder:text-foreground/35 max-h-64 min-h-24 w-full resize-none bg-transparent px-3 text-[15px] outline-none"
+              ? "min-h-0 w-full flex-1 resize-none px-3"
+              : "max-h-64 min-h-24 w-full resize-none px-3"
           }
           autoFocus
           disabled={disabled}
@@ -246,35 +303,31 @@ function LaunchComposer({
           aria-label="Task brief"
           data-testid={LAUNCH_TESTIDS.input}
         />
-        {/*
-          `items-end` rather than the vendored `items-center`: the control row
-          wraps to two lines and Send must stay in the composer's bottom-right
-          corner, where it is on every other surface. Centred against a
-          two-line group it floats in the middle of the bar instead.
-        */}
-        <ComposerToolbar className="items-end gap-2">
-          <LaunchControlRow />
+        <ComposerToolbar>
+          <LaunchAttachFiles onAdd={launch.addFiles} disabled={disabled} />
           <ComposerActions className="shrink-0">
-            {expanded ? null : (
-              <TooltipIconButton
-                tooltip="Expand"
-                side="top"
-                onClick={onExpand}
-                disabled={disabled}
-                data-testid={LAUNCH_TESTIDS.expand}
-              >
-                <Maximize2Icon />
-              </TooltipIconButton>
-            )}
+            <ModelPill />
+            {expandControl}
             <ComposerSend
-              streaming={launch.isPending}
-              idle={launch.canSubmit && !customModelInvalid}
+              streaming={false}
+              aria-label={launch.isPending ? "Creating workspace" : "Send message"}
+              aria-busy={launch.isPending}
+              idle={!launch.canSubmit || customModelInvalid}
               disabled={!launch.canSubmit || customModelInvalid}
+              className="size-[28px]"
               onClick={launch.submit}
             />
           </ComposerActions>
         </ComposerToolbar>
-      </ComposerBar>
-    </Composer>
+      </ComposerBody>
+      {/*
+        Inset from the bar's edges rather than spanning them: `mx-3` reads the
+        shelf as subordinate to the writing surface above it, where flush edges
+        would make it a second bar of equal weight.
+      */}
+      <div className="composer-shelf mx-3 flex items-center px-2 py-1.5">
+        <LaunchControlRow />
+      </div>
+    </ComposerFrame>
   );
 }

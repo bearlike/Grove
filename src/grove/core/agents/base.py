@@ -367,6 +367,31 @@ class AgentAdapter(Protocol):
         """
         ...
 
+    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+        """One KNOWN session's listing row, resolved by IDENTITY rather than by
+        scanning ``cwd`` — ``None`` when this adapter's store holds no such
+        session.
+
+        The identity-keyed counterpart to :meth:`list_sessions`, and the two
+        answer genuinely different questions: that method asks *which sessions
+        live in this directory*, which is the only thing a discovery scan can
+        ask, while this one asks *where is this exact session*, which a caller
+        already holding an id can ask far more cheaply and far more robustly.
+        The distinction is load-bearing because a store may file a transcript
+        somewhere the session's own directory does not predict — Claude Code
+        re-homes one under a native worktree it enters mid-run — so a
+        directory scan alone leaves a known session unreadable while the id
+        that names it is still perfectly valid.
+
+        Implementations resolve through :meth:`locate_transcripts` (already the
+        relocation-tolerant lookup) and MUST NOT walk the store: this is an
+        O(1)-per-id read on request paths, never a census. The returned summary
+        is the same shape and the same parse ``list_sessions`` produces, so a
+        caller can substitute one for the other; ``None`` for a remote adapter,
+        for a tool with no transcripts, and for an id this store never held.
+        """
+        ...
+
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
         """The session's agentic-loop spine — the lineage-preserving message list
         every content projection derives from, oldest first.

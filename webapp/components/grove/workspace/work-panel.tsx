@@ -5,30 +5,28 @@ import {
   FileDiffIcon,
   GitCompareArrowsIcon,
   InfoIcon,
+  PanelTopIcon,
+  RadioIcon,
   SlidersHorizontalIcon,
   TerminalIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/assistant-ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { AdaptiveTabsList, AdaptiveTabsTrigger } from "./adaptive-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { diagramOf } from "@/lib/grove/api";
 import type { CommitSummaryView, WorkspacePeekView } from "@/lib/grove/api";
+import { useWorkspacePanels } from "@/lib/grove/hooks";
 import {
+  offeredPanelTabs,
   PANEL_TAB_VALUES,
+  panelTabValue,
   type ActivityRead,
   type PanelTab,
   type WorkspaceRead,
 } from "./selectors";
-
-/**
- * The tabs a reader with no Grove session may see: what the work IS, and what
- * it CHANGED. Terminal, Files and Controls are absent because each is either a
- * live handle on the machine or a way to steer the agent.
- *
- * A subset of `PANEL_TAB_VALUES` rather than a parallel list, so a name that
- * does not exist in the census cannot be written here.
- */
-const SHARED_TABS: readonly PanelTab[] = ["changes", "info"];
 
 /**
  * Each tab is its own chunk, fetched only once its `TabsContent` actually
@@ -64,6 +62,13 @@ const InfoTab = dynamic(() => import("./info-tab").then((m) => m.InfoTab), {
 const ControlsTab = dynamic(() => import("./controls-tab").then((m) => m.ControlsTab), {
   loading: TabFallback,
 });
+const DiagramTab = dynamic(() => import("./diagram-tab").then((m) => m.DiagramTab), {
+  loading: TabFallback,
+});
+const EmbeddedPanelTab = dynamic(
+  () => import("./panel-tab").then((m) => m.PanelTab),
+  { loading: TabFallback },
+);
 
 /**
  * The tabbed half of the workspace surface — everything about the work that is
@@ -86,24 +91,9 @@ const ControlsTab = dynamic(() => import("./controls-tab").then((m) => m.Control
  * child without it refuses to shrink below its content, and the panel's scroll
  * silently becomes the page's.
  *
- * `pt-4` IS THE ONLY THING SEPARATING TWO ROWS OF CONTROLS, so it is not
- * decoration. `ShellHeader` is `h-12` with deliberately NO `border-b` — a rule
- * under it would read as a second piece of chrome sitting on the page — and it
- * carries its own tab strip (the pane switcher) in `actions`. So this strip
- * used to begin at the exact pixel that one ended: two tab lists, touching,
- * with nothing saying they belong to different layers.
- *
- * Space is therefore the whole mechanism, and the amount has to beat the
- * spacing INSIDE either row or it reads as more of the same row: 16px is twice
- * the strip's own `pb-2` between its labels and their underline, and twice the
- * header's `gap-2` between its controls. The border the `line` variant already
- * draws under this strip then closes the band from below.
- *
- * It lives here rather than on `ShellHeader` because the header is shared by
- * every page and only this one stacks a second control row beneath it — and
- * because the split view mounts THIS component inside a `ResizablePanel`, so
- * putting the clearance on the panel is what makes Work-alone and Split
- * identical by construction instead of by two matching numbers.
+ * The work row owns its closing rule; the pane switcher instead shares the
+ * shell header's rule. Both compose AdaptiveTabsList so labels yield to this
+ * pane's width, while the native trigger owns its highlight through resizing.
  */
 export function WorkPanel({
   peek,
@@ -126,11 +116,16 @@ export function WorkPanel({
    *
    * ONE optional prop rather than a `tabs` array beside an `onKilled` beside a
    * `readOnly`, because the tab set is not an independent choice: Terminal
-   * needs the pane, Files and Controls need a workspace id to fetch privately,
-   * and Lifecycle needs a record carrying `branch_provenance`. Bundling them
-   * means the panel's own reach is DERIVED from what it was handed, so a caller
-   * cannot ask for a tab whose data it did not provide, and nobody can leave a
-   * boolean disagreeing with a handler.
+   * needs the pane, Files needs a workspace id to fetch privately, and Controls
+   * needs all three of these — a record carrying `branch_provenance` for the
+   * lifecycle verbs, a kill handler, and whether there is a turn to cancel.
+   * Bundling them means the panel's own reach is DERIVED from what it was
+   * handed, so a caller cannot ask for a tab whose data it did not provide, and
+   * nobody can leave a boolean disagreeing with a handler.
+   *
+   * `canInterrupt` rides along rather than becoming a fourth top-level prop for
+   * the same reason: it is only ever true for a caller holding a live thread,
+   * and the public view has no turn to cancel.
    *
    * Withholding these is chrome, never the security boundary: the public
    * surface is safe because the daemon serves it three read-only routes, not
@@ -140,48 +135,70 @@ export function WorkPanel({
   privileged?: {
     peek: WorkspacePeekView;
     onKilled: () => void;
+    canInterrupt: boolean;
+    onExpandDiagram?: () => void;
   };
 }) {
+  const panels = useWorkspacePanels(privileged?.peek.state.id ?? null);
+  const diagram = privileged ? diagramOf(privileged.peek.state) : null;
   // Order is the census's, never the caller's — a subset cannot reorder the
-  // strip, and a sixth tab lands in the right place for both audiences at once.
-  const offered = PANEL_TAB_VALUES.filter((value) => privileged || SHARED_TABS.includes(value));
+  // strip, and a seventh tab lands in the right place for both audiences at once.
+  const offered = offeredPanelTabs(privileged !== undefined, diagram !== null);
+  const panelTabs = privileged ? (panels.data ?? []) : [];
+  // Falls back against what is OFFERED, not against the whole census: Diagram
+  // is conditional, so a workspace whose diagram was closed while its tab was
+  // selected must land somewhere real rather than on an empty panel.
+  const activeTab = panelTabs.some((panel) => panelTabValue(panel.name) === tab)
+    ? tab
+    : (offered as readonly PanelTab[]).includes(tab)
+      ? tab
+      : privileged
+        ? "terminal"
+        : "info";
   return (
     <Tabs
-      value={tab}
+      value={activeTab}
       onValueChange={(value) => onTabChange(value as PanelTab)}
-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 bg-background pt-4"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 bg-background"
       data-testid="work-panel"
     >
-      <TabsList
-        variant="line"
-        size="sm"
-        className="w-full shrink-0 justify-start overflow-x-auto px-3"
-      >
+      <AdaptiveTabsList className="workspace-work-tabs shrink-0" aria-label="Workspace tools">
         {offered.map((value) => {
-          const { label, Icon } = TAB_CHROME[value];
+          const { label, Icon } = tabChrome(value, privileged?.peek.state.native ?? false);
           return (
-            <TabsTrigger key={value} value={value} data-testid={`work-panel-tab-${value}`}>
-              <Icon aria-hidden />
-              {label}
-            </TabsTrigger>
+            <AdaptiveTabsTrigger
+              key={value}
+              value={value}
+              label={label}
+              icon={Icon}
+              data-testid={`work-panel-tab-${value}`}
+            />
           );
         })}
-      </TabsList>
+        {panelTabs.map((panel) => (
+          <AdaptiveTabsTrigger
+            key={panel.name}
+            value={panelTabValue(panel.name)}
+            label={panel.title}
+            icon={PanelTopIcon}
+            data-testid={`work-panel-tab-panel-${panel.name}`}
+          />
+        ))}
+      </AdaptiveTabsList>
 
+      {/* Empty-state navigation uses the controlled tab setter: a fragment
+          anchor cannot select an inactive Radix tab. Standalone callers may
+          omit it, in which case no navigation action renders. */}
       <TabsContent value="changes" className="flex min-h-0 flex-1 flex-col">
-        <ChangesTab peek={peek} commits={commits} />
+        <ChangesTab peek={peek} commits={commits} onNavigate={onTabChange} />
       </TabsContent>
       <TabsContent value="info" className="flex min-h-0 flex-1 flex-col">
         <InfoTab
           peek={peek}
           activity={activity}
           repoRoot={repoRoot}
-          privileged={
-            privileged && {
-              state: privileged.peek.state,
-              onKilled: privileged.onKilled,
-            }
-          }
+          identity={privileged?.peek.state}
+          onNavigate={onTabChange}
         />
       </TabsContent>
       {/* The three privileged tabs are not merely untriggerable without
@@ -196,11 +213,48 @@ export function WorkPanel({
             <TerminalTab peek={privileged.peek} active={tab === "terminal"} />
           </TabsContent>
           <TabsContent value="files" className="flex min-h-0 flex-1 flex-col">
-            <FilesTab workspaceId={privileged.peek.state.id} />
+            <FilesTab workspaceId={privileged.peek.state.id} onNavigate={onTabChange} />
           </TabsContent>
           <TabsContent value="controls" className="flex min-h-0 flex-1 flex-col">
-            <ControlsTab workspaceId={privileged.peek.state.id} />
+            <ControlsTab
+              state={privileged.peek.state}
+              onKilled={privileged.onKilled}
+              canInterrupt={privileged.canInterrupt}
+            />
           </TabsContent>
+          {/* Keep editable iframe drafts alive, not visible. Radix forceMount
+              makes Presence true even for an inactive tab, so its built-in
+              hidden flag stays false. Explicit hiding must own layout; inert
+              only owns interaction. Read-only diagrams have no live edit to
+              preserve and use ordinary mount-on-selection behavior. */}
+          {diagram && (
+            <TabsContent
+              value="diagram"
+              forceMount={diagram.mode === "active" ? true : undefined}
+              hidden={activeTab !== "diagram"}
+              inert={activeTab !== "diagram" ? true : undefined}
+              className="min-h-0 flex-1 overflow-hidden"
+            >
+              <div className="flex h-full min-h-0 min-w-0 flex-col">
+                <DiagramTab
+                  workspaceId={privileged.peek.state.id}
+                  repoRoot={privileged.peek.state.repo_root}
+                  descriptor={diagram}
+                  active={activeTab === "diagram"}
+                  onExpand={privileged.onExpandDiagram}
+                />
+              </div>
+            </TabsContent>
+          )}
+          {panelTabs.map((panel) => (
+            <TabsContent
+              key={panel.name}
+              value={panelTabValue(panel.name)}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <EmbeddedPanelTab url={panel.url} title={panel.title} />
+            </TabsContent>
+          ))}
         </>
       )}
     </Tabs>
@@ -217,10 +271,25 @@ export function WorkPanel({
 const TAB_CHROME: Record<PanelTab, { label: string; Icon: LucideIcon }> = {
   terminal: { label: "Terminal", Icon: TerminalIcon },
   changes: { label: "Changes", Icon: GitCompareArrowsIcon },
+  diagram: { label: "Diagram", Icon: WorkflowIcon },
   files: { label: "Files", Icon: FileDiffIcon },
   info: { label: "Info", Icon: InfoIcon },
   controls: { label: "Controls", Icon: SlidersHorizontalIcon },
 };
+
+/**
+ * The pane tab is named for what it SHOWS. A native workspace's pane is
+ * Grove's own worker printing the session's protocol frames, one line each,
+ * so calling that surface "Terminal" promises a place to type that does not
+ * exist; it is the session's event stream. Same tab value, same capture
+ * path, one label — the value stays `terminal` so a bookmarked tab and the
+ * e2e census survive either mode.
+ */
+export const STREAM_TAB_CHROME = { label: "Stream", Icon: RadioIcon } as const;
+
+export function tabChrome(value: PanelTab, native: boolean): { label: string; Icon: LucideIcon } {
+  return value === "terminal" && native ? STREAM_TAB_CHROME : TAB_CHROME[value];
+}
 
 /**
  * Stand-in for whichever tab is still downloading its own chunk — never an

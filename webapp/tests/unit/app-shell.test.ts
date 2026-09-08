@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+
+import { code } from "./_source";
 import { describe, expect, it } from "vitest";
 
 import { RAIL_WIDTH } from "@/components/grove/shell/rail-width";
@@ -19,13 +21,13 @@ const header = readFileSync("components/grove/shell/shell-header.tsx", "utf8");
 const fleetTree = readFileSync("components/grove/fleet/fleet-tree.tsx", "utf8");
 const workPanel = readFileSync("components/grove/workspace/work-panel.tsx", "utf8");
 
-describe("the desktop rail widened twice: 260px → 328px → 392px", () => {
-  it("expands to w-98 (392px) — 328px * 1.2 = 393.6px, and Tailwind's spacing unit is 4px", () => {
+describe("the desktop rail shares one readable measure", () => {
+  it("uses 23.8rem, approximately 305px at the desktop density root", () => {
     // The measure moved OUT of this file when a second rail appeared (the
     // public share view), so the width is now asserted at its single source
     // and the shell is only checked for using it. Asserting the old literal
     // here would pin the spelling of a call site rather than the measure.
-    expect(RAIL_WIDTH).toBe("w-98");
+    expect(RAIL_WIDTH).toBe("w-[23.8rem]");
     expect(shell).toContain('collapsed ? "w-12" : RAIL_WIDTH');
     expect(shell).not.toContain("w-65");
     expect(shell).not.toContain('"w-82"');
@@ -79,24 +81,24 @@ describe("the fleet list fills whichever container renders it (#57)", () => {
     // Asserted as the two class strings rather than one concatenated
     // expression: the formatter is free to wrap the ternary across lines, and
     // the contract is what each state renders, not where the line breaks.
-    expect(fleetTree).toContain('"w-full overflow-hidden px-2 pt-1"');
+    expect(fleetTree).toContain('"w-full overflow-hidden px-2 pt-1 [@media(pointer:coarse)]:px-0.5"');
     expect(fleetTree).toContain(': "w-full overflow-y-auto p-3"');
   });
 });
 
-describe("the rail's brand row shares the header's line, not a row above it", () => {
-  it("offsets the brand row by the SAME 8px the gutter gives the panel", () => {
-    // app-shell.tsx's gutter is `p-2` (8px), which is what pushes the panel —
-    // and ShellHeader's toggle row inside it — 8px down from the viewport
-    // top. The rail's aside carries no such padding, so its brand row must
-    // add the same offset itself, or the two rows read as different lines.
-    expect(shell).toMatch(/p-2 md:pl-0/);
-    expect(sidebar).toContain('"mt-2 flex h-12 shrink-0 items-center gap-2"');
+describe("the rail and workspace header are independently sized chrome", () => {
+  it("shares the header band without a top-only shell inset", () => {
+    expect(shell).toContain("px-2 pb-2 md:pl-0");
+    expect(sidebar).toContain('"workspace-header flex shrink-0 items-center gap-2 [@media(pointer:coarse)]:h-14"');
+    expect(sidebar).toContain('<BrandMark className="size-7 shrink-0" />');
   });
 
-  it("both rows are the same height, which is what makes them one line", () => {
-    expect(sidebar).toMatch(/\bh-12\b/);
-    expect(header).toContain("h-12");
+  it("fits native 24px controls inside the 32px workspace header", () => {
+    expect(header).toContain('workspace-header');
+    expect(readFileSync("app/globals.css", "utf8")).toMatch(/\.workspace-header\s*\{\s*min-height: 32px/);
+    expect(header).not.toContain("h-12");
+    expect(header).toContain("size-6 min-h-[24px] min-w-[24px]");
+    expect(header).toContain("[@media(pointer:coarse)]:h-14");
   });
 
   it("the header line still carries the toggle, the title and nothing portalled in", () => {
@@ -105,16 +107,18 @@ describe("the rail's brand row shares the header's line, not a row above it", ()
   });
 });
 
-describe("the search box is leaner: full accessible name, lighter visible chrome", () => {
-  it("keeps the descriptive aria-label but drops the visible placeholder's weight", () => {
-    expect(fleetTree).toContain('aria-label="Search workspaces"');
-    expect(fleetTree).toContain('placeholder="Search"');
+describe("workspace search is an explicit dialog, not a persistent rail field", () => {
+  it("keeps the native search input accessible inside the one shell-owned palette", () => {
+    const palette = readFileSync("components/grove/fleet/fleet-palette.tsx", "utf8");
+    expect(palette).toContain('aria-label="Search workspaces"');
+    expect(palette).toContain('placeholder="Search workspaces"');
+    expect(palette).toContain("shouldFilter={false}");
   });
 
-  it("sizes the input to the rail's own type scale rather than the vendored default", () => {
-    expect(fleetTree).toMatch(/<ThreadListSearch[\s\S]*?className="text-xs"/);
+  it("leaves the rail action row free of a persistent search input", () => {
+    expect(fleetTree).not.toContain("ThreadListSearch");
+    expect(fleetTree).toContain("FleetFilterMenu");
   });
-
 });
 
 /**
@@ -125,10 +129,10 @@ describe("the search box is leaner: full accessible name, lighter visible chrome
  * import.
  */
 describe("the rail gutters its contents, and gutters them the same everywhere", () => {
-  it("expanded, every band takes the footer's own p-3 — the one nobody called cramped", () => {
+  it("expanded, bands share a horizontal gutter while the scroller clears the edge fades", () => {
     expect(fleetTree).toContain('"w-full overflow-y-auto p-3"');
-    expect(sidebar).toContain('collapsed ? "px-2" : "px-3"');
-    expect(sidebar).toContain('collapsed ? "p-2" : "p-3"');
+    expect(sidebar).toContain('collapsed ? "px-2 [@media(pointer:coarse)]:px-0.5" : "border-b border-border px-3"');
+    expect(sidebar).toContain('collapsed ? "p-2 [@media(pointer:coarse)]:px-0.5" : "p-3"');
   });
 
   it("collapsed, every band stays px-2 — 8 + a 32px icon + 8 IS the 48px rail", () => {
@@ -137,21 +141,21 @@ describe("the rail gutters its contents, and gutters them the same everywhere", 
     // Asserted as the two class strings rather than one concatenated
     // expression: the formatter is free to wrap the ternary across lines, and
     // the contract is what each state renders, not where the line breaks.
-    expect(fleetTree).toContain('"w-full overflow-hidden px-2 pt-1"');
+    expect(fleetTree).toContain('"w-full overflow-hidden px-2 pt-1 [@media(pointer:coarse)]:px-0.5"');
     expect(shell).toContain('"w-12"');
   });
 });
 
-describe("one vertical rhythm down the whole rail, at 3x the old 2px", () => {
+describe("roomier vertical spacing preserves compact horizontal controls", () => {
   // Every element that separates two ROWS, named individually rather than
   // counted — symmetry is the entire request, so one survivor at the old 2px
   // is the defect, and a count would be satisfied by any four of the five.
   it.each([
-    ["the list itself", "relative flex flex-1 flex-col gap-1.5 transition-[padding]"],
-    ["the collapse-fade group", "flex min-h-0 flex-1 flex-col gap-1.5 transition-opacity"],
+    ["the list itself", "relative flex flex-1 flex-col gap-3 transition-[padding]"],
+    ["the collapse-fade group", "flex shrink-0 flex-col gap-3 transition-opacity"],
     ["the search and filter row", 'className="flex items-center gap-1.5"'],
-    ["the loading skeleton, which is shaped like the rows", 'className="flex flex-col gap-1.5"'],
-  ])("steps %s by gap-1.5", (_name, className) => {
+    ["the loading skeleton, which is shaped like the rows", 'className="flex flex-col gap-3"'],
+  ])("gives %s its specified spacing", (_name, className) => {
     expect(fleetTree).toContain(className);
   });
 
@@ -159,12 +163,10 @@ describe("one vertical rhythm down the whole rail, at 3x the old 2px", () => {
     expect(sidebar).toContain("flex shrink-0 flex-col gap-1.5 border-t");
   });
 
-  it("keeps the ONE tighter gap, which is inside a row rather than between two", () => {
-    // A workspace row's title line and entity line are one object, and spacing
-    // is the only thing grouping them: widened to the row rhythm they would
-    // read as two rows rather than one. Tighter-within-looser is what makes
-    // the outer rhythm legible at all.
-    expect(fleetTree).toContain("flex min-w-0 flex-1 flex-col items-start gap-0.5");
+  it("keeps body lines closer than neighboring workspace cards", () => {
+    const metrics = code("components/grove/fleet/workspace-metrics.tsx");
+    expect(metrics).toMatch(/flex min-w-0 flex-col gap-1.*data-testid="rail-metadata"/);
+    expect(fleetTree).toContain('className="flex flex-col gap-3"');
   });
 });
 
@@ -184,55 +186,173 @@ describe("the daemon's version and uptime break the rhythm, deliberately", () =>
   });
 });
 
-/**
- * The work panel stacks a SECOND row of controls under `ShellHeader`, which is
- * the only page that does. The header carries no `border-b` by design, so the
- * two rows were touching with nothing between them at all.
- */
-describe("the work panel's tab strip is a layer below the header, not part of it", () => {
-  it("clears the header by 16px — twice the spacing inside either row", () => {
-    expect(workPanel).toContain("flex-col gap-0 bg-background pt-4");
+/** Three adjacent 32px bands read through their closing rules, not gaps. */
+describe("workspace chrome has a fixed three-band budget", () => {
+  it("closes the shell header at its 32px band edge", () => {
+    expect(header).toContain('workspace-header');
+    expect(readFileSync("app/globals.css", "utf8")).toMatch(/\.workspace-header\s*\{\s*min-height: 32px/);
+    expect(header).toContain('border-b border-border');
+    expect(header).not.toContain('h-8');
   });
 
-  it("puts the clearance on the panel, so Work-alone and Split cannot disagree", () => {
-    // The split mounts this same component inside a `ResizablePanel`. Anything
-    // placed in `index.tsx` instead would have to be written twice.
-    expect(header).not.toMatch(/\bpb-\d/);
-    expect(header).not.toMatch(/\bmb-\d/);
+  /**
+   * `size` PICKS THE TYPE and the explicit height picks the band — the vendored
+   * variant welds them, and the caller has always overridden the height. `sm`
+   * therefore bought only the smaller type, which measured 9.6px on the built
+   * app: metadata size on the app's primary navigation.
+   */
+  it("uses the vendor's nav type inside an explicit 32px work band", () => {
+    expect(workPanel).toContain('AdaptiveTabsList');
+    expect(workPanel).toContain('workspace-work-tabs');
+    expect(readFileSync("app/globals.css", "utf8")).toMatch(/\.workspace-work-tabs\s*\{\s*min-height: 32px/);
+    expect(workPanel).not.toContain('"pt-4"');
+    expect(workPanel).not.toContain('activeTab === "diagram" ? "pt-0" : "pt-4"');
+  });
+
+  it("keeps native pane navigation at the rendered type floor with no inter-band gap", () => {
+    const workspace = readFileSync("components/grove/workspace/index.tsx", "utf8");
+    const adaptive = readFileSync("components/grove/workspace/adaptive-tabs.tsx", "utf8");
+    expect(workspace).toContain('AdaptiveTabsList className="h-full"');
+    expect(adaptive).toContain('variant="line"');
+    expect(adaptive).toContain('@/components/ui/tabs');
+    expect(workspace).not.toContain('@/components/assistant-ui/tabs');
+    expect(workspace).not.toContain('mt-[8px]');
+  });
+
+  /**
+   * THE HIT AREA IS PINNED IN GEOMETRY, THE TYPE IS LEFT TO THE RAMP.
+   *
+   * Every one of these bands carried a `max(12px, …)` inline floor, and
+   * measured on the built app that floor was the defect rather than the
+   * safeguard: the chrome held 12px while the content it frames rendered
+   * 9.6-11.2px, so the frame outweighed the picture on every surface at once.
+   * `min-h-[24px]` above is what keeps the pointer and finger targets, which is
+   * a separate decision from how large the label reads (design-system §1).
+   */
+  it("sizes all three bands from the rem ramp, never a fixed pixel floor", () => {
+    const workspace = readFileSync("components/grove/workspace/index.tsx", "utf8");
+    const sources = {
+      header: code("components/grove/shell/shell-header.tsx"),
+      workPanel: code("components/grove/workspace/work-panel.tsx"),
+      workspace: code("components/grove/workspace/index.tsx"),
+    };
+    for (const [name, source] of Object.entries(sources)) {
+      expect(source, name).not.toContain("max(12px");
+      expect(source, name).not.toMatch(/fontSize:/);
+    }
   });
 });
 
-describe("a workspace row is taller, and its title now outranks its entity line by SIZE", () => {
-  it("grew its own padding for a more comfortable row", () => {
-    // Token-wise, so the row can gain padding on the trailing edge (it did, to
-    // clear the row's own menu button) without this failing for a reason that
-    // has nothing to do with the vertical rhythm it is pinning.
-    expect(fleetTree).toMatch(/"h-auto w-full justify-start py-2[^"]*font-normal"/);
-    expect(fleetTree).not.toContain("py-1.5");
+
+describe("the shell keeps its structural edges", () => {
+  it("separates the rail with a border instead of a second width", () => {
+    expect(shell).toContain('border-r border-border');
   });
 
-  it("the title reads at the ramp's default size, not the metadata floor", () => {
-    expect(fleetTree).toContain('text-sm text-content-primary');
+  it("keeps the split separator full-height on its existing border rule", () => {
+    // ONE divider for every split in the app: the workspace's and the
+    // annotation pane's both compose `SplitHandle`, and that atom is where the
+    // full-height rule lives. A second `ResizableHandle` call site is how two
+    // splits come to draw two different dividers.
+    const handle = readFileSync("components/grove/split-handle.tsx", "utf8");
+    expect(handle).toContain('"h-full transition-colors after:w-3');
+    for (const file of ["components/grove/workspace/index.tsx", "components/grove/annotation/annotation-host.tsx"]) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("<SplitHandle");
+      expect(source, file).not.toContain("<ResizableHandle");
+    }
+  });
+});
+
+/**
+ * THE HEADER REPORTS NOTHING ANY MORE — an ABSENCE, so it is pinned as a source
+ * census: there is no runtime artifact to assert against once a component is
+ * gone, and a deleted file plus a surviving import is exactly the shape that
+ * would still typecheck against a stale build.
+ *
+ * The pill was a scrolling sentence of the agent's own prose, sitting one gap
+ * from the pane tabs in a 32px band whose job is to stay still. The claim did
+ * not disappear with it: the same `PhaseView` note renders on the Task card,
+ * where a reader who came to read a status can read one that is not moving.
+ */
+describe("the workspace header navigates and no longer reports", () => {
+  it("mounts no status pill and keeps no space for one", () => {
+    const workspace = readFileSync("components/grove/workspace/index.tsx", "utf8");
+    expect(existsSync("components/grove/workspace/status-pill.tsx")).toBe(false);
+    expect(workspace).not.toContain("StatusPill");
+    expect(workspace).not.toContain("status-pill");
+    expect(workspace).not.toContain("agentStatusProps");
+    // No reserved column, spacer or replacement mark stood in for it.
+    expect(workspace).not.toContain('data-slot="agent-status"');
   });
 
-  it("the entity line stays at the metadata floor, so the title is visibly bigger", () => {
-    expect(fleetTree).toContain(
-      'className="text-content-tertiary flex w-full min-w-0 items-center gap-2 text-xs"',
+  it("leaves the sidebar's looping text and the progress APIs alone", () => {
+    const overflow = readFileSync("components/grove/overflow-text.tsx", "utf8");
+    expect(overflow).toContain("LoopingText");
+    expect(overflow).toContain("useOverflowMotion");
+    // The adapter the pill consumed is still the fleet's, and still exported.
+    expect(readFileSync("lib/grove/adapters/status.ts", "utf8")).toContain(
+      "export function agentStatusProps",
     );
   });
 });
 
-describe("a project name keeps 8 characters before a branch beside it may crowd it out", () => {
-  it("the rail row and the fleet card both apply the shared floor to the project only", () => {
+/** Browser tests measure height and adjacency; these pin the composition boundary. */
+describe("session navigation composes the shared card material", () => {
+  it("uses CardShell without importing or modifying the vendored Card", () => {
+    expect(fleetTree).toContain('from "@/components/grove/card"');
+    expect(fleetTree).not.toContain('from "@/components/ui/card"');
+    expect(fleetTree).not.toContain('h-17 w-full');
+  });
+
+  it("keeps the title in the material band and independent states in the body", () => {
+    const row = code("components/grove/fleet/fleet-tree.tsx").split("function WorkspaceRow")[1];
+    const header = row.match(/<header\b[\s\S]*?<\/header>/)?.[0];
+    expect(header).toBeDefined();
+    expect(header).toContain("surface-header");
+    expect(header).toContain("<LoopingText");
+    expect(header).toContain("text-base");
+    expect(header).not.toContain('data-testid="fleet-row-attention-mark"');
+    expect(header).not.toContain('data-testid="fleet-row-phase-mark"');
+    expect(row).toContain('data-testid="rail-context"');
+  });
+
+  it("uses the same card header and body for the loading skeleton", () => {
+    const skeleton = fleetTree.split("function FleetSkeleton")[1];
+    expect(skeleton).toContain("<CardShell");
+    expect(skeleton).toContain("surface-header");
+    expect(skeleton).not.toContain("h-17");
+  });
+
+  it("keeps options outside the navigation link with an actual pointer floor", () => {
+    const row = code("components/grove/fleet/fleet-tree.tsx").split("function WorkspaceRow")[1];
+    expect(row.indexOf("</Link>")).toBeLessThan(row.indexOf("<DropdownMenuTrigger"));
+    expect(row).toContain("min-h-[28px]");
+    expect(row).toContain("min-w-[28px]");
+    expect(row).not.toContain("opacity-80");
+  });
+});
+
+describe("the sidebar keeps its scanned-text and project identity contracts", () => {
+  it("does not compose the mono branch label, and no rail file asks for font-mono", () => {
+    const metrics = readFileSync("components/grove/fleet/workspace-metrics.tsx", "utf8");
+    for (const source of [fleetTree, sidebar, metrics]) {
+      expect(source).not.toContain("font-mono");
+    }
+    expect(fleetTree).not.toContain("BranchLabel");
+    // The branch keeps its ONE glyph even though the geometry forbids the
+    // label's own anatomy — the mark is imported, never re-chosen.
+    expect(fleetTree).toContain("BRANCH_GLYPH");
+  });
+
+  it("keeps a flat row's project name in the accessible description rather than a third line", () => {
+    expect(fleetTree).toContain('<span className="sr-only">Project: {row.repoName}</span>');
+    expect(fleetTree).not.toContain("PROJECT_MIN_WIDTH");
+  });
+
+  it("the fleet card still applies the project floor — this was a RAIL change only", () => {
     const card = readFileSync("components/grove/fleet/workspace-card.tsx", "utf8");
-    // `\s+` rather than a single space: the formatter wraps a long element
-    // across lines, and which side of the wrap the props land on says nothing
-    // about whether the floor is applied.
-    expect(fleetTree).toMatch(/<ProjectLabel\s+name=\{row\.repoName\}\s+className=\{PROJECT_MIN_WIDTH\}\s*\/>/);
     expect(card).toMatch(/<ProjectLabel\s+name=\{repoName\}\s+className=\{PROJECT_MIN_WIDTH\}\s*\/>/);
-    // Neither site puts the floor on the branch — it is the one side of the
-    // pair that is meant to keep shrinking once the project hits its own.
-    expect(fleetTree).not.toMatch(/<BranchLabel name=\{state\.branch\} className=/);
     expect(card).not.toMatch(/<BranchLabel name=\{state\.branch\} className=/);
   });
 });

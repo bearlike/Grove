@@ -24,6 +24,7 @@ from grove.core.telemetry_backfill import (
 from grove.core.trace import TraceInstrumentor, TraceManifest, build_span_sink, price_book_estimator
 from grove.core.usage._pricing import PriceBook
 from grove.core.usage._store import UsageStore
+from grove.core.usage.pricing_sources import PricingCatalog
 
 
 @dataclass(slots=True, frozen=True)
@@ -95,8 +96,16 @@ class UsageTelemetryBackfill:
         store: UsageStore,
         ledger_path: Path | None = None,
         clock: Callable[[], datetime] | None = None,
+        prices: PriceBook | None = None,
     ) -> None:
         self._cfg = cfg
+        self._prices = (
+            prices
+            if prices is not None
+            else PriceBook(
+                PricingCatalog(cfg.usage.pricing, cache_path=paths.usage_pricing_path()).load()
+            )
+        )
         self._store = store
         self._ledger_path = ledger_path or paths.telemetry_ledger_path()
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -123,7 +132,7 @@ class UsageTelemetryBackfill:
         instrumentor = TraceInstrumentor(
             self._cfg.telemetry,
             sink=sink,
-            cost_estimator=price_book_estimator(PriceBook(self._cfg.usage.pricing)),
+            cost_estimator=price_book_estimator(self._prices),
         )
         ledger = None
         probe = None

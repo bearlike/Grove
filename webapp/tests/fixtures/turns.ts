@@ -16,9 +16,33 @@ import type { AgentQuestionView, SessionTurnView, TodoListView } from "@/lib/gro
  */
 
 /** The five entry roles a real session produced, in the order they occurred. */
+/**
+ * Grove's own attachment block, as `GroveInstruction.attachments` appends it to
+ * the human's text (`core/instructions.py`). Two rows on purpose: one with the
+ * byte count the engine publishes now, one without — the shape a transcript
+ * written before the count existed still carries.
+ */
+export const ATTACHMENT_BLOCK = [
+  '<grove-instruction kind="attachments">',
+  "The user attached 2 files to the message above. Each is on disk in this workspace at the path shown; read whichever you need.",
+  "",
+  "- openapi.yaml — /workspace/.grove/attachments/7f3c9a1b2c4d/openapi.yaml (2048 bytes)",
+  "- health-check.png — /workspace/.grove/attachments/0011aabbccdd/health-check.png",
+  "</grove-instruction>",
+].join("\n");
+
+/** A prompt long enough to overflow the six-line clamp at any pane width. */
+const LONG_BRIEF = [
+  "Add a health endpoint to the API.",
+  "It should answer GET /healthz with the daemon's own version, its uptime, and whether every configured project root is readable — one line per root, in the order the config lists them.",
+  "Keep the handler off the executor: nothing it reads may block the loop, so the root check is a stat and never a git subprocess.",
+  "The response is JSON; a root that is unreadable is reported by name with the OS error rather than dropped, because a silently-missing project is the failure this endpoint exists to catch.",
+  "Add a test that stubs one unreadable root and asserts both the 200 and the named error, then wire the route into the OpenAPI export so the generated client picks it up.",
+].join("\n\n");
+
 export const TRANSCRIPT_TURNS: SessionTurnView[] = [
   {
-    user_text: "Add a health endpoint to the API.",
+    user_text: `${LONG_BRIEF}\n\n${ATTACHMENT_BLOCK}`,
     started_at: "2026-08-10T06:12:03.481000Z",
     entries: [
       { role: "assistant", text: "I'll orient on the codebase first.", question: null, file_edit: null, todo: null },
@@ -113,19 +137,30 @@ export const QUESTION_BATCH: AgentQuestionView[] = [
   },
 ];
 
-/** An `ExitPlanMode` confirm: a lone question, no options, the plan as prompt. */
+/**
+ * An `ExitPlanMode` approval: the plan as Markdown, plus the dialog's own rows.
+ *
+ * The prompt is deliberately real Markdown — a heading, a fenced block and a
+ * list — because the defect this surface exists to fix was a plan rendered as
+ * one run-on line of plain text. A fixture of bare sentences cannot fail that
+ * way and would bless the bug.
+ */
 export const PLAN_CONFIRM: AgentQuestionView[] = [
   {
     id: "toolu_plan#0",
     group_id: "toolu_plan",
-    kind: "confirm",
-    prompt: "1. Add health.py\n2. Register the route\n3. Add a test",
+    kind: "plan_approval",
+    prompt: "# Add a health endpoint\n\n## Steps\n\n- Add `health.py`\n- Register the route\n\n```py\nprint(1)\n```",
     header: null,
     source_tool: "ExitPlanMode",
     multiselect: false,
     answered: false,
     answer: null,
-    options: [],
+    options: [
+      { label: "Approve, and stop asking for this session", description: "Runs the plan and stops prompting." },
+      { label: "Approve, approving edits as they come", description: "Runs the plan; each edit still asks." },
+      { label: "Keep planning, with feedback", description: "Rejects this plan and sends your note back." },
+    ],
   },
 ];
 

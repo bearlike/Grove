@@ -10,25 +10,30 @@ the identical one production traffic takes — not a hand-rolled stand-in.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from loguru import logger
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
 from grove.core.agents.model import AgentMessage, ContentBlock, TokenUsage
 from grove.core.config import ModelPriceConfig, TelemetryConfig, UsagePricingConfig
 from grove.core.telemetry.semconv import ChatMessage
+from grove.core.telemetry.shell import ToolSource
 from grove.core.trace import (
     SpanRecord,
     TraceInstrumentor,
+    _AcknowledgingSpanProcessor,
     _trace_transport,
     build_span_sink,
     derive_span_id,
@@ -271,6 +276,7 @@ def test_tool_record_omits_output_while_the_call_is_still_in_flight() -> None:
         start_time=_ts("2026-07-08T10:00:00"),
         end_time=_ts("2026-07-08T10:00:00"),
         tool_input={"file_path": "x.py"},
+        source=ToolSource.TRANSCRIPT,
     )
     assert "langfuse.observation.output" not in record.attributes
 
@@ -306,6 +312,7 @@ def test_sink_from_processor_exports_deterministic_ids_and_parent_link(
             end_time=_ts("2026-07-08T10:00:02"),
             tool_call_id="tu1",
             tool_input={"file_path": "x.py"},
+            source=ToolSource.TRANSCRIPT,
         )
     )
     sink.flush()
@@ -350,6 +357,127 @@ def test_sink_flush_refuses_an_unaccepted_processor_result(
 
     with pytest.raises(RuntimeError, match="did not flush"):
         sink.flush()
+
+
+@dataclass
+class _RecordedExporter:
+    """An exporter whose scripted outcomes leave batches inspectable."""
+
+    outcomes: deque[SpanExportResult | Exception]
+    batches: list[tuple[ReadableSpan, ...]]
+    on_export: Callable[[], None] | None = None
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        self.batches.append(tuple(spans))
+        if self.on_export is not None:
+            self.on_export()
+        outcome = self.outcomes.popleft() if self.outcomes else SpanExportResult.SUCCESS
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def shutdown(self) -> None:
+        pass
+
+
+def _acknowledging_processor(
+    exporter: _RecordedExporter,
+    **kwargs: Any,
+) -> _AcknowledgingSpanProcessor:
+    return _AcknowledgingSpanProcessor(exporter, **kwargs)
+
+
+def _emit_finished_spans(processor: Any, count: int) -> None:
+    for _ in range(count):
+        processor.on_end(object())
+
+
+def test_acknowledging_processor_batches_before_exporting() -> None:
+    exporter = _RecordedExporter(deque(), [])
+    processor = _acknowledging_processor(exporter, batch_size=2)
+    _emit_finished_spans(processor, 3)
+
+    assert processor.force_flush() is True
+    assert [len(batch) for batch in exporter.batches] == [2, 1]
+
+
+def test_flushing_nothing_within_no_time_succeeds() -> None:
+    """An empty queue is FLUSHED, whatever budget the caller allowed.
+
+    The OpenTelemetry contract is that ``force_flush`` reports whether work is
+    outstanding, and a caller passing ``timeout_millis=0`` is asking exactly
+    that question. Checking the deadline before the queue answered "I ran out
+    of time" for a processor with nothing to do — a shutdown path reading that
+    as unexported spans reports data loss that never happened.
+    """
+    exporter = _RecordedExporter(deque(), [])
+    processor = _acknowledging_processor(exporter, batch_size=2)
+
+    assert processor.force_flush(timeout_millis=0) is True
+    assert exporter.batches == []
+
+
+def test_acknowledging_processor_retains_failed_and_unattempted_spans() -> None:
+    exporter = _RecordedExporter(
+        deque([SpanExportResult.FAILURE, SpanExportResult.SUCCESS]),
+        [],
+    )
+    processor = _acknowledging_processor(
+        exporter,
+        batch_size=2,
+        retry_backoff_seconds=0,
+        max_retry_backoff_seconds=0,
+    )
+    _emit_finished_spans(processor, 3)
+
+    assert processor.force_flush() is False
+    assert [len(batch) for batch in exporter.batches] == [2]
+    assert processor.force_flush() is True
+    assert [len(batch) for batch in exporter.batches] == [2, 2, 1]
+
+
+def test_acknowledging_processor_refuses_overload_and_reports_it_on_flush() -> None:
+    exporter = _RecordedExporter(deque(), [])
+    processor = _acknowledging_processor(exporter, max_pending_items=2)
+    _emit_finished_spans(processor, 3)
+
+    assert processor.force_flush() is False
+    # Rejection must not stop accepted work draining: otherwise the rejected
+    # replay cannot fit in a queue whose accepted predecessors remain stuck.
+    assert [len(batch) for batch in exporter.batches] == [2]
+    # A later empty flush cannot make a rejected record look acknowledged;
+    # only re-offering that span can clear its refusal marker.
+    assert processor.force_flush() is False
+
+
+def test_acknowledging_processor_refuses_a_span_that_exceeds_byte_capacity() -> None:
+    exporter = _RecordedExporter(deque(), [])
+    processor = _acknowledging_processor(exporter, max_pending_bytes=1)
+    _emit_finished_spans(processor, 1)
+
+    assert processor.force_flush() is False
+    assert exporter.batches == []
+
+
+def test_acknowledging_processor_enforces_deadline_across_batches() -> None:
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    def advance() -> None:
+        nonlocal now
+        now += 0.6
+
+    exporter = _RecordedExporter(deque(), [], on_export=advance)
+    processor = _acknowledging_processor(exporter, batch_size=1, clock=clock)
+    _emit_finished_spans(processor, 3)
+
+    assert processor.force_flush(timeout_millis=1_000) is False
+    assert [len(batch) for batch in exporter.batches] == [1, 1]
+    now += 2.0
+    assert processor.force_flush() is True
+    assert [len(batch) for batch in exporter.batches] == [1, 1, 1]
 
 
 # ─── disabled / misconfigured → no-op ────────────────────────────────────────
@@ -728,8 +856,9 @@ def test_replay_advances_the_watermark_only_on_a_successful_export(
                 raise RuntimeError("export blew up")
             real(record)
 
-        def flush(self) -> None:
+        def flush(self) -> bool:
             real.flush()
+            return True
 
     exporter = in_memory[0]
     instrumentor = TraceInstrumentor(TelemetryConfig(enabled=True), sink=_FlakySink())

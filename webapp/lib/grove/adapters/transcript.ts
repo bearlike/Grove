@@ -1,7 +1,9 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
 
 import type { AgentQuestionView, DigestEntryView, SessionTurnView } from "@/lib/grove/api";
+import { messageAttachments, splitAttachments } from "./attachments";
 import type { ToolCallView } from "./tool-call";
+import type { AgentMessageData } from "./agent-message";
 
 /**
  * Grove's wire transcript → assistant-ui messages.
@@ -24,6 +26,7 @@ import type { ToolCallView } from "./tool-call";
 export const GROVE_DATA_PART = {
   note: "data-note",
   notification: "data-notification",
+  mailbox: "data-mailbox",
   question: "data-question",
   fileEdit: "data-file-edit",
   continuation: "data-continuation",
@@ -34,6 +37,7 @@ export const GROVE_DATA_PART = {
 export const GROVE_DATA_NAME = {
   note: "note",
   notification: "notification",
+  mailbox: "mailbox",
   question: "question",
   fileEdit: "file-edit",
   continuation: "continuation",
@@ -210,11 +214,20 @@ function buildTurnMessages(
   const nextId = (): string => `grove-msg-${nextIndex++}`;
 
   const createdAt = parseTimestamp(turn.started_at);
+  // The files a human attached ride the turn's own text as Grove's fenced
+  // block — the daemon has no structured field for them — so they are lifted
+  // back out into `attachments` here, the same field a just-sent message
+  // carries. The reader then sees which files went with which message instead
+  // of a paragraph of paths at the bottom of it.
+  const body = turn.user_text ? splitAttachments(turn.user_text) : null;
   messages.push(
-    turn.user_text
+    body
       ? {
           role: "user",
-          content: [{ type: "text", text: turn.user_text }],
+          content: body.text ? [{ type: "text" as const, text: body.text }] : [],
+          ...(body.attachments.length > 0
+            ? { attachments: messageAttachments(body.attachments) }
+            : {}),
           id: nextId(),
           ...(createdAt ? { createdAt } : {}),
         }
@@ -257,7 +270,9 @@ function buildTurnMessages(
     // has an empty prompt), so it is read before the blank-text guard that
     // drops empties of every other role.
     if (entry.role === "question") {
-      if (!entry.question) continue;
+      // An open question belongs exclusively to the interactive footer. Letting
+      // it into this historical stream would render the same interaction twice.
+      if (!entry.question || !entry.question.answered) continue;
       flushToolRun();
       messages.push(
         dataMessage(nextId(), GROVE_DATA_PART.question, { question: entry.question }),
@@ -274,17 +289,54 @@ function buildTurnMessages(
       messages.push(dataMessage(nextId(), GROVE_DATA_PART.compaction, compaction));
       continue;
     }
-    // The agent's todo list is a full REWRITE on every write, so only the
-    // latest matters and it is pinned as a sibling of the stream — see
-    // `adapters/todo.ts`. Keeping it out here is also what keeps it off the
-    // note fallback below, which it would otherwise hit.
-    if (entry.role === "todo") continue;
-    if (!entry.text) continue;
-
-    if (entry.role === "tool") {
+    // The board stays pinned outside the stream, but its recorded invocation
+    // belongs in the tool timeline just like every other non-edit call.
+    if (entry.role === "todo") {
+      if (entry.tool) toolRun.push(toolCallPart(entry));
+      continue;
+    }
+    if (entry.mailbox) {
+      // NOT a flush. A mailbox delivery arrives INSIDE a run of tool calls —
+      // the send that carried it is itself a tool call — so closing the run
+      // here split one continuous sequence into two collapsible groups with a
+      // loose card wedged between them, which is what the transcript looked
+      // like until 2026-09-15. The `todo` role above already learned this: a
+      // row that belongs to the run rides the run.
+      //
+      // The card still renders whole: `ToolCallPart` already draws an
+      // `AgentMessage` rather than a tool row when it recognises one (that is
+      // how an OUTGOING send has always rendered inside a group), so the part
+      // carries the envelope on assistant-ui's own `artifact` slot and the
+      // renderer reads it back.
+      toolRun.push(
+        mailboxPart(entry, {
+          from: entry.mailbox.sender,
+          to: entry.mailbox.recipient ?? "This session",
+          subject: entry.mailbox.subject,
+          body: entry.mailbox.body,
+          // The wire's own answer, never a guess from which fields are filled
+          // — see `AgentMessageData.handoff`. Absent on an older daemon's
+          // payload, which decodes as the conservative `notice`.
+          handoff: entry.mailbox.kind === "peer",
+        }),
+      );
+      continue;
+    }
+    if (entry.role === "tool" && (entry.text || entry.tool)) {
       toolRun.push(toolCallPart(entry));
       continue;
     }
+    // AN EDIT IS A TOOL CALL, so it belongs to the run rather than breaking it.
+    // It used to flush — which split one continuous piece of work into a tool
+    // group, a standalone diff card, and another tool group, so a run that read
+    // a file, edited it and ran the tests read as three unrelated blocks. The
+    // diff rides the part as `fileEdit` and the step renders the native card
+    // when expanded, so nothing about the diff itself is lost.
+    if (entry.role === "file_edit" && entry.file_edit) {
+      toolRun.push(fileEditCallPart(entry, entry.file_edit));
+      continue;
+    }
+    if (!entry.text) continue;
     flushToolRun();
 
     switch (entry.role) {
@@ -299,20 +351,10 @@ function buildTurnMessages(
         break;
       case "file_edit":
         // A payload-less edit degrades to the same quiet note an unknown role
-        // gets, never a blank card.
+        // gets, never a blank card. (An edit WITH a payload never reaches here
+        // — it stays in the tool run above, because an edit is a tool call.)
         messages.push(
-          entry.file_edit
-            ? dataMessage(nextId(), GROVE_DATA_PART.fileEdit, {
-                path: entry.file_edit.path,
-                displayPath: entry.file_edit.display_path,
-                oldText: entry.file_edit.old_text,
-                newText: entry.file_edit.new_text,
-                tool: entry.tool ?? null,
-              })
-            : dataMessage(nextId(), GROVE_DATA_PART.note, {
-                tone: "status",
-                text: entry.text,
-              }),
+          dataMessage(nextId(), GROVE_DATA_PART.note, { tone: "status", text: entry.text }),
         );
         break;
       case "summary":
@@ -351,7 +393,84 @@ type ToolCallPart = {
   toolCallId?: string;
   /** The wire detail, carried on assistant-ui's own UI-only slot. */
   artifact?: ToolCallView;
+  /**
+   * An INCOMING peer delivery riding inside a tool run.
+   *
+   * Set only by {@link mailboxPart}. `ToolCallPart` reads it and draws the
+   * mailbox card instead of a timeline row, which is what lets a delivery sit
+   * in the same collapsible group as the calls around it rather than splitting
+   * the run in two. An outgoing send needs no equivalent — it IS a tool call,
+   * so the renderer recovers it from `artifact` through `outgoingAgentMessage`.
+   */
+  groveMailbox?: AgentMessageData;
+  /**
+   * The diff an EDIT call produced, riding inside a tool run.
+   *
+   * Same mechanism as `groveMailbox` and for the same reason: `artifact` is
+   * contracted as the wire's `ToolCallView`, so a second meaning there is how
+   * two readers come to disagree about what that field holds. `ToolCallPart`
+   * reads this and expands the step into the native split-diff card.
+   */
+  groveFileEdit?: FileEditPartData;
 };
+
+/**
+ * One incoming peer delivery, shaped as a group part.
+ *
+ * `type: "tool-call"` is what the vendored group renders, so a non-call row can
+ * only ride the run by wearing that type. The envelope travels on its own key
+ * rather than inside `artifact`, because `artifact` is contracted as the wire's
+ * `ToolCallView` and a second meaning on one field is how two readers come to
+ * disagree about what it holds.
+ *
+ * `toolName` falls back to a readable label rather than an empty string: it is
+ * what the group's `title` attribute and any future census would print, and an
+ * unnamed part reads as a bug in the timeline rather than as a message.
+ */
+function mailboxPart(entry: DigestEntryView, message: AgentMessageData): ToolCallPart {
+  const tool = entry.tool;
+  return {
+    type: "tool-call",
+    toolName: tool?.name || "Mailbox",
+    argsText: "",
+    ...(tool?.tool_use_id ? { toolCallId: tool.tool_use_id } : {}),
+    ...(tool ? { artifact: tool } : {}),
+    groveMailbox: message,
+  };
+}
+
+/**
+ * One file edit, shaped as a group part so it rides the run it belongs to.
+ *
+ * The diff travels on `groveFileEdit` rather than becoming its own
+ * `data-file-edit` message, which is what folds an edit into the surrounding
+ * timeline instead of splitting it. `toolName` prefers the provider's own name
+ * (`Edit`, `Write`, `apply_patch`) so the catalog resolves the right verb and
+ * mark; an edit the provider did not name still reads as one rather than as an
+ * unknown tool.
+ */
+function fileEditCallPart(
+  entry: DigestEntryView,
+  edit: NonNullable<DigestEntryView["file_edit"]>,
+): ToolCallPart {
+  const tool = entry.tool;
+  return {
+    type: "tool-call",
+    toolName: tool?.name || "Edit",
+    argsText: edit.display_path,
+    ...(tool?.tool_use_id ? { toolCallId: tool.tool_use_id } : {}),
+    ...(tool?.result === null || tool?.result === undefined ? {} : { result: tool.result }),
+    ...(tool?.status === "error" ? { isError: true } : {}),
+    ...(tool ? { artifact: tool } : {}),
+    groveFileEdit: {
+      path: edit.path,
+      displayPath: edit.display_path,
+      oldText: edit.old_text,
+      newText: edit.new_text,
+      tool: tool ?? null,
+    },
+  };
+}
 
 /**
  * One digest entry → one native tool-call part.
@@ -446,6 +565,7 @@ function dataMessage(
   type: (typeof GROVE_DATA_PART)[keyof typeof GROVE_DATA_PART],
   data:
     | NotePartData
+    | AgentMessageData
     | NotificationPartData
     | QuestionPartData
     | FileEditPartData

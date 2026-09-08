@@ -30,6 +30,7 @@ from collections import deque
 from collections.abc import Callable
 
 from grove.core.activity import ActivityService, DashboardDelta
+from grove.core.admission import Admission, AdmissionLimits, BoundedInbox, InboxClosed
 from grove.core.contracts.activity import DashboardEvent
 from grove.daemon._audience import _PollAudience
 
@@ -63,12 +64,19 @@ class _SseHub:
         self._queues: set[asyncio.Queue[DashboardEvent]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._unsub: Callable[[], None] | None = None
+        self._intake = BoundedInbox[DashboardEvent](
+            AdmissionLimits(max_items=queue_size, max_bytes=16 * 1024 * 1024)
+        )
+        self._drain_task: asyncio.Task[None] | None = None
+        self._overflowed = False
 
     # ─── lifecycle ─────────────────────────────────────────────────────────
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Bind the loop and subscribe to the service. Call once, at lifespan-entry."""
         self._loop = loop
+        self._intake.bind()
+        self._drain_task = asyncio.create_task(self._drain(), name="grove-sse-delivery")
         self._unsub = self._service.subscribe(self._on_delta)
 
     def stop(self) -> None:
@@ -76,6 +84,11 @@ class _SseHub:
         if self._unsub is not None:
             self._unsub()
         self._unsub = None
+        self._intake.close()
+        if self._drain_task is not None:
+            self._drain_task.cancel()
+            self._drain_task = None
+        self._loop = None
         for queue in list(self._queues):
             self.unregister(queue)
         self._ring.clear()
@@ -104,7 +117,7 @@ class _SseHub:
         When the gap is wider than the buffer (or the buffer is empty), the caller
         should send a fresh full snapshot instead of a partial replay.
         """
-        return bool(self._ring) and self._ring[0].seq <= last_event_id + 1
+        return bool(self._ring) and self._ring[0].seq <= last_event_id + 1 <= self._ring[-1].seq + 1
 
     def replay_since(self, last_event_id: int) -> list[DashboardEvent]:
         return [event for event in self._ring if event.seq > last_event_id]
@@ -121,12 +134,41 @@ class _SseHub:
         if loop is None:
             return
         event = DashboardEvent.from_delta(delta)
-        loop.call_soon_threadsafe(self._publish, event)
+        result = self._intake.offer(event, size_bytes=len(event.model_dump_json().encode()))
+        if result in (Admission.FULL, Admission.TOO_LARGE):
+            self._overflowed = True
+
+    async def _drain(self) -> None:
+        while True:
+            try:
+                delivery = await self._intake.take()
+            except InboxClosed:
+                return
+            try:
+                if self._overflowed:
+                    self._overflowed = False
+                    self._ring.clear()
+                    snapshot, cursor = self._service.snapshot_with_cursor()
+                    self._publish(DashboardEvent.snapshot_event(snapshot, seq=cursor))
+                else:
+                    self._publish(delivery.value)
+            finally:
+                self._intake.complete(delivery)
+
+    def publish(self, event: DashboardEvent) -> None:
+        """Publish a daemon-owned small event on the loop."""
+        self._publish(event)
 
     def _publish(self, event: DashboardEvent) -> None:
         self._ring.append(event)
         for queue in list(self._queues):
-            _offer(queue, event)
+            if queue.full():
+                while not queue.empty():
+                    queue.get_nowait()
+                snapshot, cursor = self._service.snapshot_with_cursor()
+                queue.put_nowait(DashboardEvent.snapshot_event(snapshot, seq=cursor))
+            else:
+                _offer(queue, event)
 
 
 def _offer(queue: asyncio.Queue[DashboardEvent], event: DashboardEvent) -> None:

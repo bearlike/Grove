@@ -87,6 +87,7 @@ class HostPreflight:
             self._container_tmux(),
             self._container_firewall(),
             self._telemetry(),
+            self._mewbo(),
             self._telemetry_content_owner(),
             *self._agent_clis(),
         ]
@@ -367,6 +368,55 @@ class HostPreflight:
             name="telemetry",
             ok=True,
             detail="credentials resolve; OTLP exporter installed",
+            required_for="optional",
+        )
+
+    def _mewbo(self) -> CheckResult:
+        """A configured mewbo agent: does its API key actually resolve here?
+
+        The failure is silent in the one way that matters: `MewboClient` sends
+        NO auth header at all when `mewbo.api_key_env` names a variable the
+        process does not carry, so the config reads fine, `grove ls` is happy,
+        and the first symptom is a create failing at
+        ``POST /api/sessions returned 401`` after the worktree already exists.
+        Measured on the reference host: the daemon runs under systemd with its
+        own environment, so a key exported in the user's shell is present for
+        the CLI and absent for every workspace the daemon creates — the same
+        asymmetry `telemetry.env_file` exists to close one section over.
+
+        Scoped ``optional`` because it gates no RUNTIME: a host with no mewbo
+        agent in its roster must not be told anything, and one with a mewbo
+        agent still creates host and container workspaces normally. Gated on
+        the roster rather than on the section, so a default config reports
+        nothing — a check that fires for everybody is a check nobody reads.
+        """
+        roster = [agent for agent in self._cfg.agents if agent.kind == "mewbo"]
+        if not roster:
+            return CheckResult(
+                name="mewbo",
+                ok=True,
+                detail="no mewbo agent configured",
+                required_for="optional",
+            )
+        names = ", ".join(agent.name for agent in roster)
+        variable = self._cfg.mewbo.api_key_env
+        if not os.environ.get(variable):
+            return CheckResult(
+                name="mewbo",
+                ok=False,
+                detail=f"{names} configured; {variable} carries no value here",
+                hint=(
+                    f"export {variable} in the environment Grove itself runs in "
+                    "(a service-managed daemon reads its environment once, at "
+                    "start, so a shell export does not reach it); without it "
+                    "Grove sends no API key and every mewbo create fails 401"
+                ),
+                required_for="optional",
+            )
+        return CheckResult(
+            name="mewbo",
+            ok=True,
+            detail=f"{names} configured; {variable} resolves",
             required_for="optional",
         )
 

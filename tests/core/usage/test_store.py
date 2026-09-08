@@ -2,9 +2,39 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
+import pytest
+
+from grove.core import paths
+from grove.core.usage._schema import SCHEMA_VERSION
 from grove.core.usage._store import UsageStore
+
+_DEFAULT_USAGE_DB_PATH = paths.usage_db_path
+
+
+def test_newer_cache_is_never_dropped_by_an_older_reader(tmp_path: Path) -> None:
+    path = tmp_path / "usage.db"
+    seed = UsageStore(path)
+    seed.set_meta("schema_version", str(SCHEMA_VERSION + 1))
+    seed.set_meta("sentinel", "preserved")
+    seed.close()
+    reader = UsageStore(path)
+    with pytest.raises(sqlite3.DatabaseError, match="newer than supported"):
+        reader.connect()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT value FROM meta WHERE key='sentinel'").fetchone() == (
+            "preserved",
+        )
+        assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == (
+            str(SCHEMA_VERSION + 1),
+        )
+
+
+def test_default_cache_filename_is_schema_specific() -> None:
+    assert _DEFAULT_USAGE_DB_PATH().name == f"usage-v{SCHEMA_VERSION}.sqlite3"
+    assert paths.usage_pricing_path().name == "usage-pricing.json"
 
 
 def test_busy_timeout_pragma_defaults_to_five_seconds(tmp_path: Path) -> None:

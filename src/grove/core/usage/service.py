@@ -16,6 +16,7 @@ from grove.core.registry import RepoRegistry
 from grove.core.usage._pricing import PriceBook
 from grove.core.usage._store import UsageStore
 from grove.core.usage.insights import BashCommandRanking, InsightEngine
+from grove.core.usage.pricing_sources import PricingCatalog
 from grove.core.usage.projector import UsageProjector
 from grove.core.usage.query import UsageQuery
 from grove.core.usage.quota import QuotaCollector
@@ -41,12 +42,19 @@ class UsageService:
         self._store = UsageStore(
             db_path or paths.usage_db_path(), busy_timeout_ms=cfg.usage.busy_timeout_ms
         )
+        self._pricing = PricingCatalog(
+            cfg.usage.pricing,
+            cache_path=(
+                db_path.with_name("usage-pricing.json") if db_path else paths.usage_pricing_path()
+            ),
+        )
+        self._prices = PriceBook(self._pricing.load())
         self._projector = UsageProjector(
-            cfg=cfg, registry=registry, store=self._store, clock=self._clock
+            cfg=cfg, registry=registry, store=self._store, clock=self._clock, prices=self._prices
         )
         self._quota = quota or QuotaCollector(cfg=cfg, clock=self._clock)
         self._prune_deselected_quota_snapshots()
-        prices = PriceBook(cfg.usage.pricing)
+        prices = self._prices
         self._query = UsageQuery(store=self._store, prices=prices, cfg=cfg)
         self._series = UsageSeriesQuery(
             store=self._store, prices=prices, cfg=cfg, coverage=self._query.coverage
@@ -55,23 +63,28 @@ class UsageService:
         self._bash = BashCommandRanking(store=self._store, cfg=cfg)
 
     def summary(self, filters: UsageFilters) -> UsageSummaryView:
-        return self._query.summary(filters)
+        with self._store.lock:
+            return self._query.summary(filters)
 
     def activity(self, filters: UsageFilters, *, metric: UsageMetric) -> UsageActivityView:
-        return self._query.activity(filters, metric=metric)
+        with self._store.lock:
+            return self._query.activity(filters, metric=metric)
 
     def sessions(
         self, filters: UsageFilters, *, cursor: str | None, limit: int, sort: UsageSessionSort
     ) -> UsageSessionPageView:
-        return self._query.sessions(filters, cursor=cursor, limit=limit, sort=sort)
+        with self._store.lock:
+            return self._query.sessions(filters, cursor=cursor, limit=limit, sort=sort)
 
     def breakdown(self, filters: UsageFilters, *, dimension: UsageDimension) -> UsageBreakdownView:
-        return self._query.breakdown(filters, dimension=dimension)
+        with self._store.lock:
+            return self._query.breakdown(filters, dimension=dimension)
 
     def series(
         self, filters: UsageFilters, *, dimension: UsageDimension, metric: UsageMetric
     ) -> UsageSeriesView:
-        return self._series.series(filters, dimension=dimension, metric=metric)
+        with self._store.lock:
+            return self._series.series(filters, dimension=dimension, metric=metric)
 
     def quotas(self) -> UsageQuotasView:
         accounts = self._quota.snapshot()
@@ -86,6 +99,11 @@ class UsageService:
 
     def refresh(self, *, force: bool) -> UsageRefreshView:
         started = time.monotonic()
+        refreshed_prices = self._pricing.refresh()
+        # Publish one price snapshot between reads, never halfway through a
+        # multi-query aggregate. Gateway I/O stays outside the render lock.
+        with self._store.lock:
+            self._prices.replace(refreshed_prices)
         projected = self._projector.refresh(force=force)
         self._query.refresh_cost_cache()
         accounts = self._quota.refresh()
@@ -118,6 +136,7 @@ class UsageService:
             cfg=self._cfg,
             store=self._store,
             clock=self._clock,
+            prices=self._prices,
         ).run(dry_run=dry_run, limit=limit, settled_for=settled_for)
 
     def close(self) -> None:

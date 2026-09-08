@@ -16,12 +16,12 @@ in-process state".
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 # How Grove came to know about a session. ``grove_launched`` is the deterministic
 # path (Grove minted the ``--session-id``); the other two are out-of-band adoption.
@@ -80,7 +80,9 @@ class AgentSession:
 # A structured question an agent asked the user. One closed set of
 # kinds drives the client's rendering affordance; it is provider-neutral — the
 # adapters map a native tool call onto it, never the reverse.
-AgentQuestionKind = Literal["single_select", "multi_select", "free_text", "confirm"]
+AgentQuestionKind = Literal[
+    "single_select", "multi_select", "free_text", "confirm", "plan_approval"
+]
 
 # The native tool names that *are* a question. Single source of truth: the
 # normalizer below recognizes exactly these, and both providers' status paths
@@ -105,6 +107,52 @@ class AgentQuestionOption:
 
     label: str
     description: str | None = None
+
+
+#: The plan dialog's own choices, in the order Claude Code paints them.
+#:
+#: **These are POSITIONS, not labels.** Answering a plan is a mode transition
+#: rather than a payload — the mode switch runs inside ``ExitPlanMode``'s own
+#: body (``{from:"plan", to:prePlanMode, trigger:"exit_plan_mode"}``) and the
+#: destination is whichever row the human lands on. Measured 2026-09-13 on
+#: Claude Code 2.1.270: no hook can answer this. A ``PreToolUse`` or
+#: ``PermissionRequest`` ``allow`` fires correctly and is then IGNORED — the
+#: dialog stays up and the session stays in plan mode — while ``deny`` on either
+#: works. So the only channel that approves a plan is selecting a row, and Grove
+#: renders the real rows rather than inventing a decision the dialog owns.
+#:
+#: The labels here are Grove's own words on purpose. A dialog's rendered text is
+#: not a contract: option 1 read ``Yes, and switch to BYPASS PERMISSIONS`` on one
+#: build and ``Yes, and use auto mode`` on 2.1.270, one version apart. Grove
+#: never reads the pane to find a row — it counts from the top, which is the
+#: stable part — so a relabelled row still selects correctly and only Grove's
+#: description of it would age. ``description`` states the CONSEQUENCE, because
+#: "approve" and "approve and stop asking me for the rest of this session" are
+#: materially different acts and a dashboard must not blur them.
+PLAN_APPROVAL_OPTIONS: Final[tuple[AgentQuestionOption, ...]] = (
+    AgentQuestionOption(
+        label="Approve, and stop asking for this session",
+        description=(
+            "Runs the plan and switches the session out of per-edit approval, "
+            "so later tool calls will not prompt. Broadest, and it outlives this plan."
+        ),
+    ),
+    AgentQuestionOption(
+        label="Approve, approving edits as they come",
+        description="Runs the plan; each file edit still asks before it happens.",
+    ),
+    AgentQuestionOption(
+        label="Keep planning, with feedback",
+        description=(
+            "Rejects this plan and sends your note back, so the agent revises "
+            "and asks again. Stays in plan mode."
+        ),
+    ),
+)
+
+#: How many ``Down`` presses reach each option from the dialog's initial row.
+#: Position is the whole addressing scheme; see :data:`PLAN_APPROVAL_OPTIONS`.
+PLAN_APPROVAL_FIRST_ROW: Final = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -173,8 +221,9 @@ class AgentQuestion:
                 cls(
                     id=f"{call_id}#0",
                     group_id=call_id,
-                    kind="confirm",
+                    kind="plan_approval",
                     prompt=prompt,
+                    options=PLAN_APPROVAL_OPTIONS,
                     source_tool="ExitPlanMode",
                 ),
             )
@@ -243,17 +292,77 @@ class AgentQuestion:
         """
         return replace(self, answered=True, answer=answer)
 
+    @property
+    def selects_a_mode(self) -> bool:
+        """Whether answering this picks a DIALOG ROW rather than supplying text.
+
+        The one discriminator for the plan path, and it is deliberately a
+        property of the question rather than a ``kind ==`` test spread across the
+        manager, the daemon and two clients. Everything else Grove answers is a
+        payload: cancel the widget, say the answer in words, and the agent has
+        what it needs. A plan approval is a *mode transition* that only the
+        provider's own dialog can perform, so the answer has to arrive as a
+        position in that dialog.
+        """
+        return self.kind == "plan_approval"
+
+    @staticmethod
+    def plan_mismatch(
+        questions: Sequence[AgentQuestion], selections: Sequence[AnswerSelection]
+    ) -> str | None:
+        """Why *selections* does not answer *questions*, or ``None`` if it does.
+
+        The rules a wire model structurally cannot check, because each needs the
+        captured questions the client never sent back: one item per question in
+        the captured order, and every index naming an option that exists.
+        Everything the picker grammar used to add on top of these — free text
+        only on a single-select, no text beside a choice — is gone with the
+        picker, because an ordinary answer is now prose rather than a sequence
+        of keypresses.
+
+        The one exception is a question that :attr:`selects_a_mode`, which must
+        name EXACTLY ONE option. That is not the picker grammar coming back: it
+        is that a plan answer is delivered by landing on a dialog row, and "no
+        row" and "two rows" are not things a caller can land on. Enforcing it
+        here rather than at the delivery site is what keeps the failure a 422
+        naming the problem instead of a keystroke sequence that silently picks
+        whatever the cursor happened to be over.
+
+        Returns a sentence rather than raising: the caller is the manager, which
+        maps it to one typed error, and a pure predicate keeps this testable
+        without a workspace.
+        """
+        if not questions:
+            return "no captured questions to answer"
+        if len(selections) != len(questions):
+            return f"expected {len(questions)} answer(s), got {len(selections)}"
+        for i, (question, selection) in enumerate(zip(questions, selections, strict=True)):
+            over = [index for index in selection.indexes if index >= len(question.options)]
+            if over:
+                return (
+                    f"answer {i + 1} selects option {over[0] + 1}, but that question "
+                    f"offers {len(question.options)}"
+                )
+            if question.selects_a_mode and len(selection.indexes) != 1:
+                return (
+                    f"answer {i + 1} must choose exactly one option "
+                    f"(it selects {len(selection.indexes)}): answering this "
+                    "picks a row in the agent's own dialog"
+                )
+        return None
+
 
 @dataclass(slots=True, frozen=True)
 class AnswerSelection:
     """One question's validated answer, in-process IR (never crosses a wire).
 
-    The provider-neutral input a keystroke builder consumes: ``indexes`` picks
-    predefined options (0-based, in option order), ``text`` is a free-text
-    answer. Exactly one is meaningful per question — the wire model
-    (``contracts.questions``) enforces the XOR before this is built; this dataclass
-    just carries the validated choice from the manager to the adapter. Kept next
-    to :class:`AgentQuestion` because the two are the builder's paired inputs.
+    ``indexes`` picks predefined options (0-based, in option order); ``text`` is
+    whatever the human wanted to add. **Both may be set** — the answer is
+    delivered as prose rather than driven into a picker widget, so a choice and
+    a qualification of it are not alternatives. The wire model
+    (``contracts.questions``) has already refused an item that says neither.
+    Kept next to :class:`AgentQuestion` because the two are paired inputs
+    everywhere they appear.
     """
 
     indexes: tuple[int, ...] = ()
@@ -742,6 +851,75 @@ class TokenUsage:
 
 
 @dataclass(slots=True, frozen=True)
+class NativeFacts:
+    """What a session's OWNED stream said that no transcript records.
+
+    Only a native session has these: the worker that launched the agent is the
+    one process that sees Claude Code's terminal ``result`` frame (cost, TTFT,
+    the harness's own turn duration) and Codex's live ``item/completed``
+    (a shell command's exit code). Every field is ``None`` when the stream has
+    not said it yet, never a substituted zero — the same rule ``TokenUsage``
+    follows. Carried, not recomputed: ``cost_usd`` is the harness's own price
+    for the whole session (Claude's ``total_cost_usd`` is cumulative across
+    turns, measured 2.1.270), and Grove's usage audit keeps its own book.
+
+    ``last_exit_code`` is the most recent shell command's status as the
+    provider reported it — the one fact the rollout parser could not recover on
+    codex-cli ≥ 0.147 (the ``CommandExecution`` item carries no join back to
+    its tool call), and the reason a failed build reads as ``ok`` there.
+    ``ttft_ms`` is the last turn's time to first token; a fact that is in no
+    transcript at all.
+    """
+
+    cost_usd: float | None = None
+    ttft_ms: int | None = None
+    turn_duration_ms: int | None = None
+    last_exit_code: int | None = None
+    permission_denials: int = 0
+    subagents_spawned: int | None = None
+    """How many sub-agents this session has spawned, as the harness counted them.
+
+    The terminal ``result`` frame's own ``subagent_stats`` census — the only
+    place a native session states it, since Grove's status hooks are not
+    registered on an owned launch. It is a SESSION total, not a live count:
+    the live "how many are running right now" is
+    ``AgentActivity.active_subagents``, which the transcript's own sidechain
+    files answer for a native session exactly as they do for a terminal one.
+    ``None`` means no ``result`` frame has landed yet; a real ``0`` means the
+    harness counted none, which is a measurement rather than an absence."""
+    subagents_completed: int | None = None
+    subagents_failed: int | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ContextWindow:
+    """How full the model's context is RIGHT NOW, as the harness itself reports it.
+
+    A block rather than two loose ints so that "reported" is one fact: either
+    the harness said what the window is and how much of it is spent, or it said
+    nothing and the whole block is ``None``. A ``size`` beside a fabricated
+    ``used`` would render a confident 0 % on a session that is one turn from
+    compaction, which is the one reading this exists to prevent.
+
+    ``used`` is whatever the harness counts against its own window — Codex's
+    last request's total input (cached tokens included, since they occupy the
+    window whether or not they are billed), Claude Code's ``current_usage`` sum.
+    Grove does not recompute either; a provider that publishes a percentage has
+    already decided what counts.
+    """
+
+    size: int
+    used: int
+
+    @property
+    def used_fraction(self) -> float:
+        """``used / size``, clamped to ``[0, 1]`` — a window is never over-full."""
+        if self.size <= 0:
+            return 0.0
+        return min(1.0, max(0.0, self.used / self.size))
+
+
+@dataclass(slots=True, frozen=True)
 class ContentBlock:
     """One content block inside an :class:`AgentMessage`, provider-neutral.
 
@@ -783,6 +961,26 @@ class ContentBlock:
 
 
 @dataclass(slots=True, frozen=True)
+class MailboxMessage:
+    """Protocol-supplied envelope, retained separately from its digest summary.
+
+    ``kind`` says WHICH protocol, because the answer changes what a client may
+    draw. ``peer`` is Grove's own mailbox — two independent workspaces, both
+    named, a real agent-to-agent handoff. ``notice`` is everything else that
+    normalizes to this shape (a harness task notification, a teammate relay),
+    where the "sender" is frequently a task id and there is no second agent.
+    Rendering a notice as a handoff would put two agent pills on a message that
+    only ever had one.
+    """
+
+    sender: str | None
+    recipient: str | None
+    subject: str | None
+    body: str
+    kind: Literal["peer", "notice"] = "notice"
+
+
+@dataclass(slots=True, frozen=True)
 class AgentMessage:
     """One message/event in the agentic loop — the lineage-preserving spine.
 
@@ -815,6 +1013,7 @@ class AgentMessage:
     timestamp: datetime | None = None
     is_sidechain: bool = False
     thread_id: str | None = None
+    mailbox: MailboxMessage | None = None
     compaction: CompactionBoundary | None = None
     """Set only on a ``compaction`` message — the boundary this event records.
 
@@ -1150,6 +1349,7 @@ class DigestEntry:
     todo: TodoList | None = None
     tool: ToolCall | None = None
     compaction: CompactionBoundary | None = None
+    mailbox: MailboxMessage | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -1240,6 +1440,18 @@ class AgentActivity:
     model: str | None = None
     tokens_in: int = 0
     tokens_out: int = 0
+    # Context-window pressure — the harness's own claim, or ``None`` when it
+    # made none. Codex writes it on every ``token_count`` record
+    # (``model_context_window`` beside ``last_token_usage``); Claude Code
+    # publishes it only to a statusLine command, so its parser leaves this
+    # ``None`` and the hook sidecar fills it. Never derived from a model name:
+    # a lookup table is a second, silently stale copy of a number the harness
+    # already states.
+    context: ContextWindow | None = None
+    # Facts only the owned stream states (cost, TTFT, a shell's exit code) —
+    # ``None`` for every terminal workspace, filled from the sidecar for a
+    # native one. See ``NativeFacts``.
+    native: NativeFacts | None = None
     last_event_at: datetime | None = None
     # When the session was BORN (its first record's timestamp) — distinct from
     # ``last_event_at``. This is what a workspace's created_at is compared

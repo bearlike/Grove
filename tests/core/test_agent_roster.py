@@ -28,12 +28,19 @@ from tests.conftest import FakeTmux
 
 def test_default_roster_is_exactly_the_builtins(tmp_state_dir: Path, tmp_repo: Path) -> None:
     """With zero config files, `builtin_agents` defaults `True` and the roster
-    is exactly the three built-ins. Adding the opt-out knob must not change
-    the default first-run experience."""
+    is exactly the built-ins: a native entry and its terminal twin per
+    provider, plus the shell. Adding the opt-out knob must not change the
+    default first-run experience."""
     del tmp_state_dir
     cfg = load_config(tmp_repo, env={})
     assert cfg.builtin_agents is True
-    assert {a.name for a in cfg.agents} == {"claude", "codex", "shell"}
+    assert {a.name for a in cfg.agents} == {
+        "claude",
+        "claude-terminal",
+        "codex",
+        "codex-terminal",
+        "shell",
+    }
 
 
 # ─── builtin_agents: false ───────────────────────────────────────────────────

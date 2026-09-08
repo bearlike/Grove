@@ -2,24 +2,33 @@
 
 Pilot tests over a real in-memory store + the FakeTmux seam: opening from the
 list screen, grouping by project, the status lens, the agent-state glyphs, and a
-poll-driven delta refreshing the wall without a manual reload.
+daemon snapshot event refreshing the wall without a manual reload.
 """
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
+from grove.client import GroveClient
+from grove.core import WorkspaceManager
 from grove.core.activity import ActivityService
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.config import GroveConfig
+from grove.core.contracts.activity import DashboardEvent
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
 from grove.tui.app import GroveApp
-from grove.tui.screens.dashboard import DashboardScreen
+from grove.tui.screens.dashboard import (
+    DashboardEventReceived,
+    DashboardScreen,
+    _remove_workspace,
+)
 from grove.tui.widgets.dashboard_grid import DashboardCard, DashboardGrid
 from tests.conftest import FakeTmux
 
@@ -54,6 +63,40 @@ def _env(tmp_path: Path) -> tuple[RepoRegistry, ActivityService, GroveConfig, Js
     return registry, ActivityService(registry=registry), cfg, store
 
 
+class _StreamlessClient(GroveClient):
+    """Keep DashboardScreen's stream workers off the daemon in Pilot tests."""
+
+    def __init__(self) -> None:
+        pass
+
+    async def connect(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def activity_events(
+        self, *, last_event_id: int | None = None
+    ) -> AsyncIterator[DashboardEvent]:
+        del last_event_id
+        await asyncio.Future[None]()
+        if False:
+            yield DashboardEvent.model_construct(kind="snapshot")
+
+    async def pane_events(self, workspace_id: str) -> AsyncIterator[DashboardEvent]:
+        del workspace_id
+        await asyncio.Future[None]()
+        if False:
+            yield DashboardEvent.model_construct(kind="pane_snapshot")
+
+
+def _dashboard(manager: WorkspaceManager, service: ActivityService) -> DashboardScreen:
+    service.bootstrap()
+    screen = DashboardScreen(manager, service=service, client=_StreamlessClient())
+    screen._pane_client = _StreamlessClient()
+    return screen
+
+
 def _cards(screen: DashboardScreen) -> list[DashboardCard]:
     return list(screen.query(DashboardCard))
 
@@ -69,7 +112,7 @@ async def test_opens_from_list_and_groups_across_repos(fake_tmux: FakeTmux, tmp_
     app = GroveApp(registry.get(repo_a))
     async with app.run_test(size=(160, 48)) as pilot:
         await pilot.pause()
-        app.push_screen(DashboardScreen(registry.get(repo_a), service=service, registry=registry))
+        app.push_screen(_dashboard(registry.get(repo_a), service))
         await pilot.pause()
         await pilot.pause()
         screen = app.screen
@@ -95,7 +138,7 @@ async def test_wall_packs_columns_to_fill_width(fake_tmux: FakeTmux, tmp_path: P
     app = GroveApp(mgr)
     async with app.run_test(size=(200, 48)) as pilot:
         await pilot.pause()
-        app.push_screen(DashboardScreen(mgr, service=service, registry=registry))
+        app.push_screen(_dashboard(mgr, service))
         await pilot.pause()
         await pilot.pause()
         grid = app.screen.query_one(DashboardGrid)
@@ -105,19 +148,23 @@ async def test_wall_packs_columns_to_fill_width(fake_tmux: FakeTmux, tmp_path: P
         assert int(grid.styles.grid_size_columns or 0) >= 4
 
 
-async def test_d_key_opens_dashboard_from_list(fake_tmux: FakeTmux, tmp_path: Path) -> None:
+async def test_d_key_opens_dashboard_from_list(
+    fake_tmux: FakeTmux, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     del fake_tmux
-    registry, _, _, _ = _env(tmp_path)
+    registry, service, _, _ = _env(tmp_path)
     repo = _init_repo(tmp_path / "repo")
     mgr = registry.get(repo)
     mgr.create(CreateWorkspaceRequest(agent_name="claude", title="task"))
+    dashboard = _dashboard(mgr, service)
+    monkeypatch.setattr("grove.tui.screens.list.DashboardScreen", lambda _: dashboard)
 
     app = GroveApp(mgr)
     async with app.run_test(size=(160, 48)) as pilot:
         await pilot.pause()
         await pilot.press("d")
         await pilot.pause()
-        assert isinstance(app.screen, DashboardScreen)
+        assert app.screen is dashboard
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, DashboardScreen)
@@ -132,7 +179,7 @@ async def test_attention_lens_filters_out_starting(fake_tmux: FakeTmux, tmp_path
     app = GroveApp(registry.get(repo))
     async with app.run_test(size=(160, 48)) as pilot:
         await pilot.pause()
-        app.push_screen(DashboardScreen(registry.get(repo), service=service, registry=registry))
+        app.push_screen(_dashboard(registry.get(repo), service))
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, DashboardScreen)
@@ -153,7 +200,7 @@ async def test_card_shows_agent_state_label(fake_tmux: FakeTmux, tmp_path: Path)
     app = GroveApp(registry.get(repo))
     async with app.run_test(size=(160, 48)) as pilot:
         await pilot.pause()
-        app.push_screen(DashboardScreen(registry.get(repo), service=service, registry=registry))
+        app.push_screen(_dashboard(registry.get(repo), service))
         await pilot.pause()
         await pilot.pause()
         card = _cards(app.screen)[0]
@@ -162,7 +209,23 @@ async def test_card_shows_agent_state_label(fake_tmux: FakeTmux, tmp_path: Path)
         assert "task" in card.body_text
 
 
-async def test_poll_delta_refreshes_wall(
+def test_killed_workspace_event_removes_the_projected_card(tmp_path: Path) -> None:
+    registry, service, _, _ = _env(tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="task"))
+    service.bootstrap()
+    snapshot = DashboardEvent.snapshot_event(service.snapshot(), seq=1).snapshot
+
+    assert snapshot is not None
+    reduced = _remove_workspace(snapshot, state.id)
+
+    assert reduced is not None
+    assert all(
+        row.state.id != state.id for project in reduced.projects for row in project.workspaces
+    )
+
+
+async def test_daemon_snapshot_event_refreshes_wall(
     fake_tmux: FakeTmux, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     del fake_tmux
@@ -176,15 +239,15 @@ async def test_poll_delta_refreshes_wall(
     app = GroveApp(registry.get(repo))
     async with app.run_test(size=(160, 48)) as pilot:
         await pilot.pause()
-        app.push_screen(DashboardScreen(registry.get(repo), service=service, registry=registry))
+        app.push_screen(_dashboard(registry.get(repo), service))
         await pilot.pause()
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, DashboardScreen)
         assert "starting" in _cards(screen)[0].body_text
 
-        # A transcript appears → STARTING becomes WAITING; the poll emits a delta
-        # the screen consumes and re-renders, no manual refresh.
+        # A transcript appears → STARTING becomes WAITING. The daemon event
+        # replaces the TUI's shared projection without a local poll.
         folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(Path(state.worktree_path))
         folder.mkdir(parents=True)
         (folder / f"{state.agent_session_id}.jsonl").write_text(
@@ -198,6 +261,9 @@ async def test_poll_delta_refreshes_wall(
             encoding="utf-8",
         )
         service.poll_once()
+        screen.post_message(
+            DashboardEventReceived(DashboardEvent.snapshot_event(service.snapshot(), seq=1))
+        )
         await pilot.pause()
         await pilot.pause()
         assert "waiting" in _cards(app.screen)[0].body_text

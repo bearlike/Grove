@@ -55,6 +55,24 @@ export function relativeTime(iso: string, now: number): string {
 }
 
 /**
+ * The same age with the tense dropped — "2h", "3d", "now".
+ *
+ * WHY A FOURTH FUNCTION AND NOT A FLAG, same argument as the three below it:
+ * this one is read as a TOKEN IN A CELL, beside a glyph that already says the
+ * value is a time, and "ago" is then a word repeating what the mark said. The
+ * rail's created-age track is 17px wide after its 12px clock and the 4px pair
+ * gap, so the suffix is not merely redundant there — it is the difference
+ * between a value that sits still and one that has to scroll to be read.
+ *
+ * "now" rather than "just now" for the same reason: a cell this narrow has
+ * room for a measurement, never for a phrase.
+ */
+export function ageToken(iso: string, now: number): string {
+  const age = relativeTime(iso, now);
+  return age === "just now" ? "now" : age.replace(/ ago$/, "");
+}
+
+/**
  * The same age, at the precision a DETAIL surface reads — "2h 14m ago",
  * "3d 4h ago", "2mo 5d ago", "1y 3mo ago".
  *

@@ -18,15 +18,28 @@ test.describe("launch composer expand", () => {
 
     const brief = "First line of the brief.\nSecond line, which is why this needs room.";
     await inline.fill(brief);
+    const assertSendGeometry = async () => {
+      const send = await page.locator('[data-slot="composer-send"]').boundingBox();
+      const shell = await page.locator('[data-slot="composer-bar"]').boundingBox();
+      expect(send!.width).toBeCloseTo(28, 0);
+      expect(send!.height).toBeCloseTo(28, 0);
+      expect(shell!.x + shell!.width - send!.x - send!.width).toBeCloseTo(12, 0);
+      expect(shell!.y + shell!.height - send!.y - send!.height).toBeCloseTo(12, 0);
+    };
+    await assertSendGeometry();
 
     await page.getByTestId("launch-expand").click();
     await expect(page.getByTestId("launch-expanded")).toBeVisible();
+    await page.getByTestId("launch-expanded").evaluate(async (element) => {
+      await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+    });
 
     // One editor, not two. A clone would leave the inline textarea mounted and
     // give one draft two tab stops and two accessible names.
     const editors = page.getByLabel("Task brief");
     await expect(editors).toHaveCount(1);
     await expect(editors).toHaveValue(brief);
+    await assertSendGeometry();
 
     // Typing in the expanded editor is the same draft, not a fork of it.
     await editors.fill(`${brief}\nThird line, typed while expanded.`);
@@ -46,7 +59,11 @@ test.describe("launch composer expand", () => {
     await controls.getByRole("combobox", { name: "Agent" }).click();
     await page.getByText("Claude Code (default)", { exact: true }).click();
 
-    const modelPicker = controls.getByRole("combobox", { name: "Model" });
+    // Scoped to the PAGE, not to the shelf: the model pill moved into the
+    // composer's own toolbar beside send, because it configures the message's
+    // agent rather than the workspace the shelf describes.
+    await page.getByTestId("launch-input").fill("Use the custom model");
+    const modelPicker = page.getByRole("combobox", { name: "Model", exact: true });
     await expect(modelPicker).toBeEnabled({ timeout: 60_000 });
     await modelPicker.click();
     await page.getByText("Custom…", { exact: true }).click();
@@ -58,7 +75,6 @@ test.describe("launch composer expand", () => {
     );
 
     const send = page.getByRole("button", { name: "Send message" });
-    await page.getByTestId("launch-input").fill("Use the custom model");
     await expect(send).toBeDisabled();
 
     await customModel.fill("anthropic/claude-opus-5.1:beta_test");
@@ -79,10 +95,72 @@ test.describe("launch composer expand", () => {
 
     await page.getByTestId("launch-expand").click();
     await expect(page.getByTestId("launch-expanded")).toBeVisible();
-    await page.keyboard.press("Escape");
+    const editorCountDuringClose = await page.getByTestId("launch-expanded").evaluate(async (dialog) => {
+      (dialog.querySelector('[data-slot="dialog-close"]') as HTMLButtonElement).click();
+      await new Promise(requestAnimationFrame);
+      return document.querySelectorAll('textarea[aria-label="Task brief"]').length;
+    });
+    expect(editorCountDuringClose).toBe(1);
 
     await expect(page.getByTestId("launch-expanded")).toBeHidden();
     await expect(page.getByTestId("launch-input")).toBeFocused();
+  });
+
+  test("closes the project menu when the model menu opens, across the split", async ({ page }) => {
+    // The two halves of one composer now live in different parents — the model
+    // pill in the toolbar, the rest on the shelf below the bar — and they are
+    // only one control group because `LaunchPillGroup` encloses both. If that
+    // ever becomes two groups, each keeps its own `openKind`, both menus stay
+    // open at once and the second one covers the first. Nothing throws; the
+    // control underneath simply cannot be clicked.
+    //
+    // Browser-only by construction: the defect is two popovers open
+    // SIMULTANEOUSLY, which is a statement about live DOM after two clicks.
+    await page.goto("/");
+    const shelf = page.getByTestId("launch-controls");
+    await expect(shelf).toBeVisible({ timeout: 60_000 });
+
+    await shelf.getByRole("combobox", { name: "Agent", exact: true }).click();
+    await page.getByText("Claude Code (default)", { exact: true }).click();
+    const project = shelf.getByRole("combobox", { name: "Project" });
+    await project.click();
+    await expect(project).toHaveAttribute("aria-expanded", "true");
+
+    const model = page.getByRole("combobox", { name: "Model", exact: true });
+    await model.click();
+    await expect(model).toHaveAttribute("aria-expanded", "true");
+    await expect(project).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("stages a pasted file as one chip above the editor", async ({ page }) => {
+    // Chips render ABOVE the brief now. Asserted geometrically rather than by
+    // source order, because the thing that broke before was the visual
+    // relationship and not the markup: a chip row that paints below the
+    // textarea pushes the send corner and reads as a footer.
+    await page.goto("/");
+    const input = page.getByTestId("launch-input");
+    await expect(input).toBeVisible({ timeout: 60_000 });
+
+    const choosing = page.waitForEvent("filechooser");
+    await page.getByTestId("launch-attach").click();
+    const chooser = await choosing;
+    await chooser.setFiles({
+      name: "brief-notes.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("a staged file"),
+    });
+
+    const chips = page.getByTestId("launch-attachments");
+    await expect(chips).toBeVisible();
+    await expect(chips).toContainText("brief-notes.txt");
+
+    const chipBox = await chips.boundingBox();
+    const inputBox = await input.boundingBox();
+    expect(chipBox!.y + chipBox!.height).toBeLessThanOrEqual(inputBox!.y + 1);
+
+    // Removing takes the chip with it, and leaves the draft alone.
+    await page.getByRole("button", { name: "Remove brief-notes.txt" }).click();
+    await expect(chips).toBeHidden();
   });
 
   test("keeps the control selections made before expanding", async ({ page }) => {

@@ -13,10 +13,23 @@ import type { MetadataRoute } from "next";
  * hand-pick a different value here without re-deriving it from that file —
  * it is a real theme token, not a design choice made in this one.
  *
- * `icon.svg` and `favicon.ico` already exist and are reused as-is; nothing
- * here generates new art. `favicon.ico`'s four embedded sizes (16/32/48/256)
- * are declared explicitly because the manifest can't introspect an .ico the
- * way a browser's `<link>` resolution does.
+ * THE INSTALLED ICON IS THE APP ICON, NOT THE BARE MARK. An installed PWA
+ * draws its icon against the OS's own wallpaper, dock and home screen, where a
+ * transparent mark has no ground of its own and lands on whatever is behind
+ * it; the app icon carries the cream tile that IS the product's silhouette
+ * there. The backgroundless mark stays in the app's own header, where the
+ * surface underneath is already Grove's.
+ *
+ * `purpose: "maskable"` is a SEPARATE entry rather than a flag on the others,
+ * and both must exist. Android crops a maskable icon to whatever shape the
+ * launcher uses, so its artwork is inset for a safe zone and looks small and
+ * lost anywhere it is NOT cropped; the standard pair is what every other
+ * surface uses. Declaring one icon as both is how an icon ends up either
+ * clipped or floating.
+ *
+ * `favicon.ico`'s four embedded sizes (16/32/48/64) are declared explicitly
+ * because the manifest can't introspect an .ico the way a browser's `<link>`
+ * resolution does.
  *
  * NO SERVICE WORKER, NO `next-pwa`, NO RUNTIME CACHING — deliberately, and
  * this is the one place that decision needs recording so nobody adds one
@@ -35,8 +48,11 @@ export default function manifest(): MetadataRoute.Manifest {
     background_color: "#eeeef1",
     theme_color: "#eeeef1",
     icons: [
-      { src: "/icon.svg", sizes: "any", type: "image/svg+xml" },
-      { src: "/favicon.ico", sizes: "16x16 32x32 48x48 256x256", type: "image/x-icon" },
+      { src: "/favicon.ico", sizes: "16x16 32x32 48x48 64x64", type: "image/x-icon" },
+      { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      { src: "/icon-192-maskable.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
+      { src: "/icon-512-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
     ],
   };
 }

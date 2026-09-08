@@ -28,6 +28,11 @@ from grove.core.config import (
     IssueOpsConfig,
     TicketsConfig,
 )
+from grove.core.contracts.assignment_events import (
+    AssignmentLifecycleEvent,
+    AssignmentTicketEvent,
+    AssignmentTicketIdentity,
+)
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import TicketComment, TicketProviderName, TicketRef
 from grove.core.errors import GroveError, TicketProviderError
@@ -57,6 +62,7 @@ class _FakeProvider:
         *,
         name: TicketProviderName = "gitea",
         assigned: Sequence[TicketRef] = (),
+        tickets: dict[str, TicketRef] | None = None,
         configured: bool = True,
         assignees_supported: bool = True,
         login: str = "grove-ai",
@@ -71,6 +77,9 @@ class _FakeProvider:
         self.comments_supported = True
         self.context = "acme/api"
         self._assigned = list(assigned)
+        self._tickets = {
+            ref.id: ref for ref in (tickets.values() if tickets is not None else assigned)
+        }
         self._login = login
         self.list_error = list_error
         self.assign_error = assign_error
@@ -82,6 +91,7 @@ class _FakeProvider:
         self.assigned_calls: list[str] = []
         self.unassigned_calls: list[str] = []
         self.list_calls = 0
+        self.get_calls: list[str] = []
         self.viewer_calls = 0
 
     @property
@@ -102,6 +112,10 @@ class _FakeProvider:
         if self.list_error is not None:
             raise self.list_error
         return list(self._assigned)
+
+    def get_ticket(self, ticket_id: str) -> TicketRef:
+        self.get_calls.append(ticket_id)
+        return self._tickets[ticket_id]
 
     def assign_self(self, ticket_id: str) -> bool:
         """Additive and idempotent, reporting whether THIS call added the login.
@@ -202,6 +216,12 @@ class _FakeRegistry:
         del root
         return self._manager
 
+    def resolve_workspace(self, workspace_id: str) -> tuple[_FakeManager, _FakeState]:
+        for state in self._manager.states:
+            if state.id == workspace_id:
+                return self._manager, state
+        raise GroveError(f"unknown workspace {workspace_id}")
+
 
 # ─── builders ────────────────────────────────────────────────────────────────
 
@@ -217,6 +237,19 @@ def _cfg(**issueops: Any) -> GroveConfig:
 
 def _key(ticket_id: str) -> HandoverKey:
     return HandoverKey(provider="gitea", owner="acme", repo="api", ticket_id=ticket_id)
+
+
+def _ticket_event(
+    ticket_id: str, *, change: str = "assigned", delivery_id: str = "d1", generation: int = 1
+) -> AssignmentTicketEvent:
+    return AssignmentTicketEvent(
+        target=AssignmentTicketIdentity(
+            provider="gitea", owner="acme", repo="api", ticket_id=ticket_id
+        ),
+        change=change,  # type: ignore[arg-type]
+        delivery_id=delivery_id,
+        generation=generation,
+    )
 
 
 def _poller(
@@ -394,6 +427,95 @@ def test_from_config_is_none_until_a_half_is_enabled() -> None:
     )
 
 
+# ─── event-owned reconciliation ─────────────────────────────────────────────
+
+
+def test_ticket_event_rereads_only_its_authoritative_target(tmp_path: Path) -> None:
+    ref = TicketRef(provider="gitea", id="42")
+    provider = _FakeProvider(assigned=[ref])
+    poller, mgr, _ = _poller(tmp_path, provider)
+
+    assert poller.handle_ticket_event(_ticket_event("42")) is True
+
+    assert provider.get_calls == ["42"]
+    assert provider.list_calls == 0
+    assert [request.ticket.id for request in mgr.creates if request.ticket] == ["42"]
+
+
+def test_duplicate_delivery_is_idempotent_without_a_second_target_read(tmp_path: Path) -> None:
+    ref = TicketRef(provider="gitea", id="42")
+    provider = _FakeProvider(assigned=[ref])
+    poller, mgr, _ = _poller(tmp_path, provider)
+    event = _ticket_event("42", delivery_id="same")
+
+    assert poller.handle_ticket_event(event) is True
+    assert poller.handle_ticket_event(event) is False
+
+    assert provider.get_calls == ["42"]
+    assert len(mgr.creates) == 1
+
+
+def test_older_reordered_delivery_cannot_replace_newer_target_state(tmp_path: Path) -> None:
+    ref = TicketRef(provider="gitea", id="42")
+    provider = _FakeProvider(assigned=[ref])
+    poller, mgr, _ = _poller(tmp_path, provider)
+
+    assert poller.handle_ticket_event(_ticket_event("42", delivery_id="new", generation=2)) is True
+    assert poller.handle_ticket_event(_ticket_event("42", delivery_id="old", generation=1)) is False
+
+    assert provider.get_calls == ["42"]
+    assert len(mgr.creates) == 1
+
+
+def test_unassigned_event_releases_only_an_assignment_grove_owned(tmp_path: Path) -> None:
+    ref = TicketRef(provider="gitea", id="7")
+    provider = _FakeProvider(assigned=[ref])
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    assert poller.assign_now(str(mgr.repo_root), "gitea", "7") is True
+
+    assert poller.handle_ticket_event(_ticket_event("7", change="unassigned")) is True
+
+    assert provider.unassigned_calls == ["7"]
+    assert provider.list_calls == 0
+
+
+def test_lifecycle_kill_releases_its_indexed_assignment_without_fleet_scan(tmp_path: Path) -> None:
+    ref = TicketRef(provider="gitea", id="7")
+    provider = _FakeProvider(assigned=[ref])
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
+    mgr.states = [_FakeState("ws-7", [ref])]
+    assert (
+        poller.handle_lifecycle_event(
+            AssignmentLifecycleEvent(
+                workspace_id="ws-7", lifecycle="created", delivery_id="created", generation=1
+            )
+        )
+        is True
+    )
+    mgr.states = []
+
+    assert (
+        poller.handle_lifecycle_event(
+            AssignmentLifecycleEvent(
+                workspace_id="ws-7", lifecycle="killed", delivery_id="killed", generation=2
+            )
+        )
+        is True
+    )
+
+    assert provider.unassigned_calls == ["7"]
+    assert provider.list_calls == 0
+
+
+def test_bind_does_not_create_a_periodic_timer(tmp_path: Path) -> None:
+    poller, _, _ = _poller(tmp_path, _FakeProvider())
+
+    poller.bind()
+
+    assert not hasattr(poller, "_timer")
+    poller.close()
+
+
 # ─── rate limits ────────────────────────────────────────────────────────────
 
 
@@ -541,6 +663,26 @@ def test_a_pull_request_assigned_on_the_edge_does_not_flap(tmp_path: Path) -> No
     assert provider.unassigned_calls == []
 
 
+def test_an_edge_assignment_counts_toward_the_ceiling_immediately(tmp_path: Path) -> None:
+    """A publish-edge assignment must not be invisible to pickup capacity.
+
+    `_active_pickups` counts entries carrying a workspace id, and the publisher
+    always has one — it is publishing FOR a workspace. Recording the assignment
+    without it left the holder unresolved until some later lifecycle edge, so a
+    ticket event arriving in that window read the fleet as emptier than it was
+    and took work past `pickup_max_active`. The ceiling exists to bound the
+    fleet, so a window in which it under-counts is the one thing it must not do.
+    """
+    provider = _FakeProvider(assigned=[TicketRef(provider="gitea", id="43")])
+    poller, mgr, _ = _poller(tmp_path, provider, pickup_max_active=1, assign_bot=True)
+    # The publisher assigns on its own edge, naming the workspace it publishes for.
+    poller.assign_now(str(mgr.repo_root), "gitea", "42", "issue", workspace_id="ws-42")
+    # A ticket event now arrives for a DIFFERENT issue. The single pickup slot is
+    # already spent by the holder above, so this must defer rather than create.
+    poller.handle_ticket_event(_ticket_event("43"))
+    assert mgr.creates == []
+
+
 def test_a_provider_that_cannot_assign_degrades_without_failing(tmp_path: Path) -> None:
     """A missing permission costs the assignment and nothing else."""
     provider = _FakeProvider(assignees_supported=False)
@@ -561,15 +703,22 @@ def test_a_forge_refusal_to_assign_is_swallowed(tmp_path: Path) -> None:
 
 
 def test_the_assignment_is_released_when_the_workspace_ends(tmp_path: Path) -> None:
-    """The board must say who is working a ticket NOW, not who once did."""
+    """A killed lifecycle edge releases the assignment without another fleet scan."""
     provider = _FakeProvider()
     poller, mgr, _ = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
     mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
     poller.tick()
     assert provider.assigned_calls == ["7"]
 
-    mgr.states = []  # the workspace was killed — its record is gone
-    poller.tick()
+    mgr.states = []  # the workspace is gone before its kill event arrives
+    assert (
+        poller.handle_lifecycle_event(
+            AssignmentLifecycleEvent(
+                workspace_id="ws1", lifecycle="killed", delivery_id="kill-1", generation=1
+            )
+        )
+        is True
+    )
     assert provider.unassigned_calls == ["7"]
 
 
@@ -637,13 +786,19 @@ def test_an_unreadable_repo_releases_nothing(tmp_path: Path) -> None:
 
 
 def test_releasing_is_not_a_hand_back_and_keeps_no_marker(tmp_path: Path) -> None:
-    """Grove finishing is not a human saying "do not take this again"."""
+    """A lifecycle end releases the bot without recording a do-not-pick-up marker."""
     provider = _FakeProvider()
     poller, mgr, log = _poller(tmp_path, provider, pickup_enabled=False, assign_bot=True)
     mgr.states = [_FakeState("ws1", [TicketRef(provider="gitea", id="7")])]
     poller.tick()
     mgr.states = []
-    poller.tick()
+
+    poller.handle_lifecycle_event(
+        AssignmentLifecycleEvent(
+            workspace_id="ws1", lifecycle="killed", delivery_id="kill-1", generation=1
+        )
+    )
+
     assert provider.unassigned_calls == ["7"]
     assert log.contains(_key("7")) is False
 
@@ -680,8 +835,8 @@ def test_assignment_alone_never_creates_a_workspace(tmp_path: Path) -> None:
 # ─── the identity the poll runs as ──────────────────────────────────────────
 
 
-def test_the_polls_identity_is_resolved_once(tmp_path: Path) -> None:
-    """Whose queue this is gets said out loud — and asked for exactly once."""
+def test_the_manual_bootstraps_identity_once(tmp_path: Path) -> None:
+    """An explicit no-push bootstrap resolves the provider identity once."""
     provider = _FakeProvider(assigned=[])
     poller, _, _ = _poller(tmp_path, provider)
     poller.tick(T0)

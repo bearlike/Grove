@@ -41,10 +41,24 @@ from loguru import logger
 
 _T = TypeVar("_T")
 
-# Bounds chosen for a large active fleet (a session set can span a ~30 MB main
-# transcript + tens of MB of sub-agent files) while keeping worst-case resident
-# memory well under the runaway RSS this module exists to fix.
-DEFAULT_MAX_SOURCE_BYTES = 256 * 1024 * 1024
+# THE BUDGET IS DENOMINATED IN SOURCE BYTES AND SPENT IN RESIDENT OBJECTS, so
+# the two differ by a measured multiple and the cap has to carry it. Parsing a
+# real 22.9 MB transcript on the reference host produced **71.4 MB** of dicts —
+# 3.1x — because every JSON line becomes dicts, strings and lists with their own
+# per-object headers. A 256 MB source cap therefore authorised roughly 800 MB
+# resident PER CACHE, and there are two (claude_code and codex): measured 1.68 GB
+# RSS on a daemon whose fleet was idle.
+#
+# The source figure stays the accounting unit because it is free — the cursors
+# already hold it, where sizing the object graph would mean walking it — so the
+# cap is simply divided by the observed ratio. Deliberately a floor rather than
+# a per-record measurement: the ratio varies with content (a tool-heavy
+# transcript carries more structure than prose) and a bound that is occasionally
+# generous is fine, where one that silently exceeds the machine is not.
+_PARSED_BYTES_PER_SOURCE_BYTE = 3.1
+#: The resident ceiling this module actually defends, per cache instance.
+DEFAULT_MAX_PARSED_BYTES = 192 * 1024 * 1024
+DEFAULT_MAX_SOURCE_BYTES = int(DEFAULT_MAX_PARSED_BYTES / _PARSED_BYTES_PER_SOURCE_BYTE)
 DEFAULT_MEMO_MAXSIZE = 512
 
 
@@ -83,6 +97,7 @@ class _Cursor:
     offset: int = 0
     size: int = -1
     mtime_ns: int = -1
+    prefix: bytes = b""
 
 
 @dataclass(slots=True)
@@ -184,6 +199,11 @@ class TranscriptCache:
         UTF-8 never straddles that boundary because ``\\n`` is a single byte."""
         try:
             with path.open("rb") as fh:
+                if cursor.prefix and fh.read(len(cursor.prefix)) != cursor.prefix:
+                    return False
+                if not cursor.prefix:
+                    fh.seek(0)
+                    cursor.prefix = fh.read(min(stat.st_size, 256))
                 fh.seek(cursor.offset)
                 data = fh.read()
         except OSError as exc:

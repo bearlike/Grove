@@ -1,5 +1,12 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
+import { OnboardingTour } from "@/components/grove/onboarding";
 import { AppShell } from "@/components/grove/shell/app-shell";
+import { COOKIE_NAME, sharedCookieStore } from "@/lib/auth/cookie-store";
 import { GroveStreamProvider } from "@/lib/grove/hooks";
+import { ToolIconsProvider } from "@/lib/grove/tool-icons";
+import { readToolIcons } from "@/lib/grove/tool-icons.server";
 
 /**
  * Every authenticated surface renders inside the one shell — and inside the one
@@ -19,10 +26,25 @@ import { GroveStreamProvider } from "@/lib/grove/hooks";
  * layout is a single mount point for every authenticated route, so navigating
  * between them re-uses one connection instead of opening a second.
  */
-export default function ShellLayout({ children }: { children: React.ReactNode }) {
+export default async function ShellLayout({ children }: { children: React.ReactNode }) {
+  // Middleware rejects a missing cookie before this layout runs. Resolve it again
+  // before serializing host configuration so a stale or revoked cookie cannot.
+  const cookieId = (await cookies()).get(COOKIE_NAME)?.value;
+  if (!cookieId || !(await sharedCookieStore().lookup(cookieId))) redirect("/login");
+  const toolIcons = await readToolIcons();
+
   return (
-    <GroveStreamProvider>
-      <AppShell>{children}</AppShell>
-    </GroveStreamProvider>
+    <ToolIconsProvider value={toolIcons}>
+      <GroveStreamProvider>
+        {/*
+          The tour wraps the shell rather than a page: its anchors span the rail
+          AND the landing composer, and its trigger lives in the rail's account
+          menu, so the one mount that sees all three is this layout.
+        */}
+        <OnboardingTour>
+          <AppShell>{children}</AppShell>
+        </OnboardingTour>
+      </GroveStreamProvider>
+    </ToolIconsProvider>
   );
 }

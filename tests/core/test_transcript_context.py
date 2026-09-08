@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ import pytest
 
 from grove.core import process as process_mod
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
+from grove.core.agents.codex import _CodexHome
 from grove.core.config import GroveConfig
 from grove.core.container_policy import CONTAINER_CONFIG_ROOT, AgentSharePlan
 from grove.core.container_runtime import ContainerRuntimeState
@@ -397,57 +399,85 @@ def test_store_decodes_whitespace_only_config_dir_to_none(tmp_path: Path) -> Non
     assert store.get(state.id).transcript_context is None
 
 
-# ─── transcript_config_dir_scope (env boundary) ─────────────────────────────
+# ─── transcript_config_dir_scope (task-local adapter boundary) ─────────────
 
 
-def test_transcript_config_dir_scope_sets_and_restores(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+def test_transcript_config_dir_scope_changes_the_adapter_root_not_process_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ambient = tmp_path / "ambient"
+    scoped = tmp_path / "scoped"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ambient))
 
-    with WorkspaceManager.transcript_config_dir_scope("claude_code", "/mnt/host"):
-        assert os.environ["CLAUDE_CONFIG_DIR"] == "/mnt/host"
+    with WorkspaceManager.transcript_config_dir_scope("claude_code", str(scoped)):
+        assert _ClaudeHome.config_dirs() == [scoped]
+        assert os.environ["CLAUDE_CONFIG_DIR"] == str(ambient)
 
-    assert "CLAUDE_CONFIG_DIR" not in os.environ
-
-
-def test_transcript_config_dir_scope_restores_prior_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/original")
-
-    with WorkspaceManager.transcript_config_dir_scope("claude_code", "/mnt/host"):
-        assert os.environ["CLAUDE_CONFIG_DIR"] == "/mnt/host"
-
-    assert os.environ["CLAUDE_CONFIG_DIR"] == "/original"
+    assert _ClaudeHome.config_dirs()[0] == ambient
+    assert os.environ["CLAUDE_CONFIG_DIR"] == str(ambient)
 
 
-def test_transcript_config_dir_scope_noop_without_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/original")
+def test_transcript_config_dir_scope_none_preserves_ambient_cascade(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ambient = tmp_path / "ambient"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ambient))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
     with WorkspaceManager.transcript_config_dir_scope("claude_code", None):
-        assert os.environ["CLAUDE_CONFIG_DIR"] == "/original"
+        assert _ClaudeHome.config_dirs() == [
+            ambient,
+            tmp_path / "home" / ".config" / "claude",
+            tmp_path / "home" / ".claude",
+        ]
 
-    assert os.environ["CLAUDE_CONFIG_DIR"] == "/original"
 
-
-def test_transcript_config_dir_scope_noop_for_kind_without_config_dir_env(
-    monkeypatch: pytest.MonkeyPatch,
+def test_transcript_config_dir_scope_empty_clears_an_adapter_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """mewbo/generic have no config-dir env concept — the override is a no-op."""
-    monkeypatch.delenv("SOME_UNRELATED_VAR", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "ambient"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
-    with WorkspaceManager.transcript_config_dir_scope("mewbo", "/mnt/host"):
-        assert "SOME_UNRELATED_VAR" not in os.environ
+    with WorkspaceManager.transcript_config_dir_scope("codex", ""):
+        assert _CodexHome.base_dir() == tmp_path / "home" / ".codex"
+        assert os.environ["CODEX_HOME"] == str(tmp_path / "ambient")
 
-    assert "SOME_UNRELATED_VAR" not in os.environ
+
+def test_transcript_config_dir_scope_nesting_restores_the_prior_root(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    inner = tmp_path / "inner"
+
+    with WorkspaceManager.transcript_config_dir_scope("claude_code", str(outer)):
+        assert _ClaudeHome.config_dirs() == [outer]
+        with WorkspaceManager.transcript_config_dir_scope("claude_code", str(inner)):
+            assert _ClaudeHome.config_dirs() == [inner]
+        assert _ClaudeHome.config_dirs() == [outer]
 
 
-def test_transcript_config_dir_scope_uses_codex_home_for_codex(
-    monkeypatch: pytest.MonkeyPatch,
+def test_transcript_config_dir_scope_isolates_concurrent_adapter_reads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("CODEX_HOME", raising=False)
+    """The same id/cwd under two roots yields only its scoped transcript."""
+    ambient = tmp_path / "ambient"
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    cwd = "/shared/cwd"
+    session_id = "same-session"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ambient))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    left_path = _write_transcript_at(left, session_id, cwd, mtime=1, prompt="left")
+    right_path = _write_transcript_at(right, session_id, cwd, mtime=2, prompt="right")
 
-    with WorkspaceManager.transcript_config_dir_scope("codex", "/mnt/host-codex"):
-        assert os.environ["CODEX_HOME"] == "/mnt/host-codex"
+    def locate(root: Path) -> tuple[Path, ...]:
+        with WorkspaceManager.transcript_config_dir_scope("claude_code", str(root)):
+            return tuple(ClaudeCodeAdapter().locate_transcripts(Path(cwd), session_id))
 
-    assert "CODEX_HOME" not in os.environ
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        found_left, found_right = tuple(pool.map(locate, (left, right)))
+
+    assert found_left == (left_path,)
+    assert found_right == (right_path,)
+    assert os.environ["CLAUDE_CONFIG_DIR"] == str(ambient)
 
 
 # ─── manager.transcript_scope: the seam every read routes through ──────────
@@ -462,22 +492,20 @@ def test_transcript_scope_is_nullcontext_when_unpinned(manager: WorkspaceManager
     assert isinstance(manager.transcript_scope(state), contextlib.nullcontext)
 
 
-def test_transcript_scope_resolves_the_kind_and_restores_env(
+def test_transcript_scope_resolves_the_kind_without_mutating_env(
     pinned: tuple[WorkspaceManager, WorkspaceState],
 ) -> None:
-    """`transcript_scope` resolves the workspace's own effective kind rather
-    than taking one from the caller (its whole reason to exist as a public
-    seam instead of four bespoke `with` blocks): no caller can scope a read
-    with a kind that disagrees with the workspace's."""
+    """The public manager seam selects its workspace's own strict root."""
     mgr, state = pinned
     ctx = state.transcript_context
     assert ctx is not None
     before = os.environ["CLAUDE_CONFIG_DIR"]
 
     with mgr.transcript_scope(state):
-        assert os.environ["CLAUDE_CONFIG_DIR"] == ctx.config_dir
+        assert _ClaudeHome.config_dirs() == [Path(ctx.config_dir)]
+        assert os.environ["CLAUDE_CONFIG_DIR"] == before
 
-    assert os.environ["CLAUDE_CONFIG_DIR"] == before  # restored, never the pinned dir
+    assert os.environ["CLAUDE_CONFIG_DIR"] == before
 
 
 # ─── writer: create/resume/respawn populate transcript_context ─────────────
@@ -1006,7 +1034,7 @@ def test_a_containerized_workspace_transcript_actually_resolves_on_the_host(
     # resolves the planted file through the recorded context.
     assert mgr.primary_transcript(state.id) == (planted,)
     with mgr.transcript_scope(state):
-        assert os.environ["CLAUDE_CONFIG_DIR"] == ctx.config_dir
+        assert _ClaudeHome.config_dirs() == [Path(ctx.config_dir)]
 
 
 def test_killing_a_containerized_workspace_leaves_its_transcript_behind(
@@ -1318,11 +1346,11 @@ def test_subagent_turns_adapter_calls_run_inside_the_scope(
         *,
         last: int | None = None,
     ) -> tuple[object, ...]:
-        seen["subagent_turns"] = os.environ.get("CLAUDE_CONFIG_DIR", "")
+        seen["subagent_turns"] = str(_ClaudeHome.config_dirs()[0])
         return ()
 
     def fake_fleet_activity(self: ClaudeCodeAdapter, cwd: Path, session_id: str) -> list[object]:
-        seen["fleet_activity"] = os.environ.get("CLAUDE_CONFIG_DIR", "")
+        seen["fleet_activity"] = str(_ClaudeHome.config_dirs()[0])
         return []
 
     monkeypatch.setattr(ClaudeCodeAdapter, "subagent_turns", fake_subagent_turns)
@@ -1382,12 +1410,10 @@ def test_session_controls_still_degrades_on_a_broken_worktree(
     assert controls is not None
 
 
-def test_env_is_byte_identical_before_and_after_all_four_reads(
+def test_reads_leave_process_env_untouched(
     pinned: tuple[WorkspaceManager, WorkspaceState],
 ) -> None:
-    """The env `transcript_scope` mutates is PROCESS-GLOBAL — a leak from any
-    ONE of the four sites would corrupt every subsequent read the daemon
-    makes for every OTHER workspace, not just this one."""
+    """Profile-scoped reads never mutate the daemon's global environment."""
     mgr, state = pinned
     before = os.environ["CLAUDE_CONFIG_DIR"]
 

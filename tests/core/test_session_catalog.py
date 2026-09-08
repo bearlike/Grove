@@ -173,6 +173,34 @@ def test_scan_finds_managed_and_unmanaged_sessions_across_every_repo(
     assert unmanaged_entry.project.is_grove_managed is False  # never heard of, never crawled for
 
 
+def test_entry_for_path_materializes_one_claude_transcript_without_catalog_scan(
+    registry: RepoRegistry, claude_home: Path, tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _write_transcript(claude_home, UNMANAGED_SID, tmp_repo, mtime=1_000)
+    catalog = SessionCatalog(registry)
+    monkeypatch.setattr("grove.core.sessions.all_adapters", lambda: pytest.fail("whole scan"))
+    monkeypatch.setattr(
+        "grove.core.sessions.process_module.list_agent_runtimes", lambda: pytest.fail("/proc")
+    )
+
+    entry = catalog.entry_for_path(path)
+
+    assert entry is not None
+    assert entry.ref.session_id == UNMANAGED_SID
+    assert entry.ref.cwd == str(tmp_repo)
+    assert entry.project is not None
+    assert entry.project.repo_root == tmp_repo
+
+
+def test_entry_for_path_rejects_a_vanished_or_non_transcript_path(
+    registry: RepoRegistry, tmp_path: Path
+) -> None:
+    catalog = SessionCatalog(registry)
+
+    assert catalog.entry_for_path(tmp_path / "gone.jsonl") is None
+    assert catalog.entry_for_path(tmp_path / "not-a-transcript.txt") is None
+
+
 def test_scan_degrades_a_cwdless_session_without_dropping_it(
     registry: RepoRegistry, claude_home: Path
 ) -> None:

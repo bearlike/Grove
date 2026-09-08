@@ -95,6 +95,10 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_repo
                     {
                         "name": "claude",
                         "command": "sh -c 'while :; do sleep 30; done'",
+                        # The daemon is a real process, so the suite's
+                        # terminal-by-default fixture cannot reach it: pin the
+                        # terminal launch here, the same way the runtime is.
+                        "native": False,
                     },
                 ],
             }

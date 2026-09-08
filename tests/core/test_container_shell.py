@@ -28,7 +28,13 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState
-from tests.conftest import FAKE_REMOTE_FOLDER, FakeCli, FakePreflight, FakeTmux
+from tests.conftest import (
+    FAKE_REMOTE_FOLDER,
+    FakeCli,
+    FakePreflight,
+    FakeTmux,
+    tmux_argv_without_size,
+)
 
 _TMUX = "/grove/tmux/bin/amd64/tmux"
 
@@ -249,7 +255,8 @@ def test_the_launch_puts_the_shell_session_inside_the_container(
     # since a workspace whose bundle was unavailable records `""` and correctly
     # composes no flag at all.
     conf = ["-f", state.container.tmux_conf] if state.container.tmux_conf else []
-    assert list(cli.execs[-1]["argv"])[: 6 + len(conf)] == [
+    argv = tmux_argv_without_size(list(cli.execs[-1]["argv"]))
+    assert argv[: 6 + len(conf)] == [
         state.container.tmux_command,
         *conf,
         "new-session",

@@ -52,29 +52,39 @@ export function WindowMeters({
 }): React.ReactNode {
   return (
     <div className="grid min-w-0 gap-2" data-testid="usage-quota-windows">
-      <div className={TRACKS} data-testid="usage-quota-tracks">
-        {windows.map((window, index) => (
-          <FacetTrack
-            key={`${window.scope}-${window.label}`}
-            window={window}
-            accent={facetAccent(index)}
-          />
-        ))}
-      </div>
+      <section aria-label="Windows" data-testid="usage-quota-windows-section">
+        <p className="mb-1 text-xs font-medium text-content-secondary">Windows</p>
+        <div className={TRACKS} data-testid="usage-quota-tracks">
+          {windows.map((window, index) => (
+            <FacetTrack
+              key={`${window.scope}-${window.label}`}
+              window={window}
+              accent={facetAccent(index)}
+            />
+          ))}
+        </div>
+      </section>
       {/* `SUPPLEMENTARY_RULE` draws the boundary between the SCAN tier above
           (bar, percent, nothing else) and the READ tier below (everything the
           old full-height meter said about each window) — the first of the
           card's two enforced rules; the second is at the account footer in
           `quota.tsx`, reusing this same export rather than a second literal. */}
-      <ul className={cn(SUPPLEMENTARY_RULE, "flex flex-col gap-2")} data-testid="usage-quota-facets">
-        {windows.map((window, index) => (
-          <FacetSummary
-            key={`${window.scope}-${window.label}`}
-            window={window}
-            accent={facetAccent(index)}
-          />
-        ))}
-      </ul>
+      <section
+        className={cn(SUPPLEMENTARY_RULE, "min-w-0")}
+        aria-label="Window metrics"
+        data-testid="usage-quota-facets"
+      >
+        <p className="mb-1 text-xs font-medium text-content-secondary">Metrics</p>
+        <ul className="flex flex-col gap-2">
+          {windows.map((window, index) => (
+            <FacetSummary
+              key={`${window.scope}-${window.label}`}
+              window={window}
+              accent={facetAccent(index)}
+            />
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }
@@ -84,7 +94,7 @@ export function WindowMeters({
  * their label and percent columns land in one aligned grid rather than each
  * row picking its own widths.
  */
-const TRACKS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-2";
+const TRACKS = "grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-2";
 
 /**
  * The account card's ONE supplementary-tier boundary, reused everywhere a
@@ -308,27 +318,25 @@ function FacetSummary({
       data-scope={window.scope}
       data-verdict={projection?.verdict}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-        <Swatch accent={accent} />
-        {/* This is the one place a facet's own name is explained — not the
-            compact track row just above, which the module's own comment
-            already calls "bar, percent, nothing else": a second dotted-
-            underline right beside the first would be the tooltip-on-every-
-            noun failure the glossary module exists to avoid. */}
-        <Explain term="quota_window" className="truncate text-xs font-medium text-content-primary">
-          {title}
-        </Explain>
-        {humanize(window.scope) === title ? null : (
-          <span className="shrink-0 text-xs text-content-tertiary">{window.scope}</span>
-        )}
-        {/* Verdict badge and detail trigger form ONE cluster at the row's
-            trailing edge instead of the badge sitting mid-row against the
-            identity text. A pill is unavoidably heavier than plain text —
-            the vendored `Badge` has one size and it is not ours to shrink —
-            so the fix is room, not restyling: pushed to its own end of the
-            row with `ml-auto`, it reads as the row's status column rather
-            than a fifth word wedged between the label and the scope. */}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Swatch accent={accent} />
+          {/* This is the one place a facet's own name is explained — not the
+              compact track row just above, which the module's own comment
+              already calls "bar, percent, nothing else": a second dotted-
+              underline right beside the first would be the tooltip-on-every-
+              noun failure the glossary module exists to avoid. */}
+          <Explain term="quota_window" className="truncate text-xs font-medium text-content-primary">
+            {title}
+          </Explain>
+          {humanize(window.scope) === title ? null : (
+            <span className="truncate text-xs text-content-tertiary">{window.scope}</span>
+          )}
+        </span>
+        {/* Verdict badge and detail trigger form ONE cluster in the shared
+            trailing column. The identity gets the yielding column, so long
+            provider labels cannot push a control outside a narrow card. */}
+        <span className="flex shrink-0 items-center gap-1.5">
           {/* **`unknown` is a real, common answer and never an error.** A
               window that reported no duration — every Claude window today —
               or one that has barely begun cannot be judged, so it carries no

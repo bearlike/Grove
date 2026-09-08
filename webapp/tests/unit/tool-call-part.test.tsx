@@ -5,10 +5,11 @@ import { describe, expect, it, vi } from "vitest";
  * Only `ToolCallGroup` touches it, so stubbing the one export leaves every
  * other renderer in this file on the real module. */
 let groupParts: readonly unknown[] = [];
+let groupIsLast = true;
 vi.mock("@assistant-ui/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@assistant-ui/react")>()),
   useAuiState: (selector: (state: unknown) => unknown) =>
-    selector({ message: { parts: groupParts } }),
+    selector({ message: { parts: groupParts, isLast: groupIsLast } }),
 }));
 
 import { NestLevel } from "@/components/grove/workspace/nesting";
@@ -25,9 +26,7 @@ const BASH: ToolCallView = {
   tool_use_id: "toolu_01AAA",
   status: "ok",
   input: { command: "rg -n 'todo' src", description: "Search the tree" },
-  input_truncated: false,
   result: "src/a.ts:12: todo\n",
-  result_truncated: false,
   duration_ms: 1450,
 };
 
@@ -54,6 +53,12 @@ function header(call: ToolCallView | null, argsText = "rg -n todo"): string {
 const body = (call: ToolCallView): string => renderToStaticMarkup(<ToolCallDetail call={call} />);
 
 describe("a tool call's header", () => {
+  it("uses a cataloged action and command instead of Used tool", () => {
+    const markup = header(BASH);
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("rg -n &#x27;todo&#x27; src");
+    expect(markup).not.toContain("Used tool");
+  });
   it("spins instead of ticking while the call is in flight", () => {
     const markup = header({ ...BASH, status: "running", result: null, duration_ms: null });
     expect(markup).toContain("animate-spin");
@@ -76,9 +81,10 @@ describe("a tool call's header", () => {
   });
 
   it("keeps the target readable and recoverable rather than bleeding the column", () => {
-    const markup = header(BASH, "src/very/long/path/that/would/overflow.py");
+    const path = "src/very/long/path/that/would/overflow.py";
+    const markup = header({ ...BASH, name: "Read", input: { file_path: path } });
     expect(markup).toContain("truncate");
-    expect(markup).toContain('title="src/very/long/path/that/would/overflow.py"');
+    expect(markup).toContain(`title="${path}"`);
   });
 
   it("marks the call with its own correlation key, so parallel calls are distinguishable", () => {
@@ -100,7 +106,7 @@ describe("a tool call's own nesting depth", () => {
    * an unrelated `text-xs` elsewhere on the row (the duration, the target
    * line) cannot make the assertion pass for the wrong reason. */
   function triggerTag(markup: string): string {
-    const idx = markup.indexOf('data-slot="tool-fallback-trigger"');
+    const idx = markup.indexOf('data-slot="tool-timeline-step"');
     const start = markup.lastIndexOf("<", idx);
     const end = markup.indexOf(">", idx);
     return markup.slice(start, end + 1);
@@ -112,7 +118,7 @@ describe("a tool call's own nesting depth", () => {
     expect(tag).not.toContain("text-xs");
   });
 
-  it("steps down to the group's own floor once nested — the inversion this file exists to fix", () => {
+  it("keeps timeline actions at one reading size inside a group", () => {
     const markup = renderToStaticMarkup(
       <NestLevel>
         <ToolCallPart
@@ -130,8 +136,8 @@ describe("a tool call's own nesting depth", () => {
       </NestLevel>,
     );
     const tag = triggerTag(markup);
-    expect(tag).toContain("text-xs");
-    expect(tag).not.toContain("text-sm");
+    expect(tag).toContain("text-sm");
+    expect(tag).not.toContain("text-xs");
   });
 });
 
@@ -161,24 +167,16 @@ describe("a tool call's body", () => {
     expect(body({ ...BASH, input: null })).toContain("No arguments recorded");
   });
 
-  it("STATES truncation — an ellipsis inside real output would say nothing", () => {
-    const markup = body({ ...BASH, input_truncated: true, result_truncated: true });
-    expect(markup).toContain("Arguments were capped");
-    expect(markup).toContain("Response was capped");
-    expect(body(BASH)).not.toContain("capped");
-  });
-
-  it("bounds a large body with max-h and scrolls it internally — never a fixed h-*", () => {
-    // The contract is "this well bounds its own height and scrolls", which is
-    // what `max-h-* overflow-y-auto` says. `h-*` is the idiom that shipped a
-    // silent clip once already.
+  it("renders a large body whole, with no height bound and no nested scroller", () => {
+    // A tool response is one artifact read end to end, not a list to scan, and
+    // it only renders inside a disclosure the reader already opened. A porthole
+    // here hides content the same way the daemon's old character cap did — and
+    // the daemon no longer caps, so the browser must not re-introduce the clip.
     const markup = body({ ...BASH, result: "x\n".repeat(500) });
-    expect(markup).toContain("max-h-64");
-    expect(markup).toContain("overflow-y-auto");
-    // `\bh-64\b` would match INSIDE `max-h-64` — a word boundary sits between
-    // the hyphen and the `h`, so the guard against the wrong idiom fires on the
-    // right one. Anchor on a class-list boundary instead.
+    expect(markup).toContain("x\nx\n");
+    expect(markup).not.toContain("max-h-64");
     expect(markup).not.toMatch(/class="[^"]*(?:^|\s)h-64\b/);
+    expect(markup).not.toContain("Response was capped");
   });
 
   it("breaks a single unbroken line instead of letting it widen the transcript", () => {
@@ -203,32 +201,20 @@ describe("the invocation line on a card that owns its own disclosure", () => {
     expect(markup).toContain("Running");
   });
 
-  it("reports the duration and the cap for a settled one", () => {
-    const markup = renderToStaticMarkup(
-      <ToolInvocationMeta tool={{ ...BASH, result_truncated: true }} />,
-    );
+  it("reports the duration for a settled one, and never a cap", () => {
+    const markup = renderToStaticMarkup(<ToolInvocationMeta tool={BASH} />);
     expect(markup).toContain("1.4s");
-    expect(markup).toContain("capped");
+    expect(markup).not.toContain("capped");
   });
 });
 
-/**
- * A group's disclosure follows its own liveness.
- *
- * THESE DO NOT COVER THE FALLING EDGE, and that was verified by mutation
- * rather than assumed: reintroducing the `if (live) setOpen(true)` bug leaves
- * all of them green. A transition needs re-renders, SSR mounts once, and this
- * host cannot load the DOM test environment (see webapp/CLAUDE.md) — so the
- * auto-collapse is currently pinned by nothing here. Say so rather than let
- * the neighbouring test names imply otherwise.
- *
- * What they DO pin is the pair of mount states, which is what would break if
- * the initial value ever went back to an unconditional open.
- */
+/** A group's mount state comes from the runtime's message boundary. The live
+ * browser test owns the transition and manual-toggle contracts. */
 describe("a group of tool calls", () => {
   function group(running: number): string {
+    groupIsLast = true;
     groupParts = [
-      { type: "tool-call", artifact: { ...BASH, status: running > 0 ? "running" : "ok" } },
+      { type: "tool-call", toolName: "Bash", argsText: "", artifact: { ...BASH, status: running > 0 ? "running" : "ok" } },
     ];
     return renderToStaticMarkup(
       <ToolCallGroup group={{ indices: [0] } as never}>
@@ -238,12 +224,28 @@ describe("a group of tool calls", () => {
   }
 
   it("stays folded up once every call in it has settled", () => {
-    expect(group(0)).toContain('data-state="closed"');
+    const markup = group(0);
+    expect(markup).toContain('data-state="closed"');
+    expect(markup).toContain("1 step · 1 command");
+    expect(markup).toContain('data-testid="tool-timeline-icons"');
   });
 
   it("opens itself while a call is in flight, so a spinner is never one click deep", () => {
     const markup = group(1);
     expect(markup).toContain('data-state="open"');
     expect(markup).toContain("1 running");
+  });
+
+  it("does not open a settled historical group just because a later message follows", () => {
+    groupIsLast = false;
+    groupParts = [
+      { type: "tool-call", toolName: "Bash", argsText: "", artifact: { ...BASH, status: "ok" } },
+    ];
+    const markup = renderToStaticMarkup(
+      <ToolCallGroup group={{ indices: [0] } as never}>
+        <span>call body</span>
+      </ToolCallGroup>,
+    );
+    expect(markup).toContain('data-state="closed"');
   });
 });
