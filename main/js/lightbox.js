@@ -226,10 +226,33 @@
         elements: slides.map((s) => s.toSlide()),
         startAt: index,
       });
+      const fitImages = () => {
+        document.querySelectorAll('.glightbox-container .gslide-image img').forEach((image) => {
+          if (!image.naturalWidth || !image.naturalHeight) return;
+          const width = window.innerWidth - (window.innerWidth <= 640 ? 24 : 144);
+          const height = Math.max(1, window.innerHeight - 200);
+          const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+          image.style.width = `${image.naturalWidth * scale}px`;
+          image.style.height = `${image.naturalHeight * scale}px`;
+        });
+      };
+      // GLightbox rewrites inline image styles in its resize handler. Apply
+      // our fit afterwards, including after a slide finishes loading.
+      let fitFrame;
+      const scheduleFit = () => {
+        cancelAnimationFrame(fitFrame);
+        fitFrame = requestAnimationFrame(fitImages);
+      };
+      lb.on('slide_after_load', scheduleFit);
+      lb.on('slide_changed', scheduleFit);
+      window.addEventListener('resize', scheduleFit);
       lb.open();
-      // Each open builds its own instance, so drop it once it closes rather
-      // than leaving a stack of detached modals behind.
-      lb.on("close", () => window.setTimeout(() => lb.destroy(), 0));
+      // Each open owns its resize listener and library instance.
+      lb.on("close", () => {
+        window.removeEventListener('resize', scheduleFit);
+        cancelAnimationFrame(fitFrame);
+        window.setTimeout(() => lb.destroy(), 0);
+      });
     }
   }
 

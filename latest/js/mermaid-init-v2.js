@@ -203,68 +203,45 @@ const renderToSvg = async (source) => {
 const EXPAND_ICON =
   '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
 
-/**
- * Fitting the diagram to the column is the DEFAULT, and the bar for giving up
- * on it is deliberately low.
- *
- * The inline card is a preview — Expand is one click away and renders the
- * diagram at full size with zoom and pan — so a preview that is small but
- * whole beats one that is cropped behind a scrollbar. An earlier, stricter
- * value sent most real diagrams to the scroll path, which reads as the card
- * failing to lay the diagram out rather than as a deliberate affordance.
- *
- * So only a diagram close to three times the column width falls back to
- * scrolling at natural size; everything narrower shrinks to fit.
- */
-const LEGIBLE_SCALE = 0.35;
+// Keep 16px diagram labels at least 12px in a cropped preview.
+const LEGIBLE_SCALE = 0.75;
 
-/**
- * The diagram's natural size in CSS pixels, independent of any transform.
- *
- * `useMaxWidth` makes mermaid write the natural width into `max-width`, and
- * the viewBox carries the aspect ratio, so the size is knowable without
- * measuring a painted box. That matters because the painted box sits inside a
- * transformed, TRANSITIONED wrapper: measuring it means either dividing by a
- * scale that may not be the one on screen, or switching the transform off and
- * reading back before the transition has applied. Both were tried; both were
- * wrong. One derivation, used by the inline card and by the viewer.
- */
+// The viewBox is stable across paints and resizes. Inline max-width is not:
+// fitting clears that presentation hint, and it may differ from SVG units.
 const naturalSize = (svg) => {
   const box = svg.viewBox && svg.viewBox.baseVal;
   const declared = parseFloat(svg.style.maxWidth || "");
   if (box && box.width > 0 && box.height > 0) {
-    const w = declared || box.width;
-    return { w, h: box.height * (w / box.width) };
+    return { w: box.width, h: box.height };
   }
   const rect = svg.getBoundingClientRect();
   return { w: declared || rect.width, h: rect.height };
 };
 
-/**
- * Tag a figure as too wide or too tall to show whole, so CSS can switch it
- * from "shrink to fit" to "scroll at a readable size" and reveal the expand
- * affordance permanently rather than only on hover.
- */
 const classifyOverflow = (figure) => {
   const stage = figure.querySelector(".ms-mermaid__stage");
   const svg = stage && stage.querySelector("svg");
-  if (!stage || !svg) return;
+  if (!stage || !svg || !stage.clientWidth) return;
 
-  const available = stage.clientWidth;
-  const naturalW = naturalSize(svg).w || available;
-  if (available > 0 && naturalW / available > 1 / LEGIBLE_SCALE) {
-    figure.dataset.wide = "1";
-    // `width: auto` cannot recover the natural size: mermaid ships the SVG
-    // with a `width="100%"` attribute, which leaves it no intrinsic width to
-    // fall back to, so it keeps filling the column. Pin the measured width
-    // instead — CSS alone genuinely cannot express this one.
-    svg.style.width = `${naturalW}px`;
-  }
-
-  if (stage.scrollHeight > stage.clientHeight + 1) {
-    figure.dataset.tall = "1";
-  }
+  const { w, h } = naturalSize(svg);
+  if (w <= 0 || h <= 0) return;
+  const width = Math.max(stage.clientWidth, w * LEGIBLE_SCALE);
+  svg.style.maxWidth = "none";
+  svg.style.width = `${width}px`;
+  svg.style.height = `${h * width / w}px`;
+  figure.toggleAttribute("data-wide", width > stage.clientWidth + 1);
+  figure.toggleAttribute("data-tall", h * width / w > stage.clientHeight + 1);
 };
+
+// Tabs, sidebar toggles and display changes can all change the available
+// width without a window resize. Refit after reveal as well as initial paint.
+const cardResizeObserver = new ResizeObserver((entries) => {
+  // The SVG height also determines the stage height. Defer writes until the
+  // next frame so WebKit does not report an observer delivery loop.
+  requestAnimationFrame(() => {
+    for (const { target } of entries) classifyOverflow(target.parentElement);
+  });
+});
 
 const buildCard = (source, svg, index) => {
   const figure = document.createElement("figure");
@@ -285,14 +262,7 @@ const buildCard = (source, svg, index) => {
 
   figure.append(stage, expand);
 
-  // Fit to the column first; fall back to scrolling only when the diagram is
-  // so much wider than the column that shrinking it would leave nothing
-  // readable at all. See LEGIBLE_SCALE.
-  //
-  // Measured once after layout: `useMaxWidth` gives the SVG a max-width in
-  // px equal to its natural width, so the ratio is available without
-  // re-rendering anything.
-  requestAnimationFrame(() => classifyOverflow(figure));
+  cardResizeObserver.observe(stage);
 
   const open = () => openViewer(figure);
   expand.addEventListener("click", (e) => {
@@ -377,20 +347,7 @@ const setScale = (next) => {
   applyTransform();
 };
 
-/**
- * Scale the diagram so it fills the stage with a comfortable margin.
- *
- * The natural size is measured with the transform switched OFF, rather than
- * by dividing the painted rect by the current scale. That division looked
- * equivalent and was not: it assumes the transform on screen matches
- * `viewer.scale`, and on opening a diagram the wrapper still carries the
- * PREVIOUS diagram's scale, so the measurement came back inflated by it and
- * the fit came out as `correct / previous`. Opening two diagrams alternately
- * compounded that every time — 3.50, then 0.49, then clamped at 6.
- *
- * Since this code owns the transform, the honest measurement is simply to
- * take it off first. No arithmetic, and nothing to keep in sync.
- */
+// Derive the fit from SVG coordinates, never an animated screen rectangle.
 const recomputeFit = () => {
   if (!viewer.stage || !viewer.inner) return;
   const svg = viewer.inner.querySelector("svg");
@@ -497,6 +454,20 @@ const buildViewer = () => {
   return dialog;
 };
 
+const paintViewer = (svg) => {
+  viewer.inner.innerHTML = svg;
+  const el = viewer.inner.querySelector("svg");
+  if (el) {
+    const { w, h } = naturalSize(el);
+    // Percentage SVG dimensions have no reference in a shrink-to-fit wrapper.
+    // Pin both axes on EVERY paint, including a theme refresh.
+    el.style.maxWidth = "none";
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+  }
+  requestAnimationFrame(recomputeFit);
+};
+
 const openViewer = (figure) => {
   const source = figure.dataset.source || "";
   if (!source) return;
@@ -506,19 +477,12 @@ const openViewer = (figure) => {
   viewer.scale = 1;
   viewer.inner.innerHTML = "";
 
+  dialog.dataset.source = source;
+  const theme = isDarkMode();
   const paint = (svg) => {
-    viewer.inner.innerHTML = svg;
-    // Pin the SVG to its natural width. Mermaid ships `width="100%"`, and the
-    // viewer clears `max-width`, so inside the shrink-to-fit wrapper the
-    // percentage has nothing to resolve against and collapses to a default a
-    // few hundred pixels wide. Painted size then disagrees with natural size
-    // and the fit is computed against a diagram that is not the one on
-    // screen. The inline card pins the width for the same reason.
-    const el = viewer.inner.querySelector("svg");
-    if (el) el.style.width = `${naturalSize(el).w}px`;
-    // Fit after the browser has laid the SVG out, otherwise the measured
-    // rect is zero and the diagram opens at an arbitrary scale.
-    requestAnimationFrame(recomputeFit);
+    if (dialog.dataset.source === source && isDarkMode() === theme) {
+      paintViewer(svg);
+    }
   };
 
   const cached = svgCache.get(`${isDarkMode() ? "dark" : "light"}|${source}`);
@@ -542,6 +506,7 @@ const openViewer = (figure) => {
 const rerenderAll = () => {
   if (!window.mermaid) return;
   ensureInitialised();
+  const theme = isDarkMode();
   const figures = Array.from(
     document.querySelectorAll("figure.ms-mermaid[data-source]")
   );
@@ -551,34 +516,32 @@ const rerenderAll = () => {
     if (!source || !stage) return;
     renderToSvg(source)
       .then((svg) => {
+        if (isDarkMode() !== theme) return;
         stage.innerHTML = svg;
+        classifyOverflow(figure);
       })
       .catch(() => {
         /* keep the diagram that is already on screen */
       });
   });
   if (viewer.dialog && viewer.dialog.open) {
-    const open = document.querySelector("figure.ms-mermaid[data-source]");
-    if (open) {
-      renderToSvg(viewer.dialog.dataset.source || open.dataset.source || "")
-        .then((svg) => {
-          viewer.inner.innerHTML = svg;
-          requestAnimationFrame(recomputeFit);
-        })
-        .catch(() => {});
-    }
+    const source = viewer.dialog.dataset.source;
+    renderToSvg(source)
+      .then((svg) => {
+        if (viewer.dialog.open && viewer.dialog.dataset.source === source &&
+            isDarkMode() === theme) paintViewer(svg);
+      })
+      .catch(() => {});
   }
 };
 
 const observeThemeChanges = () => {
   if (!window.MutationObserver) return;
-  const observer = new MutationObserver((mutations) => {
-    for (const m of mutations) {
-      if (m.attributeName === "class") {
-        rerenderAll();
-        return;
-      }
-    }
+  let dark = isDarkMode();
+  const observer = new MutationObserver(() => {
+    if (dark === isDarkMode()) return;
+    dark = isDarkMode();
+    rerenderAll();
   });
   observer.observe(document.documentElement, {
     attributes: true,

@@ -1,11 +1,6 @@
 (() => {
-  const CANDIDATES = [
-    "build-info.json",
-    "../build-info.json",
-    "../../build-info.json",
-    "../../../build-info.json",
-    "../../../../build-info.json",
-  ];
+  const script = document.currentScript;
+  const buildInfoUrl = script && script.dataset.buildInfoUrl;
 
   const findFooter = () => {
     return (
@@ -28,27 +23,21 @@
   };
 
   const fetchBuildInfo = async () => {
-    for (const path of CANDIDATES) {
-      try {
-        const response = await fetch(path, { cache: "no-store" });
-        if (!response.ok) {
-          continue;
-        }
-        return await response.json();
-      } catch (err) {
-        continue;
-      }
+    if (!buildInfoUrl) {
+      return null;
     }
-    return null;
+    try {
+      const response = await fetch(buildInfoUrl, { cache: "no-store" });
+      return response.ok ? await response.json() : null;
+    } catch (error) {
+      return null;
+    }
   };
 
   const inject = async () => {
     const footer = findFooter();
     const target = findTarget(footer);
-    if (!target) {
-      return;
-    }
-    if (target.querySelector(".build-info")) {
+    if (!target || target.querySelector(".build-info")) {
       return;
     }
     const info = await fetchBuildInfo();

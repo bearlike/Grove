@@ -156,10 +156,15 @@ const checkIcon = () => {
 };
 
 const onCodeCopy = (event) => {
-	const button = event.target;
+	const button = event.currentTarget;
 	const code = button.parentElement.querySelector("code");
 	if (code) {
 		const text = code.innerText;
+		if (!navigator.clipboard?.writeText) {
+			button.setAttribute("aria-label", "Copy unavailable: use HTTPS");
+			button.title = "Copy unavailable: use HTTPS";
+			return;
+		}
 		navigator.clipboard.writeText(text).then(
 			// change the inner icon of the button (inline svg)
 			() => {
@@ -175,6 +180,10 @@ const onCodeCopy = (event) => {
 						button.appendChild(resetSvg);
 					}, 2000);
 				}
+			},
+			() => {
+				button.setAttribute("aria-label", "Copy failed");
+				button.title = "Copy failed";
 			},
 		);
 	}

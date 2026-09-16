@@ -218,25 +218,18 @@ div.mermaid {
   overflow-x: auto;
 }
 
-/* Inline & hero images in article content: subtle border + rounded corners so
-   screenshots and diagrams sit cleanly on the page, matching code blocks. A
-   contrasting backing (deeper than the page in dark, clean white in light)
-   shows through transparent PNGs and forms a thin matte frame, giving media a
-   sense of depth instead of dissolving into the surface. Opt out with
-   `.no-border` for images that must bleed (logos, badges). */
+/* Content images sit directly on the page without a matte or outer frame. */
 article img:not(.no-border),
 .md-content img:not(.no-border) {
   box-sizing: border-box;
-  padding: 0.5rem;
-  background: var(--image-backing, var(--card));
-  border: 1px solid var(--border, rgba(120, 120, 120, 0.2));
+  padding: 0;
+  background: transparent;
+  border: 0;
   border-radius: 0.5rem;
   max-width: 100%;
   height: auto;
 }
-/* The .ms-* media kit (screenshot figure, device mockups, carousel) carries
-   its own bespoke framing + backing token, so exempt those images from the
-   generic backing above to avoid double-framing. */
+/* Keep media-kit images frameless even when used outside article content. */
 article .ms-shot__frame img,
 article .ms-shots img,
 article .ms-devices img,
@@ -583,7 +576,7 @@ dialog#search-dialog > div {
   margin: 0;
   font-size: 0.82rem;
   color: var(--muted-foreground, currentColor);
-  line-height: 1.4;
+  line-height: var(--leading-ui);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -664,6 +657,94 @@ article {
      the space above the heading: a heading has to read as belonging to the
      content under it, not floating between two passages. */
   --prose-heading-lead: 1rem;
+  /* Around a fenced code block. A step above the body flow because a code
+     block is a framed object with its own border, radius and background
+     padding, not another line of prose — at the flow step its frame very
+     nearly touches the sentence introducing it, and a wall of prose and code
+     runs together with nothing to breathe on. One rung up the same ladder, so
+     the page still reads as one rhythm rather than a special case. */
+  --prose-code-gap: 2rem;
+}
+
+/* ── Leading ─────────────────────────────────────────────────────────────
+   Declared at :root rather than beside the gap tokens above, because the ToC
+   rail, the footer and the search dialog all sit outside `article` and need
+   the same ladder.
+
+   The gaps above are the space BETWEEN blocks; these are the space between
+   lines inside one. The page read as cramped because the two had drifted
+   apart: paragraphs were already generous at 1.625 while everything read
+   alongside them lagged — list items at 1.5, admonition and caption text at
+   1.4-1.43, the ToC at 1.4. A reader does not experience those as separate
+   components, so a page mixing them reads as unevenly tight rather than as
+   deliberately varied.
+
+   Four rungs, chosen by how the text is READ rather than by what element it
+   happens to be:
+
+     body     continuous prose you read line after line. The loosest,
+              because that is where leading does the most work.
+     ui       short runs in chrome — a ToC entry, a caption, a footer link.
+              These wrap to two or three lines at most, so they want air
+              without the paragraph's full openness, which would make a
+              two-line entry look like two separate entries.
+     compact  dense surfaces where a line is a unit rather than part of a
+              flow: a line of code, a keycap.
+     tight    display type. Headings are large enough that generous leading
+              pulls a two-line heading apart into two headings.
+
+   Unitless on purpose: these are inherited by elements at many different
+   font sizes, and a `rem` value would be a fixed gap that suffocates small
+   type and yawns on large. */
+:root {
+  --leading-body: 1.7;
+  --leading-ui: 1.55;
+  --leading-compact: 1.45;
+  --leading-tight: 1.25;
+}
+
+/* Continuous prose. `article` itself carries the body rung so anything that
+   does not opt out inherits it — including markup the theme has no rule for,
+   which is where the old drift came from. Reach matches base.css's own prose
+   rules, which are unlayered at (0,1,1)-(0,1,2); mewbo.css is linked after
+   base.css, so an equal-specificity selector wins on source order. */
+article,
+article .typography :is(p, li, dd, dt, blockquote, figcaption, details, summary, .admonition, .tabbed-block) {
+  line-height: var(--leading-body);
+}
+
+/* Chrome, and the smaller type inside prose. A caption or an admonition is
+   read in a glance, not line after line, and is set smaller — at the body
+   rung its lines drift apart instead of holding together as one note.
+
+   Table cells are deliberately NOT here. They were the subject of their own
+   fix (v1.22.1) precisely because a wrapped cell is a small paragraph, not a
+   label: `tailwind/table.css` puts them on `leading-relaxed`, and routing
+   them through this rung would quietly undo that. They inherit the body rung
+   from `article` instead, which is a touch looser again and is what the note
+   in table.css already argues for — a table here is prose set in columns,
+   not a data grid. */
+article .typography :is(figcaption, .admonition),
+.mewbo-toc__link,
+.mewbo-footer__col-links a,
+.mewbo-footer__tagline {
+  line-height: var(--leading-ui);
+}
+
+/* A line of code is addressed individually — you scan for one, you cite one
+   by number — so it is set as a unit rather than as part of a flow. Loosening
+   this to the body rung would also break the line-number gutter's alignment,
+   which pairs row for row with the code beside it. */
+article div.codehilite :is(pre, code),
+article table.codehilitetable :is(pre, code),
+article pre:not(.mermaid) {
+  line-height: var(--leading-compact);
+}
+
+/* Display type sets its own. A heading at 30px with body leading puts half a
+   line of air between its two lines and stops reading as one phrase. */
+article .typography :is(h1, h2, h3, h4, h5, h6) {
+  line-height: var(--leading-tight);
 }
 
 /* Descendant, not child, to match base.css's `article .typography h2` exactly —
@@ -707,6 +788,43 @@ article .typography > :first-child {
 article .typography :is(h2, h3, h4, h5, h6):not(.ms-hero *, .doc *)
   + :is(p, ul, ol, dl, pre, blockquote, figure, table, details, section, div, video, h2, h3, h4, h5, h6) {
   margin-top: var(--prose-heading-lead) !important;
+}
+
+/* ── Fenced code blocks sit one rung up the ladder ────────────────────────
+   A code block is a framed object, and the frame is the problem: its border
+   and its internal padding both read as part of the gap, so the same
+   `--prose-flow` that separates two paragraphs comfortably leaves the frame
+   very nearly touching the sentence that introduces it. The pattern is the
+   most common one in these docs — a line of prose, then the command it
+   describes, then the next line of prose — so it repeats down the whole page
+   and the result reads as one undifferentiated block.
+
+   Both edges are set here, not just the top, because the rhythm is symmetric:
+   what follows a block needs the same clearance as what precedes it, and the
+   file's convention is that top margins own every seam.
+
+   Three exclusions, each for a composition that spaces itself on purpose:
+   an admonition is a small padded box that would look hollow at this step,
+   mkdocstrings holds a symbol's body tight under its signature, and the hero
+   uses a flex gap.
+
+   `div.codehilite` / `div.highlight` are the wrappers `pymdownx.highlight`
+   and `codehilite` emit. A bare `> pre` is the raw-HTML case; it is matched as
+   a direct child only, so the `<pre>` INSIDE a wrapper keeps the zero margins
+   codehilite.css gives it and the frame does not gain a band of dead space. */
+article .typography
+  :is(div.codehilite, div.highlight):not(:first-child, .admonition *, .doc *, .ms-hero *),
+article .typography > pre:not(.mermaid, :first-child) {
+  margin-top: var(--prose-code-gap);
+}
+
+/* Headings keep their own, larger section gaps — `:is(h2, …)` would otherwise
+   be pulled DOWN to this step, which is the opposite of the intent. */
+article .typography
+  :is(div.codehilite, div.highlight):not(.admonition *, .doc *, .ms-hero *)
+  + :not(h2, h3, h4, h5, h6),
+article .typography > pre:not(.mermaid) + :not(h2, h3, h4, h5, h6) {
+  margin-top: var(--prose-code-gap);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1140,31 +1258,79 @@ article a:hover,
    Consolidated from per-consumer stylesheets so docs sites get them without
    forking. All tokenised. */
 
-/* Captioned screenshot figure: bezel-framed image + caption strip. The frame
-   tint is a token so it can be retinted per use; it defaults dark so light UI
-   screenshots pop. Markup: <figure class="ms-shot"><div class="ms-shot__frame">
-   <img></div><figcaption class="ms-shot__body">…</figcaption></figure>. */
+/* Keep the existing screenshot markup, but share a frameless caption overlay
+   with carousel figures. The caption itself owns the scrim, so an uncaptioned
+   image has no dark wash. No extra wrappers or generated text are needed. */
 .ms-shot {
   margin: 1.25rem 0;
-  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
-  border-radius: 0.7rem;
+}
+.ms-shot,
+.ms-shots figure {
+  position: relative;
+  isolation: isolate;
+  border: 0;
+  border-radius: 0.5rem;
   overflow: hidden;
-  background: var(--card, transparent);
+  background: transparent;
 }
 .ms-shot__frame {
-  padding: 0.75rem;
-  background: var(--ms-shot-frame, #1f1d1a);
+  padding: 0;
+  background: transparent;
 }
 .ms-shot__frame img {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: 0.4rem;
 }
-.ms-shot__body {
-  padding: 0.6rem 0.85rem;
-  font-size: 0.85rem;
-  color: var(--muted-foreground, currentColor);
+.ms-shot > figcaption,
+.ms-shots figcaption {
+  position: absolute;
+  inset: auto 1rem 0.75rem;
+  z-index: 1;
+  width: fit-content;
+  max-width: calc(100% - 2rem);
+  margin: 0 auto;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  color: #fff;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: center;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+  /* Opaque black keeps the image from competing with the caption text. */
+  background: #000;
+  /* Tight shadows outline every edge; small blur radii soften only the halo,
+     not the glyphs or the image behind them. No composited backdrop filter. */
+  text-shadow:
+    -1px -1px 1px #000, 1px -1px 1px #000,
+    -1px 1px 1px #000, 1px 1px 1px #000,
+    0 2px 4px rgb(0 0 0 / 0.95), 0 0 8px rgb(0 0 0 / 0.85);
+  pointer-events: none;
+}
+.ms-shot > figcaption a,
+.ms-shots figcaption a {
+  color: inherit;
+  pointer-events: auto;
+}
+.ms-shot > figcaption p,
+.ms-shots figcaption p {
+  margin: 0;
+  color: inherit;
+}
+.ms-shot > figcaption code,
+.ms-shots figcaption code {
+  color: inherit;
+  background: rgb(0 0 0 / 0.25);
+}
+@media (max-width: 640px) {
+  .ms-shot > figcaption,
+  .ms-shots figcaption {
+    inset: auto 0.75rem 0.6rem;
+    max-width: calc(100% - 1.5rem);
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+  }
 }
 
 /* Side-by-side device mockups (e.g. laptop + phone) at matched height that
@@ -1304,25 +1470,23 @@ article a:hover,
   outline-offset: 2px;
 }
 
-/* The opened image keeps clear of every edge. Full screen was the ask; edge to
-   edge was not, and an image bleeding into the viewport corners has nowhere
-   for the chrome to sit either. 70% leaves 15% on each side. */
+/* Reserve room for controls and caption without wasting a third of the
+   viewport. The image stays uncropped and clear of the close control. */
 .glightbox-container .gslide-image img {
-  max-width: 70vw;
-  max-height: 70vh;
+  max-width: calc(100vw - 144px);
+  max-height: calc(100dvh - 200px);
+  min-width: 0;
   border-radius: 0.6rem;
   box-shadow: 0 24px 64px -24px rgb(0 0 0 / 0.6);
 }
 .glightbox-container .gslide-media {
   box-shadow: none;
 }
-/* NO backdrop-filter here. A blur on a full viewport overlay makes the browser
-   snapshot and re-rasterize the whole page behind it, and the library fades
-   this element in over 500ms with `transition: all`, so the page visibly tore
-   itself apart for the length of the animation and again on close. A solid
-   wash costs one paint and looks the same once it has settled. */
+/* A small, static blur separates the viewer without animating its radius. */
 .glightbox-container .goverlay {
-  background: color-mix(in srgb, var(--background, #0b0b0b) 14%, #000);
+  background: rgb(0 0 0 / 0.8);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
 }
 /* The library sets `transition: all` on its overlay, which animates every
    property it is given, including ones it never meant to. */
@@ -1333,11 +1497,27 @@ article a:hover,
 .glightbox-container .gslide-description {
   background: transparent;
 }
-.glightbox-container .gslide-desc {
-  color: var(--muted-foreground, #d4d4d8);
-  font-size: 0.875rem;
+.glightbox-container .gdesc-inner {
+  padding: 0.75rem 0 0;
   text-align: center;
 }
+.glightbox-container .gslide-desc,
+.glightbox-mobile .glightbox-container .gslide-desc {
+  display: inline-block;
+  max-width: 70ch;
+  margin: 0;
+  padding: 0.65rem 1rem;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 0.75rem;
+  background: rgb(28 28 28 / 0.94);
+  color: #fff;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  text-align: center;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.glightbox-container .gslide-desc p { margin: 0; color: inherit; }
 
 /* Close and navigation. The stock controls are thin glyphs on a transparent
    field; these are real buttons with a surface, so they read as controls and
@@ -1348,19 +1528,21 @@ article a:hover,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   opacity: 1;
-  border: 1px solid color-mix(in srgb, #fff 22%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, #000 55%, transparent);
+  color: #fff;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 0.8rem;
+  background: rgb(38 38 38 / 0.94);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
   transition: background-color 0.15s ease, transform 0.1s ease;
 }
 .glightbox-container .gclose:hover,
 .glightbox-container .gprev:hover,
 .glightbox-container .gnext:hover {
-  background: color-mix(in srgb, #000 70%, transparent);
-  transform: scale(1.05);
+  background: rgb(58 58 58 / 0.98);
+  transform: translateY(-1px);
 }
 .glightbox-container .gclose svg,
 .glightbox-container .gprev svg,
@@ -1370,8 +1552,37 @@ article a:hover,
   fill: #fff;
 }
 .glightbox-container .gclose {
-  top: 1.25rem;
-  right: 1.25rem;
+  top: max(1rem, env(safe-area-inset-top));
+  right: max(1rem, env(safe-area-inset-right));
+  width: auto;
+  flex-direction: row;
+  padding: 0 0.9rem;
+  gap: 0.5rem;
+}
+.glightbox-container .gclose::after {
+  content: "Close";
+  font: 500 0.8125rem / 1 var(--font-sans);
+}
+@media (max-width: 640px) {
+  .glightbox-container .gslide-image img {
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 200px);
+  }
+  .glightbox-container .gprev,
+  .glightbox-container .gnext {
+    top: auto;
+    bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+  .glightbox-container .gprev { left: calc(50% - 52px); }
+  .glightbox-container .gnext { right: calc(50% - 52px); }
+  .glightbox-mobile .glightbox-container .gslide-description {
+    bottom: 76px;
+    padding: 0 0.75rem;
+    max-height: 25vh;
+    overflow: auto;
+    background: transparent;
+  }
+  .glightbox-container .gdesc-inner { padding: 0.5rem 0.75rem; }
 }
 .glightbox-container .gclose:focus-visible,
 .glightbox-container .gprev:focus-visible,
@@ -1405,11 +1616,7 @@ article .typography video,
   width: 100%;
   max-width: 100%;
   margin: 0.75rem 0 0.25rem;
-  /* The carousel is a heavy block and sat hard against whatever preceded it.
-     PADDING rather than margin: inside a `.ms-hero` every child's margin is
-     zeroed so the flex gap can own the rhythm, so a margin here is dropped
-     without trace. Padding survives both contexts. */
-  padding-top: 1rem;
+  padding: 0;
   overflow: hidden;
   --swiper-theme-color: var(--primary, #c15f3c);
   --swiper-navigation-size: 20px;
@@ -1430,34 +1637,23 @@ article .typography video,
   justify-content: center;
   box-sizing: border-box;
 }
-.ms-shots figure { margin: 0; width: 100%; }
+.ms-shots figure { margin: 0; width: 100%; aspect-ratio: 16 / 9; }
+article .ms-shots img,
+.md-content .ms-shots img,
 .ms-shots img {
   display: block;
   width: 100%;
-  /* 16:9. Product screenshots and screen recordings are landscape — a 4:3 box
-     letterboxed every one of them into roughly a quarter of dead `--muted`
-     space above and below, a visible frame inside a frame. Consumers were
-     overriding this rule in their own extra_css; matching the box to the
-     content is the theme's job. `object-fit: contain` still protects a
-     genuinely non-16:9 image from being cropped. */
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
-  background: var(--muted, hsl(48 25% 92.2%));
-  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
-  border-radius: 0.6rem;
-}
-/* The caption and the dots below it are one footer under the image, so they
-   sit on equal gaps. 0.55rem and 0.6rem read as a mistake rather than as a
-   rhythm, because the caption's line box makes the smaller gap look larger. */
-.ms-shots figcaption {
-  margin-top: 0.75rem;
-  text-align: center;
-  font-size: 0.875rem;
-  color: var(--muted-foreground, currentColor);
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0.5rem;
 }
 .ms-shots .swiper-pagination {
   position: static;
-  margin-top: 0.75rem;
+  margin-top: 0.35rem;
+  line-height: 1;
 }
 .ms-shots .swiper-button-prev,
 .ms-shots .swiper-button-next {
@@ -1644,7 +1840,7 @@ article .typography video,
   box-shadow: inset 1px 0 0 var(--border);
   color: var(--muted-foreground);
   font-size: 0.8rem;
-  line-height: 1.4;
+  line-height: var(--leading-ui);
   text-decoration: none;
   transition: color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1665,16 +1861,29 @@ article .typography video,
    shell — reused for mobile-search, GitHub link, and theme toggle.
    ───────────────────────────────────────────────────────────────────────── */
 
-/* Flat edge, no elevation. A single subtle hairline marks where the header
-   ends — matching Devin/Mintlify, which separate the header with a border
-   alone. The old drop shadow (esp. the heavy 0.20 dark variant) feathered
-   down over the left sidebar's top, reading as a smudge; it's gone. */
+/* Elevate the whole sticky stack, not each row. The contact shadow marks
+   its lower edge; the broad downward shadow separates scrolling content.
+   Keep this on the header's foreground stacking context so it paints OVER
+   the article, with no overlay element intercepting links below the bar. */
 .mewbo-header {
   /* One height for the two labelled header controls (search pill, Ask AI).
      Declared here rather than at :root because it describes the header's own
      control scale, and both controls are descendants. */
   --mewbo-nav-control-h: 2rem;
-  box-shadow: none;
+  /* A quiet satin sheen, derived entirely from the site's surface palette. */
+  --mewbo-chrome-finish: linear-gradient(180deg,
+    color-mix(in srgb, var(--card) 32.5%, var(--background)) 0%,
+    color-mix(in srgb, var(--muted) 9%, var(--background)) 48%,
+    color-mix(in srgb, var(--muted) 19%, var(--background)) 100%);
+  background-image: var(--mewbo-chrome-finish);
+  z-index: 50;
+  isolation: isolate;
+  box-shadow: 0 3px 6px -3px rgb(0 0 0 / 0.16),
+    0 16px 30px -10px rgb(0 0 0 / 0.18);
+}
+.dark .mewbo-header {
+  box-shadow: 0 3px 6px -3px rgb(0 0 0 / 0.5),
+    0 18px 36px -10px rgb(0 0 0 / 0.55);
 }
 
 /* Only the LAST element of the nav block draws the line that ends it. With a
@@ -1686,18 +1895,15 @@ body:not(.ms-has-header-tabs) .mewbo-header {
   border-bottom: 1px solid var(--border);
 }
 
-/* Brand cluster: glyph + wordmark optically aligned.
-   No `display` declaration here — the template's `hidden lg:inline-flex`
-   Tailwind utilities own visibility. (Adding `display` from extra.css would
-   sit outside @layer utilities and beat every Tailwind rule regardless of
-   specificity, which is how CSS Cascade Layers work.) */
+/* Brand cluster: its mark is deliberately the header's largest visual cue;
+   the nearby Docs badge identifies this surface without competing for that
+   role. Visibility remains owned by the template's `hidden lg:inline-flex`.
+   The inner SVG, image, and Iconify custom element all inherit the same box. */
 .mewbo-brand {
-  align-items: center; gap: 0.5rem;
-  height: 2.25rem; padding: 0 0.25rem;
-  /* The wordmark sits back at --muted-foreground so the glyph carries the
-     brand and the header chrome stays quiet; full --foreground read as pure
-     white in dark mode. The glyph's SVG paints its own fills, not
-     currentColor, so it is unaffected. Warms to --foreground on hover. */
+  align-items: center; gap: 0.55rem;
+  min-width: 0; height: 2.75rem; padding: 0 0.25rem;
+  /* The name remains quieter than page content so the larger scale reads as
+     identity, rather than an extra navigation control. */
   color: var(--muted-foreground); text-decoration: none;
   border-radius: 0.5rem;
   transition: background 0.15s, color 0.15s;
@@ -1705,13 +1911,34 @@ body:not(.ms-has-header-tabs) .mewbo-header {
 .mewbo-brand:hover { background: var(--accent); color: var(--foreground); }
 .mewbo-brand__glyph {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 1.25rem; height: 1.25rem; flex-shrink: 0;
+  width: 1.75rem; height: 1.75rem; flex: 0 0 1.75rem;
 }
 .mewbo-brand__glyph svg,
-.mewbo-brand__glyph img { width: 100%; height: 100%; }
-.mewbo-brand__name {
-  font-size: 0.875rem; font-weight: 600; letter-spacing: -0.01em;
+.mewbo-brand__glyph img,
+.mewbo-brand__glyph iconify-icon { width: 100%; height: 100%; }
+/* Align the two text baselines as one cluster, then center it on the mark. */
+.mewbo-brand__text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
 }
+.mewbo-brand__name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 1.03125rem; font-weight: 600; letter-spacing: -0.025em;
+  line-height: 1;
+}
+.mewbo-brand__docs {
+  /* Center the smaller lettering optically, not its padded border box. */
+  position: relative;
+  top: -0.1875rem;
+  flex: 0 0 auto;
+  padding: 0.08rem 0.25rem;
+  border: 1px solid var(--border); border-radius: 0.2rem;
+  color: var(--muted-foreground);
+  font-size: 0.525rem; font-weight: 500; line-height: 1;
+}
+.mewbo-brand:hover .mewbo-brand__docs { border-color: var(--foreground); }
 
 /* Mobile menu trigger. Visibility owned by Tailwind `flex lg:hidden`. */
 .mewbo-menu-btn {
@@ -1781,6 +2008,128 @@ body:not(.ms-has-header-tabs) .mewbo-header {
 }
 .mewbo-nav-search-pill svg { flex-shrink: 0; opacity: 0.6; }
 .mewbo-nav-search-pill span { flex: 1; text-align: left; }
+
+/* ── Keycaps ──────────────────────────────────────────────────────────────
+   A `<kbd>` has to look like a thing you press. The browser default is a
+   monospace run of text, which reads as code; a single hairline box reads as
+   a badge. What sells a keycap is that it has a TOP FACE and WALLS, lit from
+   above — and that is entirely a matter of which edges are lighter than the
+   face and which are darker.
+
+   This previously shipped as a bundled font (Libertinus Keyboard) whose
+   glyphs drew their own outlines. That is gone: a 46KB webfont was a network
+   and packaging cost for pure decoration, only some labels had glyphs (so
+   `Cmd` and the arrows fell back to a hand-drawn box and never matched the
+   others), and nothing about it was themeable.
+
+   The construction, adapted from miragecraft/keymason's layered technique:
+     · the element itself is the dark under-key shadow, one step deeper than
+       everything above it;
+     · `::before` is the base, with ASYMMETRIC border colours — lighter along
+       the top, darker at the sides, darkest along the front — which is what
+       makes the walls read as walls rather than as a uniform frame;
+     · the label sits on the top face, inset from those walls.
+   Keymason spends two pseudo-elements and a 3x3 grid on this because it
+   renders whole keyboards at 60px per unit. At text size the middle layer
+   is under a pixel, so it is collapsed into one `::before` plus an inset
+   highlight — the same lighting, at a scale where more layers would only
+   produce fringing.
+
+   Sized in `em` throughout, unlike keymason's fixed `--u`, because these
+   caps sit inline in a sentence and in table cells and must track whatever
+   type size surrounds them.
+   ────────────────────────────────────────────────────────────────────── */
+
+kbd:not(:has(kbd)):not(.mewbo-kbd, .search-shortcut, .mewbo-nav-search-pill kbd) {
+  /* Face and walls derive from `--muted`, so the cap belongs to the palette
+     and inverts with the theme on its own. `--kbd-face` is stated as an
+     opaque mix rather than a translucent fill: these sit on table rows that
+     carry their own hover tint, and a translucent cap would shift colour as
+     the row highlighted. */
+  --kbd-face: color-mix(in oklab, var(--muted) 82%, var(--background));
+  --kbd-edge-top: color-mix(in oklab, var(--kbd-face) 88%, white);
+  --kbd-edge-side: color-mix(in oklab, var(--kbd-face) 86%, black);
+  --kbd-edge-front: color-mix(in oklab, var(--kbd-face) 70%, black);
+
+  position: relative;
+  display: inline-block;
+  height: auto;
+  min-height: 0;
+  min-width: 1.9em;
+  box-sizing: border-box;
+  /* The front wall is the deep one — a keycap is seen slightly from above,
+     so its bottom edge shows and its top edge barely does. The extra bottom
+     padding is that wall; the label stays optically centred because of it,
+     not in spite of it. */
+  padding: 0.28em 0.55em 0.36em;
+  margin-inline: 0.12em;
+  border: 1px solid var(--kbd-edge-side);
+  border-top-color: var(--kbd-edge-top);
+  border-bottom-color: var(--kbd-edge-front);
+  border-radius: 0.36em;
+  background: var(--kbd-face);
+  /* Three cues, cheapest first: a bright inset lip along the top of the face
+     (the light source), a dark inset along the front (the wall in shadow),
+     and one crisp offset shadow under the whole cap — offset rather than
+     blurred, which is what keeps it reading as a solid object sitting on the
+     page instead of a floating card. */
+  box-shadow:
+    inset 0 0.08em 0 color-mix(in oklab, var(--kbd-edge-top) 60%, white),
+    inset 0 -0.18em 0 -0.08em color-mix(in oklab, var(--kbd-edge-front) 55%, transparent),
+    0 0.11em 0 color-mix(in oklab, var(--kbd-edge-front) 70%, transparent);
+
+  font-family: var(--font-sans);
+  font-size: 0.8em;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  text-align: center;
+  color: var(--foreground);
+  white-space: nowrap;
+  vertical-align: 0.06em;
+}
+
+/* `min-width` above is what keeps `C` from rendering as a narrow sliver
+   beside `Command` — every cap is at least squarish, and long labels grow
+   the cap horizontally rather than being shrunk to fit. Keymason solves the
+   same problem by making width an authored choice; inline text has no such
+   author, so the floor does it. */
+
+/* Dark: the same lighting, recomputed. A cap on a near-black page cannot be
+   built by lightening toward white — the face would glow — so the mixes are
+   weaker and the front wall leans on the page colour beneath it. */
+.dark kbd:not(:has(kbd)):not(.mewbo-kbd, .search-shortcut, .mewbo-nav-search-pill kbd) {
+  --kbd-face: color-mix(in oklab, var(--muted) 86%, var(--foreground) 3%);
+  --kbd-edge-top: color-mix(in oklab, var(--kbd-face) 82%, white);
+  --kbd-edge-side: color-mix(in oklab, var(--kbd-face) 74%, black);
+  --kbd-edge-front: color-mix(in oklab, var(--kbd-face) 45%, black);
+}
+
+/* A cap nested in a tooltip is on an inverted surface and would otherwise
+   paint a light key on a dark chip. Left flat there on purpose. */
+[data-slot="tooltip-content"] kbd:not(:has(kbd)) {
+  box-shadow: none;
+  border-color: color-mix(in oklab, currentColor 30%, transparent);
+}
+
+/* The `++ctrl+shift+a++` group. `align-items: center` matters: the caps are
+   inline-block with a front wall, so their boxes are taller than the `+`
+   between them and a baseline alignment leaves the separator sitting low. */
+.keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1em;
+  white-space: nowrap;
+  /* The caps carry a drop shadow, so a line of them needs a little more
+     room than a line of text or the row below crowds it. */
+  line-height: 1.9;
+}
+.keys > span,
+.keys .key-separator {
+  margin-inline: 0.12em;
+  color: var(--muted-foreground);
+  font-size: 0.85em;
+}
 
 .mewbo-kbd {
   margin-left: auto;
@@ -2337,7 +2686,9 @@ body.ms-has-header-tabs .mewbo-header__row { height: calc(var(--spacing) * 14); 
 .mewbo-skeleton__line:nth-child(3) { width: 72%; }
 .mewbo-skeleton__line:nth-child(4) { width: 54%; }
 
-#mewbo-answer-text { font-size: 0.9rem; color: var(--foreground); line-height: 1.6; }
+/* A generated answer is read straight through like an article, so it takes
+   the body rung rather than the chrome one the rest of the panel uses. */
+#mewbo-answer-text { font-size: 0.9rem; color: var(--foreground); line-height: var(--leading-body); }
 #mewbo-answer-text > *:first-child { margin-top: 0; }
 #mewbo-answer-text > *:last-child  { margin-bottom: 0; }
 #mewbo-answer-text h1,
@@ -2500,6 +2851,182 @@ body.ms-has-header-tabs .mewbo-header__row { height: calc(var(--spacing) * 14); 
   .mewbo-greeting__text { font-size: 0.875rem; }
 }
 
+/* Page actions share one outer border; only the toggle draws an inner seam.
+   Keep the menu outside any clipping so it can extend beyond the control. */
+.mewbo-page-actions {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--background);
+}
+
+/* Override the article button's geometry and variants as one unit, including
+   hover/active states. Otherwise the toggle inherits rounded inner corners
+   and primary-colour hover while its neighbour keeps secondary styling. */
+article .mewbo-page-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.25rem;
+  margin: 0;
+  padding: 0 0.65rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  box-shadow: none;
+  transform: none;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+article .mewbo-page-actions > .mewbo-page-actions__main {
+  border-radius: 0.5625rem;
+}
+article .mewbo-page-actions:has(.mewbo-page-actions__toggle) > .mewbo-page-actions__main {
+  border-radius: 0.5625rem 0 0 0.5625rem;
+}
+article .mewbo-page-actions > .mewbo-page-actions__toggle {
+  min-width: 2.25rem;
+  padding-inline: 0.5rem;
+  border-left: 1px solid var(--border);
+  border-radius: 0 0.5625rem 0.5625rem 0;
+}
+/* Tailwind expands variant lists into :is(), inheriting the strongest
+   selector in the list. Include the component class to beat that hover. */
+article .mewbo-page-actions > button:is(.mewbo-page-actions__main, .mewbo-page-actions__toggle):hover,
+article .mewbo-page-actions > button:is(.mewbo-page-actions__main, .mewbo-page-actions__toggle):active {
+  background: var(--muted);
+  color: var(--foreground);
+}
+article .mewbo-page-actions > button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.mewbo-page-actions__toggle svg {
+  transition: transform 0.15s ease;
+}
+.mewbo-page-actions[data-open] .mewbo-page-actions__toggle svg {
+  transform: rotate(180deg);
+}
+
+.mewbo-page-actions__menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 50;
+  width: min(19rem, calc(100vw - 1.5rem));
+  max-height: var(--page-menu-max-height, calc(100dvh - 1.5rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 12px 28px -12px rgb(0 0 0 / 0.35), 0 2px 6px -2px rgb(0 0 0 / 0.2);
+}
+.mewbo-page-actions__menu[hidden] { display: none; }
+
+/* Two rules in the Tailwind layer have to be undone here, and both are the
+   reason the menu looked wrong rather than matters of taste:
+
+   `article button { height: calc(var(--spacing)*8) }` clamps any button in the
+   article to 2rem. The "Copy page" row is a <button> while the other three are
+   <a>, so it alone rendered 32px tall against their 55px and its hint text
+   spilled onto the row below. `height: auto` is the fix; the selector reach
+   (0,2,1) is what makes it win.
+
+   `article a` underlines every prose link and paints it clay. These are menu
+   rows, not prose. */
+article .mewbo-page-actions__menu a.mewbo-page-action,
+article .mewbo-page-actions__menu button.mewbo-page-action,
+.mewbo-page-action {
+  display: flex;
+  align-items: flex-start;
+  /* The article button default centres the copy row, unlike its link peers. */
+  justify-content: flex-start;
+  gap: 0.6rem;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  padding: 0.5rem 0.55rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.mewbo-page-action:hover,
+.mewbo-page-action:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+/* The icon sits in its own bordered tile, as in the reference. It keeps a
+   brand mark (OpenAI, Claude) from reading as part of the label, and gives
+   marks of different weights a shared footprint. */
+.mewbo-page-action__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.85rem;
+  height: 1.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  color: var(--muted-foreground);
+}
+
+.mewbo-page-action__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+/* `margin: 0` is load-bearing: these are spans, but `.typography > span` and
+   the article's own flow rules still reach some of them, and any inherited
+   block margin here collapses the two-line row unevenly — which is exactly
+   how the second item ended up cramped against the first. */
+article .mewbo-page-action__label,
+.mewbo-page-action__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: var(--leading-tight);
+  color: var(--foreground);
+}
+article .mewbo-page-action__hint,
+.mewbo-page-action__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: var(--leading-ui);
+  color: var(--muted-foreground);
+}
+/* Marks the items that navigate away, so a reader can tell them from the one
+   that acts in place (Copy page). */
+.mewbo-page-action__external {
+  display: inline-flex;
+  color: var(--muted-foreground);
+}
+
+@media (pointer: coarse) {
+  article .mewbo-page-actions > button {
+    min-width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Brand footer — THREE HORIZONTAL COLUMNS, side by side.
 
@@ -2528,6 +3055,96 @@ body.theme-default { --footer-height: 320px; }
   margin-top: 4rem;
   border-top: 1px solid var(--border);
   background: var(--background);
+  position: relative;
+  isolation: isolate;
+}
+
+/* ── Dot-lattice texture ─────────────────────────────────────────────────
+   A 65px tile carrying a 5x5 lattice on a 13px pitch, 20 of its 25 cells
+   filled — so the eye reads a scatter rather than a grid, and the five gaps
+   are what keep it from looking like graph paper. Reproduced as gradients
+   rather than shipped as an SVG: at this tile size a 2K viewport draws well
+   over a thousand copies, and the file would be re-decoded per tile, on a
+   region that is pure decoration.
+
+   Colour comes from tokens, not from opacity. The source art was four
+   arbitrary web colours (yellow/red/cyan/violet) on a slate square, which
+   belong to no palette here. Dropping them to 10% alpha would only mean
+   four muddied hues instead of four loud ones — still off-palette, and
+   still shifting with whatever sits behind them. Instead each group is
+   mixed from a token toward the footer's own background, so the texture is
+   a tint OF the surface: it cannot clash, it inverts correctly between
+   light and dark on its own, and a brand fork that changes `--primary`
+   gets a matching footer for free.
+
+   The four groups are kept distinct because the pattern's charm is the
+   colour scatter; flattening them to one value gives an evenly-speckled
+   field. They are deliberately close together — the contrast between dots
+   is much smaller than the contrast to the background, so the scatter reads
+   as texture up close and as a flat surface from a normal viewing distance.
+   ────────────────────────────────────────────────────────────────────── */
+
+.mewbo-footer {
+  /* 2.5-4.5%. Tuned by eye against dark, which is the harder case: the clay
+     is a saturated hue on a near-black surface, so it reads as colour well
+     below the strength at which a neutral reads as anything at all. At the
+     7% this started from the dots were legible as dots — a polka field
+     behind the columns rather than a texture under them. These are the
+     values where the footer still looks like one surface at a normal
+     viewing distance and only resolves into a lattice up close. */
+  --ms-footer-dot-1: color-mix(in oklab, var(--primary) 4.5%, transparent);
+  --ms-footer-dot-2: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --ms-footer-dot-3: color-mix(in oklab, var(--primary) 2.5%, transparent);
+  --ms-footer-dot-4: color-mix(in oklab, var(--muted-foreground) 3.5%, transparent);
+  --ms-footer-dot-size: 65px;
+}
+
+/* A pseudo-element, not a second background layer on `.mewbo-footer`: the
+   footer's own `background` is a single token today, but a fork that gives
+   it a gradient would otherwise have to restate all twenty stops to keep
+   the texture. `z-index: -1` with the `isolation` above puts it behind the
+   content without creating a stacking context the columns can fall into. */
+.mewbo-footer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle 6px at 10% 10%, var(--ms-footer-dot-4) 72%, transparent 100%),
+    radial-gradient(circle 6px at 30% 10%, var(--ms-footer-dot-1) 72%, transparent 100%),
+    radial-gradient(circle 6px at 50% 10%, var(--ms-footer-dot-3) 72%, transparent 100%),
+    radial-gradient(circle 6px at 90% 10%, var(--ms-footer-dot-2) 72%, transparent 100%),
+    radial-gradient(circle 6px at 30% 30%, var(--ms-footer-dot-4) 72%, transparent 100%),
+    radial-gradient(circle 6px at 50% 30%, var(--ms-footer-dot-3) 72%, transparent 100%),
+    radial-gradient(circle 6px at 70% 30%, var(--ms-footer-dot-2) 72%, transparent 100%),
+    radial-gradient(circle 6px at 90% 30%, var(--ms-footer-dot-1) 72%, transparent 100%),
+    radial-gradient(circle 6px at 10% 50%, var(--ms-footer-dot-4) 72%, transparent 100%),
+    radial-gradient(circle 6px at 30% 50%, var(--ms-footer-dot-1) 72%, transparent 100%),
+    radial-gradient(circle 6px at 70% 50%, var(--ms-footer-dot-3) 72%, transparent 100%),
+    radial-gradient(circle 6px at 90% 50%, var(--ms-footer-dot-1) 72%, transparent 100%),
+    radial-gradient(circle 6px at 10% 70%, var(--ms-footer-dot-3) 72%, transparent 100%),
+    radial-gradient(circle 6px at 50% 70%, var(--ms-footer-dot-4) 72%, transparent 100%),
+    radial-gradient(circle 6px at 70% 70%, var(--ms-footer-dot-2) 72%, transparent 100%),
+    radial-gradient(circle 6px at 90% 70%, var(--ms-footer-dot-2) 72%, transparent 100%),
+    radial-gradient(circle 6px at 10% 90%, var(--ms-footer-dot-3) 72%, transparent 100%),
+    radial-gradient(circle 6px at 30% 90%, var(--ms-footer-dot-2) 72%, transparent 100%),
+    radial-gradient(circle 6px at 50% 90%, var(--ms-footer-dot-1) 72%, transparent 100%),
+    radial-gradient(circle 6px at 70% 90%, var(--ms-footer-dot-4) 72%, transparent 100%);
+  background-size: var(--ms-footer-dot-size) var(--ms-footer-dot-size);
+  /* The tile is a scatter, so its edges do not align; repeating it plainly
+     would print a seam every 65px. The mask fades the field out toward the
+     baseline strip, which both hides the seams at the bottom edge and keeps
+     the texture from competing with the copyright line. */
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 100%);
+}
+
+/* Decoration only. Anyone who has asked for less motion or a plain surface
+   is asking about the content, not about ornament — but a texture behind
+   text is exactly what high-contrast mode exists to remove. */
+@media (prefers-contrast: more) {
+  .mewbo-footer::before { display: none; }
 }
 
 /* ── Container: horizontal grid of columns ──────────────────────────── */
@@ -2603,7 +3220,7 @@ body.theme-default { --footer-height: 320px; }
 .mewbo-footer__tagline {
   color: var(--muted-foreground);
   font-size: 0.85rem;
-  line-height: 1.55;
+  line-height: var(--leading-ui);
   margin: 0;
   max-width: 36ch;
 }
@@ -2662,7 +3279,7 @@ body.theme-default { --footer-height: 320px; }
 .mewbo-footer__col-links a {
   color: var(--muted-foreground);
   font-size: 0.85rem;
-  line-height: 1.4;
+  line-height: var(--leading-ui);
   text-decoration: none;
   transition: color 0.12s ease;
   display: inline-block;
@@ -2870,8 +3487,8 @@ figure.ms-mermaid:hover {
 
 .ms-mermaid__stage {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   /* A very tall diagram would otherwise push the surrounding prose apart.
      Bound the inline card and let the expanded viewer carry the full size —
      the card is a preview, the viewer is where a large diagram is read. */
@@ -2879,26 +3496,18 @@ figure.ms-mermaid:hover {
   overflow: hidden;
 }
 
-.ms-mermaid__stage svg {
+.ms-mermaid__stage > svg {
+  display: block;
+  flex: none;
   max-width: 100%;
   height: auto;
 }
 
-/* Too wide to shrink and stay readable: show it at a legible size and let
-   the card scroll sideways. `justify-content` has to relax too, or a centred
-   flex child cannot be scrolled back to its own left edge. */
+/* Crop rather than reducing labels to a miniature. Expand shows the whole
+   diagram; the fade makes the cut edge explicit without a second scrollbar. */
 figure.ms-mermaid[data-wide] .ms-mermaid__stage {
-  overflow-x: auto;
-  justify-content: flex-start;
-}
-
-figure.ms-mermaid[data-wide] .ms-mermaid__stage svg {
-  max-width: none;
-  /* Mermaid also sets width="100%" as an ATTRIBUTE, so lifting max-width on
-     its own still leaves the diagram filling the column. `width: auto` hands
-     sizing back to the viewBox, which is the natural size we want here. */
-  width: auto;
-  flex: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 3rem), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 3rem), transparent);
 }
 
 /* Too tall to show whole: fade the cut edge instead of ending abruptly, so
@@ -3042,8 +3651,8 @@ figure.ms-mermaid foreignObject div,
    ───────────────────────────────────────────────────────────────────────── */
 
 dialog.ms-diagram-viewer {
-  width: min(95vw, 1100px);
-  height: min(85vh, 820px);
+  width: 95vw;
+  height: 92dvh;
   max-width: none;
   max-height: none;
   padding: 0;
@@ -3323,12 +3932,11 @@ div:has(> #toc) {
 
 /* ── Tab rail: its own plane between header and page ─────────────────── */
 
-/* Same canvas as the header above it and the page below it. Two hairlines
-   place it: one where the header ends, one where the page begins. Both are
-   plain `--border`, so the pair reads as one weight rather than as the
-   two different greys a 70%/90% mix produced. */
+/* Share the header's token-derived finish and retain the single hairlines
+   between navigation rows and at the lower edge of the stack. */
 .ms-header-tabs {
   background: var(--background);
+  background-image: var(--mewbo-chrome-finish);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   position: relative;
@@ -3340,16 +3948,6 @@ div:has(> #toc) {
    to full foreground on the new deeper plane looked reasonable and was wrong:
    it removes the only colour cue distinguishing the active tab from its
    neighbours, leaving just the underline. */
-
-/* The nav block casts no shadow.
-
-   A two-layer shadow used to hang under it, which contradicted the rule
-   further up this file declaring the header flat with a hairline and no
-   elevation — both were live and the later one won. A shadow under a bar that
-   is the same colour as the page reads as a grey band, not as depth, and
-   measuring it found a 4px gradient running the full width beneath the tabs.
-   Where the chrome ends is stated once, by `.ms-header-tabs`'s bottom
-   hairline, or by the header's own when no tab rail exists. */
 
 .dark .mewbo-nav-search-pill:hover {
   background: color-mix(in srgb, var(--muted) 55%, var(--background));

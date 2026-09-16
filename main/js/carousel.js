@@ -20,6 +20,7 @@
       return {
         loop: true,
         slidesPerView: 1,
+        autoHeight: false,
         spaceBetween: 24,
         grabCursor: true,
         keyboard: { enabled: true },
