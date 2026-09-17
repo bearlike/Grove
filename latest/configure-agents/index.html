@@ -67,8 +67,9 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
+<link href="../css/plex-serif.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
-    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -166,7 +167,8 @@
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
                     <span>Search…</span>
-                    <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
+                    
+                    <kbd class="mewbo-kbd" aria-hidden="true"><kbd id="mewbo-kbd-modifier">⌘</kbd><kbd>K</kbd></kbd>
                 </button>
                 
                 <button id="mewbo-nav-ask-ai" class="mewbo-nav-ask-ai-btn" type="button" aria-label="Ask AI">
@@ -3160,14 +3162,14 @@ Grove launches `claude_code` agents with an extra `--settings` file and a hook r
 
     
     <script integrity="sha384-fNifZa2zJzBUcKyN6ceWa8F0WlBRnrWGxxsA1GhFIT2idlBucX8dpOqGbkT5L55d" src="../js/pygments-theme.js"></script>
-<script integrity="sha384-GkZQUis3UGkud4fe2p4WO9VQEiwRkpFctrQq4sSNvrHPyHqHCUCtAKhXh8JXA/dw" src="../js/search-enhance.js"></script>
+<script integrity="sha384-Auv8C72/0y5F1bYBkp5lW1daDTuC6S/Kz/OXeSgLFAmVKjxadAfRUwUlkNRiT1yM" src="../js/search-enhance.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/lib/marked.umd.min.js"></script>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
     <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-V262dlYgpZKWy9k692CTshxLg2I6wPfzy4h0AhjOWLWfOuHOan1YUpq/UDnJZ62E" src="../js/mermaid-init-v2.js"></script>
+<script integrity="sha384-xtWSri63z3ykcj6146FkDCWRsc7nX1MLITAj8JoziapES6YVsBmlzVl1HiRrhl4C" src="../js/mermaid-init-v2.js"></script>
     
     <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
 <script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
@@ -3175,14 +3177,14 @@ Grove launches `claude_code` agents with an extra `--settings` file and a hook r
 <script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
-<script integrity="sha384-9Brx89QJtpCZyHsD//ihIPNQl2Mei0J5iM2r381aZkhhyNH/MLnZ31xfXMEfHGHN" src="../js/carousel.js"></script>
+<script integrity="sha384-JsUAAeTkaf9E+KsB9o6gv8Exju3bFfIayBmAAS6zbrn3USz68KkpPl/mNUEgiNAV" src="../js/carousel.js"></script>
     
     
-    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
-<script integrity="sha384-AWWgfRIG2PKj63p5oTEkROdaIQOb2pBckZiuyharusaLVoQR+AMwOvKjpRTAb8TB" src="../js/lightbox.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.js"></script>
+<script integrity="sha384-Hep12pzPKhU1vp1Ipyxos7+EVbimO3HPzGd748pwzJh/W3UOcSocFWWm3SgZ0CiD" src="../js/lightbox.js"></script>
     
     
-    <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
+    <script integrity="sha384-MpORMQSqTRzbg5KOqiUDMeO7wu6AYRnIpWFH5hAEMTkAsy1el0wiv1bvtlSmcXJs" src="../js/version-switcher.js"></script>
     
     <script integrity="sha384-eJpvKRUakG/0R4bQrYzNYkaXLaEt42EHkXERuq2H3GZ4pBKCZW5haroDCR4orO3x" src="../js/copy-page.js"></script>
     

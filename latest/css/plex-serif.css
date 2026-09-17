@@ -1,0 +1,163 @@
+/* IBM Plex Serif — the display face for content headings.
+   Self-hosted, exactly like Geist and Inter in geist.css: the theme makes no
+   request to fonts.gstatic.com, so a consumer's docs site has no third-party
+   font dependency, keeps working offline and on airgapped builds, and asks the
+   reader's browser for nothing it did not also serve.
+
+   WEIGHTS: 400/500/600 and their italics, and nothing else. The headings that
+   use this face are `font-medium` (500) and `font-semibold` (600); 400 is here
+   because a consumer may set a lighter heading, and the italics because a
+   heading can contain emphasis. Plex ships nine weights — shipping all of them
+   would roughly triple the payload for faces nothing selects.
+
+   SPLIT BY unicode-range, not merged: a page of English downloads the two
+   `latin` faces it actually renders (~44KB) and the browser never fetches
+   `latin-ext` at all. The ranges are Google's own subset boundaries, kept
+   verbatim so the split matches how the files were cut.
+
+   NO VARIABLE FONT: Plex Serif has no variable build on Google Fonts (unlike
+   Geist, which is why geist.css can declare one face at `font-weight: 100 900`).
+   Static instances are the only option here; do not "simplify" this to a single
+   @font-face with a weight range, because there is no file that would satisfy it.
+
+   `font-display: swap` matches geist.css — heading text is readable in the
+   fallback serif immediately and reflows once, rather than being invisible
+   while the face loads. */
+
+/* ── 400 regular ─────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: normal;
+  font-weight: 400;
+  src: url("../fonts/IBMPlexSerif-Regular-latin.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: normal;
+  font-weight: 400;
+  src: url("../fonts/IBMPlexSerif-Regular-latin-ext.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── 500 medium ──────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: normal;
+  font-weight: 500;
+  src: url("../fonts/IBMPlexSerif-Medium-latin.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: normal;
+  font-weight: 500;
+  src: url("../fonts/IBMPlexSerif-Medium-latin-ext.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── 600 semibold ────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: normal;
+  font-weight: 600;
+  src: url("../fonts/IBMPlexSerif-SemiBold-latin.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: normal;
+  font-weight: 600;
+  src: url("../fonts/IBMPlexSerif-SemiBold-latin-ext.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── 400 italic ──────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: italic;
+  font-weight: 400;
+  src: url("../fonts/IBMPlexSerif-Italic-latin.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: italic;
+  font-weight: 400;
+  src: url("../fonts/IBMPlexSerif-Italic-latin-ext.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── 500 medium italic ───────────────────────────────────────────────────── */
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: italic;
+  font-weight: 500;
+  src: url("../fonts/IBMPlexSerif-MediumItalic-latin.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: italic;
+  font-weight: 500;
+  src: url("../fonts/IBMPlexSerif-MediumItalic-latin-ext.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── 600 semibold italic ─────────────────────────────────────────────────── */
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: italic;
+  font-weight: 600;
+  src: url("../fonts/IBMPlexSerif-SemiBoldItalic-latin.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: italic;
+  font-weight: 600;
+  src: url("../fonts/IBMPlexSerif-SemiBoldItalic-latin-ext.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+    U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}

@@ -67,8 +67,9 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
+<link href="../css/plex-serif.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
-    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
 <link href="../css/code-refs.css" rel="stylesheet"/>
 
@@ -166,7 +167,8 @@
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
                     <span>Search…</span>
-                    <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
+                    
+                    <kbd class="mewbo-kbd" aria-hidden="true"><kbd id="mewbo-kbd-modifier">⌘</kbd><kbd>K</kbd></kbd>
                 </button>
                 
                 <button id="mewbo-nav-ask-ai" class="mewbo-nav-ask-ai-btn" type="button" aria-label="Ask AI">
@@ -1822,6 +1824,18 @@ tmux session naming and refresh cadences.
 | `session_prefix` | `string` | `&#34;grove-&#34;` | Prefix on every Grove tmux session name. |
 | `shell_window_name` | `string` | `&#34;shell&#34;` | Window that holds a plain shell. |
 | `steer_settle_ms` | `integer` | `200` | Milliseconds between pasting steered text and sending Enter, so the agent&#39;s TUI treats Enter as a submit rather than part of the paste. `0` disables the wait. |
+
+## `transcript_cache`
+
+Process-wide retention budgets per filesystem agent adapter.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_retained_bytes` | `integer` | `268435456` | Maximum estimated retained fold bytes per adapter. |
+| `max_source_bytes` | `integer \| null` | `268435456` | Additional source-byte limit; null disables this secondary limit. |
+| `memo_max_bytes` | `integer` | `67108864` | Maximum estimated bytes retained by derived read products per adapter. |
+| `memo_max_entries` | `integer` | `512` | Maximum retained derived products, including empty answers. |
 
 ## `ui`
 
@@ -3721,6 +3735,44 @@ Where worktrees live and how branches are named.
 </tr>
 </tbody>
 </table></div>
+<h2 id="transcript_cache"><code>transcript_cache</code></h2>
+<p>Process-wide retention budgets per filesystem agent adapter.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_retained_bytes</code></td>
+<td><code>integer</code></td>
+<td><code>268435456</code></td>
+<td>Maximum estimated retained fold bytes per adapter.</td>
+</tr>
+<tr>
+<td><code>max_source_bytes</code></td>
+<td><code>integer \| null</code></td>
+<td><code>268435456</code></td>
+<td>Additional source-byte limit; null disables this secondary limit.</td>
+</tr>
+<tr>
+<td><code>memo_max_bytes</code></td>
+<td><code>integer</code></td>
+<td><code>67108864</code></td>
+<td>Maximum estimated bytes retained by derived read products per adapter.</td>
+</tr>
+<tr>
+<td><code>memo_max_entries</code></td>
+<td><code>integer</code></td>
+<td><code>512</code></td>
+<td>Maximum retained derived products, including empty answers.</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="ui"><code>ui</code></h2>
 <p><abbr title="Terminal User Interface">TUI</abbr> preferences.</p>
 <div class="table-wrapper"><table>
@@ -5365,6 +5417,14 @@ Where worktrees live and how branches are named.
             </a>
             
             
+            <a href="#transcript_cache"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#transcript_cache');">
+                transcript_cache
+            </a>
+            
+            
             <a href="#ui"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2"
@@ -5561,14 +5621,14 @@ Where worktrees live and how branches are named.
 
     
     <script integrity="sha384-fNifZa2zJzBUcKyN6ceWa8F0WlBRnrWGxxsA1GhFIT2idlBucX8dpOqGbkT5L55d" src="../js/pygments-theme.js"></script>
-<script integrity="sha384-GkZQUis3UGkud4fe2p4WO9VQEiwRkpFctrQq4sSNvrHPyHqHCUCtAKhXh8JXA/dw" src="../js/search-enhance.js"></script>
+<script integrity="sha384-Auv8C72/0y5F1bYBkp5lW1daDTuC6S/Kz/OXeSgLFAmVKjxadAfRUwUlkNRiT1yM" src="../js/search-enhance.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/lib/marked.umd.min.js"></script>
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../js/ask-ai.js"></script>
     
     <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-V262dlYgpZKWy9k692CTshxLg2I6wPfzy4h0AhjOWLWfOuHOan1YUpq/UDnJZ62E" src="../js/mermaid-init-v2.js"></script>
+<script integrity="sha384-xtWSri63z3ykcj6146FkDCWRsc7nX1MLITAj8JoziapES6YVsBmlzVl1HiRrhl4C" src="../js/mermaid-init-v2.js"></script>
     
     <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
 <script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../js/sortable-tables.js"></script>
@@ -5576,14 +5636,14 @@ Where worktrees live and how branches are named.
 <script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
-<script integrity="sha384-9Brx89QJtpCZyHsD//ihIPNQl2Mei0J5iM2r381aZkhhyNH/MLnZ31xfXMEfHGHN" src="../js/carousel.js"></script>
+<script integrity="sha384-JsUAAeTkaf9E+KsB9o6gv8Exju3bFfIayBmAAS6zbrn3USz68KkpPl/mNUEgiNAV" src="../js/carousel.js"></script>
     
     
-    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
-<script integrity="sha384-AWWgfRIG2PKj63p5oTEkROdaIQOb2pBckZiuyharusaLVoQR+AMwOvKjpRTAb8TB" src="../js/lightbox.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.js"></script>
+<script integrity="sha384-Hep12pzPKhU1vp1Ipyxos7+EVbimO3HPzGd748pwzJh/W3UOcSocFWWm3SgZ0CiD" src="../js/lightbox.js"></script>
     
     
-    <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../js/version-switcher.js"></script>
+    <script integrity="sha384-MpORMQSqTRzbg5KOqiUDMeO7wu6AYRnIpWFH5hAEMTkAsy1el0wiv1bvtlSmcXJs" src="../js/version-switcher.js"></script>
     
     <script integrity="sha384-eJpvKRUakG/0R4bQrYzNYkaXLaEt42EHkXERuq2H3GZ4pBKCZW5haroDCR4orO3x" src="../js/copy-page.js"></script>
     

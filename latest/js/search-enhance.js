@@ -92,13 +92,35 @@
     return svg;
   };
 
+  // Mac says \u2318K, everywhere else says Ctrl+K \u2014 and the shortcut really does
+  // differ (callbacks.js listens for metaKey OR ctrlKey), so showing one
+  // spelling to both is wrong on one of them. `navigator.platform` is
+  // deprecated but is the only signal older WebKit gives; the UA test carries
+  // it elsewhere.
+  const isMac = () =>
+    /Mac|iPhone|iPad|iPod/.test(
+      (navigator.userAgentData && navigator.userAgentData.platform) ||
+        navigator.platform ||
+        navigator.userAgent,
+    );
+
   const shortcutHint = () => {
-    const kbd = document.createElement("kbd");
-    kbd.className = "search-shortcut";
-    kbd.setAttribute("aria-hidden", "true");
-    const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
-    kbd.textContent = isMac ? "\u2318K" : "Ctrl K";
-    return kbd;
+    const group = document.createElement("kbd");
+    group.className = "search-shortcut";
+    group.setAttribute("aria-hidden", "true");
+    // One <kbd> per key, so each renders as its own cap in the site's keycap
+    // style rather than as a single flat "Ctrl K" slab in a different
+    // typeface from every other shortcut on the site. No `+` between them:
+    // inside a search field the caps sit tight, and the separator only added
+    // width to a hint that has to stay out of the placeholder's way. The
+    // outer <kbd> wrapping others is what `kbd:has(kbd)` keys off.
+    const keys = isMac() ? ["\u2318", "K"] : ["Ctrl", "K"];
+    for (const label of keys) {
+      const key = document.createElement("kbd");
+      key.textContent = label;
+      group.appendChild(key);
+    }
+    return group;
   };
 
   const enhanceTrigger = () => {

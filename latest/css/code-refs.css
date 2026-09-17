@@ -43,6 +43,29 @@
   overflow: hidden;
   text-decoration: none !important;
   white-space: nowrap;
+  /* `overflow: hidden` clips the CONTENTS; it does not cap the BOX. An
+     inline-flex with nowrap children sizes to max-content, so a long path
+     made the pill wider than the column and scrolled the whole page — 350px
+     of pill in a 238px list item. This is the cap; the label cell below is
+     what gives up the space. */
+  max-width: 100%;
+  /* Breathing room against the prose. A badge carries a border and a filled
+     second cell, so it reads as an OBJECT in the sentence rather than as a
+     run of words — and at zero margin its border sat directly against the
+     next character, which looked like a typesetting mistake. The only
+     separation was the space in the source markdown (~0.25em at this size),
+     so the sentence "see repo:action.yml for details" had its border almost
+     touching the "f".
+
+     0.25em per side doubles that to ~0.5em. In `em` rather than `rem` so it
+     tracks the badge's own 0.75rem type: the gap stays proportional wherever
+     a consumer resizes the pill. Inline margins collapse with neither each
+     other nor the surrounding text, so two adjacent badges get the full
+     0.5em between them, which is the intent.
+
+     Vertical margin stays 0 — this is an inline element inside a line of
+     prose, and adding block margin would perturb the line box. */
+  margin-inline: 0.25em;
   transition: border-color 0.12s ease;
   /* Second tone: one consistent step away from --muted, in both themes. */
   --cr-base: var(--muted);
@@ -61,9 +84,22 @@
   padding: 0.15rem 0.5rem;
 }
 
+/* The label is the cell that yields when the pill hits its cap: the line
+   range and the method are short and fixed, and truncating either would
+   destroy the reference. A path truncates legibly — the tail is still there
+   to read once there is room, and the title attribute carries the whole of
+   it. */
 .md-coderef__label {
   gap: 0.34rem;
   color: var(--foreground);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.md-coderef__lines,
+.md-coderef__method {
+  flex: 0 0 auto;
 }
 
 .md-coderef__icon {

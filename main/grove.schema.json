@@ -1657,6 +1657,49 @@
       "title": "TmuxConfig",
       "type": "object"
     },
+    "TranscriptCacheConfig": {
+      "additionalProperties": false,
+      "description": "Process-wide retention budgets per filesystem agent adapter.\n\nBudgets limit cached Python object estimates, not process RSS or response\nsize. Oversized histories remain readable without being retained. The daemon\napplies the global configuration at startup; project overrides cannot resize\nshared caches belonging to other projects.",
+      "properties": {
+        "max_retained_bytes": {
+          "default": 268435456,
+          "description": "Maximum estimated retained fold bytes per adapter.",
+          "exclusiveMinimum": 0,
+          "title": "Max Retained Bytes",
+          "type": "integer"
+        },
+        "max_source_bytes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 268435456,
+          "description": "Additional source-byte limit; null disables this secondary limit.",
+          "title": "Max Source Bytes"
+        },
+        "memo_max_bytes": {
+          "default": 67108864,
+          "description": "Maximum estimated bytes retained by derived read products per adapter.",
+          "exclusiveMinimum": 0,
+          "title": "Memo Max Bytes",
+          "type": "integer"
+        },
+        "memo_max_entries": {
+          "default": 512,
+          "description": "Maximum retained derived products, including empty answers.",
+          "exclusiveMinimum": 0,
+          "title": "Memo Max Entries",
+          "type": "integer"
+        }
+      },
+      "title": "TranscriptCacheConfig",
+      "type": "object"
+    },
     "UIConfig": {
       "additionalProperties": false,
       "description": "TUI preferences.",
@@ -2305,6 +2348,9 @@
     },
     "tmux": {
       "$ref": "#/$defs/TmuxConfig"
+    },
+    "transcript_cache": {
+      "$ref": "#/$defs/TranscriptCacheConfig"
     },
     "ui": {
       "$ref": "#/$defs/UIConfig"

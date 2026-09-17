@@ -55,15 +55,43 @@
   function createSwitcher(versions, current) {
     const container = document.createElement('div');
     container.id = 'version-switcher';
-    container.className = 'hidden md:flex items-center gap-2';
+    // `.ms-header-select` carries the shared geometry — see mewbo.css. The
+    // sizing used to live in Tailwind classes here, which is why this control
+    // and the mike one (a bare <select>) never matched: two spellings of the
+    // same thing, only one of them maintained.
+    container.className = 'ms-header-select hidden md:flex';
 
-    const label = document.createElement('span');
-    label.className = 'text-muted-foreground text-xs';
-    label.textContent = 'Version';
+    // A text label beside a dropdown that already says "latest" is a second
+    // word for the same fact, and only THIS switcher had one — so the header
+    // read as two unrelated controls. The icon says the same thing in the
+    // space the row actually has, and matches how the branch picker beside it
+    // is marked.
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('fill', 'none');
+    icon.setAttribute('stroke', 'currentColor');
+    icon.setAttribute('stroke-width', '2');
+    icon.setAttribute('stroke-linecap', 'round');
+    icon.setAttribute('stroke-linejoin', 'round');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.classList.add('ms-header-select__icon');
+    // lucide:history — a clock with a rewind arrow. Versions are points in
+    // time, and a tag icon would collide with the branch picker's meaning.
+    for (const d of [
+      'M3 3v5h5',
+      'M3.05 13A9 9 0 1 0 6 5.3L3 8',
+      'M12 7v5l4 2',
+    ]) {
+      const path = document.createElementNS(
+        'http://www.w3.org/2000/svg',
+        'path',
+      );
+      path.setAttribute('d', d);
+      icon.appendChild(path);
+    }
 
     const select = document.createElement('select');
-    select.className =
-      'h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
+    select.setAttribute('aria-label', 'Documentation version');
 
     for (const item of versions) {
       const option = document.createElement('option');
@@ -84,7 +112,7 @@
       window.location.assign(target);
     });
 
-    container.appendChild(label);
+    container.appendChild(icon);
     container.appendChild(select);
     return container;
   }

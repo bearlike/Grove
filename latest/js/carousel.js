@@ -19,15 +19,26 @@
     options() {
       return {
         loop: true,
+        // Swiper drops any slide request that arrives mid-transition unless
+        // this is off, and a transition is 300ms. A reader clicking an arrow
+        // or a dot at a normal pace therefore loses most of their clicks and
+        // the carousel reads as stuck — measured 4 of 12 clicks landing, and
+        // 12 of 12 with this false. The guard exists to protect the loop's
+        // slide reordering; re-requesting a slide mid-flight is exactly what
+        // an impatient reader does, so answer it instead of discarding it.
+        loopPreventsSliding: false,
         slidesPerView: 1,
         autoHeight: false,
         spaceBetween: 24,
         grabCursor: true,
         keyboard: { enabled: true },
         a11y: { enabled: true },
+        // `disableOnInteraction: true` so autoplay retires for good once the
+        // reader takes over. Resuming would keep moving the slide under them
+        // between clicks, which is the second half of feeling stuck.
         autoplay: this.prefersReducedMotion
           ? false
-          : { delay: 4000, pauseOnMouseEnter: true, disableOnInteraction: false },
+          : { delay: 4000, pauseOnMouseEnter: true, disableOnInteraction: true },
         pagination: {
           el: this.root.querySelector(".swiper-pagination"),
           clickable: true,

@@ -1,9 +1,14 @@
-// Full-screen image viewer for content images. GLightbox does the viewing; this
+// Full-screen image viewer for content images. Viewer.js does the viewing; this
 // file decides WHAT is viewable, builds the gallery, and puts a visible
 // affordance on the page. The library is loaded from the CDN ahead of this file
 // (emitted when theme `lightbox: true`). If it never loads, images stay
 // ordinary images and no affordance is shown, which is the same failure mode
 // the carousel has.
+//
+// Viewer.js rather than a plain lightbox because the viewer owns its own
+// chrome: the toolbar, the title and the navigation float *over* the picture
+// instead of being laid out beside it. Chrome that takes up layout is what
+// kept a phone showing a picture at under a third of its screen.
 (() => {
   "use strict";
 
@@ -57,17 +62,13 @@
       return this.el.closest(".swiper");
     }
 
-    toSlide() {
-      return { href: this.src, type: "image", description: this.caption };
-    }
-
     /**
      * Every distinct picture in the same carousel, in slide order, so the
      * viewer's arrows walk the strip instead of dead-ending on one slide.
      *
-     * Deduplicated BY SOURCE because Swiper runs with `loop: true` and clones
-     * slides. Wrapping each image in an anchor, which is what the library's
-     * own docs suggest, would list the same picture two or three times.
+     * Deduplicated BY SOURCE because Swiper runs with `loop: true` and may
+     * clone slides; without this the same picture is listed two or three
+     * times and the arrows appear to stall on it.
      */
     gallery() {
       const strip = this.carousel;
@@ -159,11 +160,84 @@
   }
 
   /**
+   * The off-document list Viewer.js reads its gallery from.
+   *
+   * Viewer.js builds a gallery by scanning a container for `<img>`, which is
+   * how it is meant to be used but would mean pointing it at live page markup
+   * — inside a carousel that means Swiper's clones and Swiper's own DOM
+   * reordering. A detached `<ul>` we own instead: one entry per distinct
+   * picture, built at open time and thrown away on close, so what the viewer
+   * walks is exactly the gallery we computed and nothing the page does to its
+   * slides can disturb it.
+   */
+  class GallerySource {
+    constructor(targets) {
+      this.targets = targets;
+      this.el = this.build();
+    }
+
+    build() {
+      const list = document.createElement("ul");
+      list.className = "ms-viewer-source";
+      list.hidden = true;
+      this.targets.forEach((target) => {
+        const item = document.createElement("li");
+        const img = document.createElement("img");
+        img.src = target.src;
+        // Viewer.js titles a slide from `alt`, so the figcaption rides there.
+        img.alt = target.caption;
+        item.appendChild(img);
+        list.appendChild(item);
+      });
+      document.body.appendChild(list);
+      return list;
+    }
+
+    indexOf(target) {
+      return Math.max(0, this.targets.findIndex((t) => t.src === target.src));
+    }
+
+    destroy() {
+      this.el.remove();
+    }
+  }
+
+  /**
    * Binds one content root. Collaborators are injected rather than constructed
    * here, so the viewer can be exercised without the library present.
    */
   class ImageViewer {
     static CHROME = ".swiper-button-prev, .swiper-button-next, .swiper-pagination";
+
+    /**
+     * How much of the available box an opened picture starts at.
+     *
+     * 0.8, which is a READABILITY decision rather than a layout budget. At 1
+     * a landscape screenshot met every edge of the display, and with the page
+     * hidden behind an opaque backdrop there was nothing left to say the
+     * viewer was open: no margin, no frame, no visible boundary between the
+     * picture and the browser. Readers could not tell whether they were
+     * looking at an expanded image or at a page that happened to be an image,
+     * and pressed Escape or Back to find out.
+     *
+     * A fifth of the smaller axis held back is enough for the backdrop to
+     * read as a frame all the way round, while still opening the picture far
+     * larger than it sits inline. The image is centred, so the reserve is
+     * split evenly and no edge is special.
+     *
+     * NOT a return to the INSET_X / RESERVE_Y / MAX_EDGE budget this once
+     * replaced. That subtracted a FLAT 200px of height and 144px of width for
+     * chrome laid out beside the image, which on a 390x844 phone left the
+     * picture under a third of the screen — the reserve did not scale, so the
+     * smaller the display the worse the trade. A proportion cannot do that:
+     * on that same phone 0.8 is a 78px inset, not 200px. The chrome still
+     * floats (see the zero-height `.viewer-footer` rule in mewbo.css), so
+     * nothing is reserved FOR it; this margin exists to be seen.
+     *
+     * Viewer.js still refuses to enlarge past an image's own pixels, so a
+     * small screenshot opens at its own size and stays sharp.
+     */
+    static COVERAGE = 0.8;
 
     constructor(root, { factory, hint }) {
       this.root = root;
@@ -213,51 +287,61 @@
     open(target) {
       this.hint.hide();
       const slides = target.gallery();
-      const index = Math.max(0, slides.findIndex((s) => s.src === target.src));
       const many = slides.length > 1;
-      const lb = this.factory({
-        // No zoom. The ask is to see the picture at full size, nothing more.
-        zoomable: false,
-        draggable: many,
+      const source = new GallerySource(slides);
+      const viewer = new this.factory(source.el, {
+        className: "ms-viewer",
+        initialViewIndex: source.indexOf(target),
+        initialCoverage: ImageViewer.COVERAGE,
+        // The picture is the point; the page behind it is not.
+        backdrop: true,
+        // A strip of thumbnails would be chrome competing with the image on a
+        // phone, and the carousel it came from is already the thumbnail strip.
+        navbar: false,
+        // The caption, floating over the image rather than beside it. The
+        // library's default title is `alt (W × H)`; a reader wants the
+        // caption, not the pixel dimensions, so supply the text ourselves.
+        title: (image) => image.alt || "",
+        toolbar: {
+          prev: many,
+          next: many,
+          zoomIn: true,
+          zoomOut: true,
+          oneToOne: true,
+          reset: true,
+          rotateLeft: true,
+          rotateRight: true,
+          flipHorizontal: false,
+          flipVertical: false,
+          play: false,
+        },
+        // Arrows walk the strip, so only offer them when there is a strip.
         loop: many,
-        touchNavigation: many,
-        openEffect: "fade",
-        closeEffect: "fade",
-        elements: slides.map((s) => s.toSlide()),
-        startAt: index,
+        keyboard: true,
+        // Never auto-advance: the reader opened this to look at one picture.
+        autoplay: false,
+        transition: true,
+        tooltip: true,
+        movable: true,
+        zoomable: true,
+        rotatable: true,
+        scalable: false,
+        slideOnTouch: many,
+        toggleOnDblclick: true,
+        zoomOnWheel: true,
+        // Hand the OS the whole screen when the reader asks to fill it.
+        fullscreen: true,
+        hidden: () => {
+          source.destroy();
+          viewer.destroy();
+        },
       });
-      const fitImages = () => {
-        document.querySelectorAll('.glightbox-container .gslide-image img').forEach((image) => {
-          if (!image.naturalWidth || !image.naturalHeight) return;
-          const width = window.innerWidth - (window.innerWidth <= 640 ? 24 : 144);
-          const height = Math.max(1, window.innerHeight - 200);
-          const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
-          image.style.width = `${image.naturalWidth * scale}px`;
-          image.style.height = `${image.naturalHeight * scale}px`;
-        });
-      };
-      // GLightbox rewrites inline image styles in its resize handler. Apply
-      // our fit afterwards, including after a slide finishes loading.
-      let fitFrame;
-      const scheduleFit = () => {
-        cancelAnimationFrame(fitFrame);
-        fitFrame = requestAnimationFrame(fitImages);
-      };
-      lb.on('slide_after_load', scheduleFit);
-      lb.on('slide_changed', scheduleFit);
-      window.addEventListener('resize', scheduleFit);
-      lb.open();
-      // Each open owns its resize listener and library instance.
-      lb.on("close", () => {
-        window.removeEventListener('resize', scheduleFit);
-        cancelAnimationFrame(fitFrame);
-        window.setTimeout(() => lb.destroy(), 0);
-      });
+      viewer.show();
     }
   }
 
   const start = (attempt = 0) => {
-    if (typeof window.GLightbox !== "function") {
+    if (typeof window.Viewer !== "function") {
       if (attempt > 40) return; // ~4s, then give up quietly
       window.setTimeout(() => start(attempt + 1), 100);
       return;
@@ -266,7 +350,7 @@
     if (!roots.length) return;
     const hint = new ZoomHint();
     const viewers = [...roots].map(
-      (root) => new ImageViewer(root, { factory: window.GLightbox, hint })
+      (root) => new ImageViewer(root, { factory: window.Viewer, hint })
     );
     // Wired after construction rather than passed in, because the hint is
     // shared by every root and must not hold a reference to one of them.
