@@ -150,13 +150,10 @@ docs = [
     # greeting, WebMCP tool name) derives from `site_name`, so Grove ships no
     # template overrides.
     #
-    # Pin the TAGGED release asset, never `latest-master`: the rolling
-    # release's wheel FILENAME rotates with every upstream version, so a
-    # latest-master pin 404s (and breaks every `uv sync`) the moment the
-    # theme ships a release. Tagged assets are permanent. To upgrade: pick
-    # the new tag, update both the tag and the filename here, then
-    #     uv lock --upgrade-package mkdocs-shadcn-mewbo
-    "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl",
+    # Unversioned on purpose — resolved from the flat index declared under
+    # `[[tool.uv.index]]` below, so the theme tracks its own latest release
+    # and no version appears here to go stale.
+    "mkdocs-shadcn-mewbo",
     "mkdocstrings[python]",
     "pymdown-extensions>=10.20.1",
 ]
@@ -164,6 +161,55 @@ docs = [
 # ─────────────────────────────────────────────────────────────────────────────
 # Tooling
 # ─────────────────────────────────────────────────────────────────────────────
+
+# The docs theme is published only to GitHub Releases, never to PyPI, so it
+# needs a package index that is not PyPI. GitHub does not serve a PEP 503
+# index, but `/releases/expanded_assets/<tag>` returns exactly one flat page of
+# `<a href>` links to that release's assets — which is what `format = "flat"`
+# (a PEP 508 "find-links" page) consumes. Pointing it at the moving
+# `latest-master` tag makes uv RESOLVE the version instead of us naming one:
+# the page is re-rendered per request, so a new theme release is picked up by
+# the next resolution with nothing to edit here.
+#
+# This is why the old "never pin latest-master" rule no longer applies. That
+# rule was about a direct URL dependency, where the wheel FILENAME carries the
+# version and 404s the moment the theme ships a release. An index is read, not
+# fetched by name, so the rotating filename is the mechanism rather than the
+# hazard.
+#
+# `explicit = true` confines this index to the one package named in
+# `[tool.uv.sources]`; without it every dependency in the tree would be allowed
+# to resolve from a GitHub release page.
+#
+# Why `latest-master` and not the newest v* TAG, which is the more obvious
+# reading of "latest release": resolving a tag name means an api.github.com
+# call, and that API answers 403 to unauthenticated requests. The docs job runs
+# on BOTH mirrors, and the internal Gitea runner holds no github.com token —
+# measured 2026-09-16, the API returned 403 anonymously while this release page
+# returned 200. A static URL that needs no credential is the only mechanism
+# that works on both. The cost, per the theme's own release.yaml: this tracks
+# master's HEAD, so between a tag and the next one it can serve commits that
+# are newer than any tagged release while still carrying the tagged version
+# number. We own that repo and its master is the release branch, so that is
+# acceptable here; it would not be for a third-party dependency.
+#
+# The trade-off, accepted deliberately: this gives up a pinned, immutable
+# dependency. `uv.lock` still pins the resolved version, so ordinary builds
+# stay reproducible — but the lock is refreshed on every docs CI run (see
+# `.github/workflows/docs.yml`), so a docs build is reproducible only against
+# whatever the theme's latest release was at that moment. That is the intended
+# behavior: we own both repos, a theme release is meant to reach the docs
+# site without a bump commit, and the docs site is rebuilt from scratch every
+# time. Do NOT extend this pattern to a runtime dependency of the `grove`
+# package itself, where a shipped wheel must resolve identically forever.
+[[tool.uv.index]]
+name = "mkdocs-shadcn-releases"
+url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/expanded_assets/latest-master"
+format = "flat"
+explicit = true
+
+[tool.uv.sources]
+mkdocs-shadcn-mewbo = { index = "mkdocs-shadcn-releases" }
 
 [tool.ruff]
 target-version = "py312"

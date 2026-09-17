@@ -14,7 +14,32 @@ import json
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+from pydantic import BaseModel
+
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
+
+
+class _Payload(BaseModel):
+    body: str
+
+
+class _ProjectionFolder:
+    """Folder whose derived immutable snapshot appears only during projection."""
+
+    instances: ClassVar[list[_ProjectionFolder]] = []
+
+    def __init__(self) -> None:
+        self._records: list[dict] = []
+        _ProjectionFolder.instances.append(self)
+
+    def add(self, raw: dict, source: str) -> dict:
+        del source
+        self._records.append(raw)
+        return raw
+
+    def records(self) -> list[dict]:
+        return self._records
 
 
 class _CountingFolder:
@@ -35,10 +60,11 @@ class _CountingFolder:
         self.adds = 0
         _CountingFolder.instances.append(self)
 
-    def add(self, raw: dict, source: str) -> None:
+    def add(self, raw: dict, source: str) -> dict:
         self.adds += 1
         self._records.append(raw)
         self.sources.append(source)
+        return raw
 
     def records(self) -> list[dict]:
         return self._records
@@ -47,6 +73,11 @@ class _CountingFolder:
 def _cache(**kwargs: int) -> TranscriptCache:
     _CountingFolder.instances = []
     return TranscriptCache(_CountingFolder, **kwargs)
+
+
+def _projection_cache(**kwargs: int) -> TranscriptCache:
+    _ProjectionFolder.instances = []
+    return TranscriptCache(_ProjectionFolder, **kwargs)
 
 
 def _write_lines(path: Path, objs: list[dict], *, trailing_partial: str = "") -> None:
@@ -283,3 +314,204 @@ def test_memo_bounded_by_maxsize(tmp_path: Path) -> None:
     memo.get_or_compute(("b",), [f], compute)
     memo.get_or_compute(("c",), [f], compute)  # evicts ("a",)
     assert memo.get_or_compute(("a",), [f], compute) == 4
+
+
+def test_retained_byte_budget_evicts_a_single_oversized_state(tmp_path: Path) -> None:
+    """An oversized result is returned, but is not retained for the next read."""
+    cache = _cache(max_retained_bytes=1)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"body": "enough decoded data to exceed one byte"}])
+
+    assert cache.read([transcript])
+    assert cache.read([transcript])
+
+    # A singleton used to survive forever because eviction required two states.
+    assert len(_CountingFolder.instances) == 2
+
+
+def test_retained_byte_budget_evicts_empty_states(tmp_path: Path) -> None:
+    """Missing transcripts still consume state bookkeeping and cannot accumulate."""
+    cache = _cache(max_retained_bytes=1)
+    missing = tmp_path / "not-yet-created.jsonl"
+
+    assert cache.read([missing]) == []
+    assert cache.read([missing]) == []
+
+    assert len(_CountingFolder.instances) == 2
+
+
+def test_ingest_streams_complete_lines_without_reading_the_whole_delta(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    """The append path may read a bounded prefix, never an unbounded delta."""
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": number} for number in range(3)])
+    original_open = Path.open
+
+    class _Reader:
+        def __init__(self, wrapped: object) -> None:
+            self._wrapped = wrapped
+
+        def __enter__(self) -> object:
+            self._wrapped.__enter__()  # type: ignore[union-attr]
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._wrapped.__exit__(*args)  # type: ignore[union-attr]
+
+        def read(self, size: int = -1) -> bytes:
+            assert size >= 0, "incremental ingest must not read an entire delta at once"
+            return self._wrapped.read(size)  # type: ignore[union-attr,no-any-return]
+
+        def readline(self, size: int = -1) -> bytes:
+            assert size == -1, "a line must not be split before its newline"
+            return self._wrapped.readline(size)  # type: ignore[union-attr,no-any-return]
+
+        def seek(self, offset: int) -> int:
+            return self._wrapped.seek(offset)  # type: ignore[union-attr,no-any-return]
+
+    def guarded_open(path: Path, *args: object, **kwargs: object) -> _Reader:
+        return _Reader(original_open(path, *args, **kwargs))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", guarded_open)  # type: ignore[union-attr]
+    assert [record["n"] for record in _cache().read([transcript])] == [0, 1, 2]
+
+
+def test_cache_rejects_nonpositive_budgets() -> None:
+    with pytest.raises(ValueError, match="max_retained_bytes"):
+        _cache(max_retained_bytes=0)
+    with pytest.raises(ValueError, match="max_source_bytes"):
+        _cache(max_source_bytes=-1)
+    with pytest.raises(ValueError, match="max_bytes"):
+        ResultMemo(max_bytes=0)
+    with pytest.raises(ValueError, match="maxsize"):
+        ResultMemo(maxsize=-1)
+
+
+def test_configure_evicts_existing_oversized_state(tmp_path: Path) -> None:
+    cache = _cache()
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    cache.read([transcript])
+
+    cache.configure(max_retained_bytes=1)
+    cache.read([transcript])
+
+    assert len(_CountingFolder.instances) == 2
+
+
+def test_memo_configure_evicts_existing_entries(tmp_path: Path) -> None:
+    memo = ResultMemo()
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    calls = 0
+
+    def compute() -> object:
+        nonlocal calls
+        calls += 1
+        return object()
+
+    memo.get_or_compute(("k",), [transcript], compute)
+    memo.configure(max_bytes=1)
+    memo.get_or_compute(("k",), [transcript], compute)
+    assert calls == 2
+
+
+def test_memo_does_not_retain_a_value_larger_than_its_byte_budget(tmp_path: Path) -> None:
+    memo = ResultMemo(max_bytes=1)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    calls = 0
+
+    def compute() -> object:
+        nonlocal calls
+        calls += 1
+        return object()
+
+    memo.get_or_compute(("large",), [transcript], compute)
+    memo.get_or_compute(("large",), [transcript], compute)
+    assert calls == 2
+
+
+def test_memo_evicts_a_smallest_key_when_values_exceed_its_byte_budget(tmp_path: Path) -> None:
+    memo = ResultMemo(maxsize=2, max_bytes=200)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    calls = 0
+
+    def compute() -> str:
+        nonlocal calls
+        calls += 1
+        return "x" * 80
+
+    memo.get_or_compute(("a",), [transcript], compute)
+    memo.get_or_compute(("b",), [transcript], compute)
+    memo.get_or_compute(("a",), [transcript], compute)
+    assert calls == 3
+
+
+def test_memo_counts_a_pydantic_payload_beyond_its_object_shell(tmp_path: Path) -> None:
+    memo = ResultMemo(max_bytes=2_048)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    calls = 0
+
+    def compute() -> _Payload:
+        nonlocal calls
+        calls += 1
+        return _Payload(body="x" * 4_096)
+
+    memo.get_or_compute(("model",), [transcript], compute)
+    memo.get_or_compute(("model",), [transcript], compute)
+    assert calls == 2
+
+
+def test_project_runs_under_the_fold_lock_and_charges_retained_roots(tmp_path: Path) -> None:
+    cache = _cache(max_retained_bytes=1)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    projects = 0
+
+    def project(folder: _CountingFolder) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
+        nonlocal projects
+        projects += 1
+        product = tuple(folder.records())
+        return product, product
+
+    assert cache.project([transcript], project) == ({"n": 1},)
+    assert cache.project([transcript], project) == ({"n": 1},)
+    assert projects == 2
+    assert len(_CountingFolder.instances) == 2
+
+
+def test_project_charges_only_new_roots_not_its_full_cached_snapshot(tmp_path: Path) -> None:
+    cache = _projection_cache(max_retained_bytes=2_500)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"body": "x" * 700}])
+
+    def project(folder: _ProjectionFolder) -> tuple[tuple[dict, ...], None]:
+        snapshot = tuple(folder.records())
+        folder.snapshot = snapshot  # type: ignore[attr-defined]
+        return snapshot, None
+
+    assert len(cache.project([transcript], project)) == 1
+    _append_lines(transcript, [{"body": "y" * 700}])
+    assert len(cache.project([transcript], project)) == 2
+
+    # Folder shallow accounting charges its retained tuple without a history walk.
+    assert len(_ProjectionFolder.instances) == 1
+
+
+def test_project_does_not_recharge_a_replaced_snapshot_while_idle(tmp_path: Path) -> None:
+    cache = _projection_cache(max_retained_bytes=1_800)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"body": "x" * 1_000}])
+
+    def project(folder: _ProjectionFolder) -> tuple[tuple[dict, ...], None]:
+        snapshot = tuple(folder.records())
+        folder.snapshot = snapshot  # type: ignore[attr-defined]
+        return snapshot, None
+
+    assert len(cache.project([transcript], project)) == 1
+    assert len(cache.project([transcript], project)) == 1
+    assert len(_ProjectionFolder.instances) == 1

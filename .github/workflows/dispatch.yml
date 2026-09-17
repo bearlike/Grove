@@ -60,6 +60,7 @@ on:
           - python-quality
           - webapp-gate
           - webapp-e2e
+          - docs-screenshots
           - everything
       paths:
         description: "[python-tests] paths, space separated (e.g. 'tests/core tests/daemon')"
@@ -96,6 +97,26 @@ on:
         type: number
         required: false
         default: 4
+      shots_target:
+        description: "[docs-screenshots] branch the regenerated images are committed to"
+        type: string
+        required: false
+        default: "main"
+      shots_source:
+        description: "[docs-screenshots] branch supplying the capture tooling; empty reuses the target"
+        type: string
+        required: false
+        default: ""
+      shots:
+        description: "[docs-screenshots] all | subset of tui,webapp"
+        type: string
+        required: false
+        default: "all"
+      shots_dry_run:
+        description: "[docs-screenshots] 'true' captures and diffs but never pushes"
+        type: string
+        required: false
+        default: "false"
 
 jobs:
   python-tests:
@@ -128,3 +149,17 @@ jobs:
     with:
       grep: ${{ inputs.e2e_grep }}
       shards: ${{ inputs.e2e_shards }}
+
+  # Deliberately NOT part of `everything`. Every other suite here READS the tree
+  # and reports a verdict; this one WRITES to a branch. Folding a push into the
+  # run-everything option would mean a routine "just gate the branch" dispatch
+  # quietly landed a commit, so it is reachable only by asking for it by name.
+  docs-screenshots:
+    name: Docs screenshots
+    if: inputs.suite == 'docs-screenshots'
+    uses: ./.github/workflows/_docs-screenshots.yml
+    with:
+      target: ${{ inputs.shots_target }}
+      source: ${{ inputs.shots_source }}
+      shots: ${{ inputs.shots }}
+      dry_run: ${{ inputs.shots_dry_run }}

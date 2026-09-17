@@ -24,6 +24,7 @@ import itertools
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from enum import IntFlag, auto
 from pathlib import Path
 from threading import Lock, RLock
 from typing import TYPE_CHECKING, Literal
@@ -50,6 +51,7 @@ from grove.core.agents.hook import (
     SubagentHookRecord,
 )
 from grove.core.agents.session_registry import NativeClaudeSession, NativeSessionRegistry
+from grove.core.agents.transcript_scope import config_dir_override
 from grove.core.contracts.usage import DurationView, GenerationLatencyView, TokenClassesView
 from grove.core.errors import WorkspaceNotFound
 from grove.core.git import GitRepo
@@ -57,7 +59,7 @@ from grove.core.launch import AgentExit
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
 from grove.core.phase import PhaseReport
 from grove.core.registry import RepoRegistry
-from grove.core.session_duration import duration_of, generation_latency_of
+from grove.core.spine_facts import SpineFactsCache
 from grove.core.workspace import CommitSummary, WorkspaceState, WorkspaceStatus
 from grove.core.workspace_history import WorkspaceHistoryStore
 
@@ -65,6 +67,20 @@ if TYPE_CHECKING:
     from grove.core.agents import AgentMessage
 
 DeltaKind = Literal["workspace_changed", "session_activity", "workspace_source_changed"]
+
+
+class RefreshDomain(IntFlag):
+    """The independently-readable facts a workspace activity row combines.
+
+    A source hint names the facts it invalidates; combining hints is a union so
+    a pending worktree edge can never erase an earlier transcript edge.
+    """
+
+    TRANSCRIPT = auto()
+    WORKTREE = auto()
+    PHASE = auto()
+    RUNTIME = auto()
+    FULL = TRANSCRIPT | WORKTREE | PHASE | RUNTIME
 
 
 # ─── engine IR (in-process; the contracts.activity Views mirror these) ──────
@@ -124,6 +140,9 @@ class SessionActivity:
     duration: DurationView | None = None
     tokens: TokenClassesView | None = None
     latency: GenerationLatencyView | None = None
+    # The adapter's immutable answer before runtime/sidecar evidence changes its
+    # displayed state. It lets a runtime-only edge reblend without a re-parse.
+    polled_activity: AgentActivity | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -522,7 +541,10 @@ class ActivityService:
         # the same reason: loopback-only, small N, tiny entries. It was three
         # parallel dicts fed by three separate reads until the cost was
         # measured; ``_SpineFacts`` carries that measurement.
-        self._spine_cache: dict[str, tuple[int, _SpineFacts]] = {}
+        self._spine_cache: dict[
+            str, tuple[tuple[object, ...], SpineFactsCache, _SpineFacts | None]
+        ] = {}
+        self._spine_lock = Lock()
         self._projection_lock = RLock()
         self._bootstrap_lock = Lock()
         self._projection: DashboardSnapshot | None = None
@@ -678,25 +700,139 @@ class ActivityService:
             self._session_workspaces.setdefault(session.session.session_id, set()).add(row.state.id)
 
     def prepare_workspace_refresh(
-        self, repo_root: str, workspace_id: str
+        self,
+        repo_root: str,
+        workspace_id: str,
+        *,
+        domains: RefreshDomain = RefreshDomain.FULL,
     ) -> WorkspaceActivity | None:
-        """Read one current row without mutating the projection.
+        """Read only invalidated parts of one maintained workspace row.
 
-        ``reconciled`` rather than ``get``, because the row published here is
-        the SAME row the bootstrap builds through ``list`` — and ``list``
-        promotes each persisted intent to its displayed status. Reading the raw
-        record instead put the persisted value on the wire for every workspace
-        the projection refreshed one at a time, so a container mid-build
-        reported RUNNING rather than PROVISIONING and the computed statuses
-        were unreachable. Status is the fingerprint's first element, so the row
-        still changed and still emitted; it was answering a different question.
+        ``reconciled`` rather than ``get`` keeps the displayed status on every
+        path. Unknown/lifecycle recovery keeps the default full refresh; an
+        edge-specific caller reuses all retained immutable facts it did not
+        invalidate.
         """
         mgr = self._registry.get(Path(repo_root))
         try:
             state = mgr.reconciled(workspace_id)
         except WorkspaceNotFound:
             return None
-        return self._workspace_activity(mgr, state)
+        with self._projection_lock:
+            previous = self._rows.get(workspace_id)
+        # `reconciled` legitimately moves the computed status (ACTIVE/IDLE/…)
+        # every tick; comparing the WHOLE state would demote every runtime edge
+        # to a full refresh and erase the saving the domain exists for. Compare
+        # the PERSISTED identity only — everything `_reconcile_status` computes
+        # is exactly what a partial refresh is trusted to recompute itself.
+        if (
+            previous is None
+            or previous.state.updated_at != state.updated_at
+            or previous.state.id != state.id
+            or domains == RefreshDomain.FULL
+        ):
+            return self._workspace_activity(mgr, state)
+        return self._refresh_row(mgr, state, previous, domains)
+
+    def _refresh_row(
+        self,
+        mgr: WorkspaceManager,
+        state: WorkspaceState,
+        previous: WorkspaceActivity,
+        domains: RefreshDomain,
+    ) -> WorkspaceActivity:
+        """Replace only the row facts the invalidation domain names."""
+        row = replace(previous, state=state, observed_at=_utcnow())
+        if domains & RefreshDomain.TRANSCRIPT:
+            sessions = tuple(self.sessions_for(mgr, state))
+            row = replace(
+                row,
+                sessions=sessions,
+                todo=self._todo_progress(mgr, state, sessions),
+                queue=self._queue_depth(mgr, state, sessions),
+                fleet=self._fleet_summary(mgr, state),
+            )
+        if domains & RefreshDomain.WORKTREE:
+            row = self._replace_worktree_facts(row, state)
+        if domains & RefreshDomain.PHASE:
+            row = replace(row, phase=self._phase(mgr, state))
+        if domains & RefreshDomain.RUNTIME:
+            row = replace(row, sessions=self._reblend_sessions(mgr, state, row.sessions))
+        return row
+
+    def _reblend_sessions(
+        self,
+        mgr: WorkspaceManager,
+        state: WorkspaceState,
+        sessions: tuple[SessionActivity, ...],
+    ) -> tuple[SessionActivity, ...]:
+        """Reapply every non-transcript status source, over the RETAINED transcript.
+
+        Mirrors ``_session_activity``'s post-parse pipeline exactly — native
+        corroboration, the hook-sidecar override, the recorded-exit override,
+        hysteresis — so a runtime-only edge (tmux active/idle, container
+        liveness, a recorded agent exit) can never silently drop a BLOCKED or
+        ERROR verdict the transcript domain already established by reblending
+        through a simplified copy of the policy. Reading the sidecar and the
+        exit recorder is a single small-file stat each, not a transcript
+        parse or a git call — the cost this domain exists to avoid.
+        """
+        now = _utcnow()
+        agent_exit = mgr.agent_exit(state)
+        rebuilt: list[SessionActivity] = []
+        for session in sessions:
+            transcript = session.polled_activity or session.activity
+            kind = session.session.adapter_kind
+            adapter = get_adapter(kind)
+            sidecar = (
+                ClaudeHook.read(
+                    session.session.session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                )
+                if kind == "claude_code"
+                else None
+            )
+            native = (
+                NativeSessionRegistry.for_session(session.session.session_id)
+                if kind == "claude_code"
+                else None
+            )
+            has_transcript = (
+                session.session.transcript_path is not None
+                or transcript.state is not AgentActivityState.UNKNOWN
+            )
+            pane_not_authoritative = adapter.remote or not mgr.provides_pane
+            blended = self._blend(
+                state.status,
+                transcript,
+                has_transcript=has_transcript,
+                provenance=session.session.provenance,
+                remote=pane_not_authoritative,
+                now=now,
+            )
+            if native is not None:
+                blended = self._with_native_status(blended, native)
+            if sidecar is not None and sidecar.supersedes_poll(
+                now=now, transcript_at=transcript.last_event_at
+            ):
+                blended = sidecar.state
+            if agent_exit is not None and agent_exit.failed:
+                blended = AgentActivityState.ERROR
+            blended = self._settle(session.session.session_id, blended, now)
+            rebuilt.append(
+                replace(
+                    session,
+                    activity=replace(
+                        session.activity,
+                        state=blended,
+                        current_task=(
+                            agent_exit.reason
+                            if agent_exit is not None and agent_exit.failed
+                            else session.activity.current_task
+                        ),
+                    ),
+                )
+            )
+        return tuple(rebuilt)
 
     def apply_workspace_refresh(
         self, repo_root: str, workspace_id: str, row: WorkspaceActivity | None
@@ -949,123 +1085,13 @@ class ActivityService:
     def _workspace_activity(
         self, mgr: WorkspaceManager, state: WorkspaceState
     ) -> WorkspaceActivity:
-        sessions = self.sessions_for(mgr, state)
-        git = self._git_for(Path(state.repo_root))
-        branch = self._live_branch(state)
-        try:
-            ahead, behind = git.ahead_behind(branch, state.base_branch)
-        except Exception as exc:  # best-effort: never break the snapshot
-            logger.debug("activity ahead_behind({}) failed: {}", state.id, exc)
-            ahead = behind = 0
-        try:
-            added, removed = git.diff_stats(branch, state.diff_base)
-        except Exception as exc:
-            logger.debug("activity diff_stats({}) failed: {}", state.id, exc)
-            added = removed = 0
-        try:
-            # Uncommitted churn — in the fingerprint, so an agent editing files
-            # streams a delta before anything is committed.
-            dirty = git.dirty_file_count(Path(state.worktree_path))
-        except Exception as exc:
-            logger.debug("activity dirty_file_count({}) failed: {}", state.id, exc)
-            dirty = 0
-        try:
-            pane_target = mgr.pane_target_for(state)
-        except Exception as exc:
-            logger.debug("activity pane_target({}) failed: {}", state.id, exc)
-            pane_target = None
-        try:
-            # The durable latest-activity signal — one cheap `git log -3` per row,
-            # same per-tick discipline as ahead_behind/diff_stats above.
-            commits = git.recent_commits(branch, limit=3)
-        except Exception as exc:  # best-effort: never break the snapshot
-            logger.debug("activity recent_commits({}) failed: {}", state.id, exc)
-            commits = ()
-        try:
-            # One `stat` + a small JSON read off the worktree. Asked of the
-            # MANAGER rather than reading the file here so "where does a
-            # workspace's phase live" has exactly one answer — the CLI, the MCP
-            # tool and this card cannot drift apart about it.
-            phase = mgr.phase_for(state)
-        except Exception as exc:  # best-effort: never break the snapshot
-            logger.debug("activity phase({}) failed: {}", state.id, exc)
-            phase = None
-        try:
-            # The session is handed OVER, not re-derived. `sessions_for`
-            # above already resolved this workspace's primary through the full
-            # adoption path — which is the only answer that covers a codex
-            # workspace (mints no id, so `agent_session_id` is empty for life)
-            # and a dead minted pointer (rotated by `/clear`, promoted here to
-            # the live adopted session). Left to `agent_session_id` the axis
-            # reads blank for both, though the adapter parses their todo fine.
-            # The manager's own id seam reaches the same answer by scanning;
-            # this path must not, at ~1 Hz per workspace.
-            #
-            # `latest_todo_for`, NOT `latest_todo(id)`: the id form re-fetches
-            # from the store and re-runs `_reconcile_status` on a state this
-            # loop already reconciled. Cost is bounded by the incremental
-            # transcript cache — `read_messages` is memoized on the backing
-            # files' stat signature, so an unchanged transcript pays one stat
-            # and the tick stays O(appended bytes). Measured against the largest
-            # real transcript on the reference host (33 MB, 9458 messages):
-            # warm `latest_todo` 14.5 ms against the 76 ms `parse_activity`
-            # this same tick already pays per session — a fifth of an existing
-            # cost, not a new order of magnitude.
-            todo = TodoProgress.from_todo(
-                mgr.latest_todo_for(
-                    state,
-                    session_id=sessions[0].session.session_id if sessions else None,
-                )
-            )
-        except Exception as exc:  # best-effort: never break the snapshot
-            logger.debug("activity latest_todo({}) failed: {}", state.id, exc)
-            todo = None
-        try:
-            # The same handed-over session and the same `*_for` discipline as
-            # the todo above, for the same two reasons: the tick has already
-            # resolved this workspace's primary through the full adoption path
-            # (the only answer that covers codex and a dead minted pointer), and
-            # a discovery scan per workspace per ~1 Hz tick is the daemon-CPU
-            # bug the transcript cache exists to prevent.
-            #
-            # Cost measured on the reference host: Claude's queue is a fold over
-            # the records `parse_activity` already read this tick, memoized on
-            # the same stat signature; Codex's is a read-only sqlite open at
-            # 0.26 ms warm. Both are noise beside the 76 ms parse per session
-            # this tick already pays.
-            queue = QueueDepth.from_queue(
-                mgr.pending_queue_for(
-                    state,
-                    session_id=sessions[0].session.session_id if sessions else None,
-                )
-            )
-        except Exception as exc:  # best-effort: never break the snapshot
-            logger.debug("activity pending_queue({}) failed: {}", state.id, exc)
-            queue = None
-        try:
-            # A handful of small file reads (a directory listing plus one read
-            # per sub-agent), never a transcript parse — so unlike todo/queue
-            # above this needs no `*_for` hand-over, just the workspace's own
-            # minted id. claude_code only: no other kind's hook payload carries
-            # `agent_id` today, and `ClaudeHook.list_subagents` answers `()` for
-            # a session with no sub-agents regardless, so the gate is purely to
-            # avoid a pointless directory stat for every codex/generic/mewbo
-            # workspace on every tick.
-            fleet = (
-                FleetSummary.from_records(
-                    ClaudeHook.list_subagents(
-                        state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
-                    )
-                )
-                if state.agent_session_id and mgr.effective_kind(state) == "claude_code"
-                else None
-            )
-        except Exception as exc:  # best-effort: never break the snapshot
-            logger.debug("activity fleet({}) failed: {}", state.id, exc)
-            fleet = None
+        sessions = tuple(self.sessions_for(mgr, state))
+        ahead, behind, added, removed, dirty, pane_target, commits, branch = self._worktree_facts(
+            state
+        )
         return WorkspaceActivity(
             state=state,
-            sessions=tuple(sessions),
+            sessions=sessions,
             base_ahead=ahead,
             base_behind=behind,
             diff_added=added,
@@ -1074,12 +1100,116 @@ class ActivityService:
             pane_target=pane_target,
             recent_commits=commits,
             observed_at=_utcnow(),
-            phase=phase,
-            todo=todo,
-            queue=queue,
-            fleet=fleet,
+            phase=self._phase(mgr, state),
+            todo=self._todo_progress(mgr, state, sessions),
+            queue=self._queue_depth(mgr, state, sessions),
+            fleet=self._fleet_summary(mgr, state),
             branch=branch,
         )
+
+    def _replace_worktree_facts(
+        self, row: WorkspaceActivity, state: WorkspaceState
+    ) -> WorkspaceActivity:
+        """Replace every git-derived member while leaving transcript facts intact."""
+        ahead, behind, added, removed, dirty, pane_target, commits, branch = self._worktree_facts(
+            state
+        )
+        return replace(
+            row,
+            base_ahead=ahead,
+            base_behind=behind,
+            diff_added=added,
+            diff_removed=removed,
+            dirty_files=dirty,
+            pane_target=pane_target,
+            recent_commits=commits,
+            branch=branch,
+        )
+
+    def _worktree_facts(
+        self, state: WorkspaceState
+    ) -> tuple[int, int, int, int, int, str | None, tuple[CommitSummary, ...], str]:
+        """The git and pane facts an actual worktree edge invalidates."""
+        git = self._git_for(Path(state.repo_root))
+        branch = self._live_branch(state)
+        try:
+            ahead, behind = git.ahead_behind(branch, state.base_branch)
+        except Exception as exc:
+            logger.debug("activity ahead_behind({}) failed: {}", state.id, exc)
+            ahead = behind = 0
+        try:
+            added, removed = git.diff_stats(branch, state.diff_base)
+        except Exception as exc:
+            logger.debug("activity diff_stats({}) failed: {}", state.id, exc)
+            added = removed = 0
+        try:
+            dirty = git.dirty_file_count(Path(state.worktree_path))
+        except Exception as exc:
+            logger.debug("activity dirty_file_count({}) failed: {}", state.id, exc)
+            dirty = 0
+        try:
+            pane_target = self._registry.get(Path(state.repo_root)).pane_target_for(state)
+        except Exception as exc:
+            logger.debug("activity pane_target({}) failed: {}", state.id, exc)
+            pane_target = None
+        try:
+            commits = git.recent_commits(branch, limit=3)
+        except Exception as exc:
+            logger.debug("activity recent_commits({}) failed: {}", state.id, exc)
+            commits = ()
+        return ahead, behind, added, removed, dirty, pane_target, commits, branch
+
+    @staticmethod
+    def _phase(mgr: WorkspaceManager, state: WorkspaceState) -> PhaseReport | None:
+        try:
+            return mgr.phase_for(state)
+        except Exception as exc:
+            logger.debug("activity phase({}) failed: {}", state.id, exc)
+            return None
+
+    @staticmethod
+    def _todo_progress(
+        mgr: WorkspaceManager, state: WorkspaceState, sessions: Sequence[SessionActivity]
+    ) -> TodoProgress | None:
+        try:
+            return TodoProgress.from_todo(
+                mgr.latest_todo_for(
+                    state, session_id=sessions[0].session.session_id if sessions else None
+                )
+            )
+        except Exception as exc:
+            logger.debug("activity latest_todo({}) failed: {}", state.id, exc)
+            return None
+
+    @staticmethod
+    def _queue_depth(
+        mgr: WorkspaceManager, state: WorkspaceState, sessions: Sequence[SessionActivity]
+    ) -> QueueDepth | None:
+        try:
+            return QueueDepth.from_queue(
+                mgr.pending_queue_for(
+                    state, session_id=sessions[0].session.session_id if sessions else None
+                )
+            )
+        except Exception as exc:
+            logger.debug("activity pending_queue({}) failed: {}", state.id, exc)
+            return None
+
+    @staticmethod
+    def _fleet_summary(mgr: WorkspaceManager, state: WorkspaceState) -> FleetSummary | None:
+        try:
+            return (
+                FleetSummary.from_records(
+                    ClaudeHook.list_subagents(
+                        state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                    )
+                )
+                if state.agent_session_id and mgr.effective_kind(state) == "claude_code"
+                else None
+            )
+        except Exception as exc:
+            logger.debug("activity fleet({}) failed: {}", state.id, exc)
+            return None
 
     def sessions_for(self, mgr: WorkspaceManager, state: WorkspaceState) -> list[SessionActivity]:
         """The workspace's agent session(s) with blended activity.
@@ -1460,6 +1590,7 @@ class ActivityService:
             duration=spine.duration if spine else None,
             tokens=spine.tokens if spine else None,
             latency=spine.latency if spine else None,
+            polled_activity=transcript,
         )
 
     def _session_spine_facts(
@@ -1474,11 +1605,10 @@ class ActivityService:
         why it happens once here rather than once per reduction; see
         ``_SpineFacts`` for the measurement that forced the collapse.
 
-        The REDUCTIONS are the expensive half and are what the memo protects:
-        ``duration_of`` alone costs ~30 ms on that same transcript. Message
-        count is a cheap, monotonic (append-only transcripts) proxy for "did
-        this session's spine change", so a quiet session pays one ``len()``
-        check per tick and a growing one recomputes only what actually grew.
+        Retained immutable message identities prove which prefix is unchanged.
+        Only an appended suffix is reduced; replacement or reordering rebuilds
+        exactly. A count alone is not a version: split-block continuations can
+        change tokens and tool calls without adding a message.
 
         Caller holds ``mgr.transcript_scope(state)`` already; this makes no
         further env assumption. Best-effort: an adapter that cannot answer (a
@@ -1490,16 +1620,29 @@ class ActivityService:
         except Exception as exc:  # best-effort: never break the snapshot
             logger.debug("activity spine read_messages({}) failed: {}", session_id, exc)
             return None
-        cached = self._spine_cache.get(session_id)
-        if cached is not None and cached[0] == len(messages):
-            return cached[1]
-        facts = _SpineFacts(
-            duration=duration_of(messages),
-            tokens=_token_classes_of(messages),
-            latency=generation_latency_of(messages),
+        identity = (
+            type(adapter),
+            str(cwd),
+            config_dir_override("CLAUDE_CONFIG_DIR"),
+            config_dir_override("CODEX_HOME"),
         )
-        self._spine_cache[session_id] = (len(messages), facts)
-        return facts
+        with self._spine_lock:
+            cached = self._spine_cache.get(session_id)
+            reducer, previous = (
+                (cached[1], cached[2])
+                if cached is not None and cached[0] == identity
+                else (SpineFactsCache(), None)
+            )
+            current = reducer.facts(messages)
+            if previous is not None and previous.duration is current.duration:
+                return previous
+            facts = _SpineFacts(
+                duration=current.duration,
+                tokens=current.token_classes,
+                latency=current.generation_latency,
+            )
+            self._spine_cache[session_id] = (identity, reducer, facts)
+            return facts
 
     @staticmethod
     def _live_counters(

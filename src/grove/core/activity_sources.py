@@ -10,6 +10,7 @@ from pathlib import Path
 from loguru import logger
 
 from grove.core import paths
+from grove.core.activity import RefreshDomain
 from grove.core.activity_runtime import ActivityRuntime, WorkspaceInvalidated
 from grove.core.admission import AdmissionLimits, BoundedInbox, InboxClosed
 from grove.core.agents import get_adapter
@@ -38,9 +39,11 @@ class ActivitySources:
         self._store = store
         self._states: dict[str, WorkspaceState] = {}
         self._sources: list[FileEventSource] = []
-        self._control_files: dict[Path, WorkspaceKey] = {}
+        self._control_files: dict[Path, tuple[WorkspaceKey, RefreshDomain]] = {}
         self._worktree_dirs: dict[Path, set[WorkspaceKey]] = {}
         self._transcript_files: dict[Path, set[WorkspaceKey]] = {}
+        self._transcript_sessions: dict[Path, set[WorkspaceKey]] = {}
+        self._git_paths: dict[Path, set[WorkspaceKey]] = {}
         self._state_task: asyncio.Task[None] | None = None
         self._state_dirty = False
         self._sources_dirty = False
@@ -98,9 +101,10 @@ class ActivitySources:
                 # actual directory before accepting sidecar writes.
                 self._source_changed()
                 continue
-            key = self._control_files.get(event.path)
-            if key is not None:
-                self._invalidate(key)
+            control = self._control_files.get(event.path)
+            if control is not None:
+                key, domains = control
+                self._invalidate(key, domains)
                 continue
             if event.path.parent == sidecars:
                 self._runtime.hook(event.path.stem)
@@ -119,8 +123,23 @@ class ActivitySources:
         keys: set[WorkspaceKey] = set()
         for event in batch.events:
             keys.update(self._transcript_files.get(event.path, ()))
+            # A newly created subtree can be populated before the native watcher
+            # attaches below it. Its directory-creation edge must also refresh
+            # the owner, not only individual JSONL writes it may not have seen.
+            keys.update(self._transcript_sessions.get(event.path, ()))
+            for parent in event.path.parents:
+                keys.update(self._transcript_sessions.get(parent, ()))
         for key in keys:
-            self._invalidate(key)
+            self._invalidate(key, RefreshDomain.TRANSCRIPT)
+
+    def _git_events(self, batch: FileEventBatch) -> None:
+        keys: set[WorkspaceKey] = set()
+        for event in batch.events:
+            keys.update(self._git_paths.get(event.path, ()))
+            for parent in event.path.parents:
+                keys.update(self._git_paths.get(parent, ()))
+        for key in keys:
+            self._invalidate(key, RefreshDomain.WORKTREE)
 
     def _worktree_events(self, batch: FileEventBatch) -> None:
         keys: set[WorkspaceKey] = set()
@@ -132,10 +151,10 @@ class ActivitySources:
             if event.path.is_dir() and event.path not in self._worktree_dirs:
                 self._source_changed()
         for key in keys:
-            self._invalidate(key)
+            self._invalidate(key, RefreshDomain.WORKTREE)
 
-    def _invalidate(self, key: WorkspaceKey) -> None:
-        self._runtime.invalidate(WorkspaceInvalidated(*key, reason="filesystem"))
+    def _invalidate(self, key: WorkspaceKey, domains: RefreshDomain) -> None:
+        self._runtime.invalidate(WorkspaceInvalidated(*key, reason="filesystem", domains=domains))
 
     def _state_changed(self) -> None:
         self._state_dirty = True
@@ -210,12 +229,20 @@ class ActivitySources:
         for workspace_id in changed:
             state = current[workspace_id]
             self._runtime.invalidate(
-                WorkspaceInvalidated(state.repo_root, workspace_id, "lifecycle")
+                WorkspaceInvalidated(
+                    state.repo_root, workspace_id, "lifecycle", domains=RefreshDomain.FULL
+                )
             )
         for workspace_id in deleted:
             state = previous[workspace_id]
             self._runtime.invalidate(
-                WorkspaceInvalidated(state.repo_root, workspace_id, "lifecycle", deleted=True)
+                WorkspaceInvalidated(
+                    state.repo_root,
+                    workspace_id,
+                    "lifecycle",
+                    deleted=True,
+                    domains=RefreshDomain.FULL,
+                )
             )
 
     async def _restart_sources(self, states: Iterable[WorkspaceState]) -> None:
@@ -265,8 +292,11 @@ class ActivitySources:
         self._control_files.clear()
         self._worktree_dirs.clear()
         self._transcript_files.clear()
+        self._transcript_sessions.clear()
+        self._git_paths.clear()
 
         control_roots: set[Path] = {self._store.path.resolve()}
+        git_roots: set[Path] = set()
         sidecars = paths.agent_sidecar_dir().resolve()
         # A missing directory is not an inert root: watching its parent captures
         # the one creation edge, then `_source_changed` replaces this with the
@@ -283,9 +313,15 @@ class ActivitySources:
                 paths.agent_exit_path(state.id),
             ):
                 resolved = control_file.resolve()
-                self._control_files[resolved] = key
+                self._control_files[resolved] = (
+                    key,
+                    RefreshDomain.PHASE
+                    if control_file == PhaseFile.path_for(root, state.id)
+                    else RefreshDomain.RUNTIME,
+                )
                 control_roots.add(resolved)
             self._add_worktree_roots(state, key)
+            self._add_git_roots(state, key, git_roots)
             transcript_roots.update(self._add_transcript_roots(state, key))
 
         sources = [
@@ -303,16 +339,44 @@ class ActivitySources:
                     recursive=False,
                 )
             )
+        if git_roots:
+            sources.append(
+                FileEventSource(
+                    git_roots,
+                    self._git_events,
+                    on_recovery=self._recover,
+                    recursive=True,
+                    include_ignored=True,
+                )
+            )
         if transcript_roots:
             sources.append(
                 FileEventSource(
-                    transcript_roots,
+                    transcript_roots | set(self._transcript_sessions),
                     self._transcript_events,
                     on_recovery=self._recover,
-                    recursive=False,
+                    recursive=True,
                 )
             )
         return sources
+
+    def _add_git_roots(self, state: WorkspaceState, key: WorkspaceKey, roots: set[Path]) -> None:
+        """Watch git's own HEAD/index/ref edges, not source-file coincidences."""
+        try:
+            repo = GitRepo(Path(state.worktree_path))
+            common = repo.common_dir()
+            local = repo.git_dir()
+        except Exception as exc:
+            logger.debug("activity source git-dir failed for {}: {}", state.id, exc)
+            return
+        if common is None or not common.is_dir():
+            return
+        local = local or common
+        for path in (local / "HEAD", local / "index", common / "refs", common / "packed-refs"):
+            # Missing refs/index still need a creation edge (e.g. an unborn repo).
+            resolved = path.resolve()
+            roots.add(resolved)
+            self._git_paths.setdefault(resolved, set()).add(key)
 
     def _add_worktree_roots(self, state: WorkspaceState, key: WorkspaceKey) -> None:
         root = Path(state.worktree_path)
@@ -372,6 +436,15 @@ class ActivitySources:
                 for path in located:
                     resolved = path.resolve()
                     self._transcript_files.setdefault(resolved, set()).add(key)
+                    if resolved.name == f"{session_id}.jsonl":
+                        # The session-owned subdirectory a NEW sidechain file
+                        # lands under (`<project>/<session_id>/subagents/…`,
+                        # per `_ClaudeHome.locate`'s own glob) — a sibling of
+                        # the main transcript, never the shared PROJECT folder
+                        # that holds every session's main file for one cwd.
+                        self._transcript_sessions.setdefault(
+                            resolved.parent / session_id, set()
+                        ).add(key)
         return set(self._transcript_files)
 
     @staticmethod
@@ -419,4 +492,6 @@ class ActivitySources:
         self._control_files.clear()
         self._worktree_dirs.clear()
         self._transcript_files.clear()
+        self._transcript_sessions.clear()
+        self._git_paths.clear()
         self._started = False

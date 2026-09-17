@@ -32,12 +32,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
+from bisect import bisect_right
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from grove.core.config import TranscriptCacheConfig
 
 from loguru import logger
 
@@ -194,6 +200,49 @@ _QUEUED_ORIGIN_PEER = "peer"
 # neighbours, which only a pass over the whole fold can see.
 _DELIVERED_AT_KEY = "_groveDeliveredAt"
 
+# These stay on the raw dict because that dict is private to one RecordFolder
+# state. The folder is the only writer: it invalidates them before every raw
+# mutation, then retains the frozen wire product beside the source record.
+_NORMALIZED_MESSAGE_KEY = "_groveNormalizedMessage"
+_NORMALIZED_READY_KEY = "_groveNormalizedReady"
+_COMPACTION_BOUNDARY_KEY = "_groveCompactionBoundary"
+
+# Keys of a line's ``toolUseResult`` object any parser code actually reads —
+# see ``_Record.tool_use_result`` and its one consumer,
+# ``_SubagentFleet.on_tool_result``. The rest of that object is the tool's own
+# RAW return (file contents, command stdout/stderr, patch bodies) and can
+# dwarf everything else on the line; a full consumer census (grep for every
+# `.raw.get("toolUseResult")` / `.tool_use_result` site) found nothing else
+# reads it. Pruning to this subset AT INGESTION — before the dict ever enters
+# the retained fold state — is a genuine reduction, not a relocation: no
+# public projection (`messages()`, `turns()`, `digest()`, `activity()`) reads
+# any other key, so the prune is lossless to every consumer that exists today.
+_TOOL_USE_RESULT_KEPT_KEYS = ("status", "name", "taskId")
+
+
+def _prune_tool_use_result(raw: dict[str, Any]) -> None:
+    """Collapse ``raw["toolUseResult"]`` to its consumed fields, in place."""
+    # Provider UI rendering duplicates attachment content; Grove consumes the
+    # structured attachment instead. Keeping both pinned tens of MB of unused
+    # rendered strings in a real multi-worker session.
+    raw.pop("rendered", None)
+    attachment = raw.get("attachment")
+    if isinstance(attachment, dict):
+        # Only queued commands contribute to any Grove projection. Other
+        # attachment payloads are provider UI context, not conversation records.
+        keys = ("type", "prompt", "commandMode", "origin")
+        raw["attachment"] = (
+            {key: attachment[key] for key in keys if key in attachment}
+            if attachment.get("type") == _QUEUED_ATTACHMENT
+            else {"type": attachment.get("type")}
+        )
+    value = raw.get("toolUseResult")
+    if isinstance(value, dict):
+        raw["toolUseResult"] = {
+            key: value[key] for key in _TOOL_USE_RESULT_KEPT_KEYS if key in value
+        }
+
+
 _DIGEST_MAX_ENTRIES = 60
 _DIGEST_TEXT_CAP = 200
 _TASK_TEXT_CAP = 500
@@ -310,6 +359,53 @@ class _ClaudeHome:
         return re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
 
     @classmethod
+    def locate_in(cls, projects: Path, cwd: Path, session_id: str) -> list[Path]:
+        """Locate ``session_id`` under one ``projects/`` root.
+
+        The caller supplies the root so a maintained discovery index can inspect
+        only the roots whose directory snapshots changed. This stays the one
+        provider-specific discovery algorithm; :meth:`locate` is its broad
+        compatibility projection.
+        """
+        encoded = cls.encode_cwd(cwd)
+        mains: list[Path] = []
+        subagents: list[Path] = []
+        # Fast path: the cwd we expect, checked directly before any glob.
+        fast = projects / encoded / f"{session_id}.jsonl"
+        if fast.is_file():
+            mains.append(fast)
+        for match in projects.glob(f"*/{session_id}.jsonl"):
+            if match.is_file() and match not in mains:
+                mains.append(match)
+        # Sub-agent transcripts (Claude Code 2.1.2+): <uuid>/subagents/agent-*.jsonl
+        # — globbed RECURSIVELY: a Workflow ("ultracode") worker
+        # nests one level deeper, at
+        # <uuid>/subagents/workflows/wf_<runId>/agent-*.jsonl. ``**``
+        # matches zero-or-more intermediate dirs, so this still covers the
+        # flat, non-Workflow case too.
+        for match in projects.glob(f"*/{session_id}/subagents/**/agent-*.jsonl"):
+            if match.is_file():
+                subagents.append(match)
+
+        return [*mains, *subagents]
+
+    @classmethod
+    def ordered_locations(cls, cwd: Path, session_id: str, paths: Sequence[Path]) -> list[Path]:
+        """Main threads first, keeping only cwd-matching mains when one exists.
+
+        Matching has to happen AFTER roots are unioned: one profile root can
+        contain a collision while another holds the transcript that records the
+        requested cwd. Applying this per root would retain the collision too.
+        """
+        mains = [path for path in paths if path.name == f"{session_id}.jsonl"]
+        subagents = [path for path in paths if path.name != f"{session_id}.jsonl"]
+        if len(mains) > 1:
+            preferred = [path for path in mains if cls._first_cwd(path) == str(cwd)]
+            if preferred:
+                mains = preferred
+        return [*mains, *subagents]
+
+    @classmethod
     def locate(cls, cwd: Path, session_id: str) -> list[Path]:
         """All transcript files for ``session_id``: main thread first, sub-agents after.
 
@@ -319,32 +415,15 @@ class _ClaudeHome:
         first record's ``cwd`` matches ``cwd`` wins; otherwise all are returned
         and the parser's content-level de-dup sorts it out.
         """
-        encoded = cls.encode_cwd(cwd)
-        mains: list[Path] = []
-        subagents: list[Path] = []
-        for projects in cls.projects_dirs():
-            # Fast path: the cwd we expect, checked directly before any glob.
-            fast = projects / encoded / f"{session_id}.jsonl"
-            if fast.is_file():
-                mains.append(fast)
-            for match in projects.glob(f"*/{session_id}.jsonl"):
-                if match.is_file() and match not in mains:
-                    mains.append(match)
-            # Sub-agent transcripts (Claude Code 2.1.2+): <uuid>/subagents/agent-*.jsonl
-            # — globbed RECURSIVELY: a Workflow ("ultracode") worker
-            # nests one level deeper, at
-            # <uuid>/subagents/workflows/wf_<runId>/agent-*.jsonl. ``**``
-            # matches zero-or-more intermediate dirs, so this still covers the
-            # flat, non-Workflow case too.
-            for match in projects.glob(f"*/{session_id}/subagents/**/agent-*.jsonl"):
-                if match.is_file():
-                    subagents.append(match)
-
-        if len(mains) > 1:
-            preferred = [p for p in mains if cls._first_cwd(p) == str(cwd)]
-            if preferred:
-                mains = preferred
-        return [*mains, *subagents]
+        return cls.ordered_locations(
+            cwd,
+            session_id,
+            [
+                path
+                for projects in cls.projects_dirs()
+                for path in cls.locate_in(projects, cwd, session_id)
+            ],
+        )
 
     @staticmethod
     def read_subagent_meta(path: Path) -> dict[str, Any]:
@@ -1723,22 +1802,151 @@ class _Record:
     def absorb_continuation(self, other: _Record) -> None:
         """Fold a same-message sibling line's content blocks into this record.
 
-        Claude Code 2.x writes **one JSONL line per content block** — a single
-        API response (``thinking`` → ``text`` → ``tool_use``…) arrives as N
-        lines sharing one ``(message.id, requestId)`` with distinct ``uuid``s
-        (verified on-host 2026-06-11: 123/123 multi-line messages). Keeping only
-        the first line (always the ``thinking`` block) silently dropped every
-        text and tool_use follow-up from turns, digests, and tool counts.
-        ``usage`` and ``stop_reason`` are byte-identical across siblings, so
-        only content moves; token math still counts each response once.
-
-        Mutates ``raw`` in place — the frozen dataclass pins field *bindings*,
-        and ``raw`` is the documented heterogeneous-data escape hatch.
+        This legacy mutator remains for direct parser fixtures. The incremental
+        folder uses :meth:`with_continuation`, so a snapshot handed to another
+        reader never observes a half-mutated raw record.
         """
         mine = self._message.get("content")
         theirs = other._message.get("content")
         if isinstance(mine, list) and isinstance(theirs, list):
             mine.extend(b for b in theirs if isinstance(b, dict))
+
+    def with_continuation(self, other: _Record) -> _Record:
+        """Return this logical response with ``other``'s split blocks appended.
+
+        The cache serves snapshots concurrently. Copying only the provider's
+        mutable message envelope makes a split-block append invalidate precisely
+        this record's frozen message instead of racing readers of the old one.
+        """
+        raw = dict(self.raw)
+        message = dict(self._message)
+        mine = message.get("content")
+        theirs = other._message.get("content")
+        if isinstance(mine, list) and isinstance(theirs, list):
+            message["content"] = [*mine, *(block for block in theirs if isinstance(block, dict))]
+        raw["message"] = message
+        raw.pop(_NORMALIZED_MESSAGE_KEY, None)
+        raw.pop(_NORMALIZED_READY_KEY, None)
+        return _Record(raw=raw, index=self.index)
+
+    def with_compaction(self, boundary: CompactionBoundary) -> _Record:
+        """Return this boundary record with a freshly derived payload cached."""
+        raw = dict(self.raw)
+        raw.pop(_NORMALIZED_MESSAGE_KEY, None)
+        raw.pop(_NORMALIZED_READY_KEY, None)
+        raw[_COMPACTION_BOUNDARY_KEY] = boundary
+        return _Record(raw=raw, index=self.index)
+
+    def cached_message(self) -> tuple[bool, AgentMessage | None]:
+        """The folder-produced immutable message, including a cached ``None``."""
+        if not _as_bool(self.raw.get(_NORMALIZED_READY_KEY)):
+            return (False, None)
+        message = self.raw.get(_NORMALIZED_MESSAGE_KEY)
+        return (True, message if isinstance(message, AgentMessage) else None)
+
+    def cache_message(self, message: AgentMessage | None) -> None:
+        """Mark the folder's one normalized result for this private raw dict."""
+        self.raw[_NORMALIZED_READY_KEY] = True
+        if message is not None:
+            self.raw[_NORMALIZED_MESSAGE_KEY] = message
+
+
+class _ActivityFolder:
+    """Incremental aggregate for :meth:`_TranscriptParser.activity`.
+
+    The record folder appends in file order while record projections consume
+    timestamp order. Activity's rules depend on the latter, so a late timestamp
+    or replacement marks the aggregate stale; ordinary monotonic appends only
+    fold the delta. The bounded replay is deliberately local to the exceptional
+    ordering case rather than duplicating parser policy at the call site.
+    """
+
+    __slots__ = (
+        "_assistant_replies",
+        "_buckets",
+        "_current_task",
+        "_fleet",
+        "_last_event_at",
+        "_model",
+        "_started_at",
+        "_tail",
+        "_title",
+        "_tokens_in",
+        "_tokens_out",
+        "_tool_calls",
+    )
+
+    def __init__(self) -> None:
+        self._buckets: list[int] = []
+        self._assistant_replies = 0
+        self._tool_calls = 0
+        self._tokens_in = 0
+        self._tokens_out = 0
+        self._model: str | None = None
+        self._title: str | None = None
+        self._last_event_at: datetime | None = None
+        self._started_at: datetime | None = None
+        self._tail: _Record | None = None
+        self._fleet = _SubagentFleet()
+        self._current_task: str | None = None
+
+    def add(self, rec: _Record) -> None:
+        ts = rec.timestamp
+        if ts is not None:
+            if self._started_at is None:
+                self._started_at = ts
+            if self._last_event_at is None or ts > self._last_event_at:
+                self._last_event_at = ts
+
+        if rec.ai_title:
+            self._title = rec.ai_title
+            return
+        if rec.last_prompt:
+            if not any(marker in rec.last_prompt for marker in _NON_HUMAN_MARKERS):
+                self._current_task = rec.last_prompt
+            return
+        if rec.is_human_turn:
+            self._buckets.append(0)
+            self._tail = rec
+            if self._current_task is None:
+                self._current_task = rec.text()
+        elif rec.is_assistant:
+            if self._buckets:
+                self._buckets[-1] += 1
+            self._assistant_replies += 1
+            self._tool_calls += rec.tool_use_count
+            self._tokens_in += rec.usage_tokens[0]
+            self._tokens_out += rec.usage_tokens[1]
+            self._model = rec.model or self._model
+            self._fleet.spawn(rec)
+            self._tail = rec
+        elif rec.is_agent_notice:
+            self._fleet.on_notice(rec)
+            self._tail = rec
+        elif rec.is_tool_result:
+            self._fleet.on_tool_result(rec)
+            self._tail = rec
+
+    def activity(self) -> AgentActivity:
+        state = _TranscriptParser._tail_state(self._tail)
+        if state is AgentActivityState.WAITING and self._fleet.active > 0:
+            state = AgentActivityState.WORKING
+        task = self._current_task
+        return AgentActivity(
+            state=state,
+            title=self._title,
+            current_task=_truncate(task, _TASK_TEXT_CAP) if task is not None else None,
+            human_turns=len(self._buckets),
+            assistant_replies=self._assistant_replies,
+            replies_per_turn=tuple(self._buckets),
+            tool_calls=self._tool_calls,
+            active_subagents=self._fleet.active,
+            model=self._model,
+            tokens_in=self._tokens_in,
+            tokens_out=self._tokens_out,
+            last_event_at=self._last_event_at,
+            started_at=self._started_at,
+        )
 
 
 class _SubagentFleet:
@@ -1963,13 +2171,15 @@ class _TranscriptParser:
         )
 
     def messages(self) -> tuple[AgentMessage, ...]:
-        """The de-duplicated, time-sorted records mapped onto the agentic-loop
-        spine — the ONE representation :meth:`turns` and :meth:`digest`
-        below both project (DRY: one parse, many projections). Non-message
-        records map to nothing; sub-agent (sidechain) messages ride with their
-        lineage fields set. A compaction boundary is resolved first (its summary
-        and its per-event token delta both need neighbouring records) and handed
-        to the record's own mapper."""
+        """The normalized spine, reusing the folder's frozen record products.
+
+        A cache-backed parser receives records whose folder already resolved
+        delivery ordering and compaction joins. Direct parser construction stays
+        useful for focused unit tests, so it retains the old one-shot fallback.
+        """
+        cached = [rec.cached_message() for rec in self._records]
+        if all(ready for ready, _ in cached):
+            return tuple(message for _, message in cached if message is not None)
         boundaries = self._compaction_boundaries()
         return tuple(
             msg
@@ -2464,6 +2674,155 @@ def _truncate(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[: cap - 1].rstrip() + "…"
 
 
+@dataclass(frozen=True, slots=True)
+class _LocationEntry:
+    """One bounded discovery result and its direct root/session dependencies."""
+
+    paths: tuple[Path, ...]
+    roots: tuple[Path, ...]
+    root_stamps: tuple[tuple[str, tuple[int, int, int, int] | None], ...]
+    revalidate_at_ns: int
+
+
+class _TranscriptLocationIndex:
+    """Keep known session locations cheap without making unknown locations permanent.
+
+    On every warm read, the index checks the directly addressed main transcript
+    and recursively lists only its ``subagents/`` subtree. That is the complete
+    dependency set for workers at arbitrary depth, including an empty root that
+    receives its first file. If a known main disappears, Claude Code relocated
+    it and the index immediately performs the UUID search again.
+
+    A new same-id transcript in an already-existing *unrelated* project folder
+    has no direct dependency a prior answer can name. A bounded full
+    revalidation is the honest fallback for that impossible-to-observe edge;
+    until it runs the old answer may stand, but it can never stand forever. This
+    is deliberately a consistency window, not evidence that metadata timestamps
+    prove a concurrent glob saw every entry.
+
+    An EMPTY result is never cached. A session's first file materializing
+    inside an ALREADY-EXISTING project directory changes only that directory's
+    contents, never the tracked ``projects/`` root's own metadata — so a
+    missing-main answer would have no dependency that could ever invalidate it,
+    and would stand for the full window regardless of how long ago the file
+    actually appeared. Every lookup with no known main therefore repeats the
+    full UUID search.
+    """
+
+    MAX_ENTRIES = 512
+    REVALIDATE_NS = 5_000_000_000
+
+    def __init__(self) -> None:
+        self._entries: OrderedDict[tuple[str, str, tuple[str, ...]], _LocationEntry] = OrderedDict()
+        self._lock = threading.RLock()
+
+    def locate(self, cwd: Path, session_id: str) -> list[Path]:
+        """Return known paths cheaply or perform the bounded UUID revalidation."""
+        key = (str(cwd), session_id, _ClaudeHome.config_signature())
+        now = time.monotonic_ns()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and now < entry.revalidate_at_ns:
+                known, moved = self._known_paths(cwd, session_id, entry.paths)
+                root_stamps = self._stamps(entry.roots)
+                if not moved and root_stamps == entry.root_stamps:
+                    self._store(key, known, entry.roots, root_stamps, entry.revalidate_at_ns)
+                    return known
+
+            # Initial discovery, a relocated main, an empty root materializing,
+            # and expiry intentionally use the existing complete UUID search.
+            #
+            # Root identities are sampled BEFORE the scan, not after. A stamp
+            # taken after the scan already reflects anything that changed
+            # while the scan ran — including a sibling directory that arrived
+            # too late for the glob to see — so the NEXT comparison would read
+            # "nothing changed since" and never retry. Sampling before means
+            # any such overlap leaves the live state newer than the recorded
+            # baseline, so the very next check detects the drift and rescans.
+            roots = self._project_roots()
+            root_stamps = self._stamps(roots)
+            paths = _ClaudeHome.locate(cwd, session_id)
+            main_name = f"{session_id}.jsonl"
+            if any(path.name == main_name for path in paths):
+                self._store(key, paths, roots, root_stamps, now + self.REVALIDATE_NS)
+            else:
+                # No main to anchor a cheap warm read against. Caching this
+                # answer is what let a session's first file go unnoticed for
+                # the whole revalidation window when its project folder
+                # already existed: a file materializing inside an existing
+                # directory never touches that directory's own PARENT (the
+                # tracked ``projects/`` root), so no root stamp would ever
+                # change to trigger a recheck. Never cache "not found yet" —
+                # always pay the full search until a main is seen.
+                self._entries.pop(key, None)
+            return paths
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+    def _store(
+        self,
+        key: tuple[str, str, tuple[str, ...]],
+        paths: Sequence[Path],
+        roots: Sequence[Path],
+        root_stamps: tuple[tuple[str, tuple[int, int, int, int] | None], ...],
+        revalidate_at_ns: int,
+    ) -> None:
+        self._entries[key] = _LocationEntry(
+            tuple(paths), tuple(roots), root_stamps, revalidate_at_ns
+        )
+        self._entries.move_to_end(key)
+        while len(self._entries) > self.MAX_ENTRIES:
+            self._entries.popitem(last=False)
+
+    @staticmethod
+    def _known_paths(cwd: Path, session_id: str, paths: Sequence[Path]) -> tuple[list[Path], bool]:
+        """Refresh known main/subagent paths without walking project siblings.
+
+        Returning ``moved`` separately prevents an absent main path from being
+        mistaken for a valid absent-directory stamp. A rename is immediately
+        visible through ``is_file()`` and forces the next complete lookup.
+        """
+        mains = [path for path in paths if path.name == f"{session_id}.jsonl"]
+        found: list[Path] = []
+        moved = False
+        for main in mains:
+            if not main.is_file():
+                moved = True
+                continue
+            found.append(main)
+            subagents = main.parent / session_id / "subagents"
+            for worker in subagents.glob("**/agent-*.jsonl"):
+                if worker.is_file():
+                    found.append(worker)
+        return _ClaudeHome.ordered_locations(cwd, session_id, found), moved
+
+    @staticmethod
+    def _project_roots() -> tuple[Path, ...]:
+        """Track even absent roots; their creation changes a missing answer."""
+        return tuple(base / "projects" for base in _ClaudeHome.config_dirs())
+
+    @staticmethod
+    def _stamps(
+        roots: Sequence[Path],
+    ) -> tuple[tuple[str, tuple[int, int, int, int] | None], ...]:
+        """Directory identities whose absence is distinct from a readable root."""
+        stamps: list[tuple[str, tuple[int, int, int, int] | None]] = []
+        for root in roots:
+            try:
+                stat = root.stat()
+            except OSError:
+                stamp = None
+            else:
+                stamp = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns)
+            stamps.append((str(root), stamp))
+        return tuple(stamps)
+
+
+_LOCATION_INDEX = _TranscriptLocationIndex()
+
+
 class ClaudeCodeAdapter:
     """Introspect Claude Code sessions (the first concrete :class:`AgentAdapter`).
 
@@ -2471,23 +2830,6 @@ class ClaudeCodeAdapter:
     shared instance serves every workspace. Filesystem reads are funnelled
     through :class:`_ClaudeHome`; all parsing through :class:`_TranscriptParser`.
     """
-
-    #: session id -> (holding-dir mtimes, located paths). CLASS-level because
-    #: callers construct throwaway adapter instances per read, exactly like the
-    #: module-level parse caches; bounded because a host accumulates sessions
-    #: forever and this must not become a second unbounded index.
-    _LOCATED: ClassVar[
-        dict[tuple[str, str, tuple[str, ...]], tuple[tuple[int, ...] | None, tuple[Path, ...]]]
-    ] = {}
-    _LOCATED_MAX: ClassVar[int] = 512
-    #: How long a holding directory must have been still before its mtime is
-    #: trusted as a cache key. A directory mtime is coarse — measured 1 ms on
-    #: ext4 — and a scan is far faster than that, so a file created in the same
-    #: millisecond as the scan is invisible to the result AND indistinguishable
-    #: from it by mtime. Memoizing only a directory that was already quiet
-    #: closes the window: a fleet growing right now simply rescans next tick,
-    #: which is the cost this memo exists to avoid paying only when it is idle.
-    _QUIESCENT_NS: ClassVar[int] = 50_000_000
 
     kind = "claude_code"
     remote = False
@@ -2568,67 +2910,22 @@ class ClaudeCodeAdapter:
         return AgentVersionProbe.version(command, "--version")
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
-        """Every transcript file for this session, memoized on the dirs that hold them.
+        """Every transcript file for this session through the shared location index.
 
-        THIS IS THE ACTIVITY PROJECTION'S DOMINANT COST AND NO CACHE ABOVE IT
-        CAN HELP, because the read memos key on the paths this returns — a memo
-        hit still pays the scan first. Profiled over 10 warm `read_messages`
-        calls on the reference host: **96% of the time** was here, in 610
-        `glob` and 3,290 `scandir` calls, at **7.7 ms per call** against
-        **0.0 ms** for the fast-path stat that had usually already answered.
-
-        The memo key is the mtime of each directory that CONTAINS a located
-        file — the project dir for a main transcript, the `subagents/` dir for
-        each worker. Those move exactly when a file is added to or removed from
-        them, which is exactly when this answer can change; an APPEND to an
-        existing transcript does not move them and must not, since the path set
-        is unchanged and the byte-level cursors below already handle growth.
-
-        The parent dirs are knowable only from a previous result, so the first
-        call always scans and a session whose set is still empty keeps scanning
-        — correct, because "no transcript yet" is precisely the answer that a
-        new file must be allowed to change.
-
-        A RESULT IS ONLY MEMOIZED ONCE ITS HOLDING DIRECTORIES HAVE GONE QUIET
-        (``_QUIESCENT_NS``), because the mtime cannot resolve a change that
-        happened in the same millisecond as the scan that missed it. Without
-        that the memo caches its own race: the freshly spawned sub-agent is
-        absent from the answer and already accounted for by the stamp, so the
-        fleet count freezes at its pre-spawn value for the life of the entry.
+        The cached dependencies include missing/empty subagent roots, known
+        project roots and every discovered nested worker directory, so creating
+        the first file, adding a nested workflow worker, deleting a worker or
+        relocating a main transcript invalidates immediately. Warm reads only
+        stat those paths. The bounded revalidation handles the unavoidable
+        unknown root — an existing unrelated project folder that later gains the
+        same session id — without making absence permanent or bringing a
+        host-wide glob back to the ordinary poll path.
         """
-        # Keyed by (cwd, session id): a session id is unique per PROFILE, not
-        # globally, and the config-dir cascade is read from the ambient
-        # environment — so keying on the id alone lets one cwd's answer serve
-        # another's. Caught by the suite, where tmp dirs legitimately reuse ids.
-        key = (str(cwd), session_id, _ClaudeHome.config_signature())
-        cached = self._LOCATED.get(key)
-        if cached is not None and cached[0] == self._located_signature(cached[1]):
-            return list(cached[1])
-        started = time.time_ns()
         try:
-            located = _ClaudeHome.locate(cwd, session_id)
-        except OSError as exc:  # best-effort: a glob failure must not break peek
+            return _LOCATION_INDEX.locate(cwd, session_id)
+        except OSError as exc:  # best-effort: a scan failure must not break peek
             logger.debug("locate_transcripts({}, {}) failed: {}", cwd, session_id, exc)
             return []
-        if located:
-            paths = tuple(located)
-            signature = self._located_signature(paths)
-            if signature is not None and max(signature) < started - self._QUIESCENT_NS:
-                self._LOCATED[key] = (signature, paths)
-                if len(self._LOCATED) > self._LOCATED_MAX:
-                    self._LOCATED.pop(next(iter(self._LOCATED)))
-        return located
-
-    @staticmethod
-    def _located_signature(paths: Sequence[Path]) -> tuple[int, ...] | None:
-        """Holding-directory mtimes; ``None`` (never equal) forces a rescan."""
-        stamps: list[int] = []
-        for parent in dict.fromkeys(p.parent for p in paths):
-            try:
-                stamps.append(parent.stat().st_mtime_ns)
-            except OSError:
-                return None
-        return tuple(stamps)
 
     def discover_sessions(self, cwd: Path, *, exclude_id: str | None = None) -> list[str]:
         """Session ids of transcripts whose recorded cwd is ``cwd`` but that Grove
@@ -2728,11 +3025,10 @@ class ClaudeCodeAdapter:
         main + sub-agent transcripts, so sub-agent messages ride with their
         ``is_sidechain`` / ``parent_tool_use_id`` / ``thread_id`` lineage set."""
         paths = self.locate_transcripts(cwd, session_id)
-        return _MEMO.get_or_compute(
-            ("messages", str(cwd), session_id),
-            paths,
-            lambda: _TranscriptParser(self._read(paths)).messages(),
-        )
+        # The folder owns this immutable projection and its byte accounting. An
+        # outer ResultMemo would re-size the complete tuple after every append,
+        # turning an O(delta) normalization back into an O(history) graph walk.
+        return self._messages(paths)
 
     def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
         """The session's terminal outcome — a projection of
@@ -2761,7 +3057,11 @@ class ClaudeCodeAdapter:
             return _MEMO.get_or_compute(
                 ("task-board", str(board[0].parent)), board, lambda: _ClaudeTasks.read(board)
             )
-        return latest_todo_from_messages(self.read_messages(cwd, session_id))
+        return _MEMO.get_or_compute(
+            ("transcript-todo", str(cwd), session_id),
+            paths,
+            lambda: latest_todo_from_messages(self.read_messages(cwd, session_id)),
+        )
 
     def pending_queue(self, cwd: Path, session_id: str) -> tuple[QueuedMessage, ...]:
         """What Claude Code is still holding for this session, oldest first.
@@ -3014,7 +3314,10 @@ class ClaudeCodeAdapter:
         return _MEMO.get_or_compute(
             ("activity", str(cwd), session_id),
             paths,
-            lambda: _TranscriptParser(self._read(paths)).activity(),
+            lambda: _TRANSCRIPTS.project(
+                paths,
+                lambda folder: (cast(_RecordFolder, folder).activity(), None),
+            ),
         )
 
     def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
@@ -3026,6 +3329,14 @@ class ClaudeCodeAdapter:
         )
 
     @staticmethod
+    def configure_caches(cfg: TranscriptCacheConfig) -> None:
+        """Resize the process-owned caches without replacing their locks."""
+        _TRANSCRIPTS.configure(
+            max_retained_bytes=cfg.max_retained_bytes, max_source_bytes=cfg.max_source_bytes
+        )
+        _MEMO.configure(maxsize=cfg.memo_max_entries, max_bytes=cfg.memo_max_bytes)
+
+    @staticmethod
     def clear_caches() -> None:
         """Drop the incremental transcript cache + derived-result memo.
 
@@ -3033,6 +3344,7 @@ class ClaudeCodeAdapter:
         operational escape hatch; never needed on the hot path."""
         _TRANSCRIPTS.clear()
         _MEMO.clear()
+        _LOCATION_INDEX.clear()
 
     # ── internal ──────────────────────────────────────────────────────────
     def _summarize(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
@@ -3068,25 +3380,28 @@ class ClaudeCodeAdapter:
 
     @staticmethod
     def _read(paths: Sequence[Path]) -> list[_Record]:
-        """De-duped, merged, time-sorted records across the given files.
+        """The time-ordered raw snapshot for record-only projections.
 
-        Reading is incremental: :class:`TranscriptCache` folds each line into a
-        per path-set :class:`_RecordFolder` exactly once, so a poll tick pays
-        ``json.loads`` only for bytes appended since the previous read (the
-        daemon-CPU fix, 2026-07-11) — a full-history re-parse pegged the
-        executor threads on hosts with multi-GB transcript trees. The fold
-        preserves the two identity layers documented on :class:`_RecordFolder`;
-        the sort stays per call (appends keep it nearly sorted, so timsort is
-        cheap). One behavioral nuance vs the old full re-read: a record's
-        tiebreak ``index`` reflects *fold* order, so a no-timestamp record
-        appended after another file was first read sorts after that file's
-        records — real no-timestamp records live only in the file preamble,
-        parsed first either way.
+        The folder stamps delivery and maintains the sort incrementally. This
+        remains a list because activity and queue folds genuinely consume the
+        records, but it no longer mutates shared records or sorts their full
+        history on each caller.
         """
-        records = _TRANSCRIPTS.read(paths)
-        _stamp_deliveries(records)
-        records.sort(key=_sort_key)
-        return records
+        return _TRANSCRIPTS.read(paths)
+
+    @staticmethod
+    def _messages(paths: Sequence[Path]) -> tuple[AgentMessage, ...]:
+        """The folder's cached frozen spine snapshot.
+
+        ``TranscriptCache.project`` holds the fold lock through this projection,
+        so a split-block replacement cannot race a reader collecting pointers.
+        The retained tuple contains pointers only; the records' immutable payloads
+        were charged on admission by ``_RecordFolder.add``.
+        """
+        return _TRANSCRIPTS.project(
+            paths,
+            lambda folder: cast(_RecordFolder, folder).message_projection(),
+        )
 
 
 def _stamp_deliveries(records: list[_Record]) -> None:
@@ -3124,68 +3439,218 @@ def _sort_key(rec: _Record) -> tuple[float, int]:
 
 
 class _RecordFolder:
-    """The per path-set fold state behind :meth:`ClaudeCodeAdapter._read`.
+    """Incrementally folds Claude records and their frozen normalized messages.
 
-    Applies the two identity layers to each line exactly once, because one
-    JSONL line is NOT one logical record:
+    The transcript cache serializes every call into this class. Its mutable raw
+    records therefore never escape as a shared working surface: a split-block
+    continuation replaces the one kept record, rather than mutating it beneath a
+    snapshot already serving another reader. The old frozen ``AgentMessage``
+    remains valid; only the amended record is normalized again.
 
-    - ``uuid`` is line identity. A repeated uuid is a resume/fork replaying
-      history in another file → dropped.
-    - ``dedup_key`` is logical-record identity **within one file**. A new line
-      under a seen key is a split-block sibling of the same assistant response
-      (Claude Code 2.x writes one line per content block) → its blocks fold
-      into the kept record via :meth:`_Record.absorb_continuation`. The old
-      first-line-wins drop here lost every post-``thinking`` text and tool_use
-      block — the "transcripts show no follow-ups" bug.
-
-    **The file scoping is the load-bearing half of that second layer, because
-    a fork sub-agent re-records its parent's spawning message.** Its own head
-    line carries the parent's ``message.id`` with a FRESH ``uuid``, so it slips
-    the line-identity guard — which already means to drop a cross-file replay —
-    and lands on the merge, giving the parent's record the same ``tool_use``
-    block twice. That duplicate ``tool_use_id`` reaches the wire and throws
-    assistant-ui's keyed resource registry, taking the whole transcript surface
-    down. Scoping by source expresses the real invariant (one logical API
-    response is written to exactly one file) rather than sniffing ``agentId``
-    or ``isSidechain``, which would be inferring structure from provider
-    semantics. The replay then survives as its own sidechain record, which the
-    projections that already filter sidechain content drop for free — no
-    explicit discard rule is needed. Modern transcripts make this the ONLY
-    defence: ``requestId`` is absent entirely (0 of 755 assistant lines on the
-    reference session), so ``message.id`` is the whole key.
-
-    ``absorb_continuation`` mutates the kept record's raw dict, which is safe
-    here by construction: every raw dict is parsed privately for this fold
-    state (see :mod:`transcript_cache`), and a sibling line is absorbed at most
-    once because each line is folded at most once.
+    ``_ordered`` is maintained by timestamp at admission, rather than re-sorting
+    the complete history for each projection. A returned message tuple still
+    costs O(N) references — an immutable tuple must contain every pointer — but
+    no old payload is converted or walked after the first normalization.
     """
 
-    __slots__ = ("_by_key", "_index", "_seen_lines", "_unique")
+    __slots__ = (
+        "_activity",
+        "_activity_dirty",
+        "_boundaries",
+        "_boundary_previous_totals",
+        "_by_key",
+        "_index",
+        "_last_boundary_total",
+        "_messages_dirty",
+        "_messages_snapshot",
+        "_newest_timestamp",
+        "_ordered",
+        "_ordered_keys",
+        "_seen_lines",
+        "_summaries",
+        "_unique",
+        "_unique_slots",
+    )
 
     def __init__(self) -> None:
         self._seen_lines: set[str] = set()
+        self._activity = _ActivityFolder()
+        self._activity_dirty = False
         self._by_key: dict[tuple[str, str], _Record] = {}
         self._unique: list[_Record] = []
+        self._unique_slots: dict[int, int] = {}
+        self._ordered: list[_Record] = []
+        self._ordered_keys: list[tuple[float, int]] = []
         self._index = 0
+        self._newest_timestamp: datetime | None = None
+        self._summaries: dict[str, str] = {}
+        self._boundaries: dict[str, _Record] = {}
+        self._boundary_previous_totals: dict[str, int] = {}
+        self._last_boundary_total = 0
+        self._messages_snapshot: tuple[AgentMessage, ...] = ()
+        self._messages_dirty = True
 
-    def add(self, raw: dict[str, Any], source: str) -> None:
+    def add(self, raw: dict[str, Any], source: str) -> tuple[Any, ...]:
+        """Fold one raw line and return every newly retained object graph root.
+
+        ``TranscriptCache`` accounts these roots incrementally. Returning both a
+        new record and its frozen message is essential: otherwise the cache sees
+        only source bytes while the normalized wire history grows unbounded.
+
+        Always returns a tuple, never ``None`` — a resume/fork replay drops the
+        line and retains nothing, and the empty tuple says so exactly. Returning
+        ``None`` here would hit ``TranscriptCache``'s legacy fallback for folders
+        that report no roots at all, which conservatively charges the WHOLE
+        discarded raw dict against the budget for every dropped duplicate line —
+        a real cost on a resumed session replaying its own history.
+        """
+        _prune_tool_use_result(raw)
         rec = _Record(raw=raw, index=self._index)
         self._index += 1
         uid = rec.uuid
         if uid is not None:
             if uid in self._seen_lines:
-                return
+                return ()
             self._seen_lines.add(uid)
+        self._messages_dirty = True
         key = (source, rec.dedup_key)
         kept = self._by_key.get(key)
         if kept is not None:
-            kept.absorb_continuation(rec)
-            return
+            replacement = kept.with_continuation(rec)
+            self._replace(key, kept, replacement)
+            self._activity_dirty = True
+            return (replacement, *self._normalize(replacement))
+
+        self._stamp_delivery(rec)
         self._by_key[key] = rec
+        self._unique_slots[id(rec)] = len(self._unique)
         self._unique.append(rec)
+        self._insert_ordered(rec)
+        if self._ordered[-1] is rec:
+            self._activity.add(rec)
+        else:
+            self._activity_dirty = True
+
+        boundary_uuid = rec.uuid
+        if rec.is_compact_boundary and boundary_uuid:
+            previous = self._last_boundary_total
+            self._boundary_previous_totals[boundary_uuid] = previous
+            boundary = rec.compaction_boundary(
+                summary=self._summaries.get(boundary_uuid, ""), previous_total=previous
+            )
+            rec = rec.with_compaction(boundary)
+            self._replace(key, self._by_key[key], rec)
+            self._activity_dirty = True
+            self._boundaries[boundary_uuid] = rec
+            total = rec.cumulative_dropped_tokens
+            if total is not None:
+                self._last_boundary_total = total
+        elif rec.is_compact_summary:
+            parent = rec.raw.get("parentUuid")
+            if isinstance(parent, str) and rec.text().strip():
+                self._summaries[parent] = rec.text()
+                refreshed = self._refresh_boundary(parent)
+                return (rec, *self._normalize(rec), *refreshed)
+
+        return (rec, *self._normalize(rec))
 
     def records(self) -> list[_Record]:
-        return self._unique
+        """The cache-locked time-ordered records for record-derived projections.
+
+        ``TranscriptCache.read`` makes the caller snapshot; returning the owned
+        list here avoids copying all history once per appended line merely so the
+        generic cache can detect an appender's retained root.
+        """
+        return self._ordered
+
+    def messages(self) -> tuple[AgentMessage, ...]:
+        """The time-ordered immutable spine, rebuilt only after a folder mutation."""
+        if not self._messages_dirty:
+            return self._messages_snapshot
+        messages: list[AgentMessage] = []
+        for rec in self._ordered:
+            ready, message = rec.cached_message()
+            if not ready:
+                # A direct fixture can construct records outside the folder, but
+                # a cache-owned record reaches here ready. Keep the defensive
+                # fallback local rather than allowing a partial tuple.
+                self._normalize(rec)
+                _, message = rec.cached_message()
+            if message is not None:
+                messages.append(message)
+        self._messages_snapshot = tuple(messages)
+        self._messages_dirty = False
+        return self._messages_snapshot
+
+    def _stamp_delivery(self, rec: _Record) -> None:
+        if rec.is_queued:
+            rec.stamp_delivery(self._newest_timestamp)
+            return
+        timestamp = rec.timestamp
+        if timestamp is not None and (
+            self._newest_timestamp is None or timestamp > self._newest_timestamp
+        ):
+            self._newest_timestamp = timestamp
+
+    def _insert_ordered(self, rec: _Record) -> None:
+        key = _sort_key(rec)
+        position = bisect_right(self._ordered_keys, key)
+        self._ordered_keys.insert(position, key)
+        self._ordered.insert(position, rec)
+
+    def _replace(self, key: tuple[str, str], old: _Record, new: _Record) -> None:
+        self._by_key[key] = new
+        slot = self._unique_slots.pop(id(old))
+        self._unique[slot] = new
+        self._unique_slots[id(new)] = slot
+        order_key = _sort_key(old)
+        position = bisect_right(self._ordered_keys, order_key) - 1
+        # ``index`` is unique, so the key identifies exactly one entry.
+        self._ordered[position] = new
+
+    def activity(self) -> AgentActivity:
+        """The current activity without a whole-history record walk on append."""
+        if self._activity_dirty:
+            self._activity = _ActivityFolder()
+            for rec in self._ordered:
+                self._activity.add(rec)
+            self._activity_dirty = False
+        return self._activity.activity()
+
+    def message_projection(self) -> tuple[tuple[AgentMessage, ...], None]:
+        """The immutable spine, for the ``TranscriptCache.project`` callback shape.
+
+        Each message graph is charged when its raw record enters the folder via
+        ``add``'s returned roots. The tuple itself is a NEW container on every
+        rebuild (``_messages_dirty``), so the cache charges it by re-measuring
+        this folder's own shallow field sizes after the callback returns —
+        O(fields), never a walk of the messages it points at.
+        """
+        return (self.messages(), None)
+
+    def _refresh_boundary(self, uuid: str) -> tuple[Any, ...]:
+        old = self._boundaries.get(uuid)
+        if old is None:
+            return ()
+        previous = self._boundary_previous_totals.get(uuid, 0)
+        replacement = old.with_compaction(
+            old.compaction_boundary(summary=self._summaries[uuid], previous_total=previous)
+        )
+        key = next(key for key, record in self._by_key.items() if record is old)
+        self._replace(key, old, replacement)
+        self._activity_dirty = True
+        self._boundaries[uuid] = replacement
+        return (replacement, *self._normalize(replacement))
+
+    @staticmethod
+    def _normalize(rec: _Record) -> tuple[Any, ...]:
+        ready, message = rec.cached_message()
+        if ready:
+            return (message,) if message is not None else ()
+        boundary = rec.raw.get(_COMPACTION_BOUNDARY_KEY)
+        message = rec.to_message(boundary if isinstance(boundary, CompactionBoundary) else None)
+        rec.cache_message(message)
+        return (message,) if message is not None else ()
 
 
 _TRANSCRIPTS = TranscriptCache(_RecordFolder)

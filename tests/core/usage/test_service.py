@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -68,6 +69,51 @@ def test_deselecting_all_profiles_prunes_persisted_quota_coverage(tmp_path: Path
     try:
         assert service.quotas().coverage.quota_available is True
         assert service.quotas().coverage.quota_available is False
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("external", [False, True])
+def test_unchanged_quota_reads_do_not_write_but_foreign_changes_are_repaired(
+    tmp_path: Path, external: bool
+) -> None:
+    observed = datetime(2026, 9, 16, tzinfo=UTC)
+    account = BillingAccountView(
+        account_id="selected",
+        provider="claude_code",
+        label="Selected",
+        billing_mode="subscription",
+        status="ok",
+        observed_at=observed,
+        windows=(
+            SubscriptionWindowView(
+                scope="weekly", label="Weekly", used_percent=25, observed_at=observed
+            ),
+        ),
+    )
+    db_path = tmp_path / "usage.sqlite3"
+    service = UsageService(
+        cfg=GroveConfig(),
+        registry=cast(RepoRegistry, cast(Any, object())),
+        db_path=db_path,
+        quota=cast(QuotaCollector, cast(Any, _Quota([(account,)] * 22))),
+    )
+    try:
+        assert service.quotas().coverage.quota_available is True
+        conn = service._store.connect()
+        changes = conn.total_changes
+        for _ in range(20):
+            assert service.quotas().coverage.quota_available is True
+        assert conn.total_changes == changes
+        writer = sqlite3.connect(db_path) if external else conn
+        try:
+            writer.execute("DELETE FROM quota_snapshots")
+            writer.commit()
+        finally:
+            if external:
+                writer.close()
+        assert service.quotas().coverage.quota_available is True
+        assert conn.total_changes > changes
     finally:
         service.close()
 

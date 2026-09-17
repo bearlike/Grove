@@ -84,6 +84,7 @@ class FileEventSource:
         on_recovery: FileEventRecoveryCallback | None = None,
         limits: AdmissionLimits | None = None,
         recursive: bool = False,
+        include_ignored: bool = False,
         max_batch_items: int = 64,
         max_batch_bytes: int = 256 * 1024,
         debounce_ms: int = 50,
@@ -116,16 +117,19 @@ class FileEventSource:
         # relative to itself, so it is still admitted, and nothing else can be
         # relative to it. Absence is therefore resolved toward the reading that
         # can still be right later.
-        self._file_roots = tuple(
+        self._file_roots = frozenset(
             root for root in canonical_roots if root.exists() and not root.is_dir()
         )
-        self._directory_roots = tuple(
+        self._directory_roots = frozenset(
             root for root in canonical_roots if root not in self._file_roots
         )
         self._roots = canonical_roots
         self._on_event = on_event
         self._on_recovery = on_recovery or (lambda _: None)
         self._recursive = recursive
+        # Git metadata is an explicit source, but watchfiles' default filter
+        # suppresses every .git path. Containment still applies after this opt-in.
+        self._include_ignored = include_ignored
         self._max_batch_items = max_batch_items
         self._max_batch_bytes = max_batch_bytes
         self._debounce_ms = debounce_ms
@@ -197,6 +201,7 @@ class FileEventSource:
                     debounce=self._max_age_ms,
                     yield_on_timeout=True,
                     rust_timeout=1000,
+                    **({"watch_filter": None} if self._include_ignored else {}),
                 ):
                     self._ready.set()
                     self._admit_changes(changes, reconnects_remaining)
@@ -283,12 +288,13 @@ class FileEventSource:
         return tuple(paths)
 
     def _contains(self, path: Path) -> bool:
-        if path in self._file_roots:
+        if path in self._file_roots or path in self._directory_roots:
             return True
-        return any(
-            path.is_relative_to(root) and (self._recursive or path.parent == root)
-            for root in self._directory_roots
-        )
+        if not self._recursive:
+            return path.parent in self._directory_roots
+        # The path's depth bounds the lookup, not the host's watch count. Scanning
+        # every root made each event O(all watched directories) on the event loop.
+        return any(parent in self._directory_roots for parent in path.parents)
 
     @staticmethod
     def _event_size(path: Path) -> int:

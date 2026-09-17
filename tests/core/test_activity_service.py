@@ -27,13 +27,14 @@ from grove.core.activity import (
     DashboardDelta,
     DashboardSnapshot,
     FleetSummary,
+    RefreshDomain,
     SessionActivity,
     WorkspaceActivity,
     _token_classes_of,
 )
 from grove.core.agents import AgentActivity, AgentActivityState, AgentMessage, AgentSession
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
-from grove.core.agents.hook import ClaudeHook, SubagentHookRecord
+from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook, SubagentHookRecord
 from grove.core.agents.model import TokenUsage
 from grove.core.agents.session_registry import NativeClaudeSession
 from grove.core.config import GroveConfig, load_config
@@ -44,7 +45,7 @@ from grove.core.contracts.activity import (
 )
 from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.contracts.usage import DurationView, TokenClassesView
+from grove.core.launch import AgentExit
 from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
@@ -2452,38 +2453,34 @@ class _FakeMessageAdapter:
     def __init__(self, count: int) -> None:
         self.count = count
         self.reads = 0
+        self.messages: tuple[AgentMessage, ...] = ()
 
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
         del cwd, session_id
         self.reads += 1
-        # Real `AgentMessage`s, not bare ints. Each reduction used to be
-        # exercised alone with the other two patched out, so a placeholder
-        # sufficed; one read now feeds all three, and an unpatched reduction
-        # walking a placeholder raises. The count — the thing the memo keys
-        # on — is unchanged.
-        return tuple(AgentMessage(role="user") for _ in range(self.count))
+        self.messages = self.messages[: self.count] + tuple(
+            AgentMessage(role="user") for _ in range(max(0, self.count - len(self.messages)))
+        )
+        return self.messages
 
 
-def test_spine_facts_recompute_only_when_message_count_changes(
+def test_spine_facts_fold_only_the_appended_message_suffix(
     env: tuple[ActivityService, RepoRegistry], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The measured cost gate: `duration_of` is a pure reduction with no
-    memoization of its own — on the largest real transcript measured
-    (33MB/9566 messages) it costs ~30ms EVERY call, against `parse_activity`'s
-    ~5ms warm-cache hit the same tick already pays. `_session_spine_facts` keys
-    a process-lifetime cache on message COUNT (transcripts are append-only, so
-    count is a cheap monotonic proxy for "did the spine change") rather than
-    re-running the reductions every tick. This pins that an unchanged count is
-    a cache hit — no reduction at all — and a grown count recomputes."""
+    """Retained immutable prefixes must not be reduced again on an append."""
     service, _ = env
     calls = 0
 
-    def fake_duration_of(messages: object) -> DurationView:
+    from grove.core.spine_facts import SpineFactsCache  # noqa: PLC0415
+
+    original = SpineFactsCache._fold
+
+    def count_fold(cache: SpineFactsCache, messages: object) -> None:
         nonlocal calls
         calls += 1
-        return DurationView(confidence="derived")
+        original(cache, messages)
 
-    monkeypatch.setattr("grove.core.activity.duration_of", fake_duration_of)
+    monkeypatch.setattr(SpineFactsCache, "_fold", count_fold)
     adapter = _FakeMessageAdapter(count=3)
     cwd = tmp_path / "repo"
 
@@ -2499,6 +2496,19 @@ def test_spine_facts_recompute_only_when_message_count_changes(
     third = service._session_spine_facts(adapter, cwd, "s1")
     assert calls == 2  # grew: recomputed
     assert third is not first
+
+
+def test_same_length_spine_replacement_updates_facts(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    service, _ = env
+    adapter = _FakeMessageAdapter(count=1)
+    adapter.messages = (AgentMessage(role="assistant", usage=TokenUsage(input=7)),)
+    first = service._session_spine_facts(adapter, tmp_path, "same-count")
+    assert first is not None and first.tokens.fresh_input == 7
+    adapter.messages = (AgentMessage(role="assistant", usage=TokenUsage(input=11)),)
+    changed = service._session_spine_facts(adapter, tmp_path, "same-count")
+    assert changed is not None and changed.tokens.fresh_input == 11
 
 
 def test_one_tick_reads_the_message_spine_exactly_once(
@@ -2587,13 +2597,18 @@ def test_the_token_class_reduction_shares_the_one_spine_memo(
     service, _ = env
     calls = 0
 
-    def fake_token_classes_of(messages: object) -> TokenClassesView:
+    from grove.core.spine_facts import SpineFactsCache  # noqa: PLC0415
+
+    original = SpineFactsCache._fold
+
+    def count_fold(cache: SpineFactsCache, messages: object) -> None:
         nonlocal calls
         calls += 1
-        return TokenClassesView(fresh_input=1)
+        original(cache, messages)
 
-    monkeypatch.setattr("grove.core.activity._token_classes_of", fake_token_classes_of)
+    monkeypatch.setattr(SpineFactsCache, "_fold", count_fold)
     adapter = _FakeMessageAdapter(count=3)
+    adapter.messages = (AgentMessage(role="assistant", usage=TokenUsage(input=1)),)
     cwd = tmp_path / "repo"
 
     first = service._session_spine_facts(adapter, cwd, "s1")
@@ -2605,5 +2620,173 @@ def test_the_token_class_reduction_shares_the_one_spine_memo(
     assert calls == 1  # unchanged message count: cache hit, no re-reduction
 
     adapter.count = 5
-    assert service._session_spine_facts(adapter, cwd, "s1") is not first
-    assert calls == 2  # grew: recomputed
+
+
+# ─── RUNTIME-domain reblend: BLOCKED/ERROR must survive, no git/transcript I/O ──
+
+
+def test_runtime_reblend_preserves_blocked_from_the_sidecar(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A RUNTIME-only edge must reapply the FULL post-parse pipeline, not a
+    simplified copy of it — a sidecar-sourced BLOCKED (a permission prompt,
+    invisible to polling) must survive a bare tmux active/idle edge, or an
+    agent waiting on a human reads as idle the moment its pane goes quiet.
+
+    The retained transcript is DELIBERATELY materialized to a definitive
+    state (WAITING, via a real ``end_turn`` record) rather than left as an
+    empty STARTING/UNKNOWN — `_settle`'s hysteresis would otherwise hold the
+    row at its LAST cached state (BLOCKED) regardless of what a stripped
+    reblend computed, making the assertion pass whether or not the sidecar
+    override actually ran.
+    """
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="runtime-blocked"))
+
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(Path(state.worktree_path))
+    folder.mkdir(parents=True)
+    (folder / f"{state.agent_session_id}.jsonl").write_text(
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"go"}}\n'
+        '{"type":"assistant","uuid":"a1","requestId":"r1","timestamp":"2026-06-01T10:00:01.000Z",'
+        '"isSidechain":false,"message":{"id":"m1","role":"assistant","stop_reason":"end_turn",'
+        '"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"k"}]}}\n',
+        encoding="utf-8",
+    )
+    # Fresher than the transcript, so the BLOCKED push still outranks it.
+    ClaudeHook.record_event(
+        {"hook_event_name": "Notification", "session_id": state.agent_session_id},
+        sidecar_dir=sidecar_dir,
+        tmux_pane=None,
+        now=datetime(2026, 6, 1, 10, 0, 2, tzinfo=UTC),
+    )
+
+    row = service.bootstrap().projects[0].workspaces[0]
+    assert row.primary is not None
+    assert row.primary.state is AgentActivityState.BLOCKED
+
+    # A pure runtime edge — no transcript write, no sidecar write, nothing that
+    # would independently re-derive BLOCKED — must not lose it.
+    reblended = service._refresh_row(mgr, state, row, RefreshDomain.RUNTIME)
+    assert reblended.primary is not None
+    assert reblended.primary.state is AgentActivityState.BLOCKED
+
+
+def test_runtime_reblend_preserves_a_recorded_dead_agent(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A recorded non-zero agent exit is a FACT, not an inference — it must
+    outrank a RUNTIME-only reblend exactly as it outranks the full pipeline,
+    or a dead agent flips back to STARTING/IDLE the instant tmux goes quiet.
+
+    The transcript is DELIBERATELY materialized to WAITING rather than left
+    empty — a fileless session blends to STARTING/degraded, and `_settle`'s
+    hysteresis then holds the row at its cached ERROR regardless of whether
+    the exit-recorder override actually ran, which would let this assertion
+    pass against a reblend that dropped the override entirely.
+    """
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="runtime-dead"))
+
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(Path(state.worktree_path))
+    folder.mkdir(parents=True)
+    (folder / f"{state.agent_session_id}.jsonl").write_text(
+        '{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00.000Z",'
+        '"isSidechain":false,"message":{"role":"user","content":"go"}}\n'
+        '{"type":"assistant","uuid":"a1","requestId":"r1","timestamp":"2026-06-01T10:00:01.000Z",'
+        '"isSidechain":false,"message":{"id":"m1","role":"assistant","stop_reason":"end_turn",'
+        '"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"k"}]}}\n',
+        encoding="utf-8",
+    )
+    exit_path = core_paths.agent_exit_path(state.id)
+    AgentExit.prepare(exit_path)
+    exit_path.write_text("1\n", encoding="utf-8")
+
+    row = service.bootstrap().projects[0].workspaces[0]
+    assert row.primary is not None
+    assert row.primary.state is AgentActivityState.ERROR
+
+    reblended = service._refresh_row(mgr, state, row, RefreshDomain.RUNTIME)
+    assert reblended.primary is not None
+    assert reblended.primary.state is AgentActivityState.ERROR
+
+
+def test_runtime_reblend_never_marks_codex_as_pane_non_authoritative(
+    env: tuple[ActivityService, RepoRegistry], tmp_path: Path
+) -> None:
+    """`remote` in the blend means "this provider's backend, not the local
+    pane, is authoritative" (mewbo only) — a codex/claude_code session must
+    never be folded into that arm.
+
+    The discriminator needs BOTH a non-ACTIVE workspace status and a STALE
+    ``last_event_at`` — with a fresh transcript, `_blend`'s WORKING branch
+    returns WORKING whether or not `remote` is set, so that shape cannot
+    distinguish "correctly not remote" from "incorrectly treated as remote".
+    Only once both signals are stale does the truth table actually branch on
+    `remote`: `True` → WORKING (mewbo's own answer stands), `False` → IDLE (a
+    non-remote adapter falls through to the tmux-quiet default).
+    """
+    service, registry = env
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="runtime-codex"))
+    assert state.status is not WorkspaceStatus.ACTIVE
+    stale = datetime.now(tz=UTC) - timedelta(seconds=DEFAULT_SIDECAR_MAX_AGE_SECONDS + 60)
+    transcript = AgentActivity(state=AgentActivityState.WORKING, last_event_at=stale)
+    session = AgentSession(
+        session_id="codex-session",
+        transcript_path=tmp_path / "codex.jsonl",
+        adapter_kind="codex",
+        provenance="fs_discovered",
+        tmux_window="agent",
+    )
+    sessions = (SessionActivity(session=session, activity=transcript, polled_activity=transcript),)
+
+    reblended = service._reblend_sessions(mgr, state, sessions)
+
+    # A stale WORKING transcript with `remote=False` (correct for codex) falls
+    # through to IDLE, not WORKING — proving the arm was actually reached.
+    assert reblended[0].activity.state is AgentActivityState.IDLE
+
+
+def test_runtime_domain_reblend_touches_no_git_or_transcript_reads(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A RUNTIME-only invalidation is a status recompute over cached facts —
+    it must call neither a git subprocess nor an adapter transcript parse."""
+    service, registry = env
+    repo = _init_repo(tmp_path / "repo")
+    mgr = registry.get(repo)
+    state = mgr.create(CreateWorkspaceRequest(agent_name="claude", title="runtime-cheap"))
+    service.bootstrap()
+
+    def fail_parse(*_a: object, **_k: object) -> None:
+        raise AssertionError("RUNTIME reblend must not re-parse a transcript")
+
+    def fail_run(*_a: object, **_k: object) -> None:
+        raise AssertionError("RUNTIME reblend must not call git")
+
+    monkeypatch.setattr(ClaudeCodeAdapter, "parse_activity", fail_parse)
+    monkeypatch.setattr(ClaudeCodeAdapter, "read_messages", fail_parse)
+    monkeypatch.setattr("grove.core.git.GitRepo._run", staticmethod(fail_run))
+
+    result = service.prepare_workspace_refresh(str(repo), state.id, domains=RefreshDomain.RUNTIME)
+    assert result is not None

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -53,6 +54,9 @@ class UsageService:
             cfg=cfg, registry=registry, store=self._store, clock=self._clock, prices=self._prices
         )
         self._quota = quota or QuotaCollector(cfg=cfg, clock=self._clock)
+        self._quota_snapshot: tuple[BillingAccountView, ...] | None = None
+        self._quota_connection: sqlite3.Connection | None = None
+        self._quota_generation: tuple[int, int] | None = None
         self._prune_deselected_quota_snapshots()
         prices = self._prices
         self._query = UsageQuery(store=self._store, prices=prices, cfg=cfg)
@@ -144,6 +148,26 @@ class UsageService:
         self._store.close()
 
     def _store_quota_snapshots(self, accounts: tuple[BillingAccountView, ...]) -> None:
+        with self._store.lock:
+            conn = self._store.connect()
+            # Another service/process may replace the selected set. Pair SQLite's
+            # external-write generation with local changes and connection identity
+            # rather than trusting an in-memory account tuple indefinitely.
+            generation = (conn.execute("PRAGMA data_version").fetchone()[0], conn.total_changes)
+            if (
+                conn is self._quota_connection
+                and generation == self._quota_generation
+                and accounts == self._quota_snapshot
+            ):
+                return
+            self._replace_quota_snapshots(accounts)
+            self._quota_connection = conn
+            self._quota_snapshot = accounts
+            # Keep the pre-write external generation: a concurrent foreign commit
+            # must invalidate the next call, not be blessed as our own snapshot.
+            self._quota_generation = (generation[0], conn.total_changes)
+
+    def _replace_quota_snapshots(self, accounts: tuple[BillingAccountView, ...]) -> None:
         with self._store.write() as conn:
             # This table is the latest selected quota set, not history. Clearing
             # first removes profiles deselected in config; leaving their rows

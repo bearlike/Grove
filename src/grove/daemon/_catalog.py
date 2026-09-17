@@ -33,6 +33,7 @@ from loguru import logger
 from grove.core import process as process_module
 from grove.core.gallery import DiagramGallery, GalleryItem
 from grove.core.sessions import CatalogEntry, SessionCatalog
+from grove.core.turn_count import CountFillResult
 
 
 class _CatalogMemo:
@@ -56,7 +57,8 @@ class _CatalogMemo:
         # render path every route off-loads onto. One worker because the job is
         # single-flight by nature — a second pass would re-read the same files.
         self._counters = ThreadPoolExecutor(max_workers=1, thread_name_prefix="grove-turncount")
-        self._counting: Future[int] | None = None
+        self._counting: Future[CountFillResult] | None = None
+        self._counted_generation: int | None = None
         self._stopped = threading.Event()
 
     @property
@@ -94,6 +96,18 @@ class _CatalogMemo:
                     self._rows, process_module.list_agent_runtimes(), now=time.time()
                 )
             )
+
+    def snapshot(self) -> tuple[CatalogEntry, ...]:
+        """The current metadata snapshot without re-folding live processes.
+
+        Readers that use identity or attribution only must not buy a `/proc`
+        traversal. Listings keep calling :meth:`rows` and therefore preserve
+        fresh liveness on every read.
+        """
+        with self._lock:
+            if not self._bootstrapped:
+                self._replace_rows(self._catalog.scan())
+            return self._rows
 
     def reconcile(self) -> tuple[CatalogEntry, ...]:
         """Explicitly rebuild the complete snapshot for an unknown source edge.
@@ -178,22 +192,35 @@ class _CatalogMemo:
                 self.update_path(path)
 
     def count_turns_in_background(self) -> None:
-        """Fill durable turn facts for the current generation off this thread.
+        """Fill durable turn facts once for the current generation off this thread.
 
         An event mutation changes the snapshot's transcript fingerprints. The
         next listing schedules a pass for that new generation; if an older pass
         is still in flight it remains single-flight, and the following listing
-        starts the fresh pass after it completes. ``TurnCountCache`` itself
-        rejects obsolete fingerprints, so an old pass cannot publish stale facts
-        for a changed transcript.
+        starts the fresh pass after it completes. A failed pass leaves its
+        generation pending, so a later listing retries it. ``TurnCountCache``
+        itself rejects obsolete fingerprints, so an old pass cannot publish
+        stale facts for a changed transcript.
         """
         with self._lock:
             if self._stopped.is_set() or not self._rows:
                 return
             if self._counting is not None and not self._counting.done():
                 return
+            if self._counted_generation == self._generation:
+                return
             rows = self._rows
-            self._counting = self._counters.submit(self._count_turns, rows)
+            generation = self._generation
+            counting = self._counters.submit(self._count_turns, rows)
+            self._counting = counting
+        counting.add_done_callback(lambda future: self._record_count_completion(generation, future))
+
+    def _record_count_completion(self, generation: int, future: Future[CountFillResult]) -> None:
+        """Remember only a pass whose snapshot has no pending durable facts."""
+        if future.cancelled() or future.exception() is not None or not future.result().complete:
+            return
+        with self._lock:
+            self._counted_generation = generation
 
     def close(self) -> None:
         """Stop counting. Never waits on a pass in flight."""
@@ -226,18 +253,18 @@ class _CatalogMemo:
             return False
         return path is None or row.ref.transcript_path == path
 
-    def _count_turns(self, rows: tuple[CatalogEntry, ...]) -> int:
-        counted = self._catalog.count_turns(rows, stop=self._stopped.is_set)
-        if counted:
-            logger.debug("counted turns for {} session(s)", counted)
-        return counted
+    def _count_turns(self, rows: tuple[CatalogEntry, ...]) -> CountFillResult:
+        result = self._catalog.count_turn_facts(rows, stop=self._stopped.is_set)
+        if result.counted:
+            logger.debug("counted turns for {} session(s)", result.counted)
+        return result
 
     def find(self, *, kind: str, cwd: str, session_id: str) -> CatalogEntry | None:
         """The row identified by the three catalog coordinates, or ``None``."""
         return next(
             (
                 row
-                for row in self.rows()
+                for row in self.snapshot()
                 if row.ref.session_id == session_id
                 and row.ref.adapter_kind == kind
                 and row.ref.cwd == cwd
@@ -281,7 +308,7 @@ class _GalleryMemo:
         the expensive attribution join still rides the catalog generation, so
         this costs one dict lookup per row and no scan.
         """
-        rows = self._sessions.rows()
+        rows = self._sessions.snapshot()
         session_generation = self._sessions.generation
         with self._lock:
             if not self._bootstrapped or self._sessions_generation != session_generation:
@@ -300,7 +327,7 @@ class _GalleryMemo:
 
     def reconcile(self) -> tuple[GalleryItem, ...]:
         """Explicitly rebuild diagrams when an event names no materialized item."""
-        rows = self._sessions.rows()
+        rows = self._sessions.snapshot()
         session_generation = self._sessions.generation
         with self._lock:
             self._replace_items(self._gallery.scan(rows), session_generation)
@@ -339,7 +366,9 @@ class _GalleryMemo:
 
     def update_path(self, path: Path) -> bool:
         """Refresh one changed diagram through the gallery's bounded path seam."""
-        item = self._gallery.item_for_path(path, self._sessions.rows())
+        if path.suffix.lower() != ".drawio":
+            return False
+        item = self._gallery.item_for_path(path, self._sessions.snapshot())
         return self.invalidate(item=item) if item is not None else self.invalidate(path=path)
 
     def on_file_events(self, batch: object) -> None:

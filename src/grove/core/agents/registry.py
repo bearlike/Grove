@@ -9,6 +9,10 @@ here plus its adapter module; nothing else in the engine changes.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from grove.core.config import TranscriptCacheConfig
 
 from grove.core.agents.base import AgentAdapter
 from grove.core.agents.claude_code import ClaudeCodeAdapter
@@ -39,6 +43,12 @@ def get_adapter(kind: str) -> AgentAdapter:
     so the fallback is defence in depth, not the expected path.
     """
     return _ADAPTERS.get(kind, _GENERIC)
+
+
+def configure_transcript_caches(cfg: TranscriptCacheConfig) -> None:
+    """Apply one process-wide policy before starting daemon readers."""
+    for adapter in (_CLAUDE_CODE, _CODEX):
+        adapter.configure_caches(cfg)
 
 
 def all_adapters() -> tuple[AgentAdapter, ...]:

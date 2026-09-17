@@ -36,6 +36,27 @@ describe("BrandMark", () => {
     expect(icon).toContain('fill-rule="evenodd"');
   });
 
+  it("carries the weight stroke, matching the artwork stroke for stroke", () => {
+    // The linework is thin enough at small sizes that the mark needs a stroke
+    // in its own fill colour to read, and the stroke is what makes it twice
+    // the weight the raw path draws. It has the same drift exposure as the
+    // fill rule above and none of its visibility: a component that lost the
+    // stroke would render a THINNER logo beside app icons rasterized from an
+    // SVG that kept it, which is a difference nobody spots in a diff. Same
+    // cross-artifact census, for the same reason.
+    const html = renderToStaticMarkup(<BrandMark />);
+    expect(html).toContain('stroke="#c86e45"');
+    expect(html).toContain('stroke-width="10"');
+    expect(html).toContain('stroke-linejoin="round"');
+
+    const icon = readFileSync("../docs/img/grove-logo.svg", "utf8");
+    expect(icon).toContain('stroke="#c86e45"');
+    expect(icon).toContain('stroke-width="10"');
+    expect(icon).toContain('stroke-linejoin="round"');
+    // The old artwork said `stroke="none"`, so its absence is half the change.
+    expect(icon).not.toContain('stroke="none"');
+  });
+
   it("keeps the brand fill hard-coded rather than inheriting currentColor", () => {
     // A mark that took `currentColor` would go grey inside a muted row and
     // invert in dark mode. This is the one colour in the app that is not a

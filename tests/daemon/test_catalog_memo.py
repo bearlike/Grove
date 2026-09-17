@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from grove.core.agents import SessionRef
 from grove.core.gallery import GalleryItem
 from grove.core.process import LiveRuntime
 from grove.core.sessions import CatalogEntry
+from grove.core.turn_count import CountFillResult
 from grove.daemon._catalog import _CatalogMemo, _GalleryMemo
 
 
@@ -62,15 +64,44 @@ class _CountingCatalog:
         self.scans += 1
         return self.rows if limit is None else self.rows[:limit]
 
-    def count_turns(
+    def count_turn_facts(
         self, entries: Sequence[CatalogEntry], *, stop: Callable[[], bool] | None = None
-    ) -> int:
+    ) -> CountFillResult:
         del entries, stop
         self.counted += 1
         self.entered.set()
         self.release.wait(timeout=5)
         self.finished.set()
-        return 1
+        return CountFillResult(counted=1, complete=True)
+
+
+class _ImmediateExecutor:
+    """Executor double whose completed Future exercises callback registration."""
+
+    def submit(self, fn: Callable[..., CountFillResult], *args: object) -> Future[CountFillResult]:
+        future: Future[CountFillResult] = Future()
+        future.set_result(fn(*args))
+        return future
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+        del wait, cancel_futures
+
+
+class _ReentrancyDetectingLock:
+    """Allows the test to observe a callback attempting a nested lock acquire."""
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self.reentered = False
+
+    def __enter__(self) -> _ReentrancyDetectingLock:
+        if self.depth:
+            self.reentered = True
+        self.depth += 1
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.depth -= 1
 
 
 class _CountingGallery:
@@ -83,6 +114,10 @@ class _CountingGallery:
         self.scans += 1
         self.scanned_rows.append(rows)
         return self.items_to_return
+
+    def item_for_path(self, path: Path, rows: tuple[CatalogEntry, ...]) -> GalleryItem | None:
+        del path, rows
+        return None
 
 
 def _item(item_id: str, *, path: Path, modified_at: datetime | None = None) -> GalleryItem:
@@ -166,6 +201,30 @@ def test_reconcile_is_an_explicit_whole_scan() -> None:
     assert catalog.scans == 2
 
 
+def test_snapshot_and_find_do_not_consume_liveness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    calls = 0
+
+    def liveness() -> tuple[LiveRuntime, ...]:
+        nonlocal calls
+        calls += 1
+        return ()
+
+    monkeypatch.setattr("grove.core.process.list_agent_runtimes", liveness)
+    try:
+        memo.rows()
+        calls = 0
+
+        assert memo.snapshot() == (_entry("a"),)
+        assert memo.find(kind="claude_code", cwd="/w", session_id="a") is not None
+        assert calls == 0
+    finally:
+        memo.close()
+
+
 def test_find_matches_on_all_three_coordinates() -> None:
     catalog = _CountingCatalog(
         (
@@ -224,6 +283,58 @@ def test_known_diagram_update_and_deletion_change_only_that_item() -> None:
     assert gallery_source.scans == 1
 
 
+def test_gallery_reads_metadata_snapshot_without_consuming_liveness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    sessions = _memo(catalog)
+    first = _item("a", path=Path("/repo/first.drawio"))
+    gallery_source = _CountingGallery((first,))
+    gallery = _GalleryMemo(gallery_source, sessions)  # type: ignore[arg-type]
+    calls = 0
+
+    def liveness() -> tuple[LiveRuntime, ...]:
+        nonlocal calls
+        calls += 1
+        return ()
+
+    monkeypatch.setattr("grove.core.process.list_agent_runtimes", liveness)
+    try:
+        sessions.rows()
+        calls = 0
+        assert gallery.items() == (first,)
+        assert gallery.find("a") == first
+        assert gallery.update_path(first.path) is True
+        assert calls == 0
+    finally:
+        sessions.close()
+
+
+def test_non_diagram_gallery_event_does_not_consume_catalog_liveness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transcript edge cannot justify the gallery's live-process scan."""
+    catalog = _CountingCatalog((_entry("a"),))
+    sessions = _memo(catalog)
+    gallery_source = _CountingGallery(())
+    gallery = _GalleryMemo(gallery_source, sessions)  # type: ignore[arg-type]
+    calls = 0
+
+    def liveness() -> tuple[LiveRuntime, ...]:
+        nonlocal calls
+        calls += 1
+        return ()
+
+    monkeypatch.setattr("grove.core.process.list_agent_runtimes", liveness)
+    try:
+        sessions.rows()
+        calls = 0
+        assert gallery.update_path(Path("/tmp/session.jsonl")) is False
+        assert calls == 0
+    finally:
+        sessions.close()
+
+
 def test_gallery_file_event_invalidates_without_scanning_on_callback_thread() -> None:
     catalog = _CountingCatalog((_entry("a"),))
     sessions = _memo(catalog)
@@ -275,6 +386,130 @@ def test_changed_session_defers_its_next_turn_count_until_the_flight_finishes() 
         assert catalog.counted == 2
     finally:
         catalog.release.set()
+        memo.close()
+
+
+def test_immediate_turn_count_completion_does_not_reenter_the_catalog_lock() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    lock = _ReentrancyDetectingLock()
+    memo._lock = lock  # type: ignore[assignment]
+    memo._counters = _ImmediateExecutor()  # type: ignore[assignment]
+    memo._count_turns = lambda rows: CountFillResult(counted=1, complete=True)  # type: ignore[method-assign]
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+
+        assert lock.reentered is False
+        assert memo._counted_generation == memo.generation
+    finally:
+        memo.close()
+
+
+def test_unchanged_generation_schedules_one_turn_count_pass() -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+        assert catalog.entered.wait(timeout=5)
+        catalog.release.set()
+        assert memo._counting is not None
+        first: Future[int] = memo._counting
+        first.result(timeout=5)
+
+        memo.count_turns_in_background()
+        assert memo._counting is first
+    finally:
+        catalog.release.set()
+        memo.close()
+
+
+def test_zero_count_pass_marks_an_already_measured_generation_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A complete durable cache normally has no rows left to measure."""
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    attempts = 0
+
+    def count_nothing(rows: tuple[CatalogEntry, ...]) -> CountFillResult:
+        nonlocal attempts
+        del rows
+        attempts += 1
+        return CountFillResult(counted=0, complete=True)
+
+    monkeypatch.setattr(memo, "_count_turns", count_nothing)
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+        assert memo._counting is not None
+        first: Future[CountFillResult] = memo._counting
+        assert first.result(timeout=5) == CountFillResult(counted=0, complete=True)
+
+        memo.count_turns_in_background()
+        assert memo._counting is first
+        assert attempts == 1
+    finally:
+        memo.close()
+
+
+def test_incomplete_turn_count_pass_retries_for_the_same_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    attempts = 0
+
+    def incomplete_then_complete(rows: tuple[CatalogEntry, ...]) -> CountFillResult:
+        nonlocal attempts
+        del rows
+        attempts += 1
+        return CountFillResult(counted=1, complete=attempts > 1)
+
+    monkeypatch.setattr(memo, "_count_turns", incomplete_then_complete)
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+        assert memo._counting is not None
+        assert memo._counting.result(timeout=5) == CountFillResult(counted=1, complete=False)
+
+        memo.count_turns_in_background()
+        assert memo._counting is not None
+        assert memo._counting.result(timeout=5) == CountFillResult(counted=1, complete=True)
+        assert attempts == 2
+    finally:
+        memo.close()
+
+
+def test_failed_turn_count_pass_retries_for_the_same_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = _CountingCatalog((_entry("a"),))
+    memo = _memo(catalog)
+    attempts = 0
+
+    def fail_once(rows: tuple[CatalogEntry, ...]) -> int:
+        nonlocal attempts
+        del rows
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary failure")
+        return 1
+
+    monkeypatch.setattr(memo, "_count_turns", fail_once)
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+        assert memo._counting is not None
+        with pytest.raises(RuntimeError, match="temporary failure"):
+            memo._counting.result(timeout=5)
+
+        memo.count_turns_in_background()
+        assert memo._counting is not None
+        assert memo._counting.result(timeout=5) == 1
+        assert attempts == 2
+    finally:
         memo.close()
 
 

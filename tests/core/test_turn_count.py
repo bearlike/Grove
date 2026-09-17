@@ -95,6 +95,74 @@ def test_a_cold_cache_answers_nothing_and_a_fill_answers_the_adapters_own_number
     assert get_adapter("claude_code").parse_activity(cwd, SID).human_turns == 3
 
 
+def test_facts_for_decodes_the_durable_cache_once_until_it_is_replaced(
+    cache: TurnCountCache, claude_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One-file events must not revalidate every durable entry each time."""
+    cwd = tmp_path / "repo"
+    first = _write(claude_home, SID, cwd, turns=1)
+    second = _write(claude_home, OTHER_SID, cwd, turns=2)
+    refs = [_ref(SID, cwd, first), _ref(OTHER_SID, cwd, second)]
+    assert cache.fill(refs) == 2
+
+    cache_path = tmp_path / "session-turns.json"
+    reader = TurnCountCache(path=cache_path)
+    original_read_text = Path.read_text
+    reads = 0
+
+    def counted_read_text(path: Path, *args: object, **kwargs: object) -> str:
+        nonlocal reads
+        if path == cache_path:
+            reads += 1
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+    assert _counts(reader, [refs[0]]) == {("claude_code", SID): 1}
+    assert _counts(reader, [refs[1]]) == {("claude_code", OTHER_SID): 2}
+    assert reads == 1
+
+    payload = json.loads(original_read_text(cache_path, encoding="utf-8"))
+    payload["sessions"][f"claude_code\t{SID}"]["turns"] = 9
+    replacement = tmp_path / "replacement.json"
+    replacement.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(replacement, cache_path)
+
+    assert _counts(reader, [refs[0]]) == {("claude_code", SID): 9}
+    assert reads == 2
+
+
+def test_fill_result_distinguishes_a_complete_cache_from_an_unmeasurable_entry(
+    cache: TurnCountCache, claude_home: Path, tmp_path: Path
+) -> None:
+    cwd = tmp_path / "repo"
+    path = _write(claude_home, SID, cwd, turns=1)
+    eligible = _ref(SID, cwd, path)
+
+    assert cache.fill_result([eligible]).complete is True
+    assert cache.fill_result([eligible]).counted == 0
+    assert cache.fill_result([eligible]).complete is True
+
+    cwdless = SessionRef(
+        session_id=SID,
+        adapter_kind="claude_code",
+        cwd=None,
+        transcript_path=path,
+        birth=None,
+        mtime=path.stat().st_mtime,
+    )
+    assert cache.fill_result([cwdless]).complete is True
+
+
+def test_fill_result_stays_incomplete_when_an_eligible_transcript_cannot_be_measured(
+    cache: TurnCountCache, claude_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cwd = tmp_path / "repo"
+    ref = _ref(SID, cwd, _write(claude_home, SID, cwd, turns=1))
+    monkeypatch.setattr(cache, "_measure", lambda _: None)
+
+    assert cache.fill_result([ref]).complete is False
+
+
 def test_an_unchanged_transcript_is_never_read_twice(
     cache: TurnCountCache, claude_home: Path, tmp_path: Path
 ) -> None:
@@ -124,19 +192,21 @@ def test_a_grown_transcript_answers_nothing_until_it_is_recounted(
     assert _counts(cache, grown) == {("claude_code", SID): 3}
 
 
-def test_a_replaced_transcript_that_kept_its_mtime_is_still_a_miss(
+def test_an_external_replacement_with_the_same_metadata_is_a_miss(
     cache: TurnCountCache, claude_home: Path, tmp_path: Path
 ) -> None:
-    """The half of the fingerprint ``mtime`` alone cannot carry: a restored or
-    copied file whose timestamp was preserved."""
+    """Inode detects the atomic replacement mtime and size cannot distinguish."""
     cwd = tmp_path / "repo"
     path = _write(claude_home, SID, cwd, turns=2)
     assert cache.fill([_ref(SID, cwd, path)]) == 1
-    stat = path.stat()
+    before = path.stat()
+    original = path.read_text(encoding="utf-8")
+    replacement = tmp_path / "replacement.jsonl"
+    replacement.write_text(original, encoding="utf-8")
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    os.replace(replacement, path)
 
-    _write(claude_home, SID, cwd, turns=5)
-    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
-
+    assert path.stat().st_ino != before.st_ino
     assert _counts(cache, [_ref(SID, cwd, path)]) == {}
 
 

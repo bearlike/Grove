@@ -13,8 +13,8 @@ Two atomic classes, both pure mechanism (no provider knowledge, no policy):
 - :class:`TranscriptCache` — per path-tuple fold state. The adapter supplies
   the *folder* (its per-line fold policy: Claude's dedup/absorb merge, Codex's
   plain append) via ``folder_factory``; the cache owns byte cursors, appends,
-  reset-on-truncation/rotation, and an LRU source-byte budget. Records parsed
-  here are private to one fold state, so a folder that mutates records in
+  reset-on-truncation/rotation, and LRU retention budgets. Records parsed here
+  are private to one fold state, so a folder that mutates records in
   place (``absorb_continuation``) stays correct — a reset always re-parses
   from disk, never from previously-mutated objects.
 - :class:`ResultMemo` — a stat-signature memo for derived read products
@@ -30,10 +30,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
@@ -41,31 +42,66 @@ from loguru import logger
 
 _T = TypeVar("_T")
 
-# THE BUDGET IS DENOMINATED IN SOURCE BYTES AND SPENT IN RESIDENT OBJECTS, so
-# the two differ by a measured multiple and the cap has to carry it. Parsing a
-# real 22.9 MB transcript on the reference host produced **71.4 MB** of dicts —
-# 3.1x — because every JSON line becomes dicts, strings and lists with their own
-# per-object headers. A 256 MB source cap therefore authorised roughly 800 MB
-# resident PER CACHE, and there are two (claude_code and codex): measured 1.68 GB
-# RSS on a daemon whose fleet was idle.
-#
-# The source figure stays the accounting unit because it is free — the cursors
-# already hold it, where sizing the object graph would mean walking it — so the
-# cap is simply divided by the observed ratio. Deliberately a floor rather than
-# a per-record measurement: the ratio varies with content (a tool-heavy
-# transcript carries more structure than prose) and a bound that is occasionally
-# generous is fine, where one that silently exceeds the machine is not.
-_PARSED_BYTES_PER_SOURCE_BYTE = 3.1
-#: The resident ceiling this module actually defends, per cache instance.
-DEFAULT_MAX_PARSED_BYTES = 192 * 1024 * 1024
-DEFAULT_MAX_SOURCE_BYTES = int(DEFAULT_MAX_PARSED_BYTES / _PARSED_BYTES_PER_SOURCE_BYTE)
+#: Approximate retained-object budget for each incremental fold cache.
+#:
+#: This bounds the cache's own Python object graph, not process RSS: objects may
+#: share internals with each other or with an immutable memo value, and CPython's
+#: allocator retains arenas after objects are released. The estimate walks only
+#: newly admitted values and records its result, never re-walking a warm state.
+DEFAULT_MAX_RETAINED_BYTES = 256 * 1024 * 1024
+#: Legacy source-byte budget retained as a compatible constructor argument.
+DEFAULT_MAX_SOURCE_BYTES = 256 * 1024 * 1024
 DEFAULT_MEMO_MAXSIZE = 512
+DEFAULT_MEMO_MAX_BYTES = 64 * 1024 * 1024
+_PREFIX_BYTES = 256
+
+
+def _retained_size(value: object, seen: set[int] | None = None) -> int:
+    """Approximate a currently retained graph, including ordinary instance dicts.
+
+    ``seen`` is intentionally local to one admission. Persisting object ids
+    across admissions is unsafe: ids of released temporaries can be reused, and
+    a retained record may grow through a continuation. A local cycle guard makes
+    the estimate conservative across admissions without letting either case
+    undercount the budget.
+    """
+    if seen is None:
+        seen = set()
+    ident = id(value)
+    if ident in seen:
+        return 0
+    seen.add(ident)
+    total = sys.getsizeof(value)
+    if isinstance(value, dict):
+        return total + sum(
+            _retained_size(key, seen) + _retained_size(item, seen) for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return total + sum(_retained_size(item, seen) for item in value)
+    if isinstance(value, (bytearray, bytes, str)):
+        return total
+    if is_dataclass(value) and not isinstance(value, type):
+        total += sum(_retained_size(getattr(value, item.name), seen) for item in fields(value))
+    if hasattr(value, "__dict__"):
+        total += _retained_size(vars(value), seen)
+    for owner in type(value).__mro__:
+        slots = getattr(owner, "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        total += sum(
+            _retained_size(getattr(value, slot), seen)
+            for slot in slots
+            if slot not in {"__weakref__", "__dict__"} and hasattr(value, slot)
+        )
+    return total
 
 
 class RecordFolder(Protocol):
     """An adapter's per-line fold policy: ``add`` sees each parsed line exactly
     once (in file order per path, paths in the order given to ``read``);
     ``records`` returns the accumulated fold output, which the cache snapshots.
+    ``add`` may return the newly retained root (or an aggregate containing roots)
+    so a folder's own incremental projections are charged without a history walk.
 
     ``source`` identifies the FILE the line was read from. A fold that MERGES
     records sharing a provider-assigned id needs it, because one logical record
@@ -83,7 +119,7 @@ class RecordFolder(Protocol):
     retained twice, which is the very duplication this scope exists to
     prevent. The identity is free: ``_ingest`` already holds the ``stat``."""
 
-    def add(self, raw: dict[str, Any], source: str) -> None: ...
+    def add(self, raw: dict[str, Any], source: str) -> object | None: ...
 
     def records(self) -> list[Any]: ...
 
@@ -104,49 +140,150 @@ class _Cursor:
 class _State:
     folder: RecordFolder
     cursors: dict[str, _Cursor] = field(default_factory=dict)
+    retained_bytes: int = 0
+    source_bytes: int = 0
+    folder_shallow_bytes: int = 0
+    accounted_retained_bytes: int = 0
+    accounted_source_bytes: int = 0
 
-    @property
-    def source_bytes(self) -> int:
-        return sum(c.offset for c in self.cursors.values())
+    def __post_init__(self) -> None:
+        # Even a missing-file state has a folder, cursor map, and LRU entry.
+        self.folder_shallow_bytes = _folder_shallow_size(self.folder)
+        self.retained_bytes = (
+            sys.getsizeof(self) + sys.getsizeof(self.cursors) + self.folder_shallow_bytes
+        )
+
+
+def _folder_shallow_size(folder: RecordFolder) -> int:
+    """Size the folder's own containers, without walking its retained records."""
+    total = sys.getsizeof(folder)
+    values: list[object] = []
+    if hasattr(folder, "__dict__"):
+        values.extend(vars(folder).values())
+    slots = getattr(type(folder), "__slots__", ())
+    if isinstance(slots, str):
+        slots = (slots,)
+    for slot in slots:
+        if hasattr(folder, slot):
+            values.append(getattr(folder, slot))
+    return total + sum(sys.getsizeof(value) for value in values)
 
 
 class TranscriptCache:
-    """Incrementally folded records per path tuple, LRU-bounded by source bytes."""
+    """Incrementally folded records per path tuple, LRU-bounded by retained bytes.
+
+    The budget is an object-size estimate, not an RSS guarantee. Parsed line
+    graphs are charged once as they enter a fold, and folder/list bookkeeping is
+    charged by its shallow capacity changes. This deliberately over-charges
+    folded-away duplicate lines: admitting less is preferable to preserving an
+    unbounded cache, and it avoids a history-sized graph walk on warm reads.
+    """
 
     def __init__(
         self,
         folder_factory: Callable[[], RecordFolder],
         *,
-        max_source_bytes: int = DEFAULT_MAX_SOURCE_BYTES,
+        max_retained_bytes: int = DEFAULT_MAX_RETAINED_BYTES,
+        max_source_bytes: int | None = DEFAULT_MAX_SOURCE_BYTES,
     ) -> None:
+        if max_retained_bytes <= 0:
+            raise ValueError("max_retained_bytes must be positive")
+        if max_source_bytes is not None and max_source_bytes <= 0:
+            raise ValueError("max_source_bytes must be positive when set")
         self._folder_factory = folder_factory
+        self._max_retained_bytes = max_retained_bytes
         self._max_source_bytes = max_source_bytes
         self._states: OrderedDict[tuple[str, ...], _State] = OrderedDict()
+        self._retained_bytes = 0
+        self._source_bytes = 0
         self._lock = threading.Lock()
 
     def read(self, paths: Sequence[Path]) -> list[Any]:
-        """The folded records for ``paths`` — a snapshot copy, safe to sort/slice.
+        """Return a safe snapshot, retaining the fold only while it fits its budget."""
+        return self._consume(paths, lambda folder: (list(folder.records()), None))
 
-        Any file that was truncated, rotated (inode change), rewritten in place
-        (same size, new mtime), or removed resets the whole path-set state: the
-        fold is order- and history-sensitive, so a partial rebuild could double
-        merged records. Reset cost equals today's full parse — paid once per
-        anomaly, not per tick.
+    def project(
+        self,
+        paths: Sequence[Path],
+        projection: Callable[[RecordFolder], tuple[_T, object | None]],
+    ) -> _T:
+        """Project a fold under its lock and charge any newly retained roots.
+
+        ``projection`` receives the private folder only while the fold lock is
+        held. It returns ``(result, retained_roots)``; the first value must be a
+        safe snapshot/immutable value, while the second names only objects the
+        folder retained during this call. Mutation and accounting share this
+        cache's lock; the callback must not re-enter the cache or acquire a
+        derived-result memo lock.
         """
-        key = tuple(str(p) for p in paths)
+        return self._consume(paths, projection)
+
+    def _consume(
+        self,
+        paths: Sequence[Path],
+        consume: Callable[[RecordFolder], tuple[_T, object | None]],
+    ) -> _T:
+        key = tuple(str(path) for path in paths)
         with self._lock:
             state = self._states.get(key)
-            if state is None or not self._advance_all(state, paths):
-                state = _State(folder=self._folder_factory())
+            if state is None:
+                state = self._admit(key)
+            if not self._advance_all(state, paths):
+                self._discard(key)
+                state = self._admit(key)
                 self._advance_all(state, paths)
-            self._states[key] = state
+            result, retained_roots = consume(state.folder)
+            if retained_roots is not None:
+                state.retained_bytes += _retained_size(retained_roots)
+            # Folders may retain a derived immutable tuple during projection.
+            # Measuring their shallow containers charges pointer arrays in
+            # O(fields), without walking all prior records.
+            new_shallow_bytes = _folder_shallow_size(state.folder)
+            state.retained_bytes += new_shallow_bytes - state.folder_shallow_bytes
+            state.folder_shallow_bytes = new_shallow_bytes
+            self._refresh_totals(state)
             self._states.move_to_end(key)
             self._evict()
-            return list(state.folder.records())
+            return result
+
+    def _admit(self, key: tuple[str, ...]) -> _State:
+        state = _State(folder=self._folder_factory())
+        self._states[key] = state
+        self._refresh_totals(state)
+        return state
+
+    def _refresh_totals(self, state: _State) -> None:
+        self._retained_bytes += state.retained_bytes - state.accounted_retained_bytes
+        self._source_bytes += state.source_bytes - state.accounted_source_bytes
+        state.accounted_retained_bytes = state.retained_bytes
+        state.accounted_source_bytes = state.source_bytes
+
+    def _discard(self, key: tuple[str, ...]) -> None:
+        state = self._states.pop(key)
+        self._retained_bytes -= state.accounted_retained_bytes
+        self._source_bytes -= state.accounted_source_bytes
+
+    def configure(
+        self,
+        *,
+        max_retained_bytes: int = DEFAULT_MAX_RETAINED_BYTES,
+        max_source_bytes: int | None = DEFAULT_MAX_SOURCE_BYTES,
+    ) -> None:
+        """Apply a new cache policy without replacing live state or its locks."""
+        if max_retained_bytes <= 0:
+            raise ValueError("max_retained_bytes must be positive")
+        if max_source_bytes is not None and max_source_bytes <= 0:
+            raise ValueError("max_source_bytes must be positive when set")
+        with self._lock:
+            self._max_retained_bytes = max_retained_bytes
+            self._max_source_bytes = max_source_bytes
+            self._evict()
 
     def clear(self) -> None:
         with self._lock:
             self._states.clear()
+            self._retained_bytes = 0
+            self._source_bytes = 0
 
     # ── internal ──────────────────────────────────────────────────────────
 
@@ -162,11 +299,14 @@ class TranscriptCache:
         if stat is None:
             if cursor is not None and cursor.offset > 0:
                 return False  # had content, now gone → rebuild without it
-            state.cursors[key] = _Cursor()  # absent (yet); keep waiting
+            if cursor is None:
+                state.cursors[key] = _Cursor()  # absent (yet); keep waiting
+                state.retained_bytes += sys.getsizeof(key) + sys.getsizeof(state.cursors[key])
             return True
         if cursor is None:
             cursor = _Cursor(ino=stat.st_ino)
             state.cursors[key] = cursor
+            state.retained_bytes += sys.getsizeof(key) + sys.getsizeof(cursor)
         elif (
             stat.st_ino == cursor.ino
             and stat.st_size == cursor.size
@@ -178,7 +318,7 @@ class TranscriptCache:
             # (the unchanged case returned above) — the cursor can't describe
             # the new content, so the caller rebuilds from scratch.
             return False
-        return self._ingest(state.folder, path, cursor, stat)
+        return self._ingest(state, path, cursor, stat)
 
     @staticmethod
     def _stat(path: Path) -> os.stat_result | None:
@@ -191,49 +331,78 @@ class TranscriptCache:
             return None
 
     @staticmethod
-    def _ingest(folder: RecordFolder, path: Path, cursor: _Cursor, stat: os.stat_result) -> bool:
-        """Parse the bytes appended past ``cursor`` and fold each complete line.
+    def _ingest(state: _State, path: Path, cursor: _Cursor, stat: os.stat_result) -> bool:
+        """Stream complete appended lines into a folder and charge their retention.
 
-        The offset only ever advances past the last ``\\n``: a trailing partial
-        line (writer mid-append) is left in place and re-read once complete —
-        UTF-8 never straddles that boundary because ``\\n`` is a single byte."""
+        Reading one line at a time avoids transient copies of the whole delta;
+        an individual record remains uncapped to preserve complete tool payloads.
+        The cursor advances only over complete newline-terminated lines, so an
+        in-progress final line remains on disk for the next read.
+        """
         try:
             with path.open("rb") as fh:
                 if cursor.prefix and fh.read(len(cursor.prefix)) != cursor.prefix:
                     return False
                 if not cursor.prefix:
                     fh.seek(0)
-                    cursor.prefix = fh.read(min(stat.st_size, 256))
+                    cursor.prefix = fh.read(min(stat.st_size, _PREFIX_BYTES))
                 fh.seek(cursor.offset)
-                data = fh.read()
+                source = f"{stat.st_dev}:{stat.st_ino}"
+                offset = cursor.offset
+                while line := fh.readline():
+                    if not line.endswith(b"\n"):
+                        break
+                    offset += len(line)
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        obj = json.loads(stripped)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if isinstance(obj, dict):
+                        records = state.folder.records()
+                        previous_count = len(records)
+                        retained = state.folder.add(obj, source)
+                        new_records = state.folder.records()
+                        roots = (
+                            retained
+                            if retained is not None
+                            else (
+                                new_records[previous_count:]
+                                if len(new_records) > previous_count
+                                # An absorbing legacy folder has no new root to
+                                # expose; charge its new raw graph conservatively.
+                                else obj
+                            )
+                        )
+                        state.retained_bytes += _retained_size(roots)
+                        new_shallow_bytes = _folder_shallow_size(state.folder)
+                        state.retained_bytes += new_shallow_bytes - state.folder_shallow_bytes
+                        state.folder_shallow_bytes = new_shallow_bytes
+                cursor.offset = offset
         except OSError as exc:
             logger.debug("transcript read failed for {}: {}", path, exc)
             return False
-        complete = data.rfind(b"\n") + 1
-        # File IDENTITY, not the path string — see RecordFolder.add. Two aliases
-        # of one transcript must fold as one source or the scope is defeated.
-        source = f"{stat.st_dev}:{stat.st_ino}"
-        for line in data[:complete].split(b"\n"):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                obj = json.loads(stripped)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            if isinstance(obj, dict):
-                folder.add(obj, source)
-        cursor.offset += complete
         cursor.size = stat.st_size
         cursor.mtime_ns = stat.st_mtime_ns
         cursor.ino = stat.st_ino
+        state.source_bytes = sum(item.offset for item in state.cursors.values())
         return True
 
     def _evict(self) -> None:
-        total = sum(s.source_bytes for s in self._states.values())
-        while total > self._max_source_bytes and len(self._states) > 1:
-            _, evicted = self._states.popitem(last=False)
-            total -= evicted.source_bytes
+        while self._states and (
+            self._retained_bytes > self._max_retained_bytes
+            or (self._max_source_bytes is not None and self._source_bytes > self._max_source_bytes)
+        ):
+            self._discard(next(iter(self._states)))
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoEntry:
+    signature: tuple[Any, ...]
+    value: Any
+    retained_bytes: int
 
 
 class ResultMemo:
@@ -242,12 +411,24 @@ class ResultMemo:
     Keyed by the caller's logical key (method, cwd, session id, …); valid while
     every backing file's ``(path, ino, size, mtime_ns)`` signature is unchanged.
     A changed path *set* (a transcript appearing, a new sub-agent file) changes
-    the signature too, so "no transcript yet" never sticks.
+    the signature too, so "no transcript yet" never sticks. Values are measured
+    only after computing; oversized values return normally but are not retained.
     """
 
-    def __init__(self, *, maxsize: int = DEFAULT_MEMO_MAXSIZE) -> None:
+    def __init__(
+        self,
+        *,
+        maxsize: int = DEFAULT_MEMO_MAXSIZE,
+        max_bytes: int = DEFAULT_MEMO_MAX_BYTES,
+    ) -> None:
+        if maxsize <= 0:
+            raise ValueError("maxsize must be positive")
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
         self._maxsize = maxsize
-        self._entries: OrderedDict[tuple[Any, ...], tuple[tuple[Any, ...], Any]] = OrderedDict()
+        self._max_bytes = max_bytes
+        self._entries: OrderedDict[tuple[Any, ...], _MemoEntry] = OrderedDict()
+        self._retained_bytes = 0
         self._lock = threading.Lock()
 
     @staticmethod
@@ -270,17 +451,43 @@ class ResultMemo:
         sig = self.signature(paths)
         with self._lock:
             hit = self._entries.get(key)
-            if hit is not None and hit[0] == sig:
+            if hit is not None and hit.signature == sig:
                 self._entries.move_to_end(key)
-                return hit[1]  # type: ignore[no-any-return]
+                return hit.value  # type: ignore[no-any-return]
         value = compute()  # outside the lock: compute may take the cache's own lock
+        retained_bytes = _retained_size(value)
+        entry = _MemoEntry(sig, value, retained_bytes)
         with self._lock:
-            self._entries[key] = (sig, value)
-            self._entries.move_to_end(key)
-            while len(self._entries) > self._maxsize:
-                self._entries.popitem(last=False)
+            previous = self._entries.pop(key, None)
+            if previous is not None:
+                self._retained_bytes -= previous.retained_bytes
+            if retained_bytes <= self._max_bytes:
+                self._entries[key] = entry
+                self._retained_bytes += retained_bytes
+                while len(self._entries) > self._maxsize or self._retained_bytes > self._max_bytes:
+                    _, evicted = self._entries.popitem(last=False)
+                    self._retained_bytes -= evicted.retained_bytes
         return value
+
+    def configure(
+        self,
+        *,
+        maxsize: int = DEFAULT_MEMO_MAXSIZE,
+        max_bytes: int = DEFAULT_MEMO_MAX_BYTES,
+    ) -> None:
+        """Apply a new memo policy while retaining valid live entries where possible."""
+        if maxsize <= 0:
+            raise ValueError("maxsize must be positive")
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
+        with self._lock:
+            self._maxsize = maxsize
+            self._max_bytes = max_bytes
+            while len(self._entries) > maxsize or self._retained_bytes > max_bytes:
+                _, evicted = self._entries.popitem(last=False)
+                self._retained_bytes -= evicted.retained_bytes
 
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+            self._retained_bytes = 0

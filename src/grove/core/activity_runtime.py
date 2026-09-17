@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -11,7 +12,7 @@ from typing import Literal, TypeVar
 
 from loguru import logger
 
-from grove.core.activity import ActivityService, DashboardDelta, WorkspaceActivity
+from grove.core.activity import ActivityService, DashboardDelta, RefreshDomain, WorkspaceActivity
 from grove.core.admission import Admission, AdmissionLimits, BoundedInbox, InboxClosed
 
 _T = TypeVar("_T")
@@ -24,6 +25,18 @@ class WorkspaceInvalidated:
     reason: Literal["hook", "lifecycle", "filesystem", "runtime"]
     correlation: str = ""
     deleted: bool = False
+    domains: RefreshDomain = RefreshDomain.FULL
+
+    def merged(self, newer: WorkspaceInvalidated) -> WorkspaceInvalidated:
+        """Preserve every pending fact when keyed hints coalesce."""
+        return WorkspaceInvalidated(
+            repo_root=newer.repo_root,
+            workspace_id=newer.workspace_id,
+            reason="filesystem" if "filesystem" in (self.reason, newer.reason) else newer.reason,
+            correlation=newer.correlation or self.correlation,
+            deleted=self.deleted or newer.deleted,
+            domains=self.domains | newer.domains,
+        )
 
     @property
     def size_bytes(self) -> int:
@@ -66,6 +79,17 @@ class ActivityRuntime:
         self._unsub: Callable[[], None] | None = None
         self._ready = False
         self._recovery_needed = False
+        self._pending: dict[str, WorkspaceInvalidated] = {}
+        # `invalidate()` is called from BOTH the event loop (file-source
+        # callbacks, the hook route, RuntimeSources) and a `grove-lifecycle`
+        # POOL THREAD — `ActivityService._bridge_callback` fires synchronously
+        # inside whatever thread ran a manager verb (create/kill/pause), which
+        # in the daemon is the lifecycle pool. `_pending` is a plain dict with
+        # no other synchronization, so those two call paths race on it without
+        # this lock: a coalesced domain union can be lost, or `_run`'s pop can
+        # observe a torn write. `BoundedInbox` already guards its own state,
+        # but it knows nothing about `_pending`, which lives one layer above it.
+        self._pending_lock = threading.Lock()
         # A shutdown cannot stop arbitrary filesystem/git work already handed to
         # the executor. It can, however, fence that result from publication.
         self._generation = 0
@@ -123,7 +147,20 @@ class ActivityRuntime:
         self._ready = True
 
     def invalidate(self, event: WorkspaceInvalidated) -> Admission:
-        result = self._inbox.offer(event, size_bytes=event.size_bytes, key=event.workspace_id)
+        """Union coalesced source hints before the inbox replaces their envelope.
+
+        Called from both the event loop and a lifecycle pool thread (see
+        ``_pending_lock``'s docstring), so the read-merge-write against
+        ``_pending`` is not safe to split across two dict operations with
+        nothing holding them together.
+        """
+        key = event.workspace_id
+        with self._pending_lock:
+            pending = self._pending.get(key)
+            merged = pending.merged(event) if pending is not None else event
+            result = self._inbox.offer(merged, size_bytes=merged.size_bytes, key=key)
+            if result in (Admission.ACCEPTED, Admission.COALESCED):
+                self._pending[key] = merged
         if result in (Admission.FULL, Admission.TOO_LARGE):
             self._recovery_needed = True
         return result
@@ -151,7 +188,13 @@ class ActivityRuntime:
         outcome = Admission.ACCEPTED
         for repo_root, workspace_id in keys:
             result = self.invalidate(
-                WorkspaceInvalidated(repo_root, workspace_id, "hook", correlation=correlation)
+                WorkspaceInvalidated(
+                    repo_root,
+                    workspace_id,
+                    "hook",
+                    correlation=correlation,
+                    domains=RefreshDomain.TRANSCRIPT,
+                )
             )
             if result not in (Admission.ACCEPTED, Admission.COALESCED):
                 outcome = result
@@ -166,6 +209,7 @@ class ActivityRuntime:
                 delta.workspace_id,
                 "lifecycle",
                 deleted=delta.detail.get("event") == "killed",
+                domains=RefreshDomain.FULL,
             )
         )
 
@@ -184,6 +228,11 @@ class ActivityRuntime:
             except InboxClosed:
                 return
             event = delivery.value
+            if isinstance(event, WorkspaceInvalidated):
+                # A newer delivery may have merged more domains into the hint
+                # after this envelope was offered but before the worker took it.
+                with self._pending_lock:
+                    event = self._pending.pop(event.workspace_id, event)
             try:
                 async with self._transition_lock:
                     if isinstance(event, WorkspaceInvalidated):
@@ -216,11 +265,23 @@ class ActivityRuntime:
             return
 
         def prepare() -> WorkspaceActivity | None:
-            return self._service.prepare_workspace_refresh(event.repo_root, event.workspace_id)
+            return self._service.prepare_workspace_refresh(
+                event.repo_root, event.workspace_id, domains=event.domains
+            )
 
         publish, row = await self._compute(prepare)
         if publish:
             self._service.apply_workspace_refresh(event.repo_root, event.workspace_id, row)
+            # Any REAL filesystem write — not a hook push, a lifecycle bridge
+            # event or a runtime liveness edge — invalidates client-side
+            # content queries even when the activity fingerprint stayed equal
+            # (a tool body changing at the same tool count, a diff whose byte
+            # count happens to match). This is `reason`, never `domains`: a
+            # domain says WHICH cached facts this refresh recomputed, `reason`
+            # says WHERE the hint originated, and `useWorkspaceDiff`'s
+            # contract is "per filesystem invalidation", not "per worktree
+            # domain" — narrowing this to WORKTREE alone silently dropped the
+            # edge for every transcript-only and phase-only filesystem write.
             if event.reason == "filesystem":
                 self._service.source_changed(event.repo_root, event.workspace_id)
 

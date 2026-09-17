@@ -72,7 +72,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import TYPE_CHECKING, Any, Protocol, TypeGuard
+
+if TYPE_CHECKING:
+    from grove.core.config import TranscriptCacheConfig
 
 from loguru import logger
 
@@ -1192,6 +1195,227 @@ class _EventState:
         return AgentActivityState.WORKING
 
 
+class _ActivityProjector:
+    """Incrementally folds Codex's raw event stream into activity facts."""
+
+    __slots__ = (
+        "_buckets",
+        "_created_at",
+        "_events",
+        "_first_human_raw",
+        "_last_event_at",
+        "_meta_model",
+        "_open_questions",
+        "_tail",
+        "_tool_calls",
+        "_turn_model",
+    )
+
+    def __init__(self) -> None:
+        self._buckets: list[int] = []
+        self._created_at: datetime | None = None
+        self._events = _EventState()
+        self._first_human_raw: str | None = None
+        self._last_event_at: datetime | None = None
+        self._meta_model: str | None = None
+        self._open_questions: dict[str, tuple[AgentQuestion, ...]] = {}
+        self._tail: _RolloutLine | None = None
+        self._tool_calls = 0
+        self._turn_model: str | None = None
+
+    def consume(self, line: _RolloutLine) -> tuple[object, ...]:  # noqa: PLR0912
+        """Apply one append-only record, returning new retained roots for cache accounting."""
+        timestamp = line.timestamp
+        if timestamp is not None:
+            if self._created_at is None:
+                self._created_at = timestamp
+            if self._last_event_at is None or timestamp > self._last_event_at:
+                self._last_event_at = timestamp
+        if line.record_type == "session_meta" and self._meta_model is None:
+            payload = line.raw.get("payload")
+            model = payload.get("model") if isinstance(payload, dict) else None
+            if isinstance(model, str) and model:
+                self._meta_model = model
+        if self._turn_model is None and (model := line.turn_context_model()) is not None:
+            self._turn_model = model
+        if self._events.consume(line):
+            return ()
+        if line.is_human_turn:
+            self._buckets.append(0)
+            self._tail = line
+            if self._first_human_raw is None:
+                self._first_human_raw = line.message_text()
+        elif line.is_assistant:
+            if self._buckets:
+                self._buckets[-1] += 1
+            self._tail = line
+        elif line.is_tool_call:
+            self._tool_calls += 1
+            self._tail = line
+            _RolloutParser._track_question(line, self._open_questions)
+        elif line.is_tool_call_output and line.call_id:
+            self._open_questions.pop(line.call_id, None)
+        return ()
+
+    def activity(self) -> AgentActivity:
+        """The exact raw-fold activity snapshot without revisiting history."""
+        current_task = (
+            _truncate(self._first_human_raw, _TASK_TEXT_CAP)
+            if self._first_human_raw and self._first_human_raw.strip()
+            else None
+        )
+        pending = tuple(question for group in self._open_questions.values() for question in group)
+        return AgentActivity(
+            state=AgentActivityState.BLOCKED if pending else self._events.state(self._tail),
+            questions=pending,
+            current_task=current_task,
+            human_turns=len(self._buckets),
+            assistant_replies=sum(self._buckets),
+            replies_per_turn=tuple(self._buckets),
+            tool_calls=self._tool_calls,
+            model=self._turn_model or self._meta_model,
+            tokens_in=self._events.tokens_in,
+            tokens_out=self._events.tokens_out,
+            context=self._events.context,
+            last_event_at=self._last_event_at,
+            started_at=self._created_at,
+        )
+
+
+class _MessageProjector:
+    """Incrementally normalizes one append-only rollout's message spine.
+
+    Codex writes a response as several ``response_item`` fragments followed by a
+    later ``token_count`` claim.  The completed prefix is immutable, so this
+    projector retains it and replaces only the open response when a fragment or
+    usage claim arrives.  A source reset constructs a new folder/projector, which
+    discards the whole retained suffix rather than trying to repair it.
+    """
+
+    __slots__ = (
+        "_dirty",
+        "_exec_metrics",
+        "_message_list",
+        "_messages",
+        "_model",
+        "_pending",
+        "_result_indexes",
+        "_saw_turn_context",
+        "_was_assistant",
+    )
+
+    def __init__(self) -> None:
+        self._dirty = False
+        self._exec_metrics: dict[str, tuple[int | None, int]] = {}
+        self._message_list: list[AgentMessage] = []
+        self._messages: tuple[AgentMessage, ...] = ()
+        self._model: str | None = None
+        self._pending: int | None = None
+        self._result_indexes: dict[str, int] = {}
+        self._saw_turn_context = False
+        self._was_assistant = False
+
+    def messages(self) -> tuple[AgentMessage, ...]:
+        """The immutable normalized spine snapshot."""
+        if self._dirty:
+            self._publish()
+        return self._messages
+
+    def consume(self, line: _RolloutLine) -> tuple[AgentMessage, ...]:
+        """Apply one record and return newly retained message roots.
+
+        The return value feeds the cache's incremental resident-byte accounting.
+        It contains only new/replaced immutable messages, never the historical
+        prefix, so accounting does not turn an append into another graph walk.
+        """
+        if line.has_turn_usage_record:
+            return self._apply_usage(line)
+
+        turn_model = line.turn_context_model()
+        if turn_model is not None:
+            self._pending = None
+            self._was_assistant = False
+            self._model = turn_model
+            self._saw_turn_context = True
+            return ()
+        if not self._saw_turn_context and line.record_type == "session_meta":
+            payload = line.raw.get("payload")
+            candidate = payload.get("model") if isinstance(payload, dict) else None
+            if isinstance(candidate, str) and candidate:
+                self._model = candidate
+
+        metrics = line.exec_command_end_metrics()
+        if metrics is not None:
+            call_id, duration_ms, exit_code = metrics
+            self._exec_metrics[call_id] = (duration_ms, exit_code)
+            return self._apply_exec_metrics(call_id, duration_ms, exit_code)
+
+        message = line.to_message(self._exec_metrics)
+        if message is None:
+            return ()
+        if message.role == "assistant":
+            if self._pending is not None and self._was_assistant:
+                prior = self._message_list[self._pending]
+                message = replace(prior, content=prior.content + message.content)
+                self._replace(self._pending, message)
+            else:
+                message = replace(message, model=self._model)
+                self._message_list.append(message)
+                self._dirty = True
+                self._pending = len(self._message_list) - 1
+            self._was_assistant = True
+            return (message,)
+
+        if message.role == "user":
+            # A fresh prompt makes an unreported prior response permanently
+            # unknown; a later claim belongs to a later response, never it.
+            self._pending = None
+        self._was_assistant = False
+        self._message_list.append(message)
+        self._dirty = True
+        if message.role == "tool" and line.call_id is not None:
+            self._result_indexes[line.call_id] = len(self._message_list) - 1
+        return (message,)
+
+    def _apply_usage(self, line: _RolloutLine) -> tuple[AgentMessage, ...]:
+        if self._pending is None:
+            self._was_assistant = False
+            return ()
+        usage = line.turn_usage()
+        retained: tuple[AgentMessage, ...] = ()
+        if usage is not None:
+            message = replace(self._message_list[self._pending], usage=usage)
+            self._replace(self._pending, message)
+            retained = (message,)
+        self._pending = None
+        self._was_assistant = False
+        return retained
+
+    def _apply_exec_metrics(
+        self, call_id: str, duration_ms: int | None, exit_code: int
+    ) -> tuple[AgentMessage, ...]:
+        index = self._result_indexes.get(call_id)
+        if index is None:
+            return ()
+        message = self._message_list[index]
+        block = message.content[0]
+        message = replace(
+            message,
+            content=(replace(block, duration_ms=duration_ms, exit_code=exit_code),),
+        )
+        self._replace(index, message)
+        return (message,)
+
+    def _replace(self, index: int, message: AgentMessage) -> None:
+        self._message_list[index] = message
+        self._dirty = True
+
+    def _publish(self) -> None:
+        """Materialize one immutable snapshot after the cache finishes ingesting."""
+        self._messages = tuple(self._message_list)
+        self._dirty = False
+
+
 class _RolloutParser:
     """Aggregates time-sorted rollout lines into one :class:`AgentActivity`.
 
@@ -1297,85 +1521,14 @@ class _RolloutParser:
     def messages(self) -> tuple[AgentMessage, ...]:
         """The time-sorted rollout lines mapped onto the agentic-loop spine.
 
-        Codex splits one response over assistant ``message``, ``reasoning`` and
-        tool-call records, then writes one ``last_token_usage`` record when that
-        response finishes. Those fragments are *one* normalized assistant
-        message: otherwise the usage-owning fragment looks like one generation
-        while its siblings look like unmeasured requests to every spine consumer.
-        A ``last_token_usage`` object is the explicit boundary; without one, a
-        response remains open so genuinely unreported requests stay unknown.
-
-        ``exec_command_end`` is pre-scanned once and applies its native timing to
-        the correlated tool-result block. It does not define a model-response
-        boundary.
+        This remains the full-parser reference implementation.  The filesystem
+        read path keeps the identical fold in ``_LineFolder`` so an append only
+        normalizes its new record and, at most, the pending response it completes.
         """
-        exec_metrics = self._exec_metrics()
-        out: list[AgentMessage] = []
-        # Index of the most recent completed-or-in-progress response. Tool results
-        # can legally land between its tool call and the following token count, so
-        # they do not clear this claim; the next response or user turn does.
-        pending: int | None = None
-        previous_was_assistant = False
-        # A missing turn_context cannot be repaired from a later session-wide
-        # model: that would price an earlier generation under a model it may not
-        # have used. The session-meta value is admissible only until the first
-        # explicit turn context announces its replacement.
-        model: str | None = None
-        saw_turn_context = False
-
+        projector = _MessageProjector()
         for line in self._lines:
-            # An explicit `last_token_usage` is Codex's request completion marker.
-            # It closes the accumulated response even when no individual counter
-            # survived normalization: presence of the record, not a nonzero field,
-            # is the structural boundary.
-            if line.has_turn_usage_record:
-                if pending is not None:
-                    usage = line.turn_usage()
-                    if usage is not None:
-                        out[pending] = replace(out[pending], usage=usage)
-                    pending = None
-                previous_was_assistant = False
-                continue
-
-            # `turn_context` announces the model for the turn that FOLLOWS it.
-            # It is metadata, not part of the response's content.
-            turn_model = line.turn_context_model()
-            if turn_model is not None:
-                pending = None
-                previous_was_assistant = False
-                model = turn_model
-                saw_turn_context = True
-                continue
-            if not saw_turn_context and line.record_type == "session_meta":
-                payload = line.raw.get("payload")
-                candidate = payload.get("model") if isinstance(payload, dict) else None
-                if isinstance(candidate, str) and candidate:
-                    model = candidate
-
-            message = line.to_message(exec_metrics)
-            if message is None:
-                continue
-            if message.role == "assistant":
-                if pending is not None and previous_was_assistant:
-                    # Contiguous assistant native records are fragments of the
-                    # same provider response, not independent API requests.
-                    prior = out[pending]
-                    out[pending] = replace(prior, content=prior.content + message.content)
-                else:
-                    out.append(replace(message, model=model))
-                    pending = len(out) - 1
-                previous_was_assistant = True
-                continue
-
-            if message.role == "user":
-                # A new human turn means any unreported prior response remains
-                # genuinely unknown rather than being claimed by a later request.
-                pending = None
-            # A tool result stays between the response and its token-count report.
-            previous_was_assistant = False
-            out.append(message)
-
-        return tuple(out)
+            projector.consume(line)
+        return projector.messages()
 
     def _exec_metrics(self) -> dict[str, tuple[int | None, int]]:
         """``call_id`` → ``(duration_ms, exit_code)`` for every completed
@@ -1873,16 +2026,14 @@ class CodexAdapter:
         )
 
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
-        """The session's agentic-loop spine — the message list
-        ``read_turns`` / ``transcript_digest`` project from, and the seam
-        downstream fleet / trace / final-result consumers read. Codex has no
-        sub-agent transcripts, so every message is main-thread."""
+        """The session's incrementally normalized agentic-loop spine.
+
+        Unlike the other projections this reaches the Codex folder's retained
+        immutable messages directly.  The outer tuple is a cheap snapshot; a
+        completed prefix preserves object identity across appended records.
+        """
         paths = self.locate_transcripts(cwd, session_id)
-        return _MEMO.get_or_compute(
-            ("messages", str(cwd), session_id),
-            paths,
-            lambda: _RolloutParser(self._read(paths)).messages(),
-        )
+        return self._read_messages(paths)
 
     def final_result(self, cwd: Path, session_id: str) -> FinalResult | None:
         """The session's terminal outcome — a projection of
@@ -1944,7 +2095,7 @@ class CodexAdapter:
         return _MEMO.get_or_compute(
             ("activity", str(cwd), session_id),
             paths,
-            lambda: _RolloutParser(self._read(paths)).activity(),
+            lambda: self._read_activity(paths),
         )
 
     def transcript_digest(self, cwd: Path, session_id: str) -> OrderedDigest:
@@ -1954,6 +2105,14 @@ class CodexAdapter:
             paths,
             lambda: _RolloutParser(self._read(paths)).digest(),
         )
+
+    @staticmethod
+    def configure_caches(cfg: TranscriptCacheConfig) -> None:
+        """Resize the process-owned caches without replacing their locks."""
+        _TRANSCRIPTS.configure(
+            max_retained_bytes=cfg.max_retained_bytes, max_source_bytes=cfg.max_source_bytes
+        )
+        _MEMO.configure(maxsize=cfg.memo_max_entries, max_bytes=cfg.memo_max_bytes)
 
     @staticmethod
     def clear_caches() -> None:
@@ -1998,39 +2157,92 @@ class CodexAdapter:
 
     @staticmethod
     def _read(paths: Sequence[Path]) -> list[_RolloutLine]:
-        """Read and time-sort every line across the given files.
+        """Read and time-sort raw rollout lines for full-parser projections.
 
-        Codex rollouts are single-file per session with no cross-file replay,
-        so — unlike Claude's split-block dedup — there is no logical-record
-        merge to do; each line is its own record (:class:`_LineFolder` is a
-        plain appender). Reading is incremental via :class:`TranscriptCache`
-        (the daemon-CPU fix): a poll tick pays ``json.loads`` only
-        for bytes appended since the previous read. The sort stays per call —
-        appends keep the list nearly sorted, so timsort is cheap.
+        ``activity`` and session metadata still need raw event records.  The
+        message spine is retained beside those lines in the same cache folder,
+        avoiding a duplicate raw graph and a full reconstruction per append.
         """
         lines = _TRANSCRIPTS.read(paths)
         lines.sort(key=lambda line: line.sort_key)
         return lines
 
+    @staticmethod
+    def _read_activity(paths: Sequence[Path]) -> AgentActivity:
+        """Read the retained activity fold from the shared raw-line cache."""
+
+        def project(folder: _ActivityFolder) -> tuple[AgentActivity, None]:
+            return (folder.activity(), None)
+
+        return _TRANSCRIPTS.project(paths, project)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _read_messages(paths: Sequence[Path]) -> tuple[AgentMessage, ...]:
+        """Read the retained message product from the shared raw-line fold."""
+
+        def project(folder: _MessageFolder) -> tuple[tuple[AgentMessage, ...], None]:
+            return (folder.messages(), None)
+
+        return _TRANSCRIPTS.project(paths, project)  # type: ignore[arg-type]
+
+
+class _ActivityFolder(Protocol):
+    """The Codex-only activity product exposed within a cache projection."""
+
+    def activity(self) -> AgentActivity: ...
+
+
+class _MessageFolder(Protocol):
+    """The Codex-only retained product exposed within a cache projection."""
+
+    def messages(self) -> tuple[AgentMessage, ...]: ...
+
 
 class _LineFolder:
-    """Per path-set fold state behind :meth:`CodexAdapter._read` — a plain
-    appender (no dedup/merge; see ``_read``'s docstring)."""
+    """One fold retains raw lines and an incremental normalized message spine."""
 
-    __slots__ = ("_index", "_lines")
+    __slots__ = ("_activity", "_index", "_last_sort_key", "_lines", "_projector")
 
     def __init__(self) -> None:
+        self._activity = _ActivityProjector()
         self._lines: list[_RolloutLine] = []
         self._index = 0
+        self._last_sort_key: tuple[float, int] | None = None
+        self._projector = _MessageProjector()
 
-    def add(self, raw: dict[str, Any], source: str) -> None:  # noqa: ARG002
-        # ``source`` is ignored deliberately: this fold appends and never merges
-        # by id, so it has no cross-file collision to disambiguate.
-        self._lines.append(_RolloutLine(raw=raw, index=self._index))
+    def add(self, raw: dict[str, Any], source: str) -> tuple[object, ...]:  # noqa: ARG002
+        line = _RolloutLine(raw=raw, index=self._index)
+        self._lines.append(line)
         self._index += 1
+        if self._last_sort_key is not None and line.sort_key < self._last_sort_key:
+            # The parser's contract is timestamp order, not physical append
+            # order. An out-of-order provider record invalidates the affected
+            # suffix, so rebuild both retained projections rather than preserve a
+            # fast but different output from the full parser.
+            self._rebuild()
+            return (line, *self._projector.messages())
+        self._last_sort_key = line.sort_key
+        self._activity.consume(line)
+        return (line, *self._projector.consume(line))
+
+    def _rebuild(self) -> None:
+        self._activity = _ActivityProjector()
+        self._projector = _MessageProjector()
+        for prior in sorted(self._lines, key=lambda item: item.sort_key):
+            self._activity.consume(prior)
+            self._projector.consume(prior)
+        self._last_sort_key = max(item.sort_key for item in self._lines)
 
     def records(self) -> list[_RolloutLine]:
         return self._lines
+
+    def activity(self) -> AgentActivity:
+        """The raw event activity accumulated alongside the message spine."""
+        return self._activity.activity()
+
+    def messages(self) -> tuple[AgentMessage, ...]:
+        """The stable normalized snapshot retained beside the raw rollout."""
+        return self._projector.messages()
 
 
 _TRANSCRIPTS = TranscriptCache(_LineFolder)

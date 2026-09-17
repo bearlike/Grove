@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+ROOT_ENV = "GROVE_SHOTS_ROOT"
+
 
 @dataclass(frozen=True, slots=True)
 class Sandbox:
@@ -32,6 +34,21 @@ class Sandbox:
     """
 
     root: Path
+
+    @classmethod
+    def rooted(cls, default: Path) -> Sandbox:
+        """A sandbox at ``$GROVE_SHOTS_ROOT``, or at ``default``.
+
+        CI CANNOT USE THE `/tmp` DEFAULT, and the reason is capacity rather than
+        taste: act_runner's job container mounts a RAM-backed `/tmp` inside a
+        `--memory` cap, while this tree holds a year of synthetic transcripts,
+        twelve git repos and the usage cache all at once. The capture then dies
+        on memory pressure, which exits 144 and reads as a test failure rather
+        than as a full disk. The override exists so a runner can point the tree
+        at real disk; nothing else about the sandbox changes.
+        """
+        override = os.environ.get(ROOT_ENV, "").strip()
+        return cls(root=Path(override) if override else default)
 
     DIRS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("HOME", "home"),

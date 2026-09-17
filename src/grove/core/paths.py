@@ -145,6 +145,44 @@ def exclusive_lock(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
+#: The env vars `platformdirs` consults for Grove's two user-scope roots, in the
+#: order it reads them. Named here rather than inside a reporting helper because
+#: this is the ONE place that knows which variable drives which root — a second
+#: copy is what makes a diagnosis disagree with the resolution it describes.
+#:
+#: POSIX-only by construction: `platformdirs` ignores these on Windows and macOS,
+#: which is exactly what an empty tuple there would say.
+_DIR_ENV_VARS: dict[str, tuple[str, ...]] = {
+    "config": ("XDG_CONFIG_HOME",),
+    "state": ("XDG_STATE_HOME",),
+}
+
+
+def dir_overrides() -> dict[str, str]:
+    """The env vars currently redirecting Grove's user config/state roots.
+
+    Maps variable name → its value, for those that are set and non-empty. Empty
+    when Grove is resolving its ordinary per-user locations.
+
+    **Reporting only — this never changes where anything resolves.** The
+    cascade honouring ``XDG_*`` is deliberate and load-bearing (the screenshot
+    sandbox redirects these on purpose), so the defect it answers is not that
+    the override happens but that nothing SAYS it happened: a `grove` inheriting
+    a stray ``XDG_STATE_HOME`` reads a different workspace store and reports a
+    fleet that does not exist, in silence, and the obvious reading of that
+    ("my workspace was never registered") is wrong.
+
+    Reads `os.environ` at call time rather than at import, because a test — and
+    the sandbox — set these after this module is imported.
+    """
+    return {
+        var: value
+        for vars_ in _DIR_ENV_VARS.values()
+        for var in vars_
+        if (value := os.environ.get(var))
+    }
+
+
 def user_config_path() -> Path:
     """User-scope config file path (XDG / AppData / ~/Library)."""
     return Path(user_config_dir(_APP_NAME)) / _CONFIG_FILE

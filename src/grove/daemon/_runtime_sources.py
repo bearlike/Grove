@@ -16,6 +16,7 @@ from pathlib import Path
 from loguru import logger
 
 from grove.core import tmux
+from grove.core.activity import RefreshDomain
 from grove.core.activity_runtime import ActivityRuntime, WorkspaceInvalidated
 from grove.core.admission import AdmissionLimits, BoundedInbox, InboxClosed
 from grove.core.container_runtime import ContainerLiveness, ContainerState
@@ -49,7 +50,11 @@ class RuntimeSources:
         self._store = store
         self._activity_runtime = activity_runtime
         self._docker = ContainerLiveness(docker_bin=docker_bin)
-        self._events = events or RuntimeEvents(docker_bin=docker_bin, on_change=self._changed)
+        self._events = events or RuntimeEvents(
+            docker_bin=docker_bin,
+            on_change=self._changed,
+            on_host_tmux_activity=self._host_tmux_activity_changed,
+        )
         self._states: dict[str, WorkspaceState] = {}
         # Events say only alive/dead. Keep bootstrap's richer container verdict
         # (especially UNPROVISIONED) until an event changes that identity.
@@ -159,6 +164,8 @@ class RuntimeSources:
         self._remove_workspace(event.workspace_id)
         self._states[state.id] = state
         self._apply_fact(state, fact)
+        if state.runtime is Runtime.HOST:
+            self._schedule_idle_deadline(state.repo_root, state.id)
         await self._replace_scope()
 
     async def _replace_scope(self) -> None:
@@ -200,6 +207,7 @@ class RuntimeSources:
         for state in states:
             self._states[state.id] = state
             self._apply_fact(state, facts[state.id])
+        self._schedule_idle_deadlines()
 
     def _apply_fact(
         self,
@@ -220,6 +228,7 @@ class RuntimeSources:
         state = self._states.pop(workspace_id, None)
         if state is None:
             return
+        self._cancel_idle_deadline(workspace_id)
         key = (state.repo_root, state.id)
         if state.runtime is Runtime.CONTAINER and state.container is not None:
             self._discard_route(self._by_container, state.container.container_id, key)
@@ -270,7 +279,7 @@ class RuntimeSources:
         return self._container_states.get(container_id, ContainerState.RUNNING)
 
     def _changed(self, change: RuntimeLivenessChange) -> None:
-        """Run on the event loop; unknown evidence never becomes an absence."""
+        """Invalidate shared identities only when their liveness answer changes."""
         if change.kind == "container" and change.alive is not None:
             self._container_states[change.identity] = (
                 ContainerState.RUNNING if change.alive else ContainerState.ABSENT
@@ -283,25 +292,71 @@ class RuntimeSources:
             else self._by_host_tmux.get(change.identity, ())
         )
         for repo_root, workspace_id in identities:
-            self._activity_runtime.invalidate(
-                WorkspaceInvalidated(repo_root, workspace_id, reason="runtime")
-            )
-            if change.kind == "host_tmux" and change.alive:
-                previous = self._idle_deadlines.pop(workspace_id, None)
-                if previous is not None:
-                    previous.cancel()
-                cfg = self._registry.get(Path(repo_root)).config
-                threshold = cfg.tmux.activity_threshold_seconds
-                self._idle_deadlines[workspace_id] = asyncio.get_running_loop().call_later(
-                    threshold + 0.01, self._idle_due, repo_root, workspace_id
-                )
+            if change.kind == "host_tmux":
+                if change.alive is True:
+                    self._schedule_idle_deadline(repo_root, workspace_id)
+                else:
+                    self._host_tmux_activity[change.identity] = None
+                    self._cancel_idle_deadline(workspace_id)
+            self._invalidate(repo_root, workspace_id)
 
-    def _idle_due(self, repo_root: str, workspace_id: str) -> None:
+    def _host_tmux_activity_changed(self, session: str, observed_at: datetime) -> None:
+        """Refresh the authoritative activity instant without reprojecting every byte."""
+        self._host_tmux_activity[session] = observed_at
+        for repo_root, workspace_id in self._by_host_tmux.get(session, ()):
+            was_idle = workspace_id not in self._idle_deadlines
+            self._schedule_idle_deadline(repo_root, workspace_id)
+            if was_idle:
+                self._invalidate(repo_root, workspace_id)
+
+    def _schedule_idle_deadlines(self) -> None:
+        for session, identities in self._by_host_tmux.items():
+            if self._host_tmux_liveness.get(session) is not True:
+                continue
+            if self._host_tmux_activity.get(session) is None:
+                continue
+            for repo_root, workspace_id in identities:
+                self._schedule_idle_deadline(repo_root, workspace_id)
+
+    def _schedule_idle_deadline(self, repo_root: str, workspace_id: str) -> None:
+        state = self._states.get(workspace_id)
+        if state is None:
+            return
+        observed_at = self._host_tmux_activity.get(state.tmux_session)
+        if observed_at is None:
+            return
+        cfg = self._registry.get(Path(repo_root)).config
+        deadline_at = observed_at + timedelta(seconds=cfg.tmux.activity_threshold_seconds + 0.01)
+        delay = (deadline_at - datetime.now(UTC)).total_seconds()
+        if delay <= 0:
+            self._cancel_idle_deadline(workspace_id)
+            return
+        previous = self._idle_deadlines.pop(workspace_id, None)
+        if previous is not None:
+            previous.cancel()
+        self._idle_deadlines[workspace_id] = asyncio.get_running_loop().call_later(
+            delay, self._idle_due, repo_root, workspace_id, observed_at
+        )
+
+    def _cancel_idle_deadline(self, workspace_id: str) -> None:
+        deadline = self._idle_deadlines.pop(workspace_id, None)
+        if deadline is not None:
+            deadline.cancel()
+
+    def _idle_due(self, repo_root: str, workspace_id: str, observed_at: datetime) -> None:
+        state = self._states.get(workspace_id)
+        if state is None or self._host_tmux_activity.get(state.tmux_session) != observed_at:
+            return
         self._idle_deadlines.pop(workspace_id, None)
-        if workspace_id in self._states and not self._closing:
-            self._activity_runtime.invalidate(
-                WorkspaceInvalidated(repo_root, workspace_id, reason="runtime")
+        if not self._closing:
+            self._invalidate(repo_root, workspace_id)
+
+    def _invalidate(self, repo_root: str, workspace_id: str) -> None:
+        self._activity_runtime.invalidate(
+            WorkspaceInvalidated(
+                repo_root, workspace_id, reason="runtime", domains=RefreshDomain.RUNTIME
             )
+        )
 
 
 __all__ = ["RuntimeSources"]

@@ -1,0 +1,215 @@
+name: Docs screenshots (reusable)
+
+# Regenerate the committed documentation images on a runner, and push the result
+# back to the branch they belong to.
+#
+# WHY THIS EXISTS. A screenshot refresh is the most expensive routine task in
+# this repo and the only one with no CI home: `make docs-webapp-screenshots` is
+# a ~12 minute command dominated by seeding a year of synthetic usage history,
+# and it wants a browser, a tmux server, a daemon and a production Next build
+# all at once. Run locally it competes with the agent fleet and the user's own
+# work, which is the same argument that moved pytest and Playwright onto
+# workers (see `_webapp-e2e.yml`). PR #785 recorded the gap in as many words:
+# "there is also no CI path for this ... doc-image regeneration is host-only
+# today". This file is that path.
+#
+# THE SOURCE BRANCH AND THE TARGET BRANCH ARE SEPARATE INPUTS, AND THAT SPLIT IS
+# THE POINT. `source` supplies the CODE that draws the pictures (the capture
+# drivers, the webapp, the fixture); `target` receives the PNGs. They are
+# usually the same branch, and the two cases where they differ are exactly the
+# ones worth having: regenerate main's images using a capture fix that has not
+# landed yet, or refresh a long-lived feature branch's images with main's
+# current drivers. The checkout is of `target` — the commit has to sit on the
+# branch it updates — and `source`'s tooling is overlaid onto it.
+#
+# WHAT IT WILL NOT DO. It never invents a commit for an unchanged tree, it
+# never force-pushes, and it stops rather than merging when the target has moved
+# under it. `dry_run` gets the whole pipeline and uploads nothing.
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: "Branch the regenerated images are committed to"
+        type: string
+        required: false
+        default: "main"
+      source:
+        description: "Branch supplying the capture tooling; empty reuses target"
+        type: string
+        required: false
+        default: ""
+      shots:
+        description: "all | subset of tui,webapp"
+        type: string
+        required: false
+        default: "all"
+      dry_run:
+        description: "'true' captures and diffs but never pushes"
+        type: string
+        required: false
+        default: "false"
+
+# `contents: write` because the job pushes. Restricted-mode Gitea (>=1.26.0)
+# 403s an undeclared write scope, and the older instances parse-and-ignore the
+# block, so declaring it is free and its absence is a silent failure later.
+permissions:
+  contents: write
+
+jobs:
+  screenshots:
+    name: capture ${{ inputs.shots }} → ${{ inputs.target }}
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    # The local run is ~12 minutes and a cold runner adds npm ci, a Next build
+    # and a Chromium download on top. act_runner's own ceiling is 1h; naming a
+    # smaller one here means a slow run is reported as a timeout instead of
+    # dying at the ceiling where it reads as a failure.
+    timeout-minutes: 50
+    steps:
+      # fetch-depth: 0 — the push at the end needs real history, and a shallow
+      # clone cannot fast-forward-check against the remote.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target }}
+          fetch-depth: 0
+
+      # Overlay the source branch's capture tooling onto the target's tree. The
+      # paths are exactly the pipeline's inputs: the drivers, the webapp that
+      # gets photographed, and the Makefile recipes that sequence them. Nothing
+      # under docs/img is taken from source — those are the OUTPUT, and copying
+      # them would silently import the source branch's pictures wholesale.
+      - name: Overlay capture tooling from the source branch
+        if: inputs.source != '' && inputs.source != inputs.target
+        env:
+          SOURCE: ${{ inputs.source }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/$SOURCE:refs/remotes/origin/$SOURCE"
+          git checkout "origin/$SOURCE" -- tools/screenshots webapp Makefile
+          echo "overlaid tools/screenshots, webapp and Makefile from $SOURCE"
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      # Pillow rides `dev`, and so does the TUI capture's own toolchain.
+      - name: Install Python deps
+        run: uv sync --frozen --group dev
+
+      # tmux, git and bash are the capture's unpreflighted runtime dependencies:
+      # the planter creates real tmux sessions and real git repos. Missing tmux
+      # surfaces deep inside the fleet seed as an opaque setup error rather than
+      # as a missing package, which is why it is installed unconditionally.
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install webapp deps
+        working-directory: webapp
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: webapp
+        run: npx playwright install --with-deps chromium
+
+      # THE SANDBOX MUST NOT LIVE ON `/tmp` HERE. act_runner mounts a RAM-backed
+      # /tmp inside a memory-capped container, and this tree holds a year of
+      # synthetic transcripts, twelve git repos and the usage cache at once.
+      # Exhausting it kills the job with an exit code that reads as a test
+      # failure rather than as a full disk — the same ENOSPC class that forced
+      # e2e to be chained behind the webapp gate in ci.yml.
+      #
+      # `git config --global` matters for the same "unpreflighted dependency"
+      # reason as tmux: the sandbox rewrites HOME, so the planter's repos get
+      # their identity from `GitTree.init_repo`, but any git the pipeline runs
+      # outside that helper would find no identity at all.
+      - name: Prepare the capture sandbox
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/grove-shots"
+          echo "GROVE_SHOTS_ROOT=$RUNNER_TEMP/grove-shots" >> "$GITHUB_ENV"
+          git config --global user.name "grove-ci[bot]"
+          git config --global user.email "grove-ci[bot]@users.noreply.local"
+
+      - name: Capture TUI screenshots
+        if: ${{ !cancelled() && (inputs.shots == 'all' || contains(format(',{0},', inputs.shots), ',tui,')) }}
+        env:
+          GROVE_SHOTS_ROOT: ${{ env.GROVE_SHOTS_ROOT }}/tui
+        run: make docs-screenshots
+
+      # `make docs-webapp-screenshots` chains webapp-build, the capture, the
+      # framer and the tour GIF, so the whole web half is this one target. The
+      # framer is not idempotent and the GIF is built from the framed stills, so
+      # the chain must never be split apart into separate steps here.
+      - name: Capture webapp screenshots
+        if: ${{ !cancelled() && (inputs.shots == 'all' || contains(format(',{0},', inputs.shots), ',webapp,')) }}
+        env:
+          GROVE_SHOTS_ROOT: ${{ env.GROVE_SHOTS_ROOT }}/webapp
+        run: make docs-webapp-screenshots
+
+      # `make docs-images` is deliberately NOT the target above: it chains
+      # `docs-mockups`, which cannot run at all — `mockups.py` hard-exits 2 on
+      # two inputs (`tui-list.svg`, `webapp-home-grid.png`) that no current
+      # capture produces. Calling it would fail every run after the expensive
+      # part had already succeeded.
+
+      - name: Report what changed
+        id: diff
+        run: |
+          set -euo pipefail
+          git add -A docs/img
+          # --cached, because the shots are already staged: a plain `git diff`
+          # compares the worktree against the INDEX and reports nothing here.
+          if git diff --cached --quiet -- docs/img; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "no image changed"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --cached --stat -- docs/img
+          fi
+
+      # EVERY RUN CHANGES SOMETHING, and that is a property of the fixture, not
+      # a bug to suppress. The demo corpus is anchored to `datetime.now()` and
+      # the usage heatmap is laid out relative to the day it is planted, so the
+      # usage shots differ across a date boundary even with identical code. The
+      # guard above is therefore about an EMPTY tree (a capture that silently
+      # produced nothing), not about proving the images were stale.
+      - name: Commit and push
+        if: ${{ steps.diff.outputs.changed == 'true' && inputs.dry_run != 'true' }}
+        env:
+          TARGET: ${{ inputs.target }}
+          SOURCE: ${{ inputs.source }}
+        run: |
+          set -euo pipefail
+          git commit -m "📸 docs(screenshots): regenerate from ${SOURCE:-$TARGET} [skip ci]" \
+                     -m "Captured on CI by the docs-screenshots workflow."
+          # Refuse rather than merge or force. A screenshot commit is never
+          # worth resolving a race over: the images are reproducible by
+          # definition, so the honest answer to a moved target is to say so and
+          # let the next run redo them against current code.
+          if ! git push origin "HEAD:$TARGET"; then
+            echo "::error::$TARGET moved during the capture; nothing was pushed. Re-run." >&2
+            exit 1
+          fi
+
+      # `[skip ci]` in the subject is what stops this from re-triggering ci.yml
+      # on every regeneration, which would spend a full gate on a commit that
+      # only moves PNGs. It is not a substitute for the push refusing to force.
+      - name: Summarize
+        if: ${{ !cancelled() }}
+        env:
+          CHANGED: ${{ steps.diff.outputs.changed }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGED" != "true" ]; then
+            echo "No image changed — nothing to commit."
+          elif [ "$DRY" = "true" ]; then
+            echo "Dry run: images changed but nothing was pushed."
+          else
+            echo "Regenerated images pushed to ${{ inputs.target }}."
+          fi

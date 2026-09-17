@@ -30,7 +30,7 @@ from tools.screenshots.driver import Sandbox
 # ── Sandbox the whole run BEFORE importing anything that resolves a config
 #    dir. See `driver/sandbox.py` for why this cannot move into a package
 #    `__init__`.
-SANDBOX = Sandbox(root=Path("/tmp/grove-screenshots"))
+SANDBOX = Sandbox.rooted(Path("/tmp/grove-screenshots"))
 SANDBOX.activate()
 
 from PIL import Image  # noqa: E402

@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from grove.core.agents.registry import (
         MODEL_CATALOG_CAP,
         all_adapters,
+        configure_transcript_caches,
         get_adapter,
         resolve_models,
     )
@@ -126,6 +127,7 @@ _EXPORTS: dict[str, str] = {
     "ToolCallStatus": "grove.core.agents.model",
     "ToolOutcome": "grove.core.agents.model",
     "all_adapters": "grove.core.agents.registry",
+    "configure_transcript_caches": "grove.core.agents.registry",
     "final_result_from_messages": "grove.core.agents.model",
     "get_adapter": "grove.core.agents.registry",
     "latest_todo_from_messages": "grove.core.agents.model",
@@ -182,6 +184,7 @@ __all__ = [
     "ToolCallStatus",
     "ToolOutcome",
     "all_adapters",
+    "configure_transcript_caches",
     "final_result_from_messages",
     "get_adapter",
     "latest_todo_from_messages",

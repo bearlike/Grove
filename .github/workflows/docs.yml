@@ -53,10 +53,26 @@ jobs:
           key: iconify-${{ hashFiles('mkdocs.yml') }}
           restore-keys: iconify-
 
+      # The theme resolves from a moving flat index (see the `[[tool.uv.index]]`
+      # block in pyproject.toml), so the committed `uv.lock` entry is a
+      # SNAPSHOT of whatever the theme's latest release was when somebody last
+      # ran `uv lock` — and syncing it unchanged would not merely serve a stale
+      # theme, it would fail outright: the moving tag carries exactly one wheel,
+      # so the filename the stale lock asks for is already gone (404) the moment
+      # the theme ships a new version. Re-resolving this one package is
+      # therefore both how a new release reaches the site with no version edited
+      # by hand, and how this job stays green at all.
+      #
+      # Scoped to `-P mkdocs-shadcn-mewbo` on purpose: every other dependency
+      # stays pinned at the committed lock, so a docs deploy never silently
+      # picks up an unrelated upgrade. `-P` implies `--refresh-package`, which
+      # is what defeats uv's cached copy of the index page.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip uv
+          uv lock --upgrade-package mkdocs-shadcn-mewbo
           uv sync --group docs
+          uv run python -c "import importlib.metadata as m; print('theme:', m.version('mkdocs-shadcn-mewbo'))"
 
       - name: Prepare docs inputs
         run: |
@@ -98,9 +114,14 @@ jobs:
           [ "${{ github.event_name }}" = "pull_request" ] && slug="${slug}-pr-${{ github.event.pull_request.number }}"
           sed -i "s|^site_url:.*|site_url: https://${DOCS_HOST}/${slug}/|" mkdocs.yml
           uv run mkdocs build --strict -d site
-          tar -C site -cf site.tar .
-          curl -fsS -k --retry 5 --retry-all-errors --retry-delay 4 --max-time 180 \
-            -X PUT -H 'Content-Type: application/x-tar' --data-binary @site.tar \
+          # zip rather than tar because this upload can cross a slow VPN link,
+          # measured at ~1.5 Mbit/s, where the transfer is ~95% of the step
+          # (8s build, ~150s upload). git-pages accepts application/zip natively and
+          # unpacks it the same way. Two thirds of the payload is already-compressed
+          # PNG/GIF/woff2, so -9 buys ~30% overall, not the 4-5x text alone suggests.
+          (cd site && zip -qr9 ../site.zip .)
+          curl -fsS -k --retry 5 --retry-all-errors --retry-delay 4 --max-time 900 \
+            -X PUT -H 'Content-Type: application/zip' --data-binary @site.zip \
             "https://${DOCS_HOST}/${slug}/"
 
   cleanup:

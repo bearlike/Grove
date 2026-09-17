@@ -292,7 +292,7 @@ describe("UsageQuota", () => {
       // A long plan name must truncate, not wrap. Structure, not length: the
       // identity cell is `min-w-0 truncate` inside a two-column grid and carries
       // the full value in `title`, so nothing can bleed out of the card.
-      const long = "Enterprise Premium Unlimited Founders Edition";
+      const long = "Enterprise Premium Unlimited Signature Edition";
       const html = render({
         ...LIVE,
         accounts: [

@@ -264,15 +264,16 @@ async function main() {
   //
   // SHOT IN ITS OWN CONTEXT, AT A SMALLER VIEWPORT. The composer is one control
   // centred in a page that is otherwise empty, so at 1600x900 it reads as a
-  // small box in a dark field. 800x450 is the same 16:9 at half the width,
-  // which the framer scales onto the same canvas — the control fills the
-  // frame instead of a quarter of it. `deviceScaleFactor` doubles to 4 so the
-  // capture stays 3200x1800 and the framer still DOWNsamples. The rail's
-  // collapsed state rides localStorage, so the init script pins it here the
-  // way `forceDark` pins the theme; a fresh context inherits neither.
+  // small box in a dark field. 960x540 is the same 16:9 at 60% of the width
+  // (pulled back one notch from the original 50%/800x450, which read as too
+  // tightly zoomed on the control), and the framer scales it onto the same
+  // canvas either way. `deviceScaleFactor` stays 4, so the raw capture is
+  // 3840x2160 and the framer still DOWNsamples. The rail's collapsed state
+  // rides localStorage, so the init script pins it here the way `forceDark`
+  // pins the theme; a fresh context inherits neither.
   const composerCtx = await browser.newContext({
     storageState: STORAGE,
-    viewport: { width: 800, height: 450 },
+    viewport: { width: 960, height: 540 },
     deviceScaleFactor: 4,
     colorScheme: "dark",
   });

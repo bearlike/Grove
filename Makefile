@@ -48,9 +48,15 @@ check: lint test  ## Run lint + unit tests (no integration)
 
 # ─── docs ───────────────────────────────────────────────────────────────────
 
-.PHONY: docs-schema docs-screenshots docs-webapp-screenshots docs-frame-webapp-screenshots docs-tour-gif docs-mockups docs-images docs docs-build
+.PHONY: docs-schema app-icons docs-screenshots docs-webapp-screenshots docs-frame-webapp-screenshots docs-tour-gif docs-mockups docs-images docs docs-build
 docs-schema:  ## Regenerate docs/grove.schema.json from the Pydantic model
 	$(UV) run grove config schema --stdout > docs/grove.schema.json
+
+# Deliberately NOT part of `docs-images`: this reads one committed SVG and
+# writes eight committed files, so it belongs to a change to the artwork, not
+# to a screenshot refresh that needs a live fleet and twelve minutes.
+app-icons:  ## Regenerate every app icon from docs/img/grove-logo.svg (needs chromium)
+	$(UV) run --group dev python -m tools.app_icons
 
 # Captures as SVG, then rasterizes and frames in one process — the SVG is a
 # sandbox intermediate and never reaches docs/. Needs `node` plus the webapp's

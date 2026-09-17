@@ -10,6 +10,8 @@ from typing import Any, ClassVar
 
 import pytest
 
+from grove.core import paths
+from grove.core.activity import RefreshDomain
 from grove.core.activity_runtime import WorkspaceInvalidated
 from grove.core.activity_sources import ActivitySources
 from grove.core.agents.transcript_scope import config_dir_override
@@ -137,7 +139,9 @@ async def test_phase_write_invalidates_only_its_workspace_without_rebuilding_wat
     sources._control_events(FileEventBatch((FileEvent(FileEventKind.MODIFIED, phase),)))
 
     assert runtime.invalidations == [
-        WorkspaceInvalidated(state.repo_root, state.id, reason="filesystem")
+        WorkspaceInvalidated(
+            state.repo_root, state.id, reason="filesystem", domains=RefreshDomain.PHASE
+        )
     ]
     assert len(_Source.created) == created
     assert store.load_calls == loads
@@ -229,9 +233,137 @@ async def test_bootstrap_scopes_persisted_context_and_routes_exact_transcript_pa
     ]
     assert adapter.discoveries == [Path("/container/work"), Path(state.worktree_path)]
     assert runtime.invalidations == [
-        WorkspaceInvalidated(state.repo_root, state.id, reason="filesystem")
+        WorkspaceInvalidated(
+            state.repo_root, state.id, reason="filesystem", domains=RefreshDomain.TRANSCRIPT
+        )
     ]
 
+    await sources.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_exit_control_file_reblends_without_content_reads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state = _state(tmp_path)
+    store = _Store(tmp_path / "state.json", [state])
+    runtime = _Runtime()
+    monkeypatch.setattr("grove.core.activity_sources.FileEventSource", _Source)
+    monkeypatch.setattr("grove.core.activity_sources.GitRepo.list_files", lambda *_: ())
+    sources = ActivitySources(runtime, store)  # type: ignore[arg-type]
+
+    await sources.start()
+    sources._control_events(
+        FileEventBatch(
+            (FileEvent(FileEventKind.MODIFIED, paths.agent_exit_path(state.id).resolve()),)
+        )
+    )
+
+    assert runtime.invalidations == [
+        WorkspaceInvalidated(
+            state.repo_root, state.id, reason="filesystem", domains=RefreshDomain.RUNTIME
+        )
+    ]
+    await sources.close()
+
+
+@pytest.mark.asyncio
+async def test_new_sidechain_file_routes_through_its_known_session_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    main = tmp_path / "profile" / "project" / "session-id.jsonl"
+    main.parent.mkdir(parents=True)
+    main.touch()
+    state = _state(tmp_path)
+    store = _Store(tmp_path / "state.json", [state])
+    runtime = _Runtime()
+    adapter = _Adapter([main])
+    monkeypatch.setattr("grove.core.activity_sources.FileEventSource", _Source)
+    monkeypatch.setattr("grove.core.activity_sources.GitRepo.list_files", lambda *_: ())
+    monkeypatch.setattr("grove.core.activity_sources.get_adapter", lambda _: adapter)
+    sources = ActivitySources(runtime, store)  # type: ignore[arg-type]
+
+    await sources.start()
+    sidechain = main.parent / "session-id" / "subagents" / "agent-new.jsonl"
+    sidechain.parent.mkdir(parents=True)
+    sidechain.touch()
+    sources._transcript_events(FileEventBatch((FileEvent(FileEventKind.ADDED, sidechain),)))
+
+    assert runtime.invalidations == [
+        WorkspaceInvalidated(
+            state.repo_root, state.id, reason="filesystem", domains=RefreshDomain.TRANSCRIPT
+        )
+    ]
+    await sources.close()
+
+
+@pytest.mark.asyncio
+async def test_new_sidechain_file_never_routes_to_an_unrelated_session_sharing_the_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Under a shared project folder (ROOT placement, or several workspaces at
+    one cwd), a brand-new sidechain file must be routed by its OWN session's
+    subdirectory, never by the shared parent folder — or a fresh sub-agent
+    spawned in ONE workspace's session invalidates every workspace whose main
+    transcript happens to live in the same folder."""
+    shared_folder = tmp_path / "profile" / "project"
+    shared_folder.mkdir(parents=True)
+    owned = shared_folder / "owned-session.jsonl"
+    owned.touch()
+    stranger = shared_folder / "stranger-session.jsonl"
+    stranger.touch()
+    state = _state(tmp_path, id="owner", agent_session_id="owned-session")
+    store = _Store(tmp_path / "state.json", [state])
+    runtime = _Runtime()
+    adapter = _Adapter([owned])
+    monkeypatch.setattr("grove.core.activity_sources.FileEventSource", _Source)
+    monkeypatch.setattr("grove.core.activity_sources.GitRepo.list_files", lambda *_: ())
+    monkeypatch.setattr("grove.core.activity_sources.get_adapter", lambda _: adapter)
+    sources = ActivitySources(runtime, store)  # type: ignore[arg-type]
+
+    await sources.start()
+    # A sidechain file under the STRANGER session's own subdirectory — this
+    # workspace never discovered "stranger-session", so it must never be
+    # notified about it, even though both files share `shared_folder`.
+    strangers_sidechain = shared_folder / "stranger-session" / "subagents" / "agent-new.jsonl"
+    strangers_sidechain.parent.mkdir(parents=True)
+    strangers_sidechain.touch()
+    sources._transcript_events(
+        FileEventBatch((FileEvent(FileEventKind.ADDED, strangers_sidechain),))
+    )
+
+    assert runtime.invalidations == []
+    await sources.close()
+
+
+@pytest.mark.asyncio
+async def test_git_metadata_event_invalidates_worktree_facts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state = _state(tmp_path)
+    git_dir = tmp_path / "repo" / ".git"
+    (git_dir / "refs").mkdir(parents=True)
+    (git_dir / "HEAD").touch()
+    (git_dir / "index").touch()
+    store = _Store(tmp_path / "state.json", [state])
+    runtime = _Runtime()
+    monkeypatch.setattr("grove.core.activity_sources.FileEventSource", _Source)
+    monkeypatch.setattr("grove.core.activity_sources.GitRepo.list_files", lambda *_: ())
+    monkeypatch.setattr("grove.core.activity_sources.GitRepo.common_dir", lambda *_: git_dir)
+    sources = ActivitySources(runtime, store)  # type: ignore[arg-type]
+
+    await sources.start()
+    sources._git_events(FileEventBatch((FileEvent(FileEventKind.MODIFIED, git_dir / "HEAD"),)))
+
+    git_source = next(
+        source for source in _Source.created if (git_dir / "refs").resolve() in source.roots
+    )
+    assert git_source.kwargs["include_ignored"] is True
+    assert runtime.invalidations == [
+        WorkspaceInvalidated(
+            state.repo_root, state.id, reason="filesystem", domains=RefreshDomain.WORKTREE
+        )
+    ]
     await sources.close()
 
 
@@ -259,7 +391,9 @@ async def test_worktree_watches_tracked_parents_nonrecursively(
     )
     assert worktree_source.kwargs["recursive"] is False
     assert runtime.invalidations == [
-        WorkspaceInvalidated(state.repo_root, state.id, reason="filesystem")
+        WorkspaceInvalidated(
+            state.repo_root, state.id, reason="filesystem", domains=RefreshDomain.WORKTREE
+        )
     ]
 
     await sources.close()

@@ -41,7 +41,7 @@ from grove.core.activity import ActivityService
 from grove.core.activity_runtime import ActivityRuntime
 from grove.core.activity_sources import ActivitySources
 from grove.core.admission import Admission
-from grove.core.agents import get_adapter, resolve_models
+from grove.core.agents import configure_transcript_caches, get_adapter, resolve_models
 from grove.core.agents.hook import HOOK_INGEST_ROUTE, ClaudeHook
 from grove.core.auth import SessionStore
 from grove.core.config import (
@@ -537,6 +537,7 @@ def build_app(  # noqa: PLR0915
     # The coordinator is built BEFORE the registry so every manager the daemon
     # mints can steer a native workspace's owner in-process (see
     # `CoordinatorSteerClient`); the loop it needs is bound at lifespan start.
+    configure_transcript_caches(cfg.transcript_cache)
     mailbox_coordinator = MailboxCoordinator()
     native_steer = CoordinatorSteerClient(mailbox_coordinator)
     registry = RepoRegistry(

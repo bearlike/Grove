@@ -37,6 +37,7 @@ from grove.tui.cli_sessions import recollect_session, sessions_app
 from grove.tui.cli_shell import register as register_shell_commands
 from grove.tui.cli_usage import usage_app
 from grove.tui.cli_workspace import register as register_workspace_commands
+from grove.tui.cli_workspace import warn_if_store_disowns_caller
 
 app = typer.Typer(
     name="grove",
@@ -156,6 +157,10 @@ def main(ctx: typer.Context) -> None:
 @app.command("ls")
 def list_workspaces() -> None:
     """Print this repo's workspaces as JSON."""
+    # A short or empty listing is the first symptom of a store the caller never
+    # meant to read, and it is indistinguishable from an empty repo. See
+    # `warn_if_store_disowns_caller` — stderr, so `grove ls | jq` is unaffected.
+    warn_if_store_disowns_caller()
     try:
         manager = build()
     except GroveError as exc:
@@ -341,7 +346,16 @@ def agent_hook() -> None:
 
 @app.command("debug")
 def debug() -> None:
-    """Print resolved paths used by Grove."""
+    """Print resolved paths used by Grove, and why they resolved there.
+
+    ``path_overrides`` names the environment variables currently redirecting the
+    user config/state roots, empty when Grove is using its ordinary per-user
+    locations. It exists because the paths alone cannot distinguish "this is
+    where Grove lives" from "this is where something in my environment sent it"
+    — and a `grove` that inherited a stray ``XDG_STATE_HOME`` reads a different
+    workspace store and reports a fleet that does not exist, with every surface
+    agreeing and none of them saying why.
+    """
     repo_root = detect_root(Path.cwd())
     try:
         cfg = load_config(repo_root)
@@ -365,6 +379,7 @@ def debug() -> None:
                 ),
                 "repo_root": str(repo_root) if repo_root else None,
                 "config_loaded": config_loaded,
+                "path_overrides": paths.dir_overrides(),
             },
             indent=2,
         )

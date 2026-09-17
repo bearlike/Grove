@@ -112,13 +112,14 @@ from grove.core import (
     WorkspaceState,
     build,
     load_config,
+    paths,
 )
 from grove.core.agents import SessionTurn, TodoList
 from grove.core.contracts.activity import DashboardSnapshotView
 from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.views import WorkspaceDefaultsView, WorkspaceStateView
 from grove.core.issueops import HandoverKey, PickupEngine
-from grove.core.phase import PHASE_ORDER, PhaseReport, TaskPhase, TicketClaim
+from grove.core.phase import PHASE_ORDER, PhaseFile, PhaseReport, TaskPhase, TicketClaim
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tmux import AttachInstruction
 from grove.tui.cli_complete import Complete
@@ -719,11 +720,92 @@ def resolve_workspace(ref: str) -> tuple[WorkspaceManager, WorkspaceState]:
     return host_registry().resolve_workspace(ref)
 
 
+def own_workspace_ref() -> str | None:
+    """This caller's OWN workspace id, from the phase file Grove named for it.
+
+    ``GROVE_PHASE_FILE`` is published into every Grove-launched agent's
+    environment and its basename encodes the workspace id (and agent slot), so
+    an agent asking about "my workspace" has an unambiguous answer that no
+    directory can supply. Returns ``None`` outside such a session — a human at a
+    shell, which is exactly when cwd inference is the right question.
+
+    **A directory does not identify an agent, and this is the same fact
+    `core/phase.py` is built on, reaching the CLI.** Several ROOT workspaces
+    share one repo root and several agents share one container worktree, so
+    inference from the cwd answers *which workspace is here*, never *which
+    workspace is asking* — and when the two differ the command acts on a
+    stranger. The env var is what the agent is already told to trust, so
+    preferring it makes the CLI and the file agree by construction.
+
+    Deliberately NOT validated against the store here: this returns a REF, and
+    the caller resolves it through the ordinary path so a stale or unreachable
+    id produces the same honest error any bad ref does.
+    """
+    named = os.environ.get(PhaseFile.PATH_ENV)
+    return PhaseFile.workspace_id_in(named) if named else None
+
+
+def warn_if_store_disowns_caller() -> str | None:
+    """Say so when the resolved store does not contain the caller's OWN workspace.
+
+    Returns the warning text (also written to stderr), or ``None`` when there is
+    nothing to say. Never raises and never changes what any command does — this
+    is a diagnosis printed beside a result, not a refusal.
+
+    **The check is cheap and specific because it compares two facts Grove
+    already has**: ``GROVE_PHASE_FILE`` names the workspace this session IS, and
+    the store says which workspaces exist. A session whose own id is missing
+    from its own store is almost certainly reading somebody else's store —
+    there is no ordinary way to be launched by a Grove that then cannot find
+    you. Measured 2026-09-17: a `grove` that inherited a leaked
+    ``XDG_STATE_HOME`` listed one workspace where the repo had three, reported
+    three fictional ones host-wide, and answered ``no workspace matches`` for
+    the caller's own id — every surface self-consistent, none of them saying
+    why, and the obvious reading ("my workspace was never registered") wrong.
+
+    It names the environment override when there is one, because that is the
+    remedy; without one the mismatch is still worth reporting (a hand-edited or
+    half-restored state file reaches the same place) and the honest answer is
+    the mismatch alone. Gated on the variable being set, so a human at a shell —
+    who has no own workspace to disown — pays nothing.
+    """
+    own = own_workspace_ref()
+    if own is None:
+        return None
+    try:
+        known = {state.id for state in JsonWorkspaceStore().load_all()}
+    except Exception as exc:  # a diagnosis must never break the command it rides
+        logger.debug("own-workspace cross-check skipped: {}", exc)
+        return None
+    if own in known:
+        return None
+    overrides = paths.dir_overrides()
+    detail = (
+        " — set by " + ", ".join(f"{k}={v}" for k, v in sorted(overrides.items()))
+        if overrides
+        else ""
+    )
+    message = (
+        f"warning: this session's own workspace ({own[:12]}) is absent from the "
+        f"workspace store at {paths.user_state_path()}{detail}; Grove is probably "
+        "reading a different store than the one that launched it (`grove debug`)"
+    )
+    typer.secho(message, fg=typer.colors.YELLOW, err=True)
+    return message
+
+
 def resolve_or_infer_workspace(
     ref: str | None, *, manager: WorkspaceManager | None = None
 ) -> tuple[WorkspaceManager, WorkspaceState]:
     """The workspace named by ``ref`` (host-wide id-prefix), or — when ref is
-    omitted — the one whose worktree contains the cwd.
+    omitted — this session's OWN workspace, else the one containing the cwd.
+
+    The precedence is explicit ref > ``GROVE_PHASE_FILE`` > cwd, and the middle
+    term is the one that makes this safe for an agent. See
+    :func:`own_workspace_ref`: a shared worktree can only say which workspace is
+    *here*, so for a Grove-launched session the env var is both more specific
+    and the answer it is already told to trust. A human at a shell has no such
+    variable and falls through to inference exactly as before.
 
     Only the inference branch needs a repo, because only it asks a question
     about where the caller is standing; ``manager`` is the already-bound
@@ -741,6 +823,19 @@ def resolve_or_infer_workspace(
     """
     if ref is not None:
         return resolve_workspace(ref)
+    own = own_workspace_ref()
+    if own is not None:
+        # Host-wide, like any other id: the session's own workspace may well be
+        # a ROOT workspace of a repo the caller is not standing in.
+        try:
+            return resolve_workspace(own)
+        except GroveError:
+            # "Grove launched me and cannot find me" is the wrong-store
+            # signature, and the bare ref error names only the id. Diagnose,
+            # then re-raise: refusing is right — falling back to the cwd here
+            # is precisely how a claim lands on a stranger's workspace.
+            warn_if_store_disowns_caller()
+            raise
     manager = manager if manager is not None else build()
     cwd = Path.cwd().resolve()
     # Compare RESOLVED Path objects, never raw strings (git emits '/', str(Path)
@@ -1372,6 +1467,11 @@ def fleet_status() -> None:
       grove fleet
       grove fleet | jq '.projects[].workspaces[] | select(.needs_attention)'
     """
+    # Before the read, not after: a fleet of strangers is most misleading at the
+    # moment it is printed, and this is the surface where a wrong store is least
+    # visible — every row is internally consistent and simply belongs to
+    # somebody else.
+    warn_if_store_disowns_caller()
     with clean_exit():
         service = _activity_service()
         try:
@@ -1651,6 +1751,7 @@ def register(app: typer.Typer) -> None:
 __all__ = [
     "BranchFlags",
     "WorkspaceInspection",
+    "own_workspace_ref",
     "register",
     "resolve_or_infer_workspace",
     "resolve_workspace",

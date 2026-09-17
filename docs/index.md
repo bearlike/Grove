@@ -190,8 +190,6 @@ Every workspace is reachable from all four.
 
 ## What you get { .ms-h2-icon data-icon="grid" }
 
-Built for the founder or lead who wants a whole team running agents the same way, and able to see what every one of them did.
-
 <div class="ms-grid ms-grid--3">
   <a class="ms-card" href="features-cascade/">
     <span class="ms-card__icon">

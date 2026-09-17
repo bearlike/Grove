@@ -30,6 +30,7 @@ from grove.core.devcontainer import (
     UpResult,
 )
 from grove.core.errors import DevcontainerError, TmuxError
+from grove.core.phase import PhaseFile
 from grove.core.preflight import CheckResult, HostPreflight
 from grove.core.tmux import HostAttach
 
@@ -263,6 +264,24 @@ def _offline_container_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
         del self, argv
 
     monkeypatch.setattr(DockerCli, "read_result", _no_docker)
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_phase_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test inherits the DEVELOPER's own ``GROVE_PHASE_FILE``.
+
+    The CLI now prefers that variable over cwd inference (it names the caller's
+    own workspace, where a shared worktree cannot), so the suite is run by an
+    agent inside a Grove workspace exactly when it is set — and every
+    cwd-inference test would resolve that agent's real workspace instead of its
+    fixture. It would pass on CI and fail on the machine of the person most
+    likely to be changing this code, which is the worst available split.
+
+    Autouse and unconditional for the same reason ``init_logs`` is: a test
+    cannot opt into protection from an environment it does not know it has. A
+    test that means the env-var branch sets the variable itself.
+    """
+    monkeypatch.delenv(PhaseFile.PATH_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

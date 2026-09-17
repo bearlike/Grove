@@ -235,21 +235,42 @@ class GitRepo:
         errored. That is deliberate and fail-closed: the caller's remedy is
         ``force``, and refusing to pause something we cannot inspect is strictly
         safer than tearing down a session and a container to find out.
+
+        ``--no-optional-locks``: this is a background observational read racing
+        a foreground `git add`/`commit` in the same worktree — an ordinary git
+        status refreshes and can take the index lock, and plain `git status`
+        on a large index does this by default. Losing that race is an
+        `index.lock`-shaped failure with no Grove signature, indistinguishable
+        from a stale lock. The flag keeps the read side-effect-free at the
+        cost of an occasionally-stale stat cache, which is fine: the porcelain
+        OUTPUT (what changed) does not depend on the index's on-disk mtime
+        cache, only on re-reading the files status touches either way.
+        **It is a git-wide option and must precede the subcommand** —
+        ``git status --no-optional-locks`` is rejected outright
+        (``error: unknown option``, exit 129), which the earlier form of this
+        method did not catch because ``check=False`` swallows the failure into
+        a fail-closed ``False``; verified against real git, not assumed.
         """
         if not worktree_path.is_dir():
             return False
-        result = self._run(["git", "status", "--porcelain"], cwd=worktree_path, check=False)
+        result = self._run(
+            ["git", "--no-optional-locks", "status", "--porcelain"],
+            cwd=worktree_path,
+            check=False,
+        )
         return result.returncode == 0 and not result.stdout.strip()
 
     def dirty_file_count(self, worktree_path: Path) -> int:
         """Count of files with staged, unstaged, or untracked changes.
 
         Returns 0 if the worktree directory does not exist (paused workspaces).
+        Runs with ``--no-optional-locks`` for the same reason as `is_clean`,
+        and BEFORE the subcommand for the same reason — see that docstring.
         """
         if not worktree_path.exists():
             return 0
         result = self._run(
-            ["git", "status", "--porcelain"],
+            ["git", "--no-optional-locks", "status", "--porcelain"],
             cwd=worktree_path,
             check=False,
         )
@@ -646,6 +667,12 @@ class GitRepo:
             return None
         sha = result.stdout.strip()
         return sha or None
+
+    def git_dir(self) -> Path | None:
+        """Per-worktree metadata containing HEAD/index, distinct from shared refs."""
+        result = self._run(["git", "rev-parse", "--git-dir"], cwd=self._root, check=False)
+        raw = result.stdout.strip()
+        return (self._root / raw).resolve() if result.returncode == 0 and raw else None
 
     def common_dir(self) -> Path | None:
         """Absolute path of the repo's SHARED git dir, or `None` if unreadable.

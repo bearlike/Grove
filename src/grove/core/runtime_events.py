@@ -162,10 +162,12 @@ class RuntimeEvents:
         docker_bin: str = "docker",
         transport: RuntimeEventTransport | None = None,
         on_change: Callable[[RuntimeLivenessChange], None] | None = None,
+        on_host_tmux_activity: Callable[[str, datetime], None] | None = None,
     ) -> None:
         self._docker_bin = docker_bin
         self._transport = transport or AsyncioRuntimeEventTransport()
         self._on_change = on_change
+        self._on_host_tmux_activity = on_host_tmux_activity
         self._scope = RuntimeLivenessScope()
         self._container_liveness: dict[str, bool | None] = {}
         self._host_tmux_liveness: dict[str, bool | None] = {}
@@ -330,8 +332,9 @@ class RuntimeEvents:
                     return
                 self._set_host_tmux(session, True)
                 if frame.startswith(("%output", "%extended-output")):
-                    self._host_tmux_activity[session] = datetime.now(UTC)
-                    self._notify("host_tmux", session, True)
+                    observed_at = datetime.now(UTC)
+                    self._host_tmux_activity[session] = observed_at
+                    self._notify_host_tmux_activity(session, observed_at)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -345,8 +348,12 @@ class RuntimeEvents:
                 if not self._closed and session in self._host_tmux_liveness and not exited:
                     # A tmux command that ran and rejected its target is a real
                     # absence; transport exceptions above remain unknown.
-                    self._set_host_tmux(session, False if returncode not in (None, 0) else None)
+                    alive = False if returncode not in (None, 0) else None
+                    if alive is None:
+                        self._host_tmux_activity[session] = None
+                    self._set_host_tmux(session, alive)
             elif not self._closed and session in self._host_tmux_liveness:
+                self._host_tmux_activity[session] = None
                 self._set_host_tmux(session, None)
 
     def _apply_docker_frame(self, frame: str) -> None:
@@ -400,6 +407,10 @@ class RuntimeEvents:
     ) -> None:
         if self._on_change is not None:
             self._on_change(RuntimeLivenessChange(kind, identity, alive))
+
+    def _notify_host_tmux_activity(self, session: str, observed_at: datetime) -> None:
+        if self._on_host_tmux_activity is not None:
+            self._on_host_tmux_activity(session, observed_at)
 
     def _require_bootstrapped(self) -> None:
         if not self._bootstrapped:

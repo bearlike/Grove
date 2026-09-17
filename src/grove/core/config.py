@@ -3431,6 +3431,27 @@ class PanelConfig(BaseModel):
         return value
 
 
+class TranscriptCacheConfig(BaseModel):
+    """Process-wide retention budgets per filesystem agent adapter.
+
+    Budgets limit cached Python object estimates, not process RSS or response
+    size. Oversized histories remain readable without being retained. The daemon
+    applies the global configuration at startup; project overrides cannot resize
+    shared caches belonging to other projects.
+    """
+
+    model_config = _FROZEN
+
+    max_retained_bytes: int = Field(default=256 * 1024 * 1024, gt=0)
+    """Maximum estimated retained fold bytes per adapter."""
+    max_source_bytes: int | None = Field(default=256 * 1024 * 1024, gt=0)
+    """Additional source-byte limit; null disables this secondary limit."""
+    memo_max_bytes: int = Field(default=64 * 1024 * 1024, gt=0)
+    """Maximum estimated bytes retained by derived read products per adapter."""
+    memo_max_entries: int = Field(default=512, gt=0)
+    """Maximum retained derived products, including empty answers."""
+
+
 class GroveConfig(BaseModel):
     """Merged, validated configuration. Built once per `load_config` call."""
 
@@ -3487,6 +3508,7 @@ class GroveConfig(BaseModel):
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     lifecycle_max_pending: int = Field(default=64, gt=0)
     """Maximum accepted lifecycle operations, including lock waiters and running work."""
+    transcript_cache: TranscriptCacheConfig = Field(default_factory=TranscriptCacheConfig)
     activity_admission: AdmissionLimits = Field(default_factory=AdmissionLimits)
     """Item and byte reservations for pending and running activity transitions."""
     brief: BriefConfig = Field(default_factory=BriefConfig)

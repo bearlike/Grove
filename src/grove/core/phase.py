@@ -381,6 +381,36 @@ class PhaseFile:
         return f"{cls.RELDIR}/{key}.json"
 
     @classmethod
+    def workspace_id_in(cls, path: str | Path) -> str | None:
+        """The workspace id *path* names, or ``None`` if it names no per-agent file.
+
+        The inverse of :meth:`key_for` + :meth:`relpath`, and it lives here
+        because this class already owns that naming — a caller deriving the id
+        by splitting the string itself is a second copy of the format that
+        drifts the day the key gains a field.
+
+        Reads the FILENAME only, never the directory above it, which is what
+        makes it correct for a containerized agent: :attr:`PATH_ENV` carries a
+        path in the *agent's* namespace, so every leading component may be
+        meaningless on this host while the basename is the one part Grove
+        composed and both namespaces agree on.
+
+        Two shapes are refused rather than guessed at. The legacy single file
+        (:attr:`LEGACY_RELPATH`) would yield the literal ``"phase"`` — it names
+        a workspace only by sitting inside one, which is exactly the cwd-shaped
+        inference the per-agent layout exists to replace — and it is rejected by
+        requiring the parent directory to be :attr:`RELDIR`'s own leaf. An empty
+        id is refused for the same reason: ``None`` here means "this tells me
+        nothing", and a caller must be able to tell that from a real answer.
+        """
+        candidate = Path(path)
+        if candidate.parent.name != Path(cls.RELDIR).name or candidate.suffix != ".json":
+            return None
+        # `key_for` joins the slot with '.', and a slot can never contain one,
+        # so the id is everything before the FIRST separator.
+        return candidate.name.removesuffix(".json").split(".", 1)[0] or None
+
+    @classmethod
     def path_for(cls, worktree: Path | str, key: str | None) -> Path:
         """The absolute path of *key*'s phase file under *worktree*.
 

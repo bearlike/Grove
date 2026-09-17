@@ -35,7 +35,7 @@ from tools.screenshots.driver import Sandbox
 # ── Sandbox BEFORE importing grove so every resolved config dir lands in the
 #    throwaway tree. See `driver/sandbox.py` for why this cannot move into a
 #    package `__init__`.
-SANDBOX = Sandbox(root=Path("/tmp/grove-webapp-shots"))
+SANDBOX = Sandbox.rooted(Path("/tmp/grove-webapp-shots"))
 SANDBOX.activate()
 
 from tools.screenshots.driver.webapp import ClaudeSubscription, WebappCapture  # noqa: E402

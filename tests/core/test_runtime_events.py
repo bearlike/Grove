@@ -91,6 +91,31 @@ async def test_bootstrap_uses_lifecycle_witness_then_events_change_only_scoped_i
     await events.aclose()
 
 
+async def test_tmux_output_refreshes_activity_without_a_liveness_change() -> None:
+    transport = _Transport()
+    changes: list[RuntimeLivenessChange] = []
+    activity: list[tuple[str, object]] = []
+    events = RuntimeEvents(
+        transport=transport,
+        on_change=changes.append,
+        on_host_tmux_activity=lambda session, observed_at: activity.append((session, observed_at)),
+    )
+    await events.bootstrap(
+        RuntimeLivenessScope(host_tmux_sessions=frozenset({SESSION})),
+        host_tmux_sessions={SESSION: True},
+    )
+    await _settle()
+
+    transport.tmux[SESSION].frames.put_nowait("%output %1 first")
+    transport.tmux[SESSION].frames.put_nowait("%output %1 second")
+    await _settle()
+
+    assert changes == []
+    assert [session for session, _observed_at in activity] == [SESSION, SESSION]
+    assert events.host_tmux_activity(SESSION) == activity[-1][1]
+    await events.aclose()
+
+
 async def test_reader_exit_becomes_unknown_and_requires_explicit_reconnect() -> None:
     transport = _Transport()
     changes: list[RuntimeLivenessChange] = []
@@ -144,6 +169,27 @@ async def test_scope_replacement_stops_removed_tmux_reader_without_discovery() -
     assert transport.tmux[SESSION].closed
     assert events.host_tmux_liveness(SESSION) is None
     assert transport.tmux_starts == [SESSION]
+    await events.aclose()
+
+
+async def test_tmux_transport_exit_clears_activity_to_restore_probe_fallback() -> None:
+    transport = _Transport()
+    events = RuntimeEvents(transport=transport)
+    await events.bootstrap(
+        RuntimeLivenessScope(host_tmux_sessions=frozenset({SESSION})),
+        host_tmux_sessions={SESSION: True},
+    )
+    await _settle()
+    transport.tmux[SESSION].frames.put_nowait("%output %1 active")
+    await _settle()
+
+    assert events.host_tmux_activity(SESSION) is not None
+
+    transport.tmux[SESSION].exit(returncode=0)
+    await _settle()
+
+    assert events.host_tmux_liveness(SESSION) is None
+    assert events.host_tmux_activity(SESSION) is None
     await events.aclose()
 
 

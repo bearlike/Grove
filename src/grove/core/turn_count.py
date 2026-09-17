@@ -9,7 +9,7 @@ the same numbers the project-scoped listing computes for itself). That costs a
 full parse (measured: 40.3 s for 518 sessions / 1.24 GB on the reference host).
 Every cheaper source was measured and refused; the verdicts live in
 [contracts](contracts/CLAUDE.md). So the cost is not avoided, it is **paid
-once per session VERSION**: a durable ``(mtime, size)``-keyed file means an
+once per session VERSION**: a durable ``(inode, mtime_ns, size)``-keyed file means an
 unchanged transcript is never read twice, and the parsing pass runs off the
 request path entirely (:meth:`TurnCountCache.fill`).
 
@@ -32,6 +32,7 @@ which the wire already contracts as *not measured at this scope*, never ``0``.
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -82,9 +83,17 @@ class SessionFacts:
 class _Remembered:
     """One session's facts plus the transcript fingerprint they were taken at."""
 
-    mtime: float
+    inode: int
+    mtime_ns: int
     size: int
     facts: SessionFacts
+
+
+_FileSignature = tuple[int, int, int]
+"""``(inode, mtime_ns, size)`` — enough to reject a replaced file precisely."""
+
+
+_MISSING = object()
 
 
 def _entry_shape() -> str:
@@ -113,6 +122,7 @@ def _entry_shape() -> str:
     """
     return "|".join(
         (
+            ",".join(sorted(field.name for field in fields(_Remembered))),
             ",".join(sorted(field.name for field in fields(SessionFacts))),
             ",".join(sorted(DurationView.model_fields)),
         )
@@ -126,19 +136,26 @@ def _key(ref: SessionRef) -> CountKey:
     return (ref.adapter_kind, ref.session_id)
 
 
-def _fingerprint(path: Path) -> tuple[float, int] | None:
-    """``(mtime, size)`` for ``path``, or ``None`` when it cannot be stat'd.
+def _fingerprint(path: Path) -> _FileSignature | None:
+    """``(inode, mtime_ns, size)`` for ``path``, or ``None`` when unavailable.
 
-    The cheap change detector, not a content hash — the same choice ``cclens``
-    and the usage cache's ``ingested_files`` already make. ``mtime`` alone would
-    very nearly do (transcripts are append-only), and ``size`` costs nothing
-    beside it while catching a replacement that preserved a timestamp.
+    The cheap change detector, not a content hash. Nanosecond precision catches
+    ordinary appends; inode makes an external atomic replacement a miss even
+    when it preserves timestamp and size.
     """
     try:
         st = path.stat()
     except OSError:
         return None
-    return (st.st_mtime, st.st_size)
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+@dataclass(frozen=True, slots=True)
+class CountFillResult:
+    """What one background fill learned about the cache's requested rows."""
+
+    counted: int
+    complete: bool
 
 
 class TurnCountCache:
@@ -156,6 +173,9 @@ class TurnCountCache:
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or paths.session_turns_path()
+        self._lock = threading.Lock()
+        self._remembered: dict[CountKey, _Remembered] | None = None
+        self._signature: _FileSignature | None | object = _MISSING
 
     def facts_for(self, refs: Iterable[SessionRef]) -> Mapping[CountKey, SessionFacts]:
         """The parse facts for every ref this cache can already answer.
@@ -166,7 +186,7 @@ class TurnCountCache:
         means the row renders ``None``, which is the whole reason those fields
         are nullable.
         """
-        remembered = self._load()
+        remembered = self._remembered_for_read()
         if not remembered:
             return {}
         out: dict[CountKey, SessionFacts] = {}
@@ -174,7 +194,7 @@ class TurnCountCache:
             entry = remembered.get(_key(ref))
             if entry is None or ref.transcript_path is None:
                 continue
-            if _fingerprint(ref.transcript_path) == (entry.mtime, entry.size):
+            if _fingerprint(ref.transcript_path) == (entry.inode, entry.mtime_ns, entry.size):
                 out[_key(ref)] = entry.facts
         return out
 
@@ -211,13 +231,32 @@ class TurnCountCache:
             facts = self._measure(ref)
             if facts is None:
                 continue
-            measured[key] = _Remembered(mtime=before[0], size=before[1], facts=facts)
+            measured[key] = _Remembered(
+                inode=before[0], mtime_ns=before[1], size=before[2], facts=facts
+            )
             total += 1
             if len(measured) >= _SAVE_EVERY:
                 self._merge(measured, keep=keep)
                 measured = {}
         self._merge(measured, keep=keep)
         return total
+
+    def fill_result(
+        self, refs: Sequence[SessionRef], *, stop: Callable[[], bool] | None = None
+    ) -> CountFillResult:
+        """Fill pending rows and say whether this exact snapshot is now complete."""
+        counted = self.fill(refs, stop=stop)
+        if stop is not None and stop():
+            return CountFillResult(counted=counted, complete=False)
+        return CountFillResult(counted=counted, complete=not self._pending(refs))
+
+    def _pending(self, refs: Sequence[SessionRef]) -> bool:
+        """Whether an eligible current transcript still lacks durable facts."""
+        answered = self.facts_for(refs)
+        return any(
+            _key(ref) not in answered and ref.cwd is not None and ref.transcript_path is not None
+            for ref in refs
+        )
 
     @staticmethod
     def _measure(ref: SessionRef) -> SessionFacts | None:
@@ -246,6 +285,15 @@ class TurnCountCache:
                 type(exc).__name__,
             )
             return None
+
+    def _remembered_for_read(self) -> dict[CountKey, _Remembered]:
+        """Return the decoded file once per externally visible file version."""
+        with self._lock:
+            signature = _fingerprint(self._path)
+            if self._signature != signature:
+                self._remembered = self._load()
+                self._signature = signature
+            return self._remembered or {}
 
     def _load(self) -> dict[CountKey, _Remembered]:
         try:
@@ -308,11 +356,19 @@ class TurnCountCache:
                 )
         except OSError as exc:
             logger.debug("could not persist session facts: {}", type(exc).__name__)
+        else:
+            with self._lock:
+                # Another process can replace the file after our atomic write but
+                # before a post-write stat. Do not pair that foreign signature
+                # with `merged`; make the next reader decode the durable file.
+                self._remembered = None
+                self._signature = _MISSING
 
 
 def _encode(entry: _Remembered) -> dict[str, Any]:
     return {
-        "mtime": entry.mtime,
+        "inode": entry.inode,
+        "mtime_ns": entry.mtime_ns,
         "size": entry.size,
         "turns": entry.facts.turns,
         "duration": entry.facts.duration.model_dump(),
@@ -331,7 +387,8 @@ def _decode(payload: Mapping[str, Any]) -> _Remembered | None:
     try:
         duration = DurationView.model_validate(payload["duration"])
         return _Remembered(
-            mtime=float(payload["mtime"]),
+            inode=int(payload["inode"]),
+            mtime_ns=int(payload["mtime_ns"]),
             size=int(payload["size"]),
             facts=SessionFacts(turns=int(payload["turns"]), duration=duration),
         )
@@ -339,4 +396,4 @@ def _decode(payload: Mapping[str, Any]) -> _Remembered | None:
         return None
 
 
-__all__ = ["CountKey", "SessionFacts", "TurnCountCache"]
+__all__ = ["CountFillResult", "CountKey", "SessionFacts", "TurnCountCache"]

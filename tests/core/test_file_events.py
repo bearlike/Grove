@@ -126,6 +126,80 @@ async def test_a_root_that_does_not_exist_yet_admits_its_descendants(tmp_path: P
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recursive", [False, True])
+async def test_containment_does_not_walk_unrelated_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recursive: bool
+) -> None:
+    roots = [tmp_path / str(index) for index in range(512)]
+    changed = roots[-1] / "turn.jsonl"
+    outside = tmp_path / "outside" / "turn.jsonl"
+    events: list[FileEventBatch] = []
+    source = FileEventSource(
+        roots,
+        events.append,
+        recursive=recursive,
+        watcher=_WatchFactory([_changes({(2, str(changed)), (2, str(outside))})]),
+    )
+    comparisons = 0
+    original = Path.is_relative_to
+
+    def count(path: Path, other: Path) -> bool:
+        nonlocal comparisons
+        comparisons += 1
+        return original(path, other)
+
+    monkeypatch.setattr(Path, "is_relative_to", count)
+    await source.start()
+    try:
+        await _wait_for(lambda: len(events) == 1)
+    finally:
+        await source.aclose()
+    assert events == [FileEventBatch((FileEvent(FileEventKind.MODIFIED, changed.resolve()),))]
+    assert comparisons == 0  # membership lookups, never one comparison per watched root
+
+
+@pytest.mark.asyncio
+async def test_nonrecursive_absent_file_root_admits_its_creation(tmp_path: Path) -> None:
+    missing = tmp_path / "phase.json"
+    events: list[FileEventBatch] = []
+    source = FileEventSource(
+        [missing], events.append, watcher=_WatchFactory([_changes({(1, str(missing))})])
+    )
+    await source.start()
+    try:
+        await _wait_for(lambda: len(events) == 1)
+    finally:
+        await source.aclose()
+    assert events == [FileEventBatch((FileEvent(FileEventKind.ADDED, missing.resolve()),))]
+
+
+@pytest.mark.asyncio
+async def test_explicit_git_metadata_uses_the_native_watcher_without_its_default_filter(
+    tmp_path: Path,
+) -> None:
+    metadata = tmp_path / ".git"
+    metadata.mkdir()
+    head = metadata / "HEAD"
+    head.write_text("ref: refs/heads/main\n")
+    arrived = asyncio.Event()
+    events: list[FileEventBatch] = []
+
+    def receive(batch: FileEventBatch) -> None:
+        events.append(batch)
+        arrived.set()
+
+    source = FileEventSource([head], receive, include_ignored=True)
+    await source.start()
+    try:
+        await source.wait_ready(timeout=3)
+        head.write_text("ref: refs/heads/feature\n")
+        await asyncio.wait_for(arrived.wait(), timeout=3)
+    finally:
+        await source.aclose()
+    assert any(event.path == head for batch in events for event in batch.events)
+
+
+@pytest.mark.asyncio
 async def test_large_paths_are_rejected_before_batch_tuple_allocation(tmp_path: Path) -> None:
     watched = tmp_path / "transcript.jsonl"
     watched.write_text("")

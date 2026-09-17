@@ -753,7 +753,7 @@ docs = [
     { name = "mike" },
     { name = "mkdocs" },
     { name = "mkdocs-callouts", specifier = ">=1.16.0" },
-    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl" },
+    { name = "mkdocs-shadcn-mewbo", index = "https://github.com/mewbo-com/mkdocs-shadcn/releases/expanded_assets/latest-master" },
     { name = "mkdocstrings", extras = ["python"] },
     { name = "pymdown-extensions", specifier = ">=10.20.1" },
 ]
@@ -1235,8 +1235,8 @@ wheels = [
 
 [[package]]
 name = "mkdocs-shadcn-mewbo"
-version = "1.26.2"
-source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl" }
+version = "1.27.0"
+source = { registry = "https://github.com/mewbo-com/mkdocs-shadcn/releases/expanded_assets/latest-master" }
 dependencies = [
     { name = "bottle" },
     { name = "gitpython" },
@@ -1244,20 +1244,10 @@ dependencies = [
     { name = "pygments" },
     { name = "pymdown-extensions" },
 ]
+sdist = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.27.0.tar.gz" }
 wheels = [
-    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.26.2/mkdocs_shadcn_mewbo-1.26.2-py3-none-any.whl", hash = "sha256:95d7b50a61e74d8619684da0d9b1f638873c1db35bf8983f69aeff3c377614ae" },
+    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.27.0-py3-none-any.whl" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "bottle", specifier = ">=0.13.2" },
-    { name = "gitpython", specifier = ">=3.1.45" },
-    { name = "mkdocs", specifier = ">=1.6.1" },
-    { name = "properdocs", marker = "python_full_version >= '3.9' and extra == 'properdocs'", specifier = ">=1.6.7" },
-    { name = "pygments", specifier = ">=2.18.0" },
-    { name = "pymdown-extensions", specifier = ">=10.14.3" },
-]
-provides-extras = ["properdocs"]
 
 [[package]]
 name = "mkdocstrings"

@@ -109,6 +109,7 @@ async def test_burst_retains_one_trailing_keyed_refresh(
     """An in-flight refresh plus a burst costs at most one trailing git read."""
     service, _store, root = _service(tmp_path, 2)
     entered, release = Event(), Event()
+    release.set()  # Bootstrap is not the blocked refresh under test.
     calls = _git_counter(monkeypatch, block=entered, release=release)
     runtime = ActivityRuntime(service, limits=AdmissionLimits(max_items=2, max_bytes=4096))
     await runtime.start()
@@ -137,7 +138,9 @@ async def test_burst_retains_one_trailing_keyed_refresh(
         ]
         assert set(outcomes) <= {Admission.ACCEPTED, Admission.COALESCED}
         release.set()
-        await _wait_for(lambda: calls["current_branch"] == 2)
+        # The first git call proves the trailing refresh STARTED, not that its
+        # other reads or publication completed. Wait on released reservations.
+        await _wait_for(lambda: runtime._inbox.stats().items == 0)
         assert calls["current_branch"] == 2
         assert all(calls[name] == 2 for name in calls)
     finally:

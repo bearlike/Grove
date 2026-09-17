@@ -45,7 +45,7 @@ from grove.core.git import GitRepo, detect_root
 from grove.core.manager import WorkspaceManager, build
 from grove.core.process import LiveRuntime
 from grove.core.session_duration import duration_of
-from grove.core.turn_count import TurnCountCache
+from grove.core.turn_count import CountFillResult, TurnCountCache
 
 if TYPE_CHECKING:
     from grove.core.agents import AgentMessage
@@ -1057,6 +1057,12 @@ class SessionCatalog:
         it measured, so a caller can log a cold pass without inspecting the file.
         """
         return self._turn_counts.fill([e.ref for e in entries], stop=stop)
+
+    def count_turn_facts(
+        self, entries: Sequence[CatalogEntry], *, stop: Callable[[], bool] | None = None
+    ) -> CountFillResult:
+        """Fill facts and state whether every eligible row is now measured."""
+        return self._turn_counts.fill_result([e.ref for e in entries], stop=stop)
 
     @staticmethod
     def fold_liveness(
