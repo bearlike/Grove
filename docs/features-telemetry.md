@@ -61,7 +61,7 @@ A shell command is where an agent touches the machine, so it is the tool call mo
 
 ## Turn it on
 
-Telemetry ships in the `telemetry` extra, which `grove[all]` includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.
+Telemetry ships in the `telemetry` extra, which `grove-crew[all]` includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.
 
 ```json
 {

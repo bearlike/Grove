@@ -1,5 +1,9 @@
 [project]
-name = "grove"
+# The DISTRIBUTION name, which is not the import package (`grove`) or the
+# command (`grove`). `grove` on PyPI is an unrelated log-collection framework
+# we do not own, so publishing under it is impossible and a bare
+# `uv tool install grove` fetches the wrong product entirely.
+name = "grove-crew"
 version = "0.0.10"
 description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
 readme = "README.md"
@@ -65,7 +69,7 @@ mcp = [
     # whole MCP surface is built on FastMCP + mcp.server.lowlevel.Server),
     # so an uncapped `uv tool install` silently shipped a dead grove-mcp.
     "mcp>=1.2,<2",
-    "grove[client]",
+    "grove-crew[client]",
 ]
 telemetry = [
     # LangFuse ingestion via raw OTLP — deliberately NOT the
@@ -84,15 +88,15 @@ telemetry = [
     "opentelemetry-semantic-conventions>=0.64b0,<1",
 ]
 all = [
-    "grove[daemon]",
-    "grove[client]",
-    "grove[mcp]",
+    "grove-crew[daemon]",
+    "grove-crew[client]",
+    "grove-crew[mcp]",
     # `telemetry` is in here because leaving it out made `telemetry.enabled`
     # a knob that could not work on a standard install: `grove.core.trace`
     # imports the exporter lazily and degrades to a silent no-op, so a
     # deployment that turned tracing on saw a healthy fleet exporting nothing
     # and no error anywhere. The packages are small and inert while disabled.
-    "grove[telemetry]",
+    "grove-crew[telemetry]",
 ]
 
 [project.scripts]

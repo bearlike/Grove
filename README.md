@@ -141,7 +141,7 @@ https://github.com/user-attachments/assets/256714c5-37e5-4c9d-8b2d-47422d5aae0f
 Grove needs `git` and `tmux`, and installs to your PATH as `grove` straight from the repo. With [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
+uv tool install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
 
 cd path/to/your/repo
 grove config init        # scaffold .grove/config.json
@@ -149,7 +149,7 @@ grove                    # launch the TUI
 uv tool upgrade grove    # update later
 ```
 
-No uv? Use `pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"` or plain `pip install --user`. See [Get Started](https://bearlike.github.io/Grove/latest/getting-started/) for prerequisites and every install path.
+No uv? Use `pipx install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"` or plain `pip install --user`. See [Get Started](https://bearlike.github.io/Grove/latest/getting-started/) for prerequisites and every install path.
 
 <details>
 <summary><b>🤖 Let an AI agent configure Grove for you</b></summary>

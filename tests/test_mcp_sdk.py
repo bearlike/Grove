@@ -23,7 +23,7 @@ def test_absent_distribution_reports_the_install_hint(monkeypatch: pytest.Monkey
         sdk.load("grove_absent_distribution.server", "Thing")
 
     assert str(excinfo.value) == (
-        "grove-mcp requires the MCP SDK — install with: pip install 'grove[mcp]'"
+        "grove-mcp requires the MCP SDK — install with: pip install 'grove-crew[mcp]'"
     )
     assert excinfo.value.__cause__ is not None
 

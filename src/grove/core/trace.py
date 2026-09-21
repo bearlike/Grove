@@ -958,7 +958,8 @@ def build_span_sink(
         from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
     except ImportError as exc:
         logger.debug(
-            "opentelemetry not installed (grove[telemetry] extra); tracing stays no-op: {}", exc
+            "opentelemetry not installed (grove-crew[telemetry] extra); tracing stays no-op: {}",
+            exc,
         )
         return None
 

@@ -630,8 +630,8 @@ wheels = [
 ]
 
 [[package]]
-name = "grove"
-version = "0.0.9"
+name = "grove-crew"
+version = "0.0.10"
 source = { editable = "." }
 dependencies = [
     { name = "bashlex" },
@@ -708,11 +708,11 @@ requires-dist = [
     { name = "asyncssh", marker = "extra == 'client'", specifier = ">=2.14,<3" },
     { name = "bashlex", specifier = ">=0.18,<1" },
     { name = "fastapi", marker = "extra == 'daemon'", specifier = ">=0.115,<1" },
-    { name = "grove", extras = ["client"], marker = "extra == 'all'" },
-    { name = "grove", extras = ["client"], marker = "extra == 'mcp'" },
-    { name = "grove", extras = ["daemon"], marker = "extra == 'all'" },
-    { name = "grove", extras = ["mcp"], marker = "extra == 'all'" },
-    { name = "grove", extras = ["telemetry"], marker = "extra == 'all'" },
+    { name = "grove-crew", extras = ["client"], marker = "extra == 'all'" },
+    { name = "grove-crew", extras = ["client"], marker = "extra == 'mcp'" },
+    { name = "grove-crew", extras = ["daemon"], marker = "extra == 'all'" },
+    { name = "grove-crew", extras = ["mcp"], marker = "extra == 'all'" },
+    { name = "grove-crew", extras = ["telemetry"], marker = "extra == 'all'" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "httpx", marker = "extra == 'client'", specifier = ">=0.27,<1" },
     { name = "humanize", specifier = ">=4.9,<5" },
@@ -1235,7 +1235,7 @@ wheels = [
 
 [[package]]
 name = "mkdocs-shadcn-mewbo"
-version = "1.27.0"
+version = "1.37.0"
 source = { registry = "https://github.com/mewbo-com/mkdocs-shadcn/releases/expanded_assets/latest-master" }
 dependencies = [
     { name = "bottle" },
@@ -1244,9 +1244,9 @@ dependencies = [
     { name = "pygments" },
     { name = "pymdown-extensions" },
 ]
-sdist = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.27.0.tar.gz" }
+sdist = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.37.0.tar.gz" }
 wheels = [
-    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.27.0-py3-none-any.whl" },
+    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.37.0-py3-none-any.whl" },
 ]
 
 [[package]]

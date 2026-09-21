@@ -4,7 +4,7 @@
 # then drives the whole first-run path with zero human input.
 #
 #   make install-smoke      # build the image + run this script on the checkout
-#   GROVE_INSTALL_SPEC='grove[all] @ git+https://github.com/bearlike/Grove@current' \
+#   GROVE_INSTALL_SPEC='grove-crew[all] @ git+https://github.com/bearlike/Grove@current' \
 #     make install-smoke    # release mode: test the public install path instead
 #
 # Asserted, in order:
@@ -23,7 +23,7 @@
 # scripts are only install-tested if their extras are actually resolved.
 set -euo pipefail
 
-SPEC="${GROVE_INSTALL_SPEC:-grove[all] @ file:///src}"
+SPEC="${GROVE_INSTALL_SPEC:-grove-crew[all] @ file:///src}"
 BOLD=$'\033[1m'
 RESET=$'\033[0m'
 

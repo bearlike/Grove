@@ -12,7 +12,7 @@ an unrelated log-collection framework.
 
 ```bash
 uv tool uninstall grove
-uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
+uv tool install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
 ```
 
 Confirm with `grove version` and `grove debug`.
@@ -203,12 +203,12 @@ dependencies change.
 
 ## `grove-mcp` reports `No module named 'mcp'`
 
-The MCP server fails to start. The SDK is optional and the lean `grove[daemon]`
+The MCP server fails to start. The SDK is optional and the lean `grove-crew[daemon]`
 install omits it, leaving the always-present `grove-mcp` script unable to import
 it.
 
 ```bash
-uv tool install --reinstall "grove[all] @ git+https://github.com/bearlike/Grove"
+uv tool install --reinstall "grove-crew[all] @ git+https://github.com/bearlike/Grove"
 ```
 
 The MCP client respawns the server per connection, so nothing needs restarting

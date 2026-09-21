@@ -19,12 +19,12 @@ Grove installs to your user bin (`~/.local/bin`) as `grove`, straight
 from the repo. The `[daemon]` extra adds the web dashboard backend,
 drop it for TUI-only.
 
-!!! warning "Install from the repo, never by bare name"
+!!! warning "The distribution is `grove-crew`, not `grove`"
     `grove` on PyPI is an unrelated log-collection framework. A bare
     `uv tool install grove` (or `pipx`, `pip`) installs that instead,
-    failing with `Failed to initialise configuration handler`. Use the
-    full `grove[daemon] @ git+...` form below. See
-    [Troubleshooting](troubleshooting.md) if this happened.
+    failing with `Failed to initialise configuration handler`. Grove
+    publishes as **`grove-crew`**; the command it installs is still
+    `grove`. See [Troubleshooting](troubleshooting.md) if this happened.
 
 === "uv (recommended)"
 
@@ -32,7 +32,7 @@ drop it for TUI-only.
     onto your `$PATH`.
 
     ```bash
-    uv tool install "grove[daemon] @ git+https://github.com/bearlike/Grove"
+    uv tool install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
     uv tool upgrade grove      # update on demand
     uv tool uninstall grove    # remove
     ```
@@ -44,7 +44,7 @@ drop it for TUI-only.
     No uv required:
 
     ```bash
-    pipx install "grove[daemon] @ git+https://github.com/bearlike/Grove"
+    pipx install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
     pipx upgrade grove
     ```
 
@@ -53,7 +53,7 @@ drop it for TUI-only.
     Only Python and pip required:
 
     ```bash
-    pip install --user "grove[daemon] @ git+https://github.com/bearlike/Grove"
+    pip install --user "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
     ```
 
     Re-run with `--upgrade` to update. On an externally managed Python,
@@ -148,4 +148,4 @@ Set `GROVE_DEBUG=1` for verbose loguru output on stderr, with one
 - [Daily workflow](use-workflow.md), create, attach, pause, resume, kill.
 - [Agent activity and sessions](features-activity.md), the fleet on one wall, replayed.
 - [Web dashboard](use-webapp.md), the fleet in the browser or your phone.
-- [MCP server](use-mcp.md), for MCP agents (needs `grove[mcp]` or `grove[all]`, not `grove[daemon]`).
+- [MCP server](use-mcp.md), for MCP agents (needs `grove-crew[mcp]` or `grove-crew[all]`, not `grove-crew[daemon]`).

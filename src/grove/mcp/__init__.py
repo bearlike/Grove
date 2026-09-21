@@ -3,7 +3,7 @@
 Public surface:
     GroveMcpServer, McpServerConfig, main (the ``grove-mcp`` entry point)
 
-Requires the ``mcp`` extra (``pip install 'grove[mcp]'``). The server
+Requires the ``mcp`` extra (``pip install 'grove-crew[mcp]'``). The server
 talks exclusively through ``grove.client.GroveClient`` — see CLAUDE.md
 in this package for the boundary rule.
 """

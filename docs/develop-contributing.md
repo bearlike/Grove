@@ -66,7 +66,7 @@ Three install channels:
 
 | Channel | Source | Cadence | Install |
 |---|---|---|---|
-| **Stable**       | PyPI (`v*` git tags)  | manually tagged | `uvx grove` |
+| **Stable**       | PyPI (`v*` git tags)  | manually tagged | `uvx --from grove-crew grove` |
 | **Canary**       | git, `current` branch | every push to `current` | `uvx --from git+https://github.com/bearlike/Grove grove` |
 | **Pinned commit**| git, specific SHA     | reproducible installs | `uvx --from git+https://github.com/bearlike/Grove@<sha> grove` |
 

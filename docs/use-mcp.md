@@ -55,7 +55,7 @@ Any live Grove agent can write to any other, addressed like email.
 ## Same machine: stdio
 
 ```bash
-pip install 'grove[all]'           # or 'grove[mcp]' for just the MCP server
+pip install 'grove-crew[all]'      # or 'grove-crew[mcp]' for just the MCP server
 grove daemon serve                 # or the packaged systemd user service
 claude mcp add grove -- grove-mcp  # or the mcp.json entry below
 ```

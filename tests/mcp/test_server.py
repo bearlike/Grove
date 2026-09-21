@@ -461,7 +461,7 @@ def test_main_exits_cleanly_when_mcp_sdk_is_absent(
 
     assert exc_info.value.code != 0
     # SystemExit(str) prints the message to stderr with no traceback.
-    assert "pip install 'grove[mcp]'" in capsys.readouterr().err
+    assert "pip install 'grove-crew[mcp]'" in capsys.readouterr().err
 
 
 def test_main_refuses_to_bind_a_network_port_without_a_token(

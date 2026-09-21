@@ -40,7 +40,7 @@ class McpSdk:
     #: fallback for when that metadata is absent — two failure modes for a
     #: string that only ever appears in an error message.
     SUPPORTED_RANGE: ClassVar[str] = ">=1.2,<2"
-    INSTALL_COMMAND: ClassVar[str] = "pip install 'grove[mcp]'"
+    INSTALL_COMMAND: ClassVar[str] = "pip install 'grove-crew[mcp]'"
 
     consumer: str
 
