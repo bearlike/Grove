@@ -548,7 +548,9 @@ def _workspace_id(
 
 
 def _provider(kind: str) -> UsageProvider:
-    return "claude_code" if kind == "claude_code" else "codex" if kind == "codex" else "generic"
+    if kind in ("claude_code", "codex", "opencode"):
+        return cast(UsageProvider, kind)
+    return "generic"
 
 
 def _transcript_paths(
@@ -741,6 +743,42 @@ def _event_rows(
         default=-1,
     )
     for message_index, message in enumerate(messages):
+        if message.role == "compaction" and message.compaction is not None:
+            # A compaction is durable history the transcript can lose: the
+            # harness discards the turns it summarized, so the count of what it
+            # dropped, how long it took and which model did it are only ever
+            # stated on this one record. `dropped_tokens` rides the token
+            # columns' own `fresh_input` slot deliberately — it is the count of
+            # input tokens that left the context — while the trigger goes to
+            # `attrs_json`, which is already the column for a fact only one kind
+            # of row carries.
+            seq += 1
+            compaction = message.compaction
+            rows.append(
+                (
+                    session_id,
+                    source_id,
+                    seq,
+                    _epoch(compaction.at or message.timestamp),
+                    "compaction",
+                    compaction.model,
+                    None,
+                    None,
+                    None,
+                    0,
+                    compaction.duration_ms,
+                    "provider" if compaction.duration_ms is not None else None,
+                    message.thread_id,
+                    compaction.dropped_tokens,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    json.dumps({"adapter_kind": kind, "trigger": compaction.trigger}),
+                )
+            )
+            continue
         if message.role == "assistant":
             seq += 1
             usage = message.usage

@@ -34,7 +34,12 @@ from grove.core.activity import (
 )
 from grove.core.agents import AgentActivity, AgentActivityState, AgentMessage, AgentSession
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
-from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook, SubagentHookRecord
+from grove.core.agents.hook import (
+    DEFAULT_SIDECAR_MAX_AGE_SECONDS,
+    ClaudeHook,
+    HookRecord,
+    SubagentHookRecord,
+)
 from grove.core.agents.model import TokenUsage
 from grove.core.agents.session_registry import NativeClaudeSession
 from grove.core.config import GroveConfig, load_config
@@ -777,10 +782,54 @@ def test_sidecar_context_window_rides_the_activity_and_the_wire(
     primary = service.bootstrap().projects[0].workspaces[0].primary
     assert primary is not None
     assert primary.context is not None
+    assert primary.context_unavailable_reason is None
     assert (primary.context.size, primary.context.used) == (983616, 42704)
     view = AgentActivityView.from_activity(primary)
     assert view.context is not None
     assert view.context.used_fraction == pytest.approx(42704 / 983616)
+
+
+def test_legacy_native_context_reports_a_stale_worker_through_the_activity_wire(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The stale-producer remedy survives the sidecar-to-wire fold."""
+    service, registry = env
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="legacy"))
+    assert state.agent_session_id is not None
+    ClaudeHook.write(
+        HookRecord.from_json(
+            {
+                "session_id": state.agent_session_id,
+                "state": "waiting",
+                "event": "native_facts",
+                "cwd": None,
+                "transcript_path": None,
+                "tmux_pane": None,
+                "ts": datetime.now(tz=UTC).isoformat(),
+                "context": {"size": 1_000_000, "used": 29_415_905},
+                "native": {"cost_usd": 0.42},
+            }
+        )
+        or pytest.fail("legacy sidecar must parse"),
+        sidecar_dir=sidecar_dir,
+    )
+
+    sidecar = ClaudeHook.read(state.agent_session_id, sidecar_dir=sidecar_dir)
+    assert sidecar is not None
+    assert sidecar.context_unavailable_reason == "stale_native_worker"
+    primary = service.bootstrap().projects[0].workspaces[0].primary
+
+    assert primary is not None
+    assert primary.context is None
+    assert primary.context_unavailable_reason == "stale_native_worker"
+    view = AgentActivityView.from_activity(primary)
+    assert view.context is None
+    assert view.context_unavailable_reason == "stale_native_worker"
 
 
 # ─── live pending question ───────────────────────────────────────────────────

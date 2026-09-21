@@ -26,6 +26,7 @@ export const POLL_MS = {
   peek: 2_000,
   /** An open workspace's steer queue. The stream invalidates on the depth edge. */
   queue: 15_000,
+  fleet: 15_000,
   /**
    * The agent's current plan behind an open workspace.
    *

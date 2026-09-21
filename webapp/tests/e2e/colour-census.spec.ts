@@ -36,7 +36,20 @@ test.describe("workspace colour census", () => {
               element.getClientRects().length > 0 &&
               style.display !== "none" &&
               style.visibility !== "hidden" &&
-              element.closest('[data-slot="chart"]') === null
+              element.closest('[data-slot="chart"]') === null &&
+              // `elements-agent-handoff` bakes its unsettled arrow/recipient
+              // pill as literal `text-blue-*`/`bg-blue-*` JSX — Grove ALWAYS
+              // renders `settled={false}` (agent-message.tsx: the `true`
+              // branch compounds the sender pill's dim to 1.78:1, well under
+              // the 4.5:1 floor) and `className` only reaches the vendored
+              // root, never these two children. Overriding the RENDERED
+              // colour is real (globals.css's `.handoff-agent` scope), but
+              // the vendored markup itself is `registry:check`-frozen and a
+              // class census can only ever see the source it emits, not what
+              // a later rule paints over it. Same shape as the terminal/Files
+              // exemptions design-system.md §"Two surfaces are legitimately
+              // exempt" already documents; this is the third.
+              element.closest('[data-slot="agent-handoff"]') === null
             );
           })
           .map((element) => {

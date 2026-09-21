@@ -13,9 +13,9 @@ for (const theme of ["light", "dark"]) {
       payload.turns = [{ user_text: "Inspect the code", started_at: null, entries: [
         { role: "assistant", text: "```python\nprint('hello')\n```", question: null, file_edit: null, todo: null },
         { role: "tool", text: "Bash python check.py", question: null, file_edit: null, todo: null,
-          tool: { name: "Bash", input: { command: "python check.py" }, tool_use_id: "command", status: "ok", duration_ms: 20, result: "hello\n" } },
+          tool: { name: "Bash", input: { command: "python check.py" }, tool_use_id: "command", status: "ok", duration_ms: 20, result: "hello\n", body: "inline" } },
         { role: "file_edit", text: "Edit check.py", question: null, todo: null,
-          tool: { name: "Edit", input: { file_path: "/w/check.py" }, tool_use_id: "edit", status: "ok", duration_ms: 10, result: "Applied" },
+          tool: { name: "Edit", input: { file_path: "/w/check.py" }, tool_use_id: "edit", status: "ok", duration_ms: 10, result: "Applied", body: "inline" },
           file_edit: { path: "/w/check.py", display_path: "check.py", old_text: "print('old')\n", new_text: "print('hello')\n" } },
       ] }];
       await route.fulfill({ json: payload });

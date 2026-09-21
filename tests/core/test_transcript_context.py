@@ -251,6 +251,21 @@ def test_for_launch_derives_context_from_the_supplied_env_mapping() -> None:
     assert ctx == TranscriptContext(config_dir="/mnt/host-config", agent_cwd="/repo/.worktrees/w1")
 
 
+def test_opencode_launch_pins_data_root_not_configuration_root() -> None:
+    ctx = TranscriptContext.for_launch(
+        kind="opencode",
+        env={"XDG_DATA_HOME": "/profile/data", "OPENCODE_CONFIG_DIR": "/profile/config"},
+        agent_cwd=Path("/repo"),
+    )
+    assert ctx == TranscriptContext(config_dir="/profile/data", agent_cwd="/repo")
+    assert (
+        TranscriptContext.for_launch(
+            kind="opencode", env={"OPENCODE_CONFIG_DIR": "/config-only"}, agent_cwd=Path("/repo")
+        )
+        is None
+    )
+
+
 def test_for_launch_never_reads_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test that sets a REAL env var and expects `for_launch` to see it
     would FAIL by design — the whole point is deriving from the caller's

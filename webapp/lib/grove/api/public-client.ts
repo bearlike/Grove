@@ -1,4 +1,4 @@
-import type { SessionDetailView, WorkspaceDiffView } from "./types";
+import type { SessionDetailView, ToolCallView, WorkspaceDiffView } from "./types";
 import type { components } from "./types.gen";
 import { GroveProtocolError } from "./client";
 import { SHARE_PASSCODE_HEADER, readSharePasscode } from "./share-passcode";
@@ -23,14 +23,29 @@ export class PublicClient {
 
   async turns(
     token: string,
-    options: { last?: number; afterTurn?: number } = {},
+    options: { last?: number; afterTurn?: number; beforeTurn?: number } = {},
   ): Promise<SessionDetailView | null> {
     const query = new URLSearchParams();
     if (options.last !== undefined) query.set("last", String(options.last));
     if (options.afterTurn !== undefined)
       query.set("after_turn", String(options.afterTurn));
+    if (options.beforeTurn !== undefined)
+      query.set("before_turn", String(options.beforeTurn));
     return this.get(
       `/${encodeURIComponent(token)}/turns${this.suffix(query)}`,
+      token,
+    );
+  }
+
+  /**
+   * One withheld tool body, for whichever session this token names.
+   *
+   * No session or workspace coordinate, matching {@link turns} — the daemon
+   * binds the drill-in to the same transcript the page is displaying.
+   */
+  async tool(token: string, toolUseId: string): Promise<ToolCallView> {
+    return this.get(
+      `/${encodeURIComponent(token)}/tools/${encodeURIComponent(toolUseId)}`,
       token,
     );
   }

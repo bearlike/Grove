@@ -521,7 +521,11 @@ class WorkspaceInspection:
         try:
             listings = explorer.for_workspace(workspace_id)
             if listings:
-                primary = listings[0]  # newest-first
+                # The listing scan is metadata-only, and this inspector prints the
+                # agent's parsed state — so the ONE row it shows opts into the
+                # full read by identity, rather than the scan parsing every
+                # neighbour transcript to answer for one.
+                primary = explorer.enriched(listings[0])  # newest-first
                 turns = explorer.turns_for(primary, last=last_turns)
         except GroveError:
             # A discovery miss is "no agent session", not a command failure —
@@ -618,6 +622,11 @@ class WorkspaceInspection:
             typer.echo("  (no agent session)")
             return
         a = self.primary.summary.activity
+        if a is None:
+            # Enrichment is best-effort (a vanished or unreadable transcript), so
+            # the section says so rather than printing fabricated zeros.
+            typer.echo("  (agent state not readable)")
+            return
         typer.echo(
             f"  {a.state.value}"
             + (f" · {a.model}" if a.model else "")

@@ -128,15 +128,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/mailboxes/peers": {
+    "/mailboxes/contacts": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Peers */
-        get: operations["peers_mailboxes_peers_get"];
+        /** Contacts */
+        get: operations["contacts_mailboxes_contacts_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -156,23 +156,6 @@ export interface paths {
         put?: never;
         /** Send Message */
         post: operations["send_message_mailboxes_messages_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/mailboxes/messages/{message_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Message Status */
-        get: operations["message_status_mailboxes_messages__message_id__get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -533,14 +516,45 @@ export interface paths {
          *
          *     Takes no session id: the token names a workspace and the daemon picks
          *     the session, so an unauthenticated caller holds no coordinate it could
-         *     tamper with. ``after_turn`` and ``last`` mean exactly what they mean on
-         *     the authenticated route (one ``turn_window``, shared), which is what
-         *     lets the browser reuse its whole cursor-merge path unchanged.
+         *     tamper with. ``after_turn``, ``before_turn`` and ``last`` mean exactly
+         *     what they mean on the authenticated route (one ``turn_window``, shared),
+         *     which is what lets the browser reuse its whole cursor-merge path
+         *     unchanged. Settled tool bodies are withheld here too, and the public
+         *     drill-in below serves them; there is deliberately no ``bodies=all``
+         *     escape on this namespace — the whole-payload read exists for a CLI or
+         *     script holding a session, and a share link is neither.
          *
          *     ``null`` means this workspace has no readable transcript yet — a real
          *     state for a workspace shared right after it was created, not an error.
          */
         get: operations["public_turns_public__token__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/{token}/tools/{tool_use_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Tool
+         * @description One tool call's complete body, for the session the TOKEN names.
+         *
+         *     The public sibling of the authenticated drill-in, and it takes no
+         *     workspace or session coordinate for the same reason ``/turns`` does not:
+         *     the reader holds a token, the daemon picks the session, so there is
+         *     nothing here an anonymous caller could point at another workspace. A
+         *     tool id belonging to any other session is the flat share 404 every
+         *     public failure answers with — never a hint that the id exists elsewhere.
+         */
+        get: operations["public_tool_public__token__tools__tool_use_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1293,6 +1307,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Activity
+         * @description One workspace's activity row — the per-workspace half of ``/activity``.
+         *
+         *     A page about ONE workspace needs one session id, and reading it off the
+         *     cross-project snapshot made it wait for every workspace on the host:
+         *     measured on the reference host, two OFFLINE workspaces contributed
+         *     22.4 s of a 40.6 s bootstrap that a transcript page sat behind before
+         *     its first paint. This answers the same question at O(1) workspaces.
+         *
+         *     The frame is byte-identical to that workspace's row in the snapshot —
+         *     same ``WorkspaceActivityView``, built by the same engine seam — so a
+         *     client can hold one shape whether it arrived here or on the stream, and
+         *     the ``session_activity`` frames keep it current afterwards.
+         *
+         *     ``workspace_row`` reconciles status and shells git/tmux, so it rides the
+         *     executor like every other blocking manager read.
+         */
+        get: operations["workspace_activity_workspaces__ws_id__activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/pane": {
         parameters: {
             query?: never;
@@ -1394,9 +1442,9 @@ export interface paths {
          * @description Every agent session recorded for the workspace's directory, newest-first.
          *
          *     Fetch-on-demand by design — session history never rides the SSE stream.
-         *     The scan full-parses each transcript in one cwd (the documented
-         *     ``list_sessions`` cost model), so it runs in the executor like
-         *     ``/activity``.
+         *     The scan uses one bounded head read per transcript in the workspace's
+         *     cwd; parse-derived fields come only from the durable cache. It still runs
+         *     in the executor because filesystem discovery is blocking.
          *
          *     ``candidates=true`` flips the scan to the UNGATED
          *     :meth:`SessionExplorer.candidates_for` — the remap-picker set,
@@ -1486,8 +1534,59 @@ export interface paths {
          *     it falls back rather than silently skipping turns. ``after_turn`` and
          *     ``last`` are mutually exclusive (422): ``last`` counts from the end, so
          *     combining them makes the reported index ambiguous.
+         *
+         *     ``before_turn=<n>`` is the BACKWARD page — turns preceding ``n``,
+         *     exclusive — and it is what makes "load earlier" transfer only the
+         *     earlier turns instead of re-downloading the tail it already holds. It
+         *     combines with ``last``, which is its page size, and refuses
+         *     ``after_turn`` (422): a request cannot both resume forward and page
+         *     back.
+         *
+         *     ``bodies=head`` (the default) withholds the request/result of every
+         *     SETTLED tool call outside the tail turn, marking each ``body:
+         *     "available"`` for the drill-in below. Tool bodies were measured at 55.6%
+         *     of a ``?last=40`` window while a historical tool call mounts collapsed
+         *     and never puts its body in the DOM. It is a PROJECTION, not a cap —
+         *     nothing is truncated and the response says what it withheld — and
+         *     ``bodies=all`` opts a CLI, TUI or script back into the complete payload
+         *     in one read.
          */
         get: operations["workspace_session_turns_workspaces__ws_id__sessions__session_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/sessions/{session_id}/tools/{tool_use_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Session Tool
+         * @description ONE tool call's complete request and result — the drill-in member of
+         *     the head+drill-in pairing ``/turns`` heads.
+         *
+         *     The same shape ``/diff`` + ``?path=`` already has, applied to a
+         *     transcript: the windowed turn list carries every call's identity and
+         *     status while withholding a settled body it marks ``body: "available"``,
+         *     and this serves that body WHOLE. Byte-for-byte what ``?bodies=all``
+         *     carries for the same id, because both render the same
+         *     ``ToolCallView.from_call`` over the same spine — a drill-in that
+         *     disagreed with the unwindowed read would make the projection a cap in
+         *     disguise.
+         *
+         *     Resolved by id against that session's own messages
+         *     (``SessionExplorer.tool_call``), so an unknown id is a typed 404 rather
+         *     than a neighbouring call. Off the loop like every other transcript read
+         *     here.
+         */
+        get: operations["workspace_session_tool_workspaces__ws_id__sessions__session_id__tools__tool_use_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1569,21 +1668,55 @@ export interface paths {
         };
         /**
          * Workspace Fleet
-         * @description The workspace's live sub-agent roster, full detail.
+         * @description The workspace's live child-session roster, full detail, for one root.
          *
          *     The ``/todo``/``/queue`` sibling: a fleet is unbounded in count exactly
          *     like a checklist or a message queue, so only counts ride the ~1 Hz
          *     stream (``WorkspaceActivityView.fleet``) and the roster itself is
-         *     fetch-on-demand. Sourced from the Claude Code hook's per-
-         *     ``(session_id, agent_id)`` sidecar (``ClaudeHook.list_subagents``) — a
-         *     handful of small file reads, never a transcript parse — so this is
-         *     claude_code-only (no other kind's hook payload carries ``agent_id``
-         *     today). Unlike ``/todo``, a workspace of another kind or one with no
-         *     minted session answers an EMPTY roster rather than 404: "no sub-agents"
-         *     is a real, common answer for a session that never spawned one, not a
-         *     missing-session refusal.
+         *     fetch-on-demand. ``session_id`` selects the root session (default: the
+         *     workspace's readable primary) — any of the workspace's own sessions,
+         *     never a foreign workspace's.
+         *
+         *     ``sessions`` is the provider-neutral transcript-derived child
+         *     projection (``SessionExplorer.fleet_activity``, generic across every
+         *     adapter exposing the capability); ``subagents`` stays Claude Code's
+         *     hook-pushed live roster, filtered to entries the transcript
+         *     projection has not yet surfaced (a just-started child with no thread
+         *     messages) so the same child never appears twice. ``supported=False``
+         *     means this root's adapter has no child-reader capability, distinct
+         *     from a supported root with no children (``sessions=[]``,
+         *     ``supported=True``). A read failure sets ``error`` rather than being
+         *     reported as an empty fleet.
          */
         get: operations["workspace_fleet_workspaces__ws_id__fleet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/fleet/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Fleet Stream
+         * @description Live scoped fleet replacement for one workspace root session.
+         *
+         *     Reuses the existing activity bus and its bounded-queue audience
+         *     discipline — no new always-on poller, no host-wide roster payload, no
+         *     child transcript bodies (a selected child's turns stay behind the
+         *     existing cursor-aware ``/turns`` route). Authorization is the
+         *     workspace's own tree: any session belonging to this workspace, never a
+         *     stranger's. Teardown on disconnect or when the workspace/session is
+         *     removed — the reader answers honestly rather than wedging the stream.
+         */
+        get: operations["workspace_fleet_stream_workspaces__ws_id__fleet_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2240,6 +2373,8 @@ export interface components {
             /** Tokens Out */
             tokens_out: number;
             context?: components["schemas"]["ContextWindowView"] | null;
+            /** Context Unavailable Reason */
+            context_unavailable_reason?: "stale_native_worker" | null;
             native?: components["schemas"]["NativeFactsView"] | null;
             /** Last Event At */
             last_event_at: string | null;
@@ -2358,7 +2493,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "claude_code" | "codex" | "generic" | "mewbo";
+            kind: "claude_code" | "codex" | "opencode" | "generic" | "mewbo";
             /**
              * Description
              * @default
@@ -2490,7 +2625,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "claude_code" | "codex" | "mewbo" | "generic";
+            provider: "claude_code" | "codex" | "opencode" | "mewbo" | "generic";
             /** Label */
             label: string;
             /**
@@ -2608,7 +2743,13 @@ export interface components {
          *     in any version), never that it defaulted to automatic;
          *     ``dropped_tokens: null`` means the harness published no per-event count, and
          *     when it is a number it is a DELTA for this one compaction — never the
-         *     session-running total Claude Code's transcript actually stores.
+         *     session-running total Claude Code's transcript actually stores;
+         *     ``duration_ms: null`` means the harness timed no compaction span (Codex
+         *     records one timestamp and no duration), never that it was instantaneous;
+         *     ``model: null`` means no model could be attributed — NO harness stamps one
+         *     on the boundary record, so this is the model that was in effect when the
+         *     compaction ran, and a session that compacted before its first assistant
+         *     turn honestly has none.
          *
          *     ``summary`` is ``""`` (never null) when the harness carries no readable
          *     replacement text — Codex encrypts it. It crosses whole (13.9-55.3 KB on-host,
@@ -2627,6 +2768,10 @@ export interface components {
              * @default
              */
             summary: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Model */
+            model?: string | null;
         };
         /**
          * ContainerAttachView
@@ -3363,39 +3508,12 @@ export interface components {
             generating_since: string;
         };
         /**
-         * MailboxAccess
-         * @description Grove egress is separate from whether a native inbox accepts input.
-         */
-        MailboxAccess: {
-            /**
-             * Can Discover
-             * @default false
-             */
-            can_discover: boolean;
-            /**
-             * Can Send
-             * @default false
-             */
-            can_send: boolean;
-            /**
-             * Can Reply
-             * @default false
-             */
-            can_reply: boolean;
-            /**
-             * Cli
-             * @default false
-             */
-            cli: boolean;
-            /**
-             * Mcp
-             * @default false
-             */
-            mcp: boolean;
-        };
-        /**
          * MailboxAddress
          * @description A managed agent slot, never a PID, display name or transcript path.
+         *
+         *     ``agent`` is the empty string for a workspace's own primary agent and names
+         *     an additional in-container agent otherwise — the same slot vocabulary
+         *     ``peek_pane(agent=)`` and ``send_message(agent=)`` already take.
          */
         MailboxAddress: {
             /** Workspace Id */
@@ -3407,13 +3525,43 @@ export interface components {
             agent: string;
         };
         /**
-         * MailboxIdentity
-         * @description An address fenced to one authenticated runtime incarnation.
+         * MailboxContact
+         * @description One addressable agent, as the directory sees it right now.
+         *
+         *     ``live`` is the whole admission rule: a contact that is not live cannot be
+         *     delivered to, and every other field is description. It is resolved per
+         *     listing rather than stored, so a paused workspace stops being writable the
+         *     moment it pauses without anything having to invalidate a registration.
          */
-        MailboxIdentity: {
+        MailboxContact: {
             address: components["schemas"]["MailboxAddress"];
-            /** Generation */
-            generation: string;
+            /** Display Name */
+            display_name: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Runtime
+             * @enum {string}
+             */
+            runtime: "host" | "container";
+            /** Live */
+            live: boolean;
+        };
+        /**
+         * MailboxDirectory
+         * @description Every contact this host can currently deliver to.
+         */
+        MailboxDirectory: {
+            /**
+             * Protocol Version
+             * @default 2
+             * @constant
+             */
+            protocol_version: 2;
+            /** Body Limit Bytes */
+            body_limit_bytes: number;
+            /** Contacts */
+            contacts?: components["schemas"]["MailboxContact"][];
         };
         /**
          * MailboxMessageView
@@ -3442,116 +3590,50 @@ export interface components {
             kind: "peer" | "notice";
         };
         /**
-         * MailboxPeer
-         * @description Public capabilities contain no private transport handle or credentials.
-         */
-        MailboxPeer: {
-            address: components["schemas"]["MailboxAddress"];
-            /** Generation */
-            generation?: string | null;
-            /** Display Name */
-            display_name: string;
-            /** Provider */
-            provider: string;
-            /**
-             * Runtime
-             * @enum {string}
-             */
-            runtime: "host" | "container";
-            /** Can Receive */
-            can_receive?: boolean | null;
-            access?: components["schemas"]["MailboxAccess"];
-            /** Reason */
-            reason?: ("unsupported" | "not_registered" | "stale_recipient" | "sender_not_bound" | "scope_denied" | "recipient_refused" | "recipient_blocked" | "reply_unavailable" | "too_large" | "busy_conflict" | "backpressure" | "transport_unknown") | null;
-        };
-        /**
-         * MailboxPeerPage
-         * @description Caller identity survives filtering and pagination of the peer directory.
-         */
-        MailboxPeerPage: {
-            /**
-             * Protocol Version
-             * @default 1
-             * @constant
-             */
-            protocol_version: 1;
-            caller?: components["schemas"]["MailboxIdentity"] | null;
-            access?: components["schemas"]["MailboxAccess"];
-            /** Body Limit Bytes */
-            body_limit_bytes: number;
-            /** Receipt Ttl Seconds */
-            receipt_ttl_seconds: number;
-            /** Peers */
-            peers?: components["schemas"]["MailboxPeer"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-        };
-        /**
          * MailboxReceipt
-         * @description A transport observation is neither model compliance nor human consent.
+         * @description What Grove observed about ONE submission, and nothing more.
+         *
+         *     A ``delivered`` receipt means the recipient's transport accepted the bytes.
+         *     It is not evidence that a model read them, agreed with them, or acted.
          */
         MailboxReceipt: {
             /** Message Id */
             message_id?: string | null;
-            /** Reply To */
-            reply_to?: string | null;
-            sender?: components["schemas"]["MailboxIdentity"] | null;
-            recipient?: components["schemas"]["MailboxIdentity"] | null;
+            sender?: components["schemas"]["MailboxAddress"] | null;
+            recipient?: components["schemas"]["MailboxAddress"] | null;
             /**
              * Stage
              * @enum {string}
              */
-            stage: "accepted" | "queued" | "delivered" | "unknown" | "rejected";
+            stage: "delivered" | "rejected" | "unknown";
             /** Reason */
-            reason?: ("unsupported" | "not_registered" | "stale_recipient" | "sender_not_bound" | "scope_denied" | "recipient_refused" | "recipient_blocked" | "reply_unavailable" | "too_large" | "busy_conflict" | "backpressure" | "transport_unknown") | null;
-            /** Native Evidence */
-            native_evidence?: string | null;
-            /** Disposition */
-            disposition?: ("held" | "refused" | "expired" | "dropped") | null;
+            reason?: ("not_live" | "too_large" | "transport_failed") | null;
+            /** Detail */
+            detail?: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Expires At */
-            expires_at?: string | null;
-        };
-        /**
-         * MailboxReplyRequest
-         * @description Resolve the original sender server-side, without trusting quoted metadata.
-         */
-        MailboxReplyRequest: {
-            /** Body */
-            body: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "reply";
-            /** Reply To */
-            reply_to: string;
         };
         /**
          * MailboxSendRequest
-         * @description Only a fresh send chooses a target; sender identity comes from auth.
+         * @description One addressed message. The writer names both ends.
+         *
+         *     ``in_reply_to`` correlates a reply for a reader; it never routes one, so a
+         *     conversation survives a receipt expiring or the daemon restarting. That is
+         *     the whole reason replying is an ordinary send with the addresses swapped
+         *     rather than a second verb over a server-held receipt.
          */
         MailboxSendRequest: {
+            sender: components["schemas"]["MailboxAddress"];
+            recipient: components["schemas"]["MailboxAddress"];
+            /** Subject */
+            subject: string;
             /** Body */
             body: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "send";
-            recipient: components["schemas"]["MailboxAddress"];
-            /** Expected Generation */
-            expected_generation: string;
-            /**
-             * Intent
-             * @default information
-             * @enum {string}
-             */
-            intent: "request" | "information";
+            /** In Reply To */
+            in_reply_to?: string | null;
         };
         /**
          * ModelOptionView
@@ -4649,12 +4731,17 @@ export interface components {
         };
         /**
          * SubagentFleetView
-         * @description The full sub-agent roster for one workspace — ``GET /workspaces/{id}/fleet``.
+         * @description The full child-agent roster for one workspace root session.
          *
-         *     ``TodoListView``'s sibling in shape: a fleet is unbounded in count exactly
-         *     like a checklist, so it stays off the ~1 Hz stream entirely
-         *     (``WorkspaceActivityView.fleet`` carries only counts, via
-         *     ``FleetProgressView``) and is fetched on demand instead.
+         *     ``subagents`` preserves Claude Code's hook-pushed live roster. ``sessions``
+         *     is the provider-neutral, transcript-derived child projection; a matching
+         *     child id appears in both sources only once in ``sessions``. The route and
+         *     stream never embed child turns: a selected child remains drillable through
+         *     the existing cursor-aware ``/turns`` endpoint.
+         *
+         *     ``supported`` distinguishes an adapter with no child-reader capability from
+         *     a supported root with no children. ``error`` is a best-effort read failure,
+         *     never silently reported as an empty fleet.
          */
         SubagentFleetView: {
             /**
@@ -4662,6 +4749,20 @@ export interface components {
              * @default []
              */
             subagents: components["schemas"]["SubagentActivityView"][];
+            /**
+             * Sessions
+             * @default []
+             */
+            sessions: components["schemas"]["SessionActivityView"][];
+            /** Session Id */
+            session_id?: string | null;
+            /**
+             * Supported
+             * @default false
+             */
+            supported: boolean;
+            /** Error */
+            error?: string | null;
         };
         /**
          * SubscriptionTier
@@ -4992,15 +5093,27 @@ export interface components {
          *     ``tool_use_id`` is the correlation key, so several calls issued in one
          *     assistant turn stay individually addressable however they interleave.
          *
-         *     Both bodies cross WHOLE, and the pair of ``*_truncated`` flags that used to
-         *     ride here is gone rather than pinned to ``False``. A tool body is the case
-         *     that argued hardest for a cap — a turn holds dozens of calls where it holds
-         *     one or two diffs, so the cost multiplied — and it is also the case where a
-         *     cap was least honest: an ellipsis inside a command's own output is
-         *     indistinguishable from output the tool actually produced, which is why the
-         *     flags had to exist at all. A reader diffing a config, counting test failures
-         *     or reading the tail of a build log needs the bytes the tool returned, not a
-         *     prefix of them, and this route is where those bytes live.
+         *     Both bodies cross WHOLE when they cross at all, and the pair of
+         *     ``*_truncated`` flags that used to ride here is gone rather than pinned to
+         *     ``False``. A tool body is the case that argued hardest for a cap — a turn
+         *     holds dozens of calls where it holds one or two diffs, so the cost
+         *     multiplied — and it is also the case where a cap was least honest: an
+         *     ellipsis inside a command's own output is indistinguishable from output the
+         *     tool actually produced, which is why the flags had to exist at all. A reader
+         *     diffing a config, counting test failures or reading the tail of a build log
+         *     needs the bytes the tool returned, not a prefix of them.
+         *
+         *     ``body`` is how a WITHHELD body stays honest without becoming a cap. A
+         *     windowed ``/turns`` read may decline to carry a settled call's request and
+         *     response (see :meth:`SessionDetailView.withhold_settled_bodies`) — nothing
+         *     is truncated, the complete bytes are one drill-in away, and the three values
+         *     say which case a client is looking at:
+         *
+         *     * ``inline`` — ``input``/``result`` are carried here, whole.
+         *     * ``available`` — they were withheld and the tools drill-in serves them.
+         *     * ``none`` — the call has NO input and NO result to serve, so a client must
+         *       draw no fetch affordance. This is a fact about the call rather than about
+         *       the projection, which is why it survives ``bodies=all`` unchanged.
          */
         ToolCallView: {
             /** Name */
@@ -5020,6 +5133,12 @@ export interface components {
             result?: string | null;
             /** Duration Ms */
             duration_ms?: number | null;
+            /**
+             * Body
+             * @default inline
+             * @enum {string}
+             */
+            body: "inline" | "available" | "none";
         };
         /**
          * TrackRemoteBranch
@@ -5359,7 +5478,7 @@ export interface components {
              */
             tz: string;
             /** Provider */
-            provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+            provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
             /** Account */
             account?: string | null;
             /** Project */
@@ -5643,7 +5762,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "claude_code" | "codex" | "mewbo" | "generic";
+            provider: "claude_code" | "codex" | "opencode" | "mewbo" | "generic";
             /** Cwd */
             cwd?: string | null;
             /** Project */
@@ -5724,7 +5843,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "claude_code" | "codex" | "mewbo" | "generic";
+            provider: "claude_code" | "codex" | "opencode" | "mewbo" | "generic";
             /** Label */
             label: string;
             /**
@@ -5912,6 +6031,15 @@ export interface components {
          *     sub-agents it has running. All default to ``None`` so a pre-existing
          *     client deserializes unchanged (additive wire evolution), and all mean
          *     "nothing to report" when absent — never a zero value.
+         *
+         *     ``branch`` is the LIVE branch, already derived per tick by the engine and
+         *     dropped here until now — so every client rendered ``state.branch``, the
+         *     create-time snapshot nothing refreshes, and named the branch a workspace
+         *     was born on rather than the one it is on. It carries
+         *     ``WorkspaceActivity.live_branch`` (live, else recorded), so it is never
+         *     empty and a client needs no fallback of its own. ``state.branch`` stays
+         *     exactly as it was: that field is the IDENTITY ``resume`` rebuilds the
+         *     worktree from, and this one is what a reader should see.
          */
         WorkspaceActivityView: {
             state: components["schemas"]["WorkspaceStateView"];
@@ -5942,6 +6070,8 @@ export interface components {
             todo?: components["schemas"]["TodoProgressView"] | null;
             queue?: components["schemas"]["QueueDepthView"] | null;
             fleet?: components["schemas"]["FleetProgressView"] | null;
+            /** Branch */
+            branch?: string;
         };
         /**
          * WorkspaceDefaults
@@ -6337,10 +6467,10 @@ export interface components {
             delete_branch?: boolean | null;
         };
         /**
-         * _MailboxAckBody
-         * @description A native owner's bounded observation of one submitted message.
+         * _OwnerAckBody
+         * @description A native owner's bounded observation of one submitted frame.
          */
-        _MailboxAckBody: {
+        _OwnerAckBody: {
             /** Message Id */
             message_id: string;
             /**
@@ -6348,10 +6478,6 @@ export interface components {
              * @enum {string}
              */
             stage: "queued" | "delivered" | "unknown" | "rejected";
-            /** Evidence */
-            evidence?: string | null;
-            /** Reason */
-            reason?: ("unsupported" | "not_registered" | "stale_recipient" | "sender_not_bound" | "scope_denied" | "recipient_refused" | "recipient_blocked" | "reply_unavailable" | "too_large" | "busy_conflict" | "backpressure" | "transport_unknown") | null;
         };
         /**
          * _PauseBody
@@ -6628,13 +6754,9 @@ export interface operations {
             };
         };
     };
-    peers_mailboxes_peers_get: {
+    contacts_mailboxes_contacts_get: {
         parameters: {
-            query?: {
-                workspace_id?: string | null;
-                limit?: number;
-                cursor?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -6647,16 +6769,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MailboxPeerPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["MailboxDirectory"];
                 };
             };
         };
@@ -6670,40 +6783,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MailboxSendRequest"] | components["schemas"]["MailboxReplyRequest"];
+                "application/json": components["schemas"]["MailboxSendRequest"];
             };
         };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MailboxReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    message_status_mailboxes_messages__message_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                message_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -6728,8 +6810,8 @@ export interface operations {
     connection_mailboxes_connection_get: {
         parameters: {
             query: {
+                workspace_id: string;
                 provider_session_id: string;
-                mcp_ready?: boolean;
                 input_capacity?: number | null;
                 pending_input_ids?: string[] | null;
             };
@@ -6761,14 +6843,17 @@ export interface operations {
     };
     acknowledge_mailboxes_ack_post: {
         parameters: {
-            query?: never;
+            query: {
+                workspace_id: string;
+                generation: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_MailboxAckBody"];
+                "application/json": components["schemas"]["_OwnerAckBody"];
             };
         };
         responses: {
@@ -6778,7 +6863,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MailboxReceipt"];
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -6798,7 +6885,7 @@ export interface operations {
                 since?: string | null;
                 until?: string | null;
                 tz?: string;
-                provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+                provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
                 account?: string | null;
                 project?: string | null;
                 model?: string | null;
@@ -6837,7 +6924,7 @@ export interface operations {
                 since?: string | null;
                 until?: string | null;
                 tz?: string;
-                provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+                provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
                 account?: string | null;
                 project?: string | null;
                 model?: string | null;
@@ -6878,7 +6965,7 @@ export interface operations {
                 since?: string | null;
                 until?: string | null;
                 tz?: string;
-                provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+                provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
                 account?: string | null;
                 project?: string | null;
                 model?: string | null;
@@ -6917,7 +7004,7 @@ export interface operations {
                 since?: string | null;
                 until?: string | null;
                 tz?: string;
-                provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+                provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
                 account?: string | null;
                 project?: string | null;
                 model?: string | null;
@@ -6957,7 +7044,7 @@ export interface operations {
                 since?: string | null;
                 until?: string | null;
                 tz?: string;
-                provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+                provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
                 account?: string | null;
                 project?: string | null;
                 model?: string | null;
@@ -7016,7 +7103,7 @@ export interface operations {
                 since?: string | null;
                 until?: string | null;
                 tz?: string;
-                provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+                provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
                 account?: string | null;
                 project?: string | null;
                 model?: string | null;
@@ -7054,7 +7141,7 @@ export interface operations {
                 since?: string | null;
                 until?: string | null;
                 tz?: string;
-                provider?: ("claude_code" | "codex" | "mewbo" | "generic") | null;
+                provider?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
                 account?: string | null;
                 project?: string | null;
                 model?: string | null;
@@ -7276,6 +7363,7 @@ export interface operations {
             query?: {
                 last?: number | null;
                 after_turn?: number | null;
+                before_turn?: number | null;
             };
             header?: {
                 "x-grove-share-passcode"?: string | null;
@@ -7294,6 +7382,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionDetailView"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_tool_public__token__tools__tool_use_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-grove-share-passcode"?: string | null;
+            };
+            path: {
+                token: string;
+                tool_use_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolCallView"];
                 };
             };
             /** @description Validation Error */
@@ -8364,6 +8486,37 @@ export interface operations {
             };
         };
     };
+    workspace_activity_workspaces__ws_id__activity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceActivityView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     workspace_pane_workspaces__ws_id__pane_get: {
         parameters: {
             query?: never;
@@ -8531,6 +8684,8 @@ export interface operations {
             query?: {
                 last?: number | null;
                 after_turn?: number | null;
+                before_turn?: number | null;
+                bodies?: "head" | "all";
             };
             header?: never;
             path: {
@@ -8548,6 +8703,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionDetailView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_session_tool_workspaces__ws_id__sessions__session_id__tools__tool_use_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+                session_id: string;
+                tool_use_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolCallView"];
                 };
             };
             /** @description Validation Error */
@@ -8625,7 +8813,9 @@ export interface operations {
     };
     workspace_fleet_workspaces__ws_id__fleet_get: {
         parameters: {
-            query?: never;
+            query?: {
+                session_id?: string | null;
+            };
             header?: never;
             path: {
                 ws_id: string;
@@ -8641,6 +8831,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubagentFleetView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_fleet_stream_workspaces__ws_id__fleet_stream_get: {
+        parameters: {
+            query?: {
+                session_id?: string | null;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description text/event-stream of `fleet_snapshot` SubagentFleetView JSON frames for one workspace root session. Coalesced: a burst of activity edges produces at most one in-flight re-read at a time, offloaded to a worker thread so a slow snapshot never blocks `/message` or any other route. Heartbeats every 15s. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

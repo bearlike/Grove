@@ -45,6 +45,7 @@ from grove.core.agents import (
 )
 from grove.core.agents.brief import AgentBrief
 from grove.core.agents.hook import DEFAULT_DAEMON_LOOPBACK_URL, ClaudeHook, PendingQuestion
+from grove.core.agents.registry import CONTEXT_VARIANT_SUFFIX
 from grove.core.agents.transcript_scope import config_dir_scope
 from grove.core.attachments import Attachment, AttachmentStore
 from grove.core.config import AgentKind, AgentSpec, GroveConfig, load_config
@@ -105,6 +106,7 @@ from grove.core.mewbo import MewboClient
 from grove.core.otel_resource import compose_resource_attributes
 from grove.core.phase import PhaseFile, PhaseReport, TaskPhase
 from grove.core.preflight import HostPreflight
+from grove.core.process import reap_cwd_holders
 from grove.core.runtime import ContainerProvisioner, RuntimeDecision, RuntimeResolver
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tickets import TicketProviderRegistry
@@ -437,6 +439,21 @@ class WorkspaceManager:
         return _unsub
 
     # ─── lifecycle ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _promote_default_model(model: str | None, agent: AgentSpec) -> str | None:
+        """Prefer an offered long-context twin for an untouched saved model.
+
+        The catalog is a presentation-only fold, while a saved default is an
+        engine decision. Reconcile their old plain value only when the resolved
+        catalog proves the marked twin is available; explicit request values
+        skip this helper and remain provider-boundary passthrough.
+        """
+        if model is None or model.endswith(CONTEXT_VARIANT_SUFFIX):
+            return model
+        catalog = resolve_models(kind=agent.kind, command=agent.command, configured=agent.models)
+        marked = model + CONTEXT_VARIANT_SUFFIX
+        return marked if marked in catalog else model
 
     def list(self) -> list[WorkspaceState]:
         """Workspaces in this repo, with each persisted intent promoted to its
@@ -1249,7 +1266,9 @@ class WorkspaceManager:
         # engine rather than in each client is what stops a client that trusts
         # this contract (the web composer does, by design: it sends only the
         # fields the user touched) from silently discarding the user's answer.
-        model = request.model or self._cfg.defaults.model
+        model = request.model
+        if model is None:
+            model = self._promote_default_model(self._cfg.defaults.model, agent)
         skip_init = self._cfg.default_skip_init if request.skip_init is None else request.skip_init
 
         ts = WorkspaceIdentity.timestamp()
@@ -1719,6 +1738,12 @@ class WorkspaceManager:
                 container.pause()
             except Exception as exc:
                 logger.warning("container stop during pause failed: {}", exc)
+        # Clear anyone still standing in the worktree before it is unlinked.
+        # `tmux kill-session` only SIGHUPs each pane's own process group, which
+        # misses a prompt-forked subshell; that survivor keeps the worktree as
+        # its cwd, reparents to `systemd --user`, and spins a core forever once
+        # the directory goes away.
+        reap_cwd_holders(Path(state.worktree_path))
         try:
             self._git.worktree_remove(Path(state.worktree_path), force=force)
         except Exception as exc:
@@ -1808,6 +1833,9 @@ class WorkspaceManager:
         try:
             transcript_context = self._launch(state, agent, launch_decoration)
         except Exception as exc:
+            # A partially-started launch can already have shells in the
+            # worktree; see `pause`.
+            reap_cwd_holders(worktree)
             self._git.worktree_remove(worktree, force=True)
             self._emit("error", state.id, {"phase": "resume.tmux", "error": str(exc)})
             raise GroveError(f"could not start tmux session: {exc}") from exc
@@ -1936,6 +1964,8 @@ class WorkspaceManager:
         residue: list[str] = []
         branch_deleted = False
         if not is_root:
+            # See `pause`: strand nobody on a cwd that is about to be unlinked.
+            reap_cwd_holders(Path(state.worktree_path))
             try:
                 self._git.worktree_remove(Path(state.worktree_path), force=True)
             except Exception as exc:
@@ -2782,6 +2812,25 @@ class WorkspaceManager:
             found.append((stored.name, self._attachment_path(state, stored), stored.size))
         return GroveInstruction.attachments(found)
 
+    def can_receive(self, state: WorkspaceState) -> bool:
+        """Whether :meth:`send_message` could deliver to *state* right now.
+
+        The mailbox's whole admission rule, and it is deliberately the same
+        predicate steering already enforces rather than a second opinion about
+        liveness — a contact the directory advertises must be one the send can
+        actually reach. Takes a reconciled state, so a listing pays no second
+        reconciliation per row.
+
+        A native workspace whose owner has died still answers True: the steer
+        path revives it (``_revive_for_steer``), so refusing here would hide a
+        peer that one message brings back.
+        """
+        try:
+            ensure_can_steer(state)
+        except WorkspaceStateError:
+            return False
+        return True
+
     def send_message(
         self, workspace_id: str, text: str, *, agent: str = "", attachments: Sequence[str] = ()
     ) -> None:
@@ -3003,7 +3052,7 @@ class WorkspaceManager:
     def _steer_native(
         self,
         state: WorkspaceState,
-        op: Literal["message", "interrupt", "set_model", "answer"],
+        op: Literal["message", "interrupt", "set_model", "answer", "compact", "command"],
         text: str | None = None,
     ) -> None:
         """THE single dispatch point for agents steered over a native channel.
@@ -3026,6 +3075,10 @@ class WorkspaceManager:
             self._native_steer().interrupt(state)
         elif op == "answer":
             self._native_steer().answer(state, text or "")
+        elif op == "compact":
+            self._native_steer().compact(state)
+        elif op == "command":
+            self._native_steer().invoke_control(state, text or "")
         else:
             self._native_steer().set_model(state, text or "")
             self._emit("control_invoked", state.id, {"control": "model", "target": target})
@@ -3403,6 +3456,11 @@ class WorkspaceManager:
         with self.transcript_scope(state):
             return adapter.latest_todo(state.transcript_scan_cwds[0], session_id)
 
+    def queue_supported(self, workspace_id: str) -> bool:
+        """Whether this workspace's provider can report an empty queue honestly."""
+        state = self._reconcile_status(self._store.get(workspace_id))
+        return get_adapter(self.effective_kind(state)).reports_queue
+
     def pending_queue(self, workspace_id: str) -> tuple[QueuedMessage, ...]:
         """What the harness is holding for this workspace but has not delivered
         — the engine seam ``GET /workspaces/{id}/queue`` reads.
@@ -3605,7 +3663,18 @@ class WorkspaceManager:
         raises ``CapabilityUnavailable`` (well-formed, but the runtime can't act
         on it). Best-effort dispatch semantics like ``send_message`` — 204/return
         is "delivered", not "ran"."""
-        self._deliver_control(workspace_id, name)
+        state = self._reconcile_status(self._store.get(workspace_id))
+        cleaned = name.strip().lstrip("/").strip()
+        if not cleaned:
+            raise CapabilityUnavailable("cannot invoke an empty control")
+        if state.native:
+            if cleaned == "compact":
+                self._steer_native(state, "compact")
+            else:
+                self._steer_native(state, "command", cleaned)
+            self._emit("control_invoked", state.id, {"control": cleaned.split(" ", 1)[0]})
+            return
+        self._deliver_control(workspace_id, cleaned)
 
     def switch_model(self, workspace_id: str, model: str) -> None:
         """Switch the running session's model where the agent exposes a switch
@@ -4057,8 +4126,19 @@ class WorkspaceManager:
         silent empty snapshot — this is the one place best-effort would be
         actively misleading, because "that agent printed nothing" and "there is
         no such agent" are different answers a user acts on differently.
+
+        A workspace that no longer exists is one of those failures, and it is
+        the ordinary one on this path: the ~250 ms tick fires against whatever
+        the rail last selected, so a `kill` between two ticks leaves the next
+        one asking about a deleted record. Only the lookup is guarded — the
+        typed refusal above still raises, for the reason its own paragraph
+        gives.
         """
-        state = self._reconcile_status(self._store.get(workspace_id))
+        try:
+            record = self._store.get(workspace_id)
+        except WorkspaceNotFound:
+            return None, None
+        state = self._reconcile_status(record)
         if agent:
             self._container_tmux_or_refuse(state, session=agent)
         return self._capture_pane(state, session=agent)
@@ -5565,6 +5645,8 @@ class WorkspaceManager:
             except Exception as exc:
                 logger.warning("rollback: container teardown failed: {}", exc)
         if state.placement is not Placement.ROOT:
+            # See `pause`: strand nobody on a cwd that is about to be unlinked.
+            reap_cwd_holders(Path(state.worktree_path))
             try:
                 self._git.worktree_remove(Path(state.worktree_path), force=True)
             except Exception as exc:

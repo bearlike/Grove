@@ -15,7 +15,6 @@ import {
 import { cn } from "@/lib/utils";
 import { ScannedTextScope } from "@/components/grove/overflow-text";
 import { RAIL_ITEMS, type NavItem } from "@/components/grove/shell/nav";
-import { DaemonStatus } from "@/components/grove/shell/daemon-status";
 import { FleetTree, type FleetStream } from "@/components/grove/fleet";
 import { activeFilterCount } from "@/components/grove/fleet/filter";
 import type { ProjectContextController } from "@/components/grove/fleet/project-context";
@@ -107,9 +106,6 @@ export function AppSidebar({
           ))}
         </div>
         <AccountMenu collapsed={collapsed} />
-        <div className={cn("flex flex-col gap-1.5 empty:hidden", collapsed ? null : "mt-3")}>
-          <DaemonStatus collapsed={collapsed} />
-        </div>
       </div>
     </ScannedTextScope>
   );

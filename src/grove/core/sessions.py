@@ -17,26 +17,30 @@ adapter automatically.
 from __future__ import annotations
 
 import contextlib
+import heapq
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from loguru import logger
 
 from grove.core import paths as core_paths
 from grove.core import process as process_module
+from grove.core.activity import SessionActivity
 from grove.core.agents import (
     SessionProvenance,
     SessionRef,
     SessionSummary,
     SessionTurn,
+    ToolCall,
     all_adapters,
     get_adapter,
+    tool_call_from_messages,
 )
-from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
+from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.agents.codex import _CodexHome
 from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS, ClaudeHook
 from grove.core.contracts.usage import DurationView
@@ -44,11 +48,10 @@ from grove.core.errors import GroveError
 from grove.core.git import GitRepo, detect_root
 from grove.core.manager import WorkspaceManager, build
 from grove.core.process import LiveRuntime
-from grove.core.session_duration import duration_of
-from grove.core.turn_count import CountFillResult, TurnCountCache
+from grove.core.turn_count import CountFillResult, SessionFacts, TurnCountCache
 
 if TYPE_CHECKING:
-    from grove.core.agents import AgentMessage
+    from grove.core.agents import AgentActivity, AgentMessage, AgentSession
     from grove.core.agents.base import AgentAdapter
     from grove.core.registry import RepoRegistry
     from grove.core.workspace import WorkspaceState
@@ -56,6 +59,25 @@ if TYPE_CHECKING:
 # Aware epoch for "no mtime" rows so the newest-first sort never compares
 # aware and naive datetimes (that raises, and a sort must never raise here).
 _EPOCH = datetime.fromtimestamp(0, tz=UTC)
+
+
+@runtime_checkable
+class FleetActivityAdapter(Protocol):
+    """Optional child-session read capability exposed by adapters that record it.
+
+    It stays outside ``AgentAdapter`` because most providers have no structural
+    child transcript relation. An empty result means a supported parent has no
+    children; lack of this capability is what lets the fleet wire state
+    ``supported=False`` without a provider-name branch at the consumer.
+    """
+
+    def fleet_activity(
+        self, cwd: Path, session_id: str
+    ) -> list[tuple[AgentSession, AgentActivity]]: ...
+
+    def subagent_turns(
+        self, cwd: Path, session_id: str, thread_id: str, *, last: int | None = None
+    ) -> tuple[SessionTurn, ...]: ...
 
 
 @dataclass(slots=True, frozen=True)
@@ -77,6 +99,37 @@ class SessionQuery:
     sent_at: datetime | None = None
 
 
+def _narrow(
+    listings: list[SessionListing],
+    *,
+    agent: str | None,
+    workspace: str | None,
+    since: datetime | None,
+) -> list[SessionListing]:
+    """The browse listing's agent/workspace/since filters, applied in order.
+
+    A free function because it reaches for nothing on the explorer — pure over
+    rows it is handed, which is also what keeps it testable without a repo.
+    """
+    if agent is not None:
+        listings = [ls for ls in listings if ls.summary.adapter_kind == agent]
+    if workspace is not None:
+        needle = workspace.lower()
+        listings = [
+            ls
+            for ls in listings
+            if (ls.workspace_id or "").startswith(workspace)
+            or needle in (ls.workspace_title or "").lower()
+        ]
+    if since is not None:
+        listings = [
+            ls
+            for ls in listings
+            if ls.summary.modified_at is not None and ls.summary.modified_at >= since
+        ]
+    return listings
+
+
 @dataclass(slots=True, frozen=True)
 class SessionListing:
     """One session row with its project context attached.
@@ -86,13 +139,11 @@ class SessionListing:
     workspace). ``provenance`` is ``grove_launched`` only when the id matches
     a workspace's minted ``agent_session_id``.
 
-    ``duration`` is the wall clock and the compute total (see
-    :func:`~grove.core.session_duration.duration_of`), derived here from the
-    message spine because this scope is already parsing the transcript.
-    ``None`` means the spine could not be read at all — never *no work*, which
-    is a ``DurationView`` whose own fields are null. It is the same number
-    :class:`CatalogEntry` reads out of the durable cache, from the same
-    function, so the two scopes cannot disagree about one session.
+    ``duration`` is the wall clock and compute total (see
+    :func:`~grove.core.session_duration.duration_of`) looked up from the SAME
+    durable parse-fact cache the host catalog uses. ``None`` means *not measured
+    yet* — never *no work*, which is a ``DurationView`` whose own fields are
+    null. Listing requests never full-parse a transcript to fill this column.
     """
 
     summary: SessionSummary
@@ -101,13 +152,17 @@ class SessionListing:
     workspace_title: str | None = None
     workspace_branch: str | None = None
     duration: DurationView | None = None
+    turn_count: int | None = None
 
 
 class SessionExplorer:
     """Aggregate, filter, and resolve agent sessions across a project's worktrees."""
 
-    def __init__(self, manager: WorkspaceManager) -> None:
+    def __init__(
+        self, manager: WorkspaceManager, *, turn_counts: TurnCountCache | None = None
+    ) -> None:
         self._manager = manager
+        self._turn_counts = turn_counts or TurnCountCache()
 
     @classmethod
     def from_cwd(cls, cwd: Path) -> SessionExplorer:
@@ -170,6 +225,7 @@ class SessionExplorer:
         workspace: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
+        enrich: bool = False,
     ) -> list[SessionListing]:
         """Every session across the project, newest-first, optionally filtered.
 
@@ -177,6 +233,11 @@ class SessionExplorer:
         workspace id prefix or a case-insensitive title substring; ``since``
         keeps sessions modified at/after that instant; ``limit`` caps the
         result after sorting.
+
+        ``enrich`` is the OPT-IN full parse, for the one consumer that renders
+        parse products (the ``grove sessions`` table). It runs AFTER filtering
+        and limiting, so the cost is one identity-keyed read per DISPLAYED row
+        rather than one per transcript sharing the directory.
         """
         states = self._manager.list()
         # A scanned root binds to its workspace by cwd — key on agent_cwd (a
@@ -235,6 +296,7 @@ class SessionExplorer:
                                 and summary.adapter_kind == eff_kind[candidate.id]
                             ):
                                 state = candidate
+                        facts = self._facts(summary)
                         listings.append(
                             SessionListing(
                                 summary=summary,
@@ -246,28 +308,44 @@ class SessionExplorer:
                                 workspace_id=state.id if state else None,
                                 workspace_title=state.title if state else None,
                                 workspace_branch=state.branch if state else None,
-                                duration=self._duration(adapter, root, summary.session_id),
+                                duration=facts.duration if facts is not None else None,
+                                turn_count=facts.turns if facts is not None else None,
                             )
                         )
 
-        if agent is not None:
-            listings = [ls for ls in listings if ls.summary.adapter_kind == agent]
-        if workspace is not None:
-            needle = workspace.lower()
-            listings = [
-                ls
-                for ls in listings
-                if (ls.workspace_id or "").startswith(workspace)
-                or needle in (ls.workspace_title or "").lower()
-            ]
-        if since is not None:
-            listings = [
-                ls
-                for ls in listings
-                if ls.summary.modified_at is not None and ls.summary.modified_at >= since
-            ]
+        listings = _narrow(listings, agent=agent, workspace=workspace, since=since)
         listings.sort(key=lambda ls: ls.summary.modified_at or _EPOCH, reverse=True)
-        return listings[:limit] if limit is not None else listings
+        if limit is not None:
+            listings = listings[:limit]
+        return [self.enriched(ls) for ls in listings] if enrich else listings
+
+    def enriched(self, listing: SessionListing) -> SessionListing:
+        """One row re-read by IDENTITY so its parse products are populated.
+
+        ``session_summary`` is the adapter seam that may full-parse; it resolves
+        one known id through ``locate_transcripts`` rather than scanning, so this
+        costs one parse per DISPLAYED row. Best-effort by contract: a row that
+        cannot be re-read keeps its metadata-only form rather than raising out of
+        a listing.
+        """
+        summary = listing.summary
+        if summary.cwd is None:
+            return listing
+        adapter = get_adapter(summary.adapter_kind)
+        try:
+            with self._manager.transcript_config_dir_scope(
+                summary.adapter_kind, self._transcript_config_dir(listing)
+            ):
+                full = adapter.session_summary(Path(summary.cwd), summary.session_id, full=True)
+        except Exception as exc:
+            logger.debug(
+                "session enrichment unavailable for {} {}: {}",
+                summary.adapter_kind,
+                summary.session_id,
+                type(exc).__name__,
+            )
+            return listing
+        return listing if full is None else replace(listing, summary=full)
 
     @staticmethod
     def _override_by_root(
@@ -300,7 +378,9 @@ class SessionExplorer:
                 out[str(cwd)] = (eff_kind[state.id], ctx.config_dir)
         return out
 
-    def for_workspace(self, workspace_id: str) -> tuple[SessionListing, ...]:
+    def for_workspace(
+        self, workspace_id: str, *, limit: int | None = None
+    ) -> tuple[SessionListing, ...]:
         """Every session recorded for one workspace's directory, newest-first.
 
         The bounded variant of :meth:`list` for per-request consumers (the
@@ -332,7 +412,7 @@ class SessionExplorer:
         resolve to the :meth:`list` method, not the builtin (the documented
         mypy shadowing trap).
         """
-        return self._scan_workspace(self._manager.get(workspace_id), adopt_gate=True)
+        return self._scan_workspace(self._manager.get(workspace_id), adopt_gate=True, limit=limit)
 
     def primary_for_workspace(self, workspace_id: str) -> SessionListing:
         """The readable primary session for one workspace.
@@ -377,7 +457,7 @@ class SessionExplorer:
         return self._scan_workspace(self._manager.get(workspace_id), adopt_gate=False)
 
     def _scan_workspace(
-        self, state: WorkspaceState, *, adopt_gate: bool
+        self, state: WorkspaceState, *, adopt_gate: bool, limit: int | None = None
     ) -> tuple[SessionListing, ...]:
         """The shared one-cwd scan behind :meth:`for_workspace` (``adopt_gate``
         True) and :meth:`candidates_for` (False).
@@ -451,6 +531,7 @@ class SessionExplorer:
                             cwd=cwd,
                         ):
                             continue
+                    facts = self._facts(summary)
                     listings.append(
                         SessionListing(
                             summary=summary,
@@ -458,7 +539,8 @@ class SessionExplorer:
                             workspace_id=state.id,
                             workspace_title=state.title,
                             workspace_branch=state.branch,
-                            duration=self._duration(adapter, cwd, summary.session_id),
+                            duration=facts.duration if facts is not None else None,
+                            turn_count=facts.turns if facts is not None else None,
                         )
                     )
         # NEWEST-FIRST, and deliberately NOT "the workspace's own session
@@ -474,6 +556,10 @@ class SessionExplorer:
         # every hand-started one. The public share reader took `[0]` and served
         # strangers for it; it now resolves an id through
         # `WorkspaceManager.shared_session_id` and looks that id up here.
+        if limit is not None:
+            return tuple(
+                heapq.nlargest(limit, listings, key=lambda ls: ls.summary.modified_at or _EPOCH)
+            )
         listings.sort(key=lambda ls: ls.summary.modified_at or _EPOCH, reverse=True)
         return tuple(listings)
 
@@ -515,44 +601,35 @@ class SessionExplorer:
         if summary is None:
             return None
         seen.add((summary.adapter_kind, summary.session_id))
+        facts = self._facts(summary)
         return SessionListing(
             summary=summary,
             provenance="grove_launched",
             workspace_id=state.id,
             workspace_title=state.title,
             workspace_branch=state.branch,
-            duration=self._duration(adapter, cwd, summary.session_id),
+            duration=facts.duration if facts is not None else None,
+            turn_count=facts.turns if facts is not None else None,
         )
 
-    @staticmethod
-    def _duration(adapter: AgentAdapter, cwd: Path, session_id: str) -> DurationView | None:
-        """This session's two clocks, from the spine the listing is already parsing.
+    def _facts(self, summary: SessionSummary) -> SessionFacts | None:
+        """This session's cached parse facts, or ``None`` when not measured yet.
 
-        Project scope pays for its own measurement rather than reading the
-        catalog's durable cache, for the same reason ``turn_count`` does: the
-        parse is happening here anyway, and a cache filled only when somebody
-        browses the HOST-wide list would leave this column empty for a user who
-        never opens it. Both roads run :func:`duration_of` over
-        ``adapter.read_messages``, so the number is the same one either way.
-
-        ``read_messages`` covers the main transcript AND every sub-agent file
-        (that union is the whole point — the compute total is a fleet's), which
-        is a different fold key from the one ``list_sessions`` used for the
-        summary, so the first call per transcript VERSION pays a parse and every
-        later one is a ``stat`` against the adapter's memo. Best-effort by
-        contract: a browse row must degrade to an unmeasured column, never raise
-        out of a listing.
+        The listing path performs no parse. It asks the durable fact cache with
+        the same ``SessionRef`` shape the host catalog uses; a changed or unseen
+        transcript is simply absent until the background catalog pass measures it.
         """
-        try:
-            return duration_of(adapter.read_messages(cwd, session_id))
-        except Exception as exc:
-            logger.debug(
-                "session duration unavailable for {} {}: {}",
-                adapter.kind,
-                session_id,
-                type(exc).__name__,
-            )
-            return None
+        ref = SessionRef(
+            session_id=summary.session_id,
+            adapter_kind=summary.adapter_kind,
+            cwd=summary.cwd,
+            transcript_path=summary.transcript_path,
+            birth=summary.created_at,
+            mtime=summary.modified_at.timestamp() if summary.modified_at is not None else 0.0,
+            git_branch=summary.git_branch,
+            size_bytes=summary.size_bytes,
+        )
+        return self._turn_counts.facts_for((ref,)).get((ref.adapter_kind, ref.session_id))
 
     def resolve(self, ref: str) -> SessionListing:
         """The unique session whose id matches ``ref`` exactly or by prefix.
@@ -658,6 +735,52 @@ class SessionExplorer:
         """Every direct user query in the uniquely resolved session, oldest first."""
         return self.recollect_for(self.resolve(ref), last=last)
 
+    def tool_call_for(self, listing: SessionListing, tool_use_id: str) -> ToolCall | None:
+        """ONE tool call out of an already-resolved session, by its id.
+
+        The drill-in half of the head+drill-in pairing the windowed ``/turns``
+        read introduced: a turn list that withheld settled bodies
+        (``ToolCallView.body == "available"``) is the head, and this serves any
+        one of those bodies whole. Built as a PROJECTION over
+        :meth:`AgentAdapter.read_messages` — the same spine every other
+        projection here reads, memoized per transcript — so an opened body costs
+        a walk rather than a parse once the turn list is warm.
+
+        Deliberately a sibling of :meth:`recollect_for` rather than a new
+        adapter capability: "which call carries this id" is answered identically
+        for every provider off the normalized spine, so a per-adapter method
+        would be one implementation duplicated per kind. Scoped to the owning
+        workspace's config-dir override for the same reason
+        :meth:`turns_for` is.
+        """
+        adapter = get_adapter(listing.summary.adapter_kind)
+        with self._manager.transcript_config_dir_scope(
+            listing.summary.adapter_kind, self._transcript_config_dir(listing)
+        ):
+            messages = adapter.read_messages(self._session_cwd(listing), listing.summary.session_id)
+        return tool_call_from_messages(messages, tool_use_id)
+
+    def tool_call(self, workspace_id: str, session_id: str, tool_use_id: str) -> ToolCall | None:
+        """One of a workspace session's tool calls, resolved the way its turns are.
+
+        The listing whose id matches answers first. A ``session_id`` that names
+        no listing is the fleet-child case the turns route already handles
+        (``subagent_turns``): a sub-agent thread never appears in a workspace's
+        own listing, but its records ride its PARENT session's spine, so the
+        fallback searches the workspace's top-level sessions for the id. The
+        search is by ``tool_use_id``, which is unique across the spine, so the
+        widened scan can only find the call the caller named.
+        """
+        listings = self.for_workspace(workspace_id)
+        owner = next((ls for ls in listings if ls.summary.session_id == session_id), None)
+        if owner is not None:
+            return self.tool_call_for(owner, tool_use_id)
+        for listing in listings:
+            found = self.tool_call_for(listing, tool_use_id)
+            if found is not None:
+                return found
+        return None
+
     def turns_for(
         self, listing: SessionListing, *, last: int | None = None
     ) -> tuple[SessionTurn, ...]:
@@ -677,6 +800,52 @@ class SessionExplorer:
             return adapter.read_turns(
                 self._session_cwd(listing), listing.summary.session_id, last=last
             )
+
+    def fleet_activity(
+        self, workspace_id: str, session_id: str | None = None
+    ) -> tuple[str | None, bool, tuple[SessionActivity, ...]]:
+        """The selected root's child-session projection for the fleet reader.
+
+        A selected root is the explicit ``session_id`` when present, otherwise
+        the workspace's own minted session — read directly off the record
+        rather than through :meth:`primary_for_workspace`, which requires a
+        materialized transcript and would misreport an honestly-supported
+        root as unsupported during the STARTING window before its first
+        transcript line lands (the same window the live hook roster already
+        renders through). An explicit ``session_id`` must belong to this
+        workspace's own scan — never a stranger's — so it is checked against
+        :meth:`for_workspace` and refused (unsupported, no children) rather
+        than resolved against a foreign workspace's cwd.
+
+        The adapter capability decides whether an empty tuple means "no
+        children"; an adapter lacking it is honestly unsupported. This is a
+        targeted, on-demand read, never an activity poll.
+        """
+        state = self._manager.get(workspace_id)
+        cwd = state.transcript_scan_cwds[0]
+        if session_id is not None and session_id != state.agent_session_id:
+            for candidate in self.for_workspace(workspace_id):
+                if candidate.summary.session_id == session_id:
+                    cwd = self._session_cwd(candidate)
+                    break
+            else:
+                return (session_id, False, ())
+        resolved_id = session_id or state.agent_session_id
+        if resolved_id is None:
+            return (None, False, ())
+        adapter = get_adapter(self._manager.effective_kind(state))
+        if not isinstance(adapter, FleetActivityAdapter):
+            return (resolved_id, False, ())
+        with self._manager.transcript_scope(state):
+            children = adapter.fleet_activity(cwd, resolved_id)
+        return (
+            resolved_id,
+            True,
+            tuple(
+                SessionActivity(session=session, activity=activity)
+                for session, activity in children
+            ),
+        )
 
     def subagent_turns(
         self, workspace_id: str, thread_id: str, *, last: int | None = None
@@ -704,22 +873,18 @@ class SessionExplorer:
         ``claude_code``.
         """
         state = self._manager.get(workspace_id)
-        if self._manager.effective_kind(state) != "claude_code":
-            return None
-        adapter = ClaudeCodeAdapter()
         for listing in self.for_workspace(workspace_id):
+            adapter = get_adapter(listing.summary.adapter_kind)
+            if not isinstance(adapter, FleetActivityAdapter):
+                continue
             cwd = self._session_cwd(listing)
-            top_id = listing.summary.session_id
-            # Both projections are ambient-env reads, and the scope `for_workspace`
-            # opens is long gone by the time this body runs — it closed when that
-            # call returned. Scoping the loop HEADER would have looked
-            # right and fixed nothing: the listing resolved, then the reads below
-            # found nothing and this returned None, i.e. a 404 on the fleet
-            # drill-in for any pinned workspace. `fleet_activity` returns a list,
-            # so the rows are fully materialized before the scope closes.
+            root_id = listing.summary.session_id
+            # `for_workspace` closes its own config-dir scope before returning.
+            # Hold the workspace scope around both child reads so a profile-pinned
+            # parent and its descendants resolve from the same adapter root.
             with self._manager.transcript_scope(state):
-                turns = adapter.subagent_turns(cwd, top_id, thread_id, last=last)
-                fleet = adapter.fleet_activity(cwd, top_id) if turns else []
+                turns = adapter.subagent_turns(cwd, root_id, thread_id, last=last)
+                fleet = adapter.fleet_activity(cwd, root_id) if turns else []
             if not turns:
                 continue
             for session, activity in fleet:
@@ -970,7 +1135,7 @@ class SessionCatalog:
                 return None
             claude_root = _ClaudeHome.projects_dirs()
             if any(path.is_relative_to(root) for root in claude_root):
-                cwd, birth, branch = _ClaudeHome._head_cwd_and_birth(path)
+                cwd, birth, branch, _first_prompt = _ClaudeHome._head_cwd_and_birth(path)
                 info = path.stat()
                 return SessionRef(
                     session_id=path.stem,

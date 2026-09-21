@@ -92,8 +92,16 @@ def zoom_claude(path: Path) -> None:
 
 
 def main() -> None:
-    """Apply only the approved edge and Claude zoom operations."""
-    zoom_claude(ICON_DIR / "claude-code.png")
+    """Apply only the approved edge operations.
+
+    ``zoom_claude`` is deliberately NOT called. It selects the brand colour by
+    warmth to find a clay mark on a near black shell, and the Claude Code tile
+    is now the inverse: a cream mark on a clay tile. Measured on the current
+    file, that predicate selects 27,556 of 36,864 pixels, which is the
+    background rather than the mark, so the pass would crop the tile to itself
+    and paint the mark out. The function is kept because the operation is still
+    the documented one for a tile of the old composition.
+    """
     for name in ("codex", "linear", "gitea"):
         clean_edge(ICON_DIR / f"{name}.png")
 

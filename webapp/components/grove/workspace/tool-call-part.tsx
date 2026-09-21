@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, type PropsWithChildren, type ReactNode } from "react";
+import { useToolBody } from "@/lib/grove/hooks";
 import { useAuiState, type ToolCallMessagePartProps } from "@assistant-ui/react";
 import { LoaderIcon } from "lucide-react";
 
@@ -10,6 +11,7 @@ import {
 import {
   asToolCall,
   formatToolDuration,
+  shouldFetchToolBody,
   toolCallFields,
   toolCallStatusLabel,
   type ToolCallView,
@@ -51,6 +53,11 @@ export function ToolCallPart(props: ToolCallMessagePartProps): ReactNode {
   const call = asToolCall(props.artifact);
   const running = call?.status === "running";
   const serverIcons = useToolIcons();
+  // Mirrors the step's own disclosure, declared ahead of every early return per
+  // the rules of hooks. The vendored root would happily own this state
+  // uncontrolled, but then this component could not say whether the body is on
+  // screen — which is the one fact the withheld-body fetch is gated on.
+  const [open, setOpen] = useState(false);
   const presentation = toolPresentation(call?.name || props.toolName, call?.input, props.argsText, serverIcons);
   // An INCOMING delivery the adapter folded into this run. It is not a tool
   // call, so it draws the card alone — there is no invocation to report a
@@ -82,6 +89,10 @@ export function ToolCallPart(props: ToolCallMessagePartProps): ReactNode {
       running={running}
       status={call?.status ?? "unknown"}
       callId={call?.tool_use_id}
+      // A withheld body is fetched when the DISCLOSURE opens, never on mount:
+      // that is the whole point of the daemon's projection, and the step is the
+      // only component that knows its own open state.
+      onOpenChange={setOpen}
       metadata={
         <>
           {edit ? <FileEditCounts data={edit} /> : null}
@@ -92,7 +103,7 @@ export function ToolCallPart(props: ToolCallMessagePartProps): ReactNode {
       {edit ? (
         <FileEditDiff data={edit} />
       ) : (
-        <NestLevel>{call ? <ToolCallDetail call={call} /> : <NoDetail />}</NestLevel>
+        <NestLevel>{call ? <ToolCallDetail call={call} open={open} /> : <NoDetail />}</NestLevel>
       )}
     </ToolTimelineStep>
   );
@@ -107,14 +118,75 @@ export function ToolCallPart(props: ToolCallMessagePartProps): ReactNode {
  * That is the contract worth pinning anyway; whether it sits behind a Radix
  * collapsible is the vendored component's business.
  */
-export function ToolCallDetail({ call }: { call: ToolCallView }): ReactNode {
+export function ToolCallDetail({
+  call,
+  open = true,
+}: {
+  call: ToolCallView;
+  /** Whether the disclosure holding this body is on screen. Defaults true so a
+   * direct render (the unit tests, any future always-open surface) still shows
+   * the body; only the FETCH is gated on it. */
+  open?: boolean;
+}): ReactNode {
+  // The fetch lives in a SEPARATE component rather than a hook here, and the
+  // reason is structural: a hook on this component would subscribe every tool
+  // body in the transcript to react-query — thousands of them on a long
+  // session, all to serve the handful a reader opens — and would make an
+  // inline body unrenderable without a QueryClient at all. Only the `available`
+  // branch mounts a subscriber.
+  return call.body === "available" ? (
+    <WithheldToolCallBody call={call} open={open} />
+  ) : (
+    <ToolCallBody call={call} />
+  );
+}
+
+/**
+ * The `available` case: fetch on open, then render the same body inline would.
+ *
+ * Mounted only for a withheld call, so the query is the exception rather than
+ * the rule — and it renders the fetched view through {@link ToolCallBody}, so
+ * an opened body and an inline one cannot drift apart.
+ */
+function WithheldToolCallBody({
+  call,
+  open,
+}: {
+  call: ToolCallView;
+  open: boolean;
+}): ReactNode {
+  const fetched = useToolBody(call.tool_use_id, shouldFetchToolBody(call.body, open));
+  if (fetched.data) return <ToolCallBody call={fetched.data} />;
+  return (
+    <ToolCallBody
+      call={call}
+      // A withheld body is neither absent nor empty — saying "Returned nothing"
+      // here would state a fact about the call that only the drill-in can
+      // answer, which is the confusion `body` exists to end.
+      pendingNote={fetched.isError ? "Couldn’t load this body." : "Loading…"}
+    />
+  );
+}
+
+function ToolCallBody({
+  call,
+  pendingNote,
+}: {
+  call: ToolCallView;
+  /** Set only while a withheld body has not arrived; replaces both sections'
+   * content without claiming anything about the call. */
+  pendingNote?: string;
+}): ReactNode {
   const fields = toolCallFields(call.input);
+  const pending = pendingNote !== undefined;
 
   return (
     <>
       <section className="flex min-w-0 flex-col gap-1.5" data-testid="tool-call-request">
         <SectionLabel>Request</SectionLabel>
-        {fields.length === 0 ? (
+        {pending ? (
+          <Absent>{pendingNote}</Absent>
+        ) : fields.length === 0 ? (
           <Absent>No arguments recorded.</Absent>
         ) : (
           fields.map((field) => (
@@ -133,6 +205,8 @@ export function ToolCallDetail({ call }: { call: ToolCallView }): ReactNode {
         <SectionLabel>Response</SectionLabel>
         {call.status === "running" ? (
           <Absent>Still running — no response yet.</Absent>
+        ) : pending ? (
+          <Absent>{pendingNote}</Absent>
         ) : call.result === null || call.result === undefined ? (
           // NOT the same claim as "running", and the wire keeps them apart.
           <Absent>Returned nothing.</Absent>

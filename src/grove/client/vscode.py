@@ -23,7 +23,6 @@ import binascii
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
 from typing import Protocol
 
 from grove.client.errors import TransportError
@@ -82,48 +81,6 @@ def build_vscode_uri(
     payload = json.dumps(target, separators=(",", ":"))
     authority = "attached-container+" + binascii.hexlify(payload.encode()).decode()
     return f"vscode-remote://{authority}{remote_workspace_folder}"
-
-
-@dataclass(frozen=True, slots=True)
-class VolumeMount:
-    """A named-volume mount, in the shape ``devcontainer.json``'s ``mounts`` /
-    ``docker --mount`` both accept (``type``/``source``/``target``).
-
-    Deliberately NOT ``grove.core.devcontainer.DevcontainerMount``: that type
-    is owned by the devcontainer overlay layer, and ``client/`` only ever
-    depends on ``grove.core.contracts`` (the wire boundary), never on core
-    engine internals — reaching into ``core.devcontainer`` from here would
-    cross that boundary for a value the consumer can trivially reshape into
-    its own type.
-    """
-
-    source: str
-    target: str
-    type: str = "volume"
-
-    def to_flag(self) -> str:
-        """The ``docker --mount`` / CLI ``--mount`` flag string form."""
-        return f"type={self.type},source={self.source},target={self.target}"
-
-
-def vscode_server_mount(volume_name: str, *, remote_home: str = "/root") -> VolumeMount:
-    """The per-project named-volume mount for VS Code Server's cache directory.
-
-    A mount CONTRIBUTION, not a wire-up: this returns the mount spec and
-    nothing else. The consumer is the overlay/infra layer building each
-    workspace's devcontainer mounts — that layer decides WHEN to add this to
-    a config and what ``volume_name`` to pass (project-scoped, so a fresh
-    worktree in the same repo reuses the volume); it is not wired into
-    ``manager.py`` or ``container_infra.py`` here, keeping this module out of
-    the engine's mount-wiring internals.
-
-    Why a named volume at all: the VS Code Server download is hundreds of MB
-    and is pinned to the connecting client's exact commit, so baking it into
-    an image goes stale on the next VS Code update. A volume pays the
-    download once per VS Code version per project instead of once per
-    workspace, without Grove having to track a version.
-    """
-    return VolumeMount(source=volume_name, target=f"{remote_home}/.vscode-server")
 
 
 class VsCodeAttach:

@@ -17,7 +17,11 @@ import { useAgents } from "@/lib/grove/hooks/queries";
 import type { AgentSummaryView } from "@/lib/grove/api";
 
 /** The kinds whose launch has two modes; every other kind has only its terminal. */
-const NATIVE_KINDS: ReadonlySet<AgentSummaryView["kind"]> = new Set(["claude_code", "codex"]);
+const NATIVE_KINDS: ReadonlySet<AgentSummaryView["kind"]> = new Set([
+  "claude_code",
+  "codex",
+  "opencode",
+]);
 
 /** Which channel Grove drives the agent over, as the row's second line. */
 export function sessionModeLabel(native: boolean): string {

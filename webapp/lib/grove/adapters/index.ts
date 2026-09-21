@@ -20,6 +20,7 @@ export {
   peekFromActivity,
   pendingQuestions,
   primarySessionId,
+  primarySessionIdOf,
   queueFingerprint,
   streamAction,
   turnsProgressFingerprint,
@@ -99,6 +100,7 @@ export {
 } from "./launch";
 
 export { mergeTurns, turnCursor } from "./turns";
+export type { MergeDirection } from "./turns";
 export type { HeldWindow, TurnMerge, TurnWindow } from "./turns";
 
 export { questionGroups, questionPresentation } from "./question";
@@ -156,6 +158,7 @@ export type { AgentPlanProps, TodoListProps } from "./todo";
 export {
   asToolCall,
   formatToolDuration,
+  shouldFetchToolBody,
   toolCallFields,
   toolCallStatus,
   toolCallStatusLabel,
@@ -176,3 +179,37 @@ export type {
   NotificationPartData,
   QuestionPartData,
 } from "./transcript";
+
+export {
+  accountSummaries,
+  accountSummary,
+  EMPTY_CONTEXT,
+  EMPTY_COUNTS,
+  fitAccounts,
+  fleetCounts,
+  hiddenNeedsAttention,
+  MAX_INLINE_ACCOUNTS,
+  EMPTY_PROGRESS,
+  fleetAttention,
+  fleetProgress,
+  hasGitActivity,
+  percentLabel,
+  projectContext,
+  projectSubpath,
+  quotaSummary,
+  sessionSummary,
+  systemFacts,
+  tightestWindow,
+  workspaceContext,
+} from "./footer";
+export type {
+  AccountFit,
+  AccountSummary,
+  FleetCounts,
+  FleetProgress,
+  FooterContext,
+  GitFacts,
+  QuotaSummary,
+  SessionSummary,
+  SystemFacts,
+} from "./footer";

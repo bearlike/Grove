@@ -325,6 +325,14 @@ class _GalleryMemo:
                 for item in self._items
             )
 
+    def census(self) -> list[tuple[Path, Path, list[Path]]]:
+        """The gallery's own worktree census, for the watch-root discovery.
+
+        Passed through rather than re-derived so bootstrap enumerates the
+        worktrees once; see ``DiagramGallery.census``.
+        """
+        return self._gallery.census()
+
     def reconcile(self) -> tuple[GalleryItem, ...]:
         """Explicitly rebuild diagrams when an event names no materialized item."""
         rows = self._sessions.snapshot()

@@ -35,7 +35,7 @@ _TIMEOUT_SECONDS = 10.0
 #: Which AgentKinds run as a host-installed CLI Grove itself must find on
 #: PATH. `generic` is user-defined (nothing to check); `mewbo` is a remote
 #: orchestrator reached over HTTP, not a local binary.
-_HOST_AGENT_KINDS: frozenset[AgentKind] = frozenset({"claude_code", "codex"})
+_HOST_AGENT_KINDS: frozenset[AgentKind] = frozenset({"claude_code", "codex", "opencode"})
 
 RequiredFor = Literal["container", "host", "all", "optional"]
 """Which runtime a check GATES — ``optional`` gates nothing.

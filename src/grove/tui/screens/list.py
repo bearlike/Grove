@@ -59,7 +59,13 @@ from grove.core import (
     load_config,
 )
 from grove.core.activity import ActivityService
-from grove.core.agents import AgentActivity, SessionTurn
+from grove.core.agents import (
+    AgentActivity,
+    AgentQuestion,
+    QueuedMessage,
+    SessionControls,
+    SessionTurn,
+)
 from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.usage import UsageQuotasView
 from grove.core.phase import PhaseReport, TicketClaim
@@ -78,6 +84,7 @@ from grove.tui.screens.dashboard import DashboardScreen
 from grove.tui.screens.edit import EditWorkspaceScreen, RetryContainerization
 from grove.tui.screens.help import HelpScreen
 from grove.tui.screens.message import SendMessageScreen
+from grove.tui.screens.native_controls import NativeControlAction, NativeControlsScreen
 from grove.tui.screens.project_picker import ProjectPickerScreen, RepoChoice
 from grove.tui.screens.remap_session import RemapSessionScreen
 from grove.tui.screens.sessions import SessionsScreen
@@ -111,6 +118,39 @@ class QuotasLoaded(Message):
     def __init__(self, quotas: UsageQuotasView) -> None:
         super().__init__()
         self.quotas = quotas
+
+
+class NativeControlsLoaded(Message):
+    """One-shot native-controls snapshot, read off the UI thread.
+
+    Bundles everything the modal needs to render without touching the
+    manager again: the filesystem-scanned control surface, the harness queue
+    (with its own supported/empty distinction — see `Manager.queue_supported`,
+    the same seam the daemon's `/queue` route calls, so the TUI never
+    provider-branches to decide it), and the live pending question batch plus
+    the session id it must answer against (`ActivityService.sessions_for`,
+    the screen's existing agent-activity seam — never derived from
+    `state.agent_session_id` alone, which a native Codex workspace mints
+    nothing into).
+    """
+
+    def __init__(
+        self,
+        workspace_id: str,
+        *,
+        controls: SessionControls,
+        queue: tuple[QueuedMessage, ...],
+        queue_supported: bool,
+        questions: tuple[AgentQuestion, ...],
+        session_id: str | None,
+    ) -> None:
+        super().__init__()
+        self.workspace_id = workspace_id
+        self.controls = controls
+        self.queue = queue
+        self.queue_supported = queue_supported
+        self.questions = questions
+        self.session_id = session_id
 
 
 class TicketsResolved(Message):
@@ -553,6 +593,128 @@ class WorkspaceListScreen(Screen[None]):
             self._safe_call("message", lambda: self._manager.send_message(wid, text), key=wid)
 
         self.app.push_screen(SendMessageScreen(workspace_title=title), _on_result)
+
+    def action_native_controls(self) -> None:
+        """Open the compact native-session controls modal.
+
+        Every read (control surface, queue, pending questions) is I/O — a
+        filesystem scan, a possible harness-queue read, a transcript parse —
+        so it runs on a worker thread and the modal is pushed only once the
+        snapshot lands (`_open_native_controls`), never built inline on the
+        UI thread. Gated the same as `m`: RUNNING-family only, and refused
+        with a flash rather than opening a modal with nothing to control.
+        """
+        wid = self._selected_id()
+        if wid is None:
+            self._flash("nothing selected")
+            return
+        peek = self._safe_peek(wid)
+        if peek is not None and peek.state.status not in LIVE_STATUSES:
+            self._flash("native controls need a live session")
+            return
+        self.run_worker(
+            lambda: self._read_native_controls(wid),
+            thread=True,
+            group="native-controls",
+        )
+
+    def _read_native_controls(self, wid: str) -> None:
+        """Worker body: the three best-effort reads the modal needs, bundled.
+
+        `session_controls` already degrades to `SessionControls.empty()` on
+        any scan failure; the queue and pending-question reads mirror that
+        discipline here so one flaky read never blocks the other two.
+        """
+        try:
+            controls = self._manager.session_controls(wid)
+        except GroveError as exc:
+            logger.debug("session_controls for {} failed: {}", wid, exc)
+            controls = SessionControls.empty()
+        queue: tuple[QueuedMessage, ...] = ()
+        # `queue_supported` is the same seam the daemon's `/queue` route
+        # already calls to answer "empty" vs "cannot observe" — see
+        # `Manager.pending_queue`'s own docstring on that distinction. Never
+        # re-derived from the adapter kind here, or the TUI would grow the
+        # provider branch the manager exists to own.
+        queue_supported = False
+        try:
+            queue = self._manager.pending_queue(wid)
+            queue_supported = self._manager.queue_supported(wid)
+        except GroveError as exc:
+            logger.debug("pending_queue for {} failed: {}", wid, exc)
+        questions: tuple[AgentQuestion, ...] = ()
+        session_id: str | None = None
+        try:
+            state = self._manager.get(wid)
+            sessions = self._service.sessions_for(self._manager, state)
+        except Exception as exc:  # best-effort, peek contract
+            logger.debug("pending questions for {} failed: {}", wid, exc)
+        else:
+            if sessions:
+                primary = sessions[0]
+                questions = primary.activity.questions
+                session_id = primary.session.session_id
+        self.post_message(
+            NativeControlsLoaded(
+                wid,
+                controls=controls,
+                queue=queue,
+                queue_supported=queue_supported,
+                questions=questions,
+                session_id=session_id,
+            )
+        )
+
+    def on_native_controls_loaded(self, message: NativeControlsLoaded) -> None:
+        """Push the modal now that its snapshot is in hand — the UI-thread half."""
+        if self._selected_id() != message.workspace_id:
+            return  # selection moved while the read was in flight
+        state = self._selected_state()
+        title = state.title if state is not None else message.workspace_id[:8]
+        wid = message.workspace_id
+
+        def _on_result(action: NativeControlAction | None) -> None:
+            if action is None:
+                return
+            self._dispatch_native_control(wid, action)
+
+        self.app.push_screen(
+            NativeControlsScreen(
+                workspace_title=title,
+                controls=message.controls,
+                queue=message.queue,
+                queue_supported=message.queue_supported,
+                questions=message.questions,
+                session_id=message.session_id,
+            ),
+            _on_result,
+        )
+
+    def _dispatch_native_control(self, wid: str, action: NativeControlAction) -> None:
+        """Route the modal's returned intent to the matching manager verb.
+
+        One `_safe_call` per intent, same as every other lifecycle/steer verb
+        on this screen — a typed refusal (`CapabilityUnavailable`, a pending-
+        question mismatch) surfaces as the ordinary error flash rather than a
+        second error path.
+        """
+        if action.kind == "interrupt":
+            self._safe_call("interrupt", lambda: self._manager.interrupt(wid), key=wid)
+        elif action.kind == "compact":
+            self._safe_call(
+                "compact", lambda: self._manager.invoke_control(wid, "compact"), key=wid
+            )
+        elif action.kind == "model":
+            model = action.value or ""
+            self._safe_call("model", lambda: self._manager.switch_model(wid, model), key=wid)
+        elif action.kind == "command":
+            name = action.value or ""
+            self._safe_call("command", lambda: self._manager.invoke_control(wid, name), key=wid)
+        elif action.kind == "answer":
+            request = action.answer
+            if request is None:
+                return
+            self._safe_call("answer", lambda: self._manager.answer_question(wid, request), key=wid)
 
     def action_focus_filter(self) -> None:
         bar = self.query_one(FilterBar)
@@ -1464,16 +1626,17 @@ _AVAILABLE_KEYS_BY_STATUS: dict[WorkspaceStatus, frozenset[str]] = {
     # Sessions ('s') is permitted in EVERY status — transcripts outlive
     # worktrees (they live in the agent tool's own data dir), so even an
     # orphaned record's history is readable.
-    # Message ('m') is RUNNING-family only — same gate family as pause:
-    # steering needs a live session (the engine refuses OFFLINE/PAUSED with
-    # a typed error; the footer dims the key so the modal isn't a trap).
+    # Message ('m') and native controls ('c') are RUNNING-family only — same
+    # gate family as pause: steering needs a live session (the engine refuses
+    # OFFLINE/PAUSED with a typed error; the footer dims the key so the modal
+    # isn't a trap).
     # Remap ('x') shares edit's gate exactly — same `ensure_can_update`
     # rule the engine's `remap_session` enforces (a doomed ORPHANED record
     # gains nothing from a re-pinned session).
-    WorkspaceStatus.ACTIVE: frozenset({"enter,a", "m", "e", "s", "x", "p", "k"}),
-    WorkspaceStatus.IDLE: frozenset({"enter,a", "m", "e", "s", "x", "p", "k"}),
+    WorkspaceStatus.ACTIVE: frozenset({"enter,a", "m", "c", "e", "s", "x", "p", "k"}),
+    WorkspaceStatus.IDLE: frozenset({"enter,a", "m", "c", "e", "s", "x", "p", "k"}),
     WorkspaceStatus.RUNNING: frozenset(
-        {"enter,a", "m", "e", "s", "x", "p", "k"}
+        {"enter,a", "m", "c", "e", "s", "x", "p", "k"}
     ),  # raw intent leak
     WorkspaceStatus.PAUSED: frozenset({"e", "s", "x", "R", "k"}),
     WorkspaceStatus.OFFLINE: frozenset({"e", "s", "x", "o", "k"}),

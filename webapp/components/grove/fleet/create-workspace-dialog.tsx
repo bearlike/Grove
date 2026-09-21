@@ -193,7 +193,9 @@ function CreateWorkspaceForm({
   }, [agents.data, agentName]);
   // The mode's default belongs to the ENTRY, so a choice made against one
   // agent is not an answer about the next (the landing page's RULE 1b).
-  const hasSessionMode = agent !== undefined && (agent.kind === "claude_code" || agent.kind === "codex");
+  const hasSessionMode =
+    agent !== undefined &&
+    (agent.kind === "claude_code" || agent.kind === "codex" || agent.kind === "opencode");
 
   const submit = (event: React.FormEvent): void => {
     event.preventDefault();

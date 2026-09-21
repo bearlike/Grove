@@ -7,8 +7,12 @@
  */
 
 export { groveClient, POLL_MS } from "./client";
+export { useSubagentFleet, useSubagentFleetStream } from "./subagent-fleet";
+export type { SubagentFleetData } from "./subagent-fleet";
 export { usePublicDiff, usePublicTurns, usePublicWorkspace } from "./public";
 export { groveKeys } from "./keys";
+export { ToolBodyProvider, useToolBody, useToolBodySource } from "./tool-body";
+export type { ToolBodySource } from "./tool-body";
 export { useGallery, useGalleryDocument, useGalleryPreview, useSaveGalleryPreview } from "./gallery";
 
 export {
@@ -31,6 +35,7 @@ export {
   useWorkspaceCommits,
   useWorkspaceDiff,
   useWorkspacePanels,
+  useWorkspaceActivity,
   useWorkspacePeek,
   useWorkspaceQueue,
   useWorkspaceSessionCandidates,

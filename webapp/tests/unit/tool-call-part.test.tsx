@@ -28,6 +28,7 @@ const BASH: ToolCallView = {
   input: { command: "rg -n 'todo' src", description: "Search the tree" },
   result: "src/a.ts:12: todo\n",
   duration_ms: 1450,
+  body: "inline",
 };
 
 /** The vendored part props, with the fields this renderer never reads stubbed.

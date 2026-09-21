@@ -39,7 +39,11 @@ from grove.core.errors import ProcessError
 # all (mewbo is remote, generic has no known binary) — this maps the real
 # `/proc/<pid>/comm` value (verified on-host: a running Claude Code CLI's comm
 # is literally ``claude``) to the matching `AgentAdapter.kind` discriminator.
-_RUNTIME_KINDS: Final[dict[str, str]] = {"claude": "claude_code", "codex": "codex"}
+_RUNTIME_KINDS: Final[dict[str, str]] = {
+    "claude": "claude_code",
+    "codex": "codex",
+    "opencode": "opencode",
+}
 
 
 def spawn_detached(
@@ -131,8 +135,23 @@ class ProcessTree:
             ordered.extend(sorted(descendants))
         return cls(tuple((pid, rows[pid][1]) for pid in reversed(ordered)), proc_root)
 
+    def kill_and_wait(self, *, timeout: float = 5.0) -> None:
+        """SIGKILL the captured incarnations. The backstop for a declined SIGTERM.
+
+        Reserved for survivors that already ignored both tmux's SIGHUP and a
+        SIGTERM -- a shell wedged in a startup loop on an unlinked cwd never
+        reaches a point where it handles a catchable signal, so nothing short
+        of SIGKILL reclaims the core it is spinning. Identity-guarded on the
+        captured start time exactly as `terminate_and_wait`, so a recycled pid
+        is never signalled.
+        """
+        self._signal_and_wait(signal.SIGKILL, timeout=timeout)
+
     def terminate_and_wait(self, *, timeout: float = 5.0) -> None:
         """Signal only the captured incarnations, then refuse overlap on timeout."""
+        self._signal_and_wait(signal.SIGTERM, timeout=timeout)
+
+    def _signal_and_wait(self, sig: signal.Signals, *, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         # Children exit before their ancestors, so a refusal leaves the pane's
         # ancestry available to inspect again rather than orphaning a provider.
@@ -141,7 +160,7 @@ class ProcessTree:
             if identity is None or identity[1] != start:
                 continue
             try:
-                os.kill(pid, signal.SIGTERM)
+                os.kill(pid, sig)
             except ProcessLookupError:
                 continue
             except OSError as exc:
@@ -155,6 +174,63 @@ class ProcessTree:
                         "native runtime did not stop; refusing to launch another owner"
                     )
                 time.sleep(0.05)
+
+
+def reap_cwd_holders(
+    root: Path, *, proc_root: Path = Path("/proc"), timeout: float = 2.0
+) -> tuple[int, ...]:
+    """Signal every process whose cwd is inside ``root``. Returns the pids hit.
+
+    The teardown counterpart to :func:`list_agent_runtimes`: that one answers
+    "which agents are alive", this one answers "who is standing in the
+    directory I am about to unlink". Unlinking it out from under them is what
+    strands a shell on a dead cwd, and a git/node-aware prompt then spins a
+    full core re-globbing a path that no longer resolves (measured on the
+    reference host 2026-09-18: nine survivors, ~7.6 of 8 cores, 9.5 CPU-days).
+
+    Scans ALL pids rather than a pane subtree on purpose -- the survivors
+    reparent to ``systemd --user`` the moment their tmux session dies, so by
+    teardown they are no longer descendants of anything Grove can name. Reads
+    only the calling user's processes: a foreign-uid ``/proc/<pid>/cwd`` raises
+    ``PermissionError`` and is skipped.
+
+    Never raises -- it runs on a teardown path and a failure to enumerate must
+    not turn a good pause into an error.
+    """
+    if sys.platform != "linux":
+        return ()
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return ()
+    root = root.resolve() if root.exists() else root
+    pids: list[int] = []
+    for entry in entries:
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            # A deleted cwd reads back as "/path (deleted)"; strip the marker so
+            # a worktree already half-removed still matches.
+            cwd = os.readlink(entry / "cwd").removesuffix(" (deleted)")
+        except OSError:
+            continue  # vanished mid-scan, or another user's process
+        if cwd == str(root) or cwd.startswith(f"{root}/"):
+            pids.append(int(entry.name))
+    if not pids:
+        return ()
+    try:
+        tree = ProcessTree.capture(tuple(pids), proc_root=proc_root, include_roots=True)
+    except ProcessError:
+        return ()
+    try:
+        tree.terminate_and_wait(timeout=timeout)
+    except ProcessError:
+        # Already declined SIGTERM; a shell wedged mid-rc never handles one.
+        try:
+            tree.kill_and_wait(timeout=timeout)
+        except ProcessError as exc:
+            logger.warning("could not clear processes holding {}: {}", root, exc)
+    return tuple(pids)
 
 
 @dataclass(slots=True, frozen=True)

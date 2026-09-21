@@ -101,6 +101,47 @@ def test_binary_of_takes_the_executable_from_the_configured_command(
     assert AgentVersionProbe.binary_of(command) == binary
 
 
+@pytest.mark.parametrize(
+    ("command", "argv"),
+    [
+        ("opencode", ("opencode", "models")),
+        # A LAUNCH flag is dropped: it configures an interactive session, and a
+        # subcommand is not one. Measured — `opencode --auto models` reads
+        # `models` as the positional DIRECTORY and dies with "Failed to change
+        # directory to …/models", which killed the picker just as an empty
+        # catalog does.
+        ("/opt/custom-opencode --pure", ("/opt/custom-opencode", "models")),
+        # The case `binary_of` gets wrong: the first token is the WRAPPER, so a
+        # probe built from it runs `ssm-cli models`, which is not a command.
+        # The wrapper's OWN arguments survive — they name which credentials to
+        # fetch — while the wrapped tool's flags do not.
+        (
+            "ssm-cli run --project opencode -- opencode",
+            ("ssm-cli", "run", "--project", "opencode", "--", "opencode", "models"),
+        ),
+        (
+            "ssm-cli run --project opencode -- opencode --auto",
+            ("ssm-cli", "run", "--project", "opencode", "--", "opencode", "models"),
+        ),
+        ('claude "unbalanced', ()),  # a hand-edited command must not raise
+        ("", ()),
+        ("ssm-cli run --", ()),  # a trailing separator wraps no binary
+    ],
+)
+def test_probe_argv_keeps_the_probe_inside_a_credential_wrapper(
+    command: str, argv: tuple[str, ...]
+) -> None:
+    """A probe runs the whole configured command, not its first token.
+
+    `binary_of` answers "which executable is this", which is right for a
+    version probe and wrong for a SUBCOMMAND probe: a gateway profile execs
+    the real tool after `--`, so the first token is the credential injector.
+    Appending to the whole command reaches the right binary and inherits the
+    credentials the wrapper exists to supply.
+    """
+    assert AgentVersionProbe.probe_argv(command, "models") == argv
+
+
 def test_an_empty_command_probes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []
     _counting_probe(monkeypatch, calls, "1.0")

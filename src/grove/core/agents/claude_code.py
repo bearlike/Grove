@@ -81,6 +81,7 @@ from grove.core.agents.model import (
 )
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 from grove.core.agents.transcript_scope import config_dir_override
+from grove.core.agents.turn_projection import TurnProjection, window_turns
 from grove.core.mailboxes import MailboxEnvelope
 
 # Markers that flag a ``type:"user"`` line as machinery, not a human turn:
@@ -276,6 +277,35 @@ def _parse_timestamp(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _nonempty_str(value: Any) -> str | None:
+    """A non-blank string, else ``None`` — the head read's one narrowing rule."""
+    return value if isinstance(value, str) and value else None
+
+
+def _decode_head_line(line: str) -> dict[str, Any] | None:
+    """One head line as a record dict, or ``None`` for anything unusable.
+
+    Blank lines, malformed JSON and non-object records are all "skip this line",
+    so they collapse into one predicate rather than three branches at each of
+    the head read's call sites.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+    try:
+        rec = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def _head_prompt(rec: dict[str, Any], index: int) -> str | None:
+    """A head record's first-prompt text, through the SAME real-human-turn rule
+    the parser applies — never a looser one, or a preamble becomes a label."""
+    wrapped = _Record(rec, index)
+    return _truncate(wrapped.text(), _TASK_TEXT_CAP) if wrapped.is_human_turn else None
 
 
 class _ClaudeHome:
@@ -530,7 +560,7 @@ class _ClaudeHome:
                 session_id = path.stem
                 if session_id == exclude_id or not path.is_file():
                     continue
-                recorded_cwd, birth, _branch = cls._head_cwd_and_birth(path)
+                recorded_cwd, birth, _branch, _first_prompt = cls._head_cwd_and_birth(path)
                 if recorded_cwd != target:
                     continue
                 try:
@@ -560,62 +590,46 @@ class _ClaudeHome:
     @staticmethod
     def _head_cwd_and_birth(
         path: Path, *, max_lines: int = 200
-    ) -> tuple[str | None, datetime | None, str | None]:
-        """The ``(cwd, birth, git_branch)`` this session recorded, from ONE
-        bounded head read.
+    ) -> tuple[str | None, datetime | None, str | None, str | None]:
+        """The ``(cwd, birth, git_branch, first_prompt)`` this session recorded,
+        from ONE bounded head read.
 
         Modern transcripts open with cwd-less preamble lines (``mode``,
         ``file-history-snapshot``, ``summary``); the ``cwd`` first appears a few
         lines in (the first ``attachment``/``user`` record) and the earliest
-        timestamped record (records are time-sorted) is the session BIRTH.
-        Line 0 never carries a cwd, so reading only that line yields ``None``
-        for every real transcript, which silently breaks all cwd-based
-        discovery and locate tie-breaking. All three facts ride out of one
-        head read (bounded by ``max_lines`` so a pathological file costs no
-        more than a head-read; all are near the top in practice), so the
-        cheap adoption pre-filter never pays a full parse. ``git_branch``
-        rides the SAME record as
-        ``cwd`` (verified on-host: 374/374 real transcripts carry both on one
-        line), so this costs no extra I/O over the ``(cwd, birth)`` shape the
-        hot-path callers below already relied on — they simply ignore the third
-        element.
+        timestamped record in the bounded head is the session BIRTH. Line 0
+        usually carries neither, so reading only that line silently breaks cwd
+        discovery and locate tie-breaking. ``git_branch`` rides the same record
+        as ``cwd``; ``first_prompt`` uses the parser's real-human-turn predicate,
+        so provider/harness preambles never become labels. The scan stays bounded
+        by ``max_lines``: a transcript whose prompt appears later degrades to
+        ``None`` rather than turning a listing back into a full-file read.
         """
         first_cwd: str | None = None
         first_birth: datetime | None = None
         first_branch: str | None = None
+        first_prompt: str | None = None
         try:
             with path.open(encoding="utf-8") as fh:
                 for index, line in enumerate(fh):
                     if index >= max_lines:
                         break
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        rec = json.loads(stripped)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(rec, dict):
+                    rec = _decode_head_line(line)
+                    if rec is None:
                         continue
                     if first_cwd is None:
-                        cwd = rec.get("cwd")
-                        if isinstance(cwd, str) and cwd:
-                            first_cwd = cwd
+                        first_cwd = _nonempty_str(rec.get("cwd"))
                     if first_branch is None:
-                        branch = rec.get("gitBranch")
-                        if isinstance(branch, str) and branch:
-                            first_branch = branch
+                        first_branch = _nonempty_str(rec.get("gitBranch"))
                     if first_birth is None:
                         first_birth = _parse_timestamp(rec.get("timestamp"))
-                    if (
-                        first_cwd is not None
-                        and first_birth is not None
-                        and first_branch is not None
-                    ):
+                    if first_prompt is None:
+                        first_prompt = _head_prompt(rec, index)
+                    if None not in (first_cwd, first_birth, first_branch, first_prompt):
                         break
         except OSError:
-            return (None, None, None)
-        return (first_cwd, first_birth, first_branch)
+            return (None, None, None, None)
+        return (first_cwd, first_birth, first_branch, first_prompt)
 
     @classmethod
     def discover_all(cls) -> tuple[SessionRef, ...]:
@@ -648,7 +662,7 @@ class _ClaudeHome:
                     if not path.is_file():
                         continue
                     session_id = path.stem
-                    cwd, birth, branch = cls._head_cwd_and_birth(path)
+                    cwd, birth, branch, _first_prompt = cls._head_cwd_and_birth(path)
                     try:
                         st = path.stat()
                         mtime = st.st_mtime
@@ -1208,8 +1222,22 @@ class _Record:
         value = self._compact_metadata.get("cumulativeDroppedTokens")
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
+    @property
+    def compaction_duration_ms(self) -> int | None:
+        """``compactMetadata.durationMs`` — how long the harness spent compacting.
+
+        Native and per-event (unlike ``cumulativeDroppedTokens`` beside it, which
+        needs a delta), present on 52 of 52 real boundaries on-host. Read
+        defensively anyway: a negative value would be a clock artefact rather
+        than a duration, and is refused instead of being published as one.
+        """
+        value = self._compact_metadata.get("durationMs")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
     def compaction_boundary(
-        self, *, summary: str = "", previous_total: int = 0
+        self, *, summary: str = "", previous_total: int = 0, model: str | None = None
     ) -> CompactionBoundary:
         """This boundary record as a :class:`CompactionBoundary`.
 
@@ -1225,6 +1253,11 @@ class _Record:
         ``trigger`` is passed through only when it is one of the two values
         Claude Code actually writes — a third spelling is a provider change we
         have not measured, and coercing it would invent a fact.
+
+        ``model`` is supplied by the caller because the record cannot answer it:
+        the boundary carries no model-shaped key at all (0 of 52 on-host), so the
+        value is the model in effect when it was written, which only a walk over
+        the surrounding records can establish.
         """
         trigger = self._compact_metadata.get("trigger")
         total = self.cumulative_dropped_tokens
@@ -1234,6 +1267,8 @@ class _Record:
             at=self.timestamp,
             dropped_tokens=dropped,
             summary=summary,
+            duration_ms=self.compaction_duration_ms,
+            model=model,
         )
 
     @property
@@ -1394,11 +1429,11 @@ class _Record:
                 kind="peer",
                 sender=facts.sender,
                 recipient=facts.recipient,
-                # A peer message has no subject line; the intent ("request" /
-                # "information") is the nearest honest thing, and inventing one
-                # from the body's first line would be summarising a stranger's
-                # words in Grove's voice.
-                subject=facts.intent,
+                # The writer's own subject line, carried verbatim. `None` for a
+                # message predating the field — never synthesized from the
+                # body's first line, which would summarise a stranger's words
+                # in Grove's voice.
+                subject=facts.subject,
                 body=facts.body,
             )
         envelope = _PEER_ENVELOPE_RE.search(self.text())
@@ -1949,6 +1984,125 @@ class _ActivityFolder:
         )
 
 
+class _QueueFolder:
+    """The harness's own queue ledger, folded one record at a time.
+
+    Incremental because the ~1 Hz activity tick asks every workspace for its
+    queue DEPTH, and the fold's inputs are a handful of ``queue-operation``
+    records scattered through a history that is mostly assistant work: rebuilding
+    it per tick read the whole transcript to answer a question whose state had
+    not moved. Folding on admission makes an idle session cost one ``stat`` and a
+    busy one only its appended records, which is what every other projection here
+    already does.
+
+    Claude Code narrates its queue as it mutates it: ``enqueue`` pushes,
+    ``remove`` pops a named message (the delivery pop — it sits immediately
+    before the ``queued_command`` attachment), ``popAll`` clears, and ``dequeue``
+    pops the front.
+
+    **An op that names nothing pops the FRONT, and that is an assumption rather
+    than a reading.** Measured over 3548 real ops: every one of the 278
+    ``dequeue`` records is contentless, and so are 22 of the 1403 ``remove``
+    records — so the contentless branch is not a ``dequeue`` special case but the
+    shape either op can take, and keying it to the op NAME would leave those 22
+    removes silently unapplied. Where the assumption could disagree with the
+    ``queued_command`` attachment, the attachment wins: it is a WITNESS to an
+    actual delivery where FIFO is an inference about one.
+
+    That precedence is why a contentless dequeue is DEFERRED rather than applied
+    where it is read. A dequeue and the delivery that follows it are one event,
+    so popping eagerly and then dropping the witness by content removes TWO
+    messages for one delivery — which is what the first version of this fold did,
+    silently, and only for the shape the assumption was written for. **The
+    deferred pop is therefore settled at READ time as well as on the next op**:
+    incrementally there is no "end of the records", so :meth:`pending` resolves
+    an outstanding deferral against the queue as it stands without consuming it,
+    and a witness arriving in a later chunk still answers it.
+
+    Ordered by the position the harness currently implies (insertion order),
+    which is what it reports and not a promise about what it will do.
+
+    **A finished session can legitimately report a residual queue**, and it is the
+    harness's ledger rather than a fold bug: across the 25 busiest sessions on the
+    reference host the ops record 1811 enqueues against 1737 pops, leaving 70
+    messages the harness took and never narrated delivering (mostly re-queued
+    background notices). Reconciling that away would mean Grove keeping a second,
+    corrected queue — the one thing this axis must not do.
+    """
+
+    __slots__ = ("_deferred_pop", "_queued", "_removed_identity")
+
+    def __init__(self) -> None:
+        self._queued: list[tuple[str, datetime | None]] = []
+        # A contentless dequeue awaiting either its witness or its FIFO fallback.
+        self._deferred_pop = False
+        self._removed_identity: str | None = None
+
+    def add(self, rec: _Record) -> None:
+        """Apply one record's queue effect, if it has one."""
+        if rec.is_queued:
+            if self._removed_identity == _TranscriptParser._queue_identity(rec.queued_prompt):
+                self._removed_identity = None
+                return
+            self._removed_identity = None
+            # The delivery this record witnesses is the one a preceding dequeue
+            # popped, so the witness ANSWERS that pop rather than adding to it.
+            # It answers nothing when the message is already gone, and then the
+            # FIFO fallback still owes a pop.
+            if self._drop(rec.queued_prompt):
+                self._deferred_pop = False
+            else:
+                self._settle_pop()
+            return
+        operation = rec.queue_operation
+        if operation is None:
+            return
+        self._settle_pop()
+        self._removed_identity = None
+        name, content = operation
+        if name == "enqueue":
+            self._queued.append((content, rec.timestamp))
+        elif name == "popAll":
+            self._queued.clear()
+        elif content:
+            if self._drop(content):
+                self._removed_identity = _TranscriptParser._queue_identity(content)
+        else:
+            self._deferred_pop = True
+
+    def pending(self) -> tuple[QueuedMessage, ...]:
+        """The queue as it stands, with any outstanding deferral applied.
+
+        Applied to a COPY: the deferral is settled non-destructively because a
+        witness may still arrive in a later chunk, and consuming it here would
+        pop the same message twice.
+        """
+        queued = self._queued
+        if self._deferred_pop and queued:
+            queued = queued[1:]
+        return tuple(
+            QueuedMessage(text=text, sent_at=at, position=i) for i, (text, at) in enumerate(queued)
+        )
+
+    def depth(self) -> int:
+        """How many messages are pending — the ~1 Hz tick's whole question."""
+        return max(0, len(self._queued) - (1 if self._deferred_pop else 0))
+
+    def _drop(self, content: str) -> bool:
+        identity = _TranscriptParser._queue_identity(content)
+        for i, (text, _) in enumerate(self._queued):
+            if _TranscriptParser._queue_identity(text) == identity:
+                del self._queued[i]
+                return True
+        return False
+
+    def _settle_pop(self) -> None:
+        if self._deferred_pop:
+            if self._queued:
+                del self._queued[0]
+            self._deferred_pop = False
+
+
 class _SubagentFleet:
     """Tracks spawned-but-unreturned sub-agents across one record stream.
 
@@ -2212,6 +2366,18 @@ class _TranscriptParser:
           history. The running total is accumulated in FOLD order (``index``,
           i.e. what the writer appended) rather than sorted order, for the same
           reason the join is by id.
+
+        **The MODEL that compacted is not on the record either** — 0 of 52 real
+        boundaries carry a model-shaped key anywhere — so it is taken from the
+        nearest preceding assistant message, which is the model that was in
+        effect when the harness compacted. That walk runs in SORTED order,
+        unlike the two joins above, and deliberately: "which model was running
+        just before this moment" is a question about the conversation's
+        chronology, where the id-joined facts are questions about one record's
+        own fields. A boundary with no assistant message before it (measured: 1
+        of 48) keeps ``None``; the session's configured default is NOT used as a
+        stand-in, because a mid-session ``/model`` switch makes it wrong exactly
+        when it differs from the running model.
         """
         summaries: dict[str, str] = {}
         for rec in self._records:
@@ -2220,13 +2386,26 @@ class _TranscriptParser:
                 summaries[parent] = rec.text()
 
         positions = {id(rec): position for position, rec in enumerate(self._records)}
+        # The model in effect at each boundary, by the boundary's SORTED
+        # position — one forward walk rather than a rescan per boundary.
+        models: dict[int, str | None] = {}
+        running: str | None = None
+        for position, rec in enumerate(self._records):
+            if rec.type == "assistant" and rec.model:
+                running = rec.model
+            elif rec.is_compact_boundary:
+                models[position] = running
+
         out: dict[int, CompactionBoundary] = {}
         previous_total = 0
         for rec in sorted(
             (r for r in self._records if r.is_compact_boundary), key=lambda r: r.index
         ):
-            out[positions[id(rec)]] = rec.compaction_boundary(
-                summary=summaries.get(rec.uuid or "", ""), previous_total=previous_total
+            position = positions[id(rec)]
+            out[position] = rec.compaction_boundary(
+                summary=summaries.get(rec.uuid or "", ""),
+                previous_total=previous_total,
+                model=models.get(position),
             )
             total = rec.cumulative_dropped_tokens
             if total is not None:
@@ -2247,97 +2426,14 @@ class _TranscriptParser:
         return header + content[opening.end() :]
 
     def pending_queue(self) -> tuple[QueuedMessage, ...]:
-        """What the harness is still holding, folded from its own ops — the
-        SAME records :meth:`messages` walks, so this costs no extra I/O.
-
-        Claude Code narrates its queue as it mutates it: ``enqueue`` pushes,
-        ``remove`` pops a named message (the delivery pop — it sits immediately
-        before the ``queued_command`` attachment), ``popAll`` clears, and
-        ``dequeue`` pops the front.
-
-        **An op that names nothing pops the FRONT, and that is an assumption
-        rather than a reading.** Measured over 3548 real ops: every one of the
-        278 ``dequeue`` records is contentless, and so are 22 of the 1403
-        ``remove`` records — so the contentless branch is not a ``dequeue``
-        special case but the shape either op can take, and keying it to the op
-        NAME would leave those 22 removes silently unapplied. Where the
-        assumption could disagree with the ``queued_command`` attachment, the
-        attachment wins: it is a WITNESS to an actual delivery where FIFO is an
-        inference about one.
-
-        That precedence is why a contentless dequeue is DEFERRED rather than
-        applied where it is read. A dequeue and the delivery that follows it are
-        one event, so popping eagerly and then dropping the witness by content
-        removes TWO messages for one delivery — which is what the first version
-        of this fold did, silently, and only for the shape the assumption was
-        written for. The deferred pop is applied when the next op or the end of
-        the records proves no witness is coming.
-
-        Ordered by the position the harness currently implies (insertion order),
-        which is what it reports and not a promise about what it will do.
-
-        **A finished session can legitimately report a residual queue**, and it
-        is the harness's ledger rather than a fold bug: across the 25 busiest
-        sessions on the reference host the ops record 1811 enqueues against 1737
-        pops, leaving 70 messages the harness took and never narrated delivering
-        (mostly re-queued background notices). Reconciling that away would mean
-        Grove keeping a second, corrected queue — the one thing this axis must
-        not do.
-        """
-        queued: list[tuple[str, datetime | None]] = []
-        # A contentless dequeue awaiting either its witness or its FIFO fallback.
-        deferred_pop = False
-        removed_identity: str | None = None
-
-        def _drop(content: str) -> bool:
-            identity = self._queue_identity(content)
-            for i, (text, _) in enumerate(queued):
-                if self._queue_identity(text) == identity:
-                    del queued[i]
-                    return True
-            return False
-
-        def _settle_pop() -> None:
-            nonlocal deferred_pop
-            if deferred_pop:
-                if queued:
-                    del queued[0]
-                deferred_pop = False
-
+        """What the harness is still holding — :class:`_QueueFolder` owns the
+        rules. A direct-parse caller replays the whole record list into a fresh
+        folder; the cached read path folds each appended record once and never
+        walks history again."""
+        folder = _QueueFolder()
         for rec in self._records:
-            if rec.is_queued:
-                if removed_identity == self._queue_identity(rec.queued_prompt):
-                    removed_identity = None
-                    continue
-                removed_identity = None
-                # The delivery this record witnesses is the one a preceding
-                # dequeue popped, so the witness ANSWERS that pop rather than
-                # adding to it. It answers nothing when the message is already
-                # gone, and then the FIFO fallback still owes a pop.
-                if _drop(rec.queued_prompt):
-                    deferred_pop = False
-                else:
-                    _settle_pop()
-                continue
-            operation = rec.queue_operation
-            if operation is None:
-                continue
-            _settle_pop()
-            removed_identity = None
-            name, content = operation
-            if name == "enqueue":
-                queued.append((content, rec.timestamp))
-            elif name == "popAll":
-                queued.clear()
-            elif content:
-                if _drop(content):
-                    removed_identity = self._queue_identity(content)
-            else:
-                deferred_pop = True
-        _settle_pop()
-        return tuple(
-            QueuedMessage(text=text, sent_at=at, position=i) for i, (text, at) in enumerate(queued)
-        )
+            folder.add(rec)
+        return folder.pending()
 
     def digest(self) -> OrderedDigest:
         """Ordered ``user / assistant / tool`` skeleton, ``tool_result`` stripped
@@ -2383,18 +2479,49 @@ class _TranscriptParser:
         return self._turns_from_messages(self.messages(), last=last)
 
     @classmethod
+    def render_turn_span(
+        cls, messages: Sequence[AgentMessage], board: TaskBoard
+    ) -> tuple[SessionTurn, ...]:
+        """Render ONE span of the spine against a carried task board.
+
+        The incremental projection's entry into the one builder: it renders a
+        frozen span once and the open span per read, so the board must be the
+        caller's rather than a fresh one per call.
+        """
+        return cls._turns_from_messages(messages, board=board)
+
+    @staticmethod
+    def starts_turn(message: AgentMessage, *, include_sidechain: bool = False) -> bool:
+        """Whether ``message`` opens a new turn in :meth:`_turns_from_messages`.
+
+        Published beside the builder because the incremental projection freezes
+        turns at these boundaries: a predicate that disagreed with the builder's
+        own cut would freeze a prefix corresponding to no turn it would emit.
+        """
+        if message.is_sidechain and not include_sidechain:
+            return False
+        return message.role == "user"
+
+    @classmethod
     def _turns_from_messages(
         cls,
         messages: Sequence[AgentMessage],
         *,
         last: int | None = None,
         include_sidechain: bool = False,
+        board: TaskBoard | None = None,
     ) -> tuple[SessionTurn, ...]:
         """The one turn-builder behind :meth:`turns` (main thread,
         ``include_sidechain=False``) and :meth:`ClaudeCodeAdapter.subagent_turns`
         (one already-thread-filtered sidechain, ``include_sidechain=True``) —
         so a sub-agent's rendered turns (question/file-edit/todo structuring,
         leading-continuation handling) can never drift from the main thread's.
+
+        ``board`` lets the incremental projection carry ONE running task fold
+        across a frozen turn boundary — a ``TaskUpdate`` in the open turn
+        routinely names a ``TaskCreate`` dozens of turns back, so restarting the
+        board per span would silently drop it. A caller that omits it gets the
+        per-parse board this builder has always created, unchanged.
         """
         turns: list[SessionTurn] = []
         entries: list[DigestEntry] = []
@@ -2410,7 +2537,9 @@ class _TranscriptParser:
         # TaskCreate/TaskUpdate calls into the running task list. `outcomes`
         # above already carries each call's own tool_result, which is also
         # where a TaskCreate's server-assigned id lives (see `TaskBoard`).
-        board = TaskBoard()
+        # An incremental caller supplies its own carried board instead.
+        if board is None:
+            board = TaskBoard()
 
         def _flush(user_text: str, started_at: datetime | None, sent_at: datetime | None) -> None:
             turns.append(
@@ -2891,6 +3020,18 @@ class ClaudeCodeAdapter:
     # aliases is indistinguishable from a complete one. ``claude --help``'s own
     # ``--model`` prose is the census; re-read it on a major release rather than
     # trusting this line. Ordered most- to least-capable.
+    #
+    # **There is no native enumeration to prefer over this, and that was
+    # MEASURED rather than assumed (2.1.274, 2026-09-17).** Three candidates
+    # were probed and all three refuse: the stream-json ``system/init`` frame
+    # carries the session's CURRENT ``model`` and no catalog; the binary's
+    # ``supportedModels`` is an SDK HOST DELEGATE (``supportedModels: () =>
+    # Promise.resolve(typeof Q === "function" ? Q() : Qt.models)``), so the
+    # embedding application supplies that list and a client launching the CLI
+    # has nobody to ask; and there is no ``--list-models`` or model subcommand
+    # on the CLI at all. So this tuple is the maintained fallback by necessity,
+    # not by preference — do not re-open it from the SDK's documentation, which
+    # describes a surface only an SDK host can reach.
     _MODEL_ALIASES: tuple[str, ...] = ("fable", "opus", "sonnet", "haiku")
 
     def available_models(self, command: str) -> tuple[str, ...]:
@@ -2973,13 +3114,11 @@ class ClaudeCodeAdapter:
             return ()
 
     def list_sessions(self, cwd: Path) -> list[SessionSummary]:
-        """Normalized summaries for every session recorded in ``cwd``, newest-first.
+        """Metadata-only summaries for every session in ``cwd``, newest-first.
 
-        One full parse per main transcript (sub-agent files are excluded from
-        the summary scope — they describe sidechains, not the session). The
-        same parse yields both the listing metadata and the point-in-time
-        ``activity``, so a listing never reads a file twice. Best-effort:
-        a session that fails to read still lists with empty metadata.
+        One bounded head read per main transcript; no full parser construction.
+        Parse products (activity/title/last prompt) stay ``None``. Best-effort:
+        a session whose head cannot be read still lists with empty metadata.
         """
         try:
             scanned = _ClaudeHome.discover_paths(cwd)
@@ -2988,7 +3127,9 @@ class ClaudeCodeAdapter:
             return []
         return [self._summarize(sid, path, mtime) for sid, path, mtime, _ in scanned]
 
-    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+    def session_summary(
+        self, cwd: Path, session_id: str, *, full: bool = False
+    ) -> SessionSummary | None:
         """One known session's row, found by UUID even after Claude Code has
         RE-HOMED its transcript — the relocation-tolerant read.
 
@@ -3006,17 +3147,24 @@ class ClaudeCodeAdapter:
             mtime = main.stat().st_mtime
         except OSError:  # vanished between the glob and the stat
             return None
+        if full:
+            return self._summarize_full(session_id, main, mtime)
         return self._summarize(session_id, main, mtime)
 
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None
     ) -> tuple[SessionTurn, ...]:
+        """The session's rendered turns, oldest first, windowed by ``last``.
+
+        Folder-owned for the reason ``read_messages`` is: an outer memo keyed on
+        a stat signature invalidates on any appended byte, and the rebuild then
+        re-renders every historical turn — O(history) per append on a file that
+        only ever grows. ``last`` is applied HERE, as a slice over the complete
+        tuple, so it is part of no cache key and two clients asking for
+        different windows share one projection.
+        """
         paths = self.locate_transcripts(cwd, session_id)
-        return _MEMO.get_or_compute(
-            ("turns", str(cwd), session_id, last),
-            paths,
-            lambda: _TranscriptParser(self._read(paths)).turns(last=last),
-        )
+        return window_turns(self._turns(paths), last)
 
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
         """The session's agentic-loop spine — the lineage-preserving
@@ -3069,12 +3217,22 @@ class ClaudeCodeAdapter:
         Folded from the ``queue-operation`` records the transcript already
         carries, through the SAME incremental read every other projection here
         uses — no new file, no new scan, and one ``stat`` on an idle session.
+
+        Projected through the FOLDER (:class:`_QueueFolder`) rather than built
+        from ``_read``: the ~1 Hz activity tick asks every workspace on the host
+        for its queue depth, and ``_read`` hands back the whole record history
+        for a parser to walk each time. Here the fold advanced on admission, so
+        an unchanged transcript costs a ``stat`` and a changed one costs its
+        appended records — the same shape ``parse_activity`` already has.
         """
         paths = self.locate_transcripts(cwd, session_id)
         return _MEMO.get_or_compute(
             ("queue", str(cwd), session_id),
             paths,
-            lambda: _TranscriptParser(self._read(paths)).pending_queue(),
+            lambda: _TRANSCRIPTS.project(
+                paths,
+                lambda folder: (cast(_RecordFolder, folder).pending_queue(), None),
+            ),
         )
 
     def latest_task(self, cwd: Path, session_id: str) -> str | None:
@@ -3348,16 +3506,37 @@ class ClaudeCodeAdapter:
 
     # ── internal ──────────────────────────────────────────────────────────
     def _summarize(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
-        """One session's listing row, from a single parse of its main transcript."""
-        return _MEMO.get_or_compute(
-            ("summary", session_id, str(path)),
-            [path],
-            lambda: self._summarize_uncached(session_id, path, mtime),
-        )
+        """One metadata-only listing row, from one bounded transcript head read."""
+        return self._summarize_uncached(session_id, path, mtime)
 
     def _summarize_uncached(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
-        records = self._read([path])
-        parser = _TranscriptParser(records)
+        cwd, birth, branch, first_prompt = _ClaudeHome._head_cwd_and_birth(path)
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = 0
+        return SessionSummary(
+            session_id=session_id,
+            adapter_kind=self.kind,
+            transcript_path=path,
+            cwd=cwd,
+            created_at=birth,
+            modified_at=(datetime.fromtimestamp(mtime, tz=UTC) if mtime > 0 else None),
+            size_bytes=size_bytes,
+            git_branch=branch,
+            first_prompt=first_prompt,
+        )
+
+    def _summarize_full(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
+        """One identity-keyed row, with the parse products an explicit read earns."""
+        return _MEMO.get_or_compute(
+            ("summary-full", session_id, str(path)),
+            [path],
+            lambda: self._summarize_full_uncached(session_id, path, mtime),
+        )
+
+    def _summarize_full_uncached(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
+        parser = _TranscriptParser(self._read([path]))
         try:
             size_bytes = path.stat().st_size
         except OSError:
@@ -3388,6 +3567,14 @@ class ClaudeCodeAdapter:
         history on each caller.
         """
         return _TRANSCRIPTS.read(paths)
+
+    @staticmethod
+    def _turns(paths: Sequence[Path]) -> tuple[SessionTurn, ...]:
+        """The folder's complete turn projection, under the fold lock."""
+        return _TRANSCRIPTS.project(
+            paths,
+            lambda folder: cast(_RecordFolder, folder).turn_projection(),
+        )
 
     @staticmethod
     def _messages(paths: Sequence[Path]) -> tuple[AgentMessage, ...]:
@@ -3466,8 +3653,11 @@ class _RecordFolder:
         "_newest_timestamp",
         "_ordered",
         "_ordered_keys",
+        "_queue",
+        "_queue_dirty",
         "_seen_lines",
         "_summaries",
+        "_turns",
         "_unique",
         "_unique_slots",
     )
@@ -3476,6 +3666,8 @@ class _RecordFolder:
         self._seen_lines: set[str] = set()
         self._activity = _ActivityFolder()
         self._activity_dirty = False
+        self._queue = _QueueFolder()
+        self._queue_dirty = False
         self._by_key: dict[tuple[str, str], _Record] = {}
         self._unique: list[_Record] = []
         self._unique_slots: dict[int, int] = {}
@@ -3489,6 +3681,11 @@ class _RecordFolder:
         self._last_boundary_total = 0
         self._messages_snapshot: tuple[AgentMessage, ...] = ()
         self._messages_dirty = True
+        self._turns: TurnProjection[TaskBoard] = TurnProjection(
+            render=_TranscriptParser.render_turn_span,
+            starts_turn=_TranscriptParser.starts_turn,
+            fork_carry=_fork_board,
+        )
 
     def add(self, raw: dict[str, Any], source: str) -> tuple[Any, ...]:
         """Fold one raw line and return every newly retained object graph root.
@@ -3518,7 +3715,7 @@ class _RecordFolder:
         if kept is not None:
             replacement = kept.with_continuation(rec)
             self._replace(key, kept, replacement)
-            self._activity_dirty = True
+            self._mark_dirty()
             return (replacement, *self._normalize(replacement))
 
         self._stamp_delivery(rec)
@@ -3528,8 +3725,11 @@ class _RecordFolder:
         self._insert_ordered(rec)
         if self._ordered[-1] is rec:
             self._activity.add(rec)
+            self._queue.add(rec)
         else:
-            self._activity_dirty = True
+            # An out-of-order arrival invalidates both folds for the same reason:
+            # each is a sequence of ops whose ORDER decides the result.
+            self._mark_dirty()
 
         boundary_uuid = rec.uuid
         if rec.is_compact_boundary and boundary_uuid:
@@ -3608,6 +3808,11 @@ class _RecordFolder:
         # ``index`` is unique, so the key identifies exactly one entry.
         self._ordered[position] = new
 
+    def _mark_dirty(self) -> None:
+        """Invalidate both order-dependent folds after an out-of-order mutation."""
+        self._activity_dirty = True
+        self._queue_dirty = True
+
     def activity(self) -> AgentActivity:
         """The current activity without a whole-history record walk on append."""
         if self._activity_dirty:
@@ -3616,6 +3821,34 @@ class _RecordFolder:
                 self._activity.add(rec)
             self._activity_dirty = False
         return self._activity.activity()
+
+    def pending_queue(self) -> tuple[QueuedMessage, ...]:
+        """The harness's outstanding queue, without re-reading history.
+
+        The replay on the dirty path is the same bounded exception
+        :meth:`activity` makes: a record that arrived out of timestamp order (or
+        a split-block replacement) changes what the op sequence means, and
+        replaying is cheaper than teaching the fold to undo itself.
+        """
+        if self._queue_dirty:
+            self._queue = _QueueFolder()
+            for rec in self._ordered:
+                self._queue.add(rec)
+            self._queue_dirty = False
+        return self._queue.pending()
+
+    def turns(self) -> tuple[SessionTurn, ...]:
+        """The complete turn projection, advanced only over appended messages."""
+        return self._turns.turns(self.messages())
+
+    def turn_projection(self) -> tuple[tuple[SessionTurn, ...], None]:
+        """The turn tuple, for the ``TranscriptCache.project`` callback shape.
+
+        The rendered turns point at objects already charged when their records
+        entered the fold; the tuple itself is caught by the cache's own shallow
+        re-measure of this folder, exactly as ``message_projection`` is.
+        """
+        return (self.turns(), None)
 
     def message_projection(self) -> tuple[tuple[AgentMessage, ...], None]:
         """The immutable spine, for the ``TranscriptCache.project`` callback shape.
@@ -3651,6 +3884,15 @@ class _RecordFolder:
         message = rec.to_message(boundary if isinstance(boundary, CompactionBoundary) else None)
         rec.cache_message(message)
         return (message,) if message is not None else ()
+
+
+def _fork_board(board: TaskBoard | None) -> TaskBoard:
+    """A board the open turn may fold into without touching the frozen carry.
+
+    The open turn is re-rendered on every read, so it must never advance the
+    persistent board — a ``TaskUpdate`` would otherwise apply once per poll.
+    """
+    return TaskBoard() if board is None else board.copy()
 
 
 _TRANSCRIPTS = TranscriptCache(_RecordFolder)

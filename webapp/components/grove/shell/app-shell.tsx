@@ -8,10 +8,26 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
+import { usePathname } from "next/navigation";
+
 import { Sheet, SheetClose, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  accountSummaries,
+  EMPTY_COUNTS,
+  EMPTY_PROGRESS,
+  fleetAttention,
+  fleetCounts,
+  fleetProgress,
+  projectContext,
+  systemFacts,
+  workspaceContext,
+} from "@/lib/grove/adapters";
+import { useUsageQuotas } from "@/lib/grove/hooks/usage";
+import { useWhoami } from "@/lib/grove/hooks";
+import { StatusFooter } from "@/components/grove/shell/status-footer";
 import { AnnotationHost } from "@/components/grove/annotation";
 import { FleetOverlays, useFleetStream } from "@/components/grove/fleet";
 import {
@@ -54,6 +70,64 @@ function useFleetSearch(
   );
 }
 
+/**
+ * The status footer's four sections, from the queries the shell already holds.
+ *
+ * Reads the SAME fleet snapshot the rail renders rather than opening a second
+ * subscription — the "one `EventSource` per APP" rule this shell already owns.
+ * Quota and identity are ordinary cached queries; both are served from the
+ * daemon's own TTL cache, so a permanently-mounted footer costs no upstream
+ * request per render.
+ *
+ * Context is route-derived: on `/w/<id>` the open workspace answers, and
+ * everywhere else the rail's selected project does. Mixing the two — one
+ * project's name beside another workspace's branch — is the one thing this
+ * band must never do, so exactly one of the two branches runs.
+ */
+function useFooterData(
+  stream: ReturnType<typeof useFleetStream>,
+  project: ReturnType<typeof useProjectContext>,
+) {
+  const pathname = usePathname();
+  const quotas = useUsageQuotas();
+  const whoami = useWhoami();
+
+  const workspaceId = pathname.startsWith("/w/")
+    ? (pathname.split("/")[2] ?? null)
+    : null;
+  const connected = stream.phase === "online" && !stream.error;
+
+  const context = useMemo(() => {
+    if (workspaceId !== null) {
+      const open = workspaceContext(stream.snapshot, workspaceId);
+      if (open !== null) return open;
+    }
+    return projectContext(stream.snapshot, project.selectedProjectCwd);
+  }, [project.selectedProjectCwd, stream.snapshot, workspaceId]);
+
+  // Counts are honest about the stream rather than the cache: a disconnected
+  // stream holds whatever it last saw, and rendering that as a live count is
+  // the silently-stale answer the footer's own contract refuses.
+  const counts = useMemo(
+    () => (connected ? fleetCounts(stream.snapshot) : EMPTY_COUNTS),
+    [connected, stream.snapshot],
+  );
+  const accounts = useMemo(() => accountSummaries(quotas.data), [quotas.data]);
+  const system = useMemo(() => systemFacts(whoami.data), [whoami.data]);
+  // Gated on the stream for the same reason the counts are: a cached snapshot
+  // read as a live aggregate is the silently-stale answer.
+  const progress = useMemo(
+    () => (connected ? fleetProgress(stream.snapshot) : EMPTY_PROGRESS),
+    [connected, stream.snapshot],
+  );
+  const attention = useMemo(
+    () => (connected ? fleetAttention(stream.snapshot) : 0),
+    [connected, stream.snapshot],
+  );
+
+  return { context, counts, accounts, system, connected, progress, attention };
+}
+
 /** The app's one shell, fleet stream, search controller, and app-level overlays. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const collapsed = useSidebarUi((state) => state.collapsed);
@@ -62,6 +136,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const stream = useFleetStream();
   const project = useProjectContext(stream.snapshot?.projects ?? []);
   const search = useFleetSearch(stream.snapshot, project);
+  const footer = useFooterData(stream, project);
   const searchOpener = useRef<HTMLElement | null>(null);
   const [searchAfterSheet, setSearchAfterSheet] = useState(false);
   useSidebarShortcuts();
@@ -116,7 +191,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="relative flex h-dvh w-full overflow-hidden">
+    // One column: the rail+page ROW, then the status footer beneath both.
+    // The row keeps `relative` and `h-dvh`'s bounded height moves to the
+    // column, so the rail's absolutely-positioned descendants still resolve
+    // against the row that CONTAINS the rail — the trap `webapp/CLAUDE.md`
+    // records as a page painting over the brand.
+    <div className="flex h-dvh w-full flex-col overflow-hidden">
+      <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
       <aside
         data-testid="app-sidebar"
         data-collapsed={collapsed}
@@ -191,6 +272,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           else closeSearch();
         }}
         onSearchCloseAutoFocus={returnFocus}
+      />
+      </div>
+
+      <StatusFooter
+        context={footer.context}
+        counts={footer.counts}
+        accounts={footer.accounts}
+        system={footer.system}
+        connected={footer.connected}
+        progress={footer.progress}
+        attention={footer.attention}
       />
     </div>
   );

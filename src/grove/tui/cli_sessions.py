@@ -101,11 +101,13 @@ def _listing_payload(ls: SessionListing) -> dict[str, Any]:
         "title": s.title,
         "first_prompt": s.first_prompt,
         "last_prompt": s.last_prompt,
-        "state": s.activity.state.value,
-        "human_turns": s.activity.human_turns,
-        "assistant_replies": s.activity.assistant_replies,
-        "tool_calls": s.activity.tool_calls,
-        "model": s.activity.model,
+        # Null across the board for a metadata-only row (`sessions list` without
+        # the full-parse enrichment) — "not parsed at this scope", never zero.
+        "state": s.activity.state.value if s.activity else None,
+        "human_turns": s.activity.human_turns if s.activity else None,
+        "assistant_replies": s.activity.assistant_replies if s.activity else None,
+        "tool_calls": s.activity.tool_calls if s.activity else None,
+        "model": s.activity.model if s.activity else None,
     }
 
 
@@ -253,7 +255,11 @@ def list_sessions(
         return
 
     explorer = _explorer()
-    listings = explorer.list(agent=agent, workspace=workspace, since=since_dt, limit=limit)
+    # The one consumer that renders STATE/TURNS, so it is the one that opts into
+    # the parse — paid per displayed row, after the filters and the limit.
+    listings = explorer.list(
+        agent=agent, workspace=workspace, since=since_dt, limit=limit, enrich=True
+    )
     if as_json:
         typer.echo(json.dumps([_listing_payload(ls) for ls in listings], indent=2))
         return
@@ -273,8 +279,8 @@ def list_sessions(
             f"{s.session_id[:8]:<10} "
             f"{s.adapter_kind:<12} "
             f"{_truncate(workspace_label, 19):<20} "
-            f"{s.activity.state.value:<8} "
-            f"{s.activity.human_turns:>5} "
+            f"{(s.activity.state.value if s.activity else '-'):<8} "
+            f"{(str(s.activity.human_turns) if s.activity else '-'):>5} "
             f"{_ago(s.modified_at):<16} "
             f"{_truncate(label, _TABLE_TEXT_CAP)}"
         )

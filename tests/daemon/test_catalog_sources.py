@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -26,6 +26,12 @@ class _Index:
     recoveries: int = 0
     bootstraps: int = 0
     bootstrap_thread: int | None = None
+    # (repo root, worktree, diagrams) as the gallery's own census reports it.
+    # Stated here rather than patched onto `GitRepo`, because the watch-root
+    # discovery now consumes the gallery's census instead of re-enumerating
+    # the worktrees itself — so this IS the boundary these tests stub.
+    scopes: list[tuple[Path, Path, list[Path]]] = field(default_factory=list)
+    censuses: int = 0
 
     def rows(self) -> tuple[object, ...]:
         self.bootstraps += 1
@@ -36,6 +42,10 @@ class _Index:
         self.bootstraps += 1
         self.bootstrap_thread = threading.get_ident()
         return ()
+
+    def census(self) -> list[tuple[Path, Path, list[Path]]]:
+        self.censuses += 1
+        return self.scopes
 
     def update_path(self, path: Path) -> bool:
         self.updates.append(path)
@@ -126,6 +136,9 @@ def _owner(
     state = _state(tmp_path)
     catalog = _Index([])
     gallery = _Index([])
+    # The one worktree `_state` materializes, holding no diagrams — the shape
+    # the removed `GitRepo` patches used to produce.
+    gallery.scopes = [(Path(state.repo_root), Path(state.repo_root) / ".worktrees" / "catalog", [])]
     return (
         _CatalogSources(
             catalog,  # type: ignore[arg-type]
@@ -142,16 +155,11 @@ def _owner(
 
 @pytest.mark.asyncio
 async def test_start_bootstraps_both_indexes_off_loop_then_updates_paths_in_catalog_order(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     changed: list[str] = []
     owner, catalog, gallery = _owner(tmp_path, lambda: changed.append("changed"))
     loop_thread = threading.get_ident()
-    monkeypatch.setattr(
-        "grove.daemon._catalog_sources.GitRepo.worktree_paths",
-        lambda repo: (repo._root / ".worktrees" / "catalog",),
-    )
-    monkeypatch.setattr("grove.daemon._catalog_sources.GitRepo.list_files", lambda *_: ())
 
     await owner.start()
     transcript_source = next(source for source in _Source.created if source.kwargs["recursive"])
@@ -174,14 +182,9 @@ async def test_start_bootstraps_both_indexes_off_loop_then_updates_paths_in_cata
 
 @pytest.mark.asyncio
 async def test_recursive_transcript_watch_covers_new_sessions_rotations_and_deletes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     owner, catalog, gallery = _owner(tmp_path, lambda: None)
-    monkeypatch.setattr(
-        "grove.daemon._catalog_sources.GitRepo.worktree_paths",
-        lambda repo: (repo._root / ".worktrees" / "catalog",),
-    )
-    monkeypatch.setattr("grove.daemon._catalog_sources.GitRepo.list_files", lambda *_: ())
     await owner.start()
     transcript_source = next(source for source in _Source.created if source.kwargs["recursive"])
     profile_root = tmp_path / "claude-profile" / "projects"
@@ -210,15 +213,8 @@ async def test_recursive_transcript_watch_covers_new_sessions_rotations_and_dele
 
 
 @pytest.mark.asyncio
-async def test_gallery_scopes_are_nonrecursive_at_workspace_roots(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_gallery_scopes_are_nonrecursive_at_workspace_roots(tmp_path: Path) -> None:
     owner, _catalog, _gallery = _owner(tmp_path, lambda: None)
-    monkeypatch.setattr(
-        "grove.daemon._catalog_sources.GitRepo.worktree_paths",
-        lambda repo: (repo._root / ".worktrees" / "catalog",),
-    )
-    monkeypatch.setattr("grove.daemon._catalog_sources.GitRepo.list_files", lambda *_: ())
 
     await owner.start()
 
@@ -236,20 +232,13 @@ async def test_gallery_scopes_are_nonrecursive_at_workspace_roots(
 
 
 @pytest.mark.asyncio
-async def test_overflow_invalidates_both_indexes_once_and_notifies_once(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_overflow_invalidates_both_indexes_once_and_notifies_once(tmp_path: Path) -> None:
     changed: list[str] = []
     owner, catalog, gallery = _owner(
         tmp_path,
         lambda: changed.append("changed"),
         limits=AdmissionLimits(max_items=1, max_bytes=1),
     )
-    monkeypatch.setattr(
-        "grove.daemon._catalog_sources.GitRepo.worktree_paths",
-        lambda repo: (repo._root / ".worktrees" / "catalog",),
-    )
-    monkeypatch.setattr("grove.daemon._catalog_sources.GitRepo.list_files", lambda *_: ())
     await owner.start()
     transcript_source = next(source for source in _Source.created if source.kwargs["recursive"])
     root = tmp_path / "claude-profile" / "projects"
@@ -273,14 +262,9 @@ async def test_overflow_invalidates_both_indexes_once_and_notifies_once(
 
 @pytest.mark.asyncio
 async def test_start_failure_closes_already_started_sources_and_close_is_idempotent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     owner, _catalog, _gallery = _owner(tmp_path, lambda: None)
-    monkeypatch.setattr(
-        "grove.daemon._catalog_sources.GitRepo.worktree_paths",
-        lambda repo: (repo._root / ".worktrees" / "catalog",),
-    )
-    monkeypatch.setattr("grove.daemon._catalog_sources.GitRepo.list_files", lambda *_: ())
     _Source.fail_at = 1
 
     with pytest.raises(RuntimeError, match="watcher could not start"):

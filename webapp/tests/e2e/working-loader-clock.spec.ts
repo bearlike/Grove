@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Page } from "@playwright/test";
 
 import { FIXTURE_ACTIVITY } from "./_fixtures";
 import type { DashboardSnapshotView } from "@/lib/grove/api";
@@ -147,6 +147,117 @@ test("a hidden document stands the animation down, and returning resumes it", as
   await setHidden(page, false);
   const visible = await frames(page);
   expect(new Set(visible).size).toBeGreaterThan(1);
+});
+
+/**
+ * THE READER WHO ASKED FOR LESS MOTION STILL GETS A MOVING MARK.
+ *
+ * Every test above runs at Playwright's default `no-preference`, so the suite
+ * only ever exercised the branch where the clock runs — which is exactly why
+ * the frozen matrix survived five fixes and reached a real reader. Under
+ * `reduce` all three animated layers stand down by design (the clock's
+ * `wanted()`, the breathe's `no-preference` query, the label's
+ * `motion-reduce:animate-none`), and what was left on screen was the vendored
+ * position math at tick zero: a static grid indistinguishable from a bug.
+ *
+ * This asserts the CSS fallback in `globals.css` supplies the motion instead.
+ * It cannot go through `frame()` — that samples the CLASS attribute, and the
+ * fallback animates a computed `opacity` the class never changes, so the class
+ * census is frozen here CORRECTLY. Read the rendered value instead.
+ */
+test.describe("reduced motion", () => {
+  /** Every cell's computed opacity, as the browser is painting it right now. */
+  async function opacities(page: Page): Promise<readonly string[]> {
+    return page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="working-mark"] div > span')].map(
+        (cell) => getComputedStyle(cell).opacity,
+      ),
+    );
+  }
+
+  /**
+   * A context that asks for less motion, opened explicitly rather than through
+   * `test.use` — the project's fixture type does not carry `reducedMotion`, and
+   * both existing reduced-motion specs (`top-left-layout`, `sidebar-sessions`)
+   * open their own context for the same reason.
+   */
+  async function reducedMotionPage(browser: Browser): Promise<Page> {
+    const context = await browser.newContext({ reducedMotion: "reduce" });
+    const page = await context.newPage();
+    await useWorkingFleet(page);
+    await page.goto("/fleet");
+    await expect(page.getByTestId("working-mark").first()).toBeVisible();
+    return page;
+  }
+
+  test("the matrix animates on CSS alone when the JS clock never starts", async ({ browser }) => {
+    const page = await reducedMotionPage(browser);
+    try {
+      // The clock must genuinely be down, or this passes on the clock's own
+      // work and proves nothing about the fallback. `frame()` reads the class
+      // the clock writes, so one distinct value across ~2s is that proof.
+      const classFrames = await frames(page);
+      expect(new Set(classFrames).size).toBe(1);
+
+      // The cells still have to be MOVING. Sampled off the animation's own
+      // period (2.4s) so two samples cannot land on one phase by luck.
+      const seen = new Set<string>();
+      for (let index = 0; index < 8; index += 1) {
+        seen.add((await opacities(page)).join(","));
+        await page.waitForTimeout(180);
+      }
+      expect(seen.size).toBeGreaterThan(1);
+
+      // The stagger IS the pattern with the clock down: without the per-cell
+      // delays every cell would hold one identical value and the grid would
+      // pulse as a single block rather than wave.
+      const sample = await opacities(page);
+      expect(sample.length).toBeGreaterThan(1);
+      expect(new Set(sample).size).toBeGreaterThan(1);
+    } finally {
+      await page.context().close();
+    }
+  });
+
+  test("the working label shimmers while the rail's empty label costs nothing", async ({
+    browser,
+  }) => {
+    const page = await reducedMotionPage(browser);
+    try {
+      // `WorkingMark` passes an empty label deliberately, and a shimmer over no
+      // glyphs is a per-frame repaint of nothing — the `:empty` rule must still
+      // win under `reduce`, where this rule re-arms the shimmer for real labels.
+      const mark = page.getByTestId("working-mark").locator(".shimmer").first();
+      expect(await mark.evaluate((node) => getComputedStyle(node).animationName)).toBe("none");
+
+      // The workspace transcript is the one surface with a real label. Navigate
+      // there rather than fabricating one: that proves `motion-reduce:animate-none`
+      // from the vendored `ShimmerLabel` was actually overridden in the composed
+      // surface the reader reported, with a non-zero duration and infinite loop.
+      // Stay inside the synthetic fleet: its first row has the working activity
+      // the loader needs. Navigating to the fixture's original id would leave
+      // that snapshot and land on a session picker, proving nothing about the
+      // label. The fake daemon's peek is id-agnostic, so the row route supplies
+      // the workspace body while the synthetic activity supplies working state.
+      await page.goto(`/w/${workingFleet().projects[0].workspaces[0].state.id}`);
+      await page.getByTestId("pane-transcript").click();
+      const label = page.getByTestId("working-loader").locator(".shimmer");
+      await expect(label).toHaveText("Working");
+      const animation = await label.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return {
+          name: style.animationName,
+          duration: style.animationDuration,
+          iterations: style.animationIterationCount,
+        };
+      });
+      expect(animation.name).toBe("tw-shimmer");
+      expect(animation.duration).not.toBe("0s");
+      expect(animation.iterations).toBe("infinite");
+    } finally {
+      await page.context().close();
+    }
+  });
 });
 
 test("some loaders unmounting leaves the clock listening for the others", async ({ page }) => {

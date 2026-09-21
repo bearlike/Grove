@@ -42,12 +42,7 @@ What the frame carries that nothing else does (all measured on one real turn):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Final
-
-# A turn that ended because the harness refused something, rather than because
-# the model finished. Kept as data rather than branched on: Grove reports what
-# the frame said and never second-guesses it (the provider boundary).
-RESULT_SUBTYPES: Final[tuple[str, ...]] = ("success", "error_max_turns", "error_during_execution")
+from typing import Any
 
 
 @dataclass(slots=True, frozen=True)

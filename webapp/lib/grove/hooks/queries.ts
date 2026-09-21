@@ -27,6 +27,7 @@ import type {
   TicketRef,
   TodoListView,
   WhoamiView,
+  WorkspaceActivityView,
   WorkspaceDiffView,
   WorkspaceHistoryView,
   WorkspacePanelView,
@@ -76,6 +77,33 @@ export function useWorkspacePeek(id: string | null): UseQueryResult<WorkspacePee
   return useQuery({
     queryKey: groveKeys.peek(id ?? ""),
     queryFn: () => groveClient.getPeek(id!),
+    enabled: id !== null,
+    refetchInterval: backstopInterval(connected, POLL_MS.peek),
+  });
+}
+
+/**
+ * One workspace's activity row, fetched directly rather than found in the
+ * fleet snapshot.
+ *
+ * This is what stops a workspace page waiting on the whole host. The snapshot
+ * describes every workspace on the machine, so a page needing ONE session id
+ * inherited the cost of workspaces it never renders — measured on the
+ * reference host, two OFFLINE workspaces contributed 22.4 s of a 40.6 s
+ * bootstrap that first paint sat behind.
+ *
+ * It carries the same `WorkspaceActivityView` the snapshot does, so the stream
+ * remains the freshness mechanism and nothing downstream changes shape: once
+ * `/events` delivers, its `session_activity` frames keep the row current and
+ * this query is the backstop rather than the source of truth.
+ */
+export function useWorkspaceActivity(
+  id: string | null,
+): UseQueryResult<WorkspaceActivityView> {
+  const { connected } = useActivityStream();
+  return useQuery({
+    queryKey: groveKeys.workspaceActivity(id ?? ""),
+    queryFn: () => groveClient.getWorkspaceActivity(id!),
     enabled: id !== null,
     refetchInterval: backstopInterval(connected, POLL_MS.peek),
   });
@@ -407,6 +435,16 @@ export function useWorkspaceSessionCandidates(
  */
 export const INITIAL_TURN_WINDOW = 40;
 
+/**
+ * How many turns one "load earlier" click fetches.
+ *
+ * The same size as the first paint, and deliberately a CONSTANT page rather
+ * than a doubling tail: each click now transfers only turns the reader does not
+ * hold, so cost per click is flat and reading far back no longer re-downloads
+ * everything below it.
+ */
+export const TURN_PAGE = INITIAL_TURN_WINDOW;
+
 /** `useSessionTurns`'s return: the ordinary query state, plus the "load
  * earlier history" capability layered on top of it. */
 export interface SessionTurnsQuery {
@@ -415,9 +453,9 @@ export interface SessionTurnsQuery {
   /** True once the held window's `first_turn_index` is above zero — there is
    * more history above what is currently rendered. */
   hasEarlier: boolean;
-  /** Double the requested tail and merge the newly-arrived earlier turns onto
-   * what is held. A no-op while nothing is held yet, there is no earlier
-   * history, or a widen is already in flight. */
+  /** Fetch one page of turns BEFORE the held window and prepend it. A no-op
+   * while nothing is held yet, there is no earlier history, or a page is
+   * already in flight. */
   loadEarlier: () => void;
   /** True while a `loadEarlier` fetch is in flight. */
   loadingEarlier: boolean;
@@ -457,25 +495,12 @@ export function useSessionTurns(
   const queryClient = useQueryClient();
   const key = groveKeys.turns(workspaceId ?? "", sessionId ?? "");
 
-  // The tail size `loadEarlier` will next ask for, doubling on every call.
-  // Reset whenever the session changes — an in-render comparison rather than
-  // an effect, so a widened window from the PREVIOUS session can never leak
-  // into the first paint of a freshly opened one.
-  //
-  // `useSessionTurns` is called TWICE for one session — once here (via
-  // `useGroveThread`) and once more in `transcript.tsx`'s own three-state
-  // gate — so there are two independent `requestedRef`s and two `widen`
-  // mutations behind the SAME query key. Harmless today because only
-  // `useGroveThread`'s `loadEarlier` is ever exposed and called; if a second
-  // call site ever starts calling ITS `loadEarlier` too, the two refs would
-  // disagree about the next size to request and this stops being harmless.
-  const sessionRef = useRef(sessionId);
-  const requestedRef = useRef(INITIAL_TURN_WINDOW);
-  if (sessionRef.current !== sessionId) {
-    sessionRef.current = sessionId;
-    requestedRef.current = INITIAL_TURN_WINDOW;
-  }
-
+  // No per-hook "how far have we widened" ref any more, and that is a property
+  // of the backward page rather than a simplification: the next request is
+  // derived entirely from the CACHE (`before_turn = held.first_turn_index`), so
+  // the several `useSessionTurns` call sites behind one query key cannot
+  // disagree about it, and a remount cannot reset it out of step with a window
+  // the cache still holds.
   const query = useQuery({
     queryKey: key,
     queryFn: async () => {
@@ -520,24 +545,35 @@ export function useSessionTurns(
 
   // `loadEarlier` is a one-off imperative fetch, not a `last` the query hook
   // itself carries — once ANY window is held, `queryFn` above always follows
-  // via the cursor, so widening the requested size has to happen outside that
-  // loop and write the wider result straight into the cache. Every observer
-  // of this query key (the steerable pane AND the read gate in
-  // `transcript.tsx`) then re-renders off the same write; no second mechanism.
+  // via the cursor, so reaching further back has to happen outside that loop
+  // and write the result straight into the cache. Every observer of this query
+  // key (the steerable pane AND the read gate in `transcript.tsx`) then
+  // re-renders off the same write; no second mechanism.
+  //
+  // It fetches a BACKWARD PAGE (`before_turn=<first held index>&last=40`), not
+  // a doubled tail. The old widen re-downloaded everything the reader already
+  // had to gain one page in front of it — measured on a real session as
+  // `last=40` 3.71 MB then `last=80` 4.61 MB, i.e. ~3.7 MB re-transferred for
+  // ~0.9 MB of new turns. A page carries only what is missing, so the cost of
+  // reading further back is flat rather than quadratic in how far you go.
   const widen = useMutation({
-    // The size is computed here but only COMMITTED to `requestedRef` in
-    // `onSuccess`, below — a failed fetch must leave the next click asking for
-    // the same doubling again, not skip a size. Doubling eagerly (before the
-    // request) would make a transient failure permanently forget how far the
-    // reader had widened.
-    mutationFn: (): Promise<SessionDetailView> =>
-      groveClient.getSessionTurns(workspaceId!, sessionId!, { last: requestedRef.current * 2 }),
-    onSuccess: (window) => {
-      requestedRef.current *= 2;
+    mutationFn: (): Promise<SessionDetailView> => {
       const held = queryClient.getQueryData<SessionDetailView>(key);
-      const merged = mergeTurns(held, window);
-      // A `last`-only fetch is never incremental, so `mergeTurns` always takes
-      // the wholesale-replace branch here — `unchanged`/`refetch` cannot occur.
+      return groveClient.getSessionTurns(workspaceId!, sessionId!, {
+        beforeTurn: held?.first_turn_index ?? 0,
+        last: TURN_PAGE,
+      });
+    },
+    onSuccess: (window) => {
+      const held = queryClient.getQueryData<SessionDetailView>(key);
+      const merged = mergeTurns(held, window, "backward");
+      // `refetch` means the page did not end where the held window starts —
+      // a poll landed between the request and its answer, so the honest move
+      // is to let the ordinary query re-read rather than splice a guess.
+      if (merged.kind === "refetch") {
+        void queryClient.invalidateQueries({ queryKey: key });
+        return;
+      }
       if (merged.kind === "replace") {
         queryClient.setQueryData<SessionDetailView>(key, {
           ...window,

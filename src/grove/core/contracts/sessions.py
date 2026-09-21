@@ -64,6 +64,22 @@ TodoStatus = Literal["pending", "in_progress", "completed"]
 # distinguishable from either value.
 CompactionTrigger = Literal["manual", "auto"]
 
+# Whether a ``ToolCallView`` carries its own request/result, can fetch them, or
+# has none to fetch. See ``ToolCallView.body`` for what each member promises.
+ToolBodyMode = Literal["inline", "available", "none"]
+
+
+def _has_no_body(c: ToolCall) -> bool:
+    """True when this call has nothing a drill-in could serve.
+
+    An empty ``input`` map reads the same as an absent one to every consumer,
+    and an empty result string is a body a reader can still see the emptiness
+    of — but neither is worth advertising a fetch for when BOTH are empty. This
+    is the one place the distinction is decided, so ``none`` cannot mean one
+    thing on the windowed read and another on the drill-in.
+    """
+    return not c.input and not c.result
+
 
 class RemapSessionRequest(BaseModel):
     """Body for ``POST /workspaces/{id}/session`` — pin an existing agent session
@@ -179,7 +195,13 @@ class CompactionView(BaseModel):
     in any version), never that it defaulted to automatic;
     ``dropped_tokens: null`` means the harness published no per-event count, and
     when it is a number it is a DELTA for this one compaction — never the
-    session-running total Claude Code's transcript actually stores.
+    session-running total Claude Code's transcript actually stores;
+    ``duration_ms: null`` means the harness timed no compaction span (Codex
+    records one timestamp and no duration), never that it was instantaneous;
+    ``model: null`` means no model could be attributed — NO harness stamps one
+    on the boundary record, so this is the model that was in effect when the
+    compaction ran, and a session that compacted before its first assistant
+    turn honestly has none.
 
     ``summary`` is ``""`` (never null) when the harness carries no readable
     replacement text — Codex encrypts it. It crosses whole (13.9-55.3 KB on-host,
@@ -193,6 +215,8 @@ class CompactionView(BaseModel):
     at: datetime | None = None
     dropped_tokens: int | None = None
     summary: str = ""
+    duration_ms: int | None = None
+    model: str | None = None
 
     @classmethod
     def from_compaction(cls, c: CompactionBoundary) -> CompactionView:
@@ -201,6 +225,8 @@ class CompactionView(BaseModel):
             at=c.at,
             dropped_tokens=c.dropped_tokens,
             summary=c.summary,
+            duration_ms=c.duration_ms,
+            model=c.model,
         )
 
 
@@ -218,15 +244,27 @@ class ToolCallView(BaseModel):
     ``tool_use_id`` is the correlation key, so several calls issued in one
     assistant turn stay individually addressable however they interleave.
 
-    Both bodies cross WHOLE, and the pair of ``*_truncated`` flags that used to
-    ride here is gone rather than pinned to ``False``. A tool body is the case
-    that argued hardest for a cap — a turn holds dozens of calls where it holds
-    one or two diffs, so the cost multiplied — and it is also the case where a
-    cap was least honest: an ellipsis inside a command's own output is
-    indistinguishable from output the tool actually produced, which is why the
-    flags had to exist at all. A reader diffing a config, counting test failures
-    or reading the tail of a build log needs the bytes the tool returned, not a
-    prefix of them, and this route is where those bytes live.
+    Both bodies cross WHOLE when they cross at all, and the pair of
+    ``*_truncated`` flags that used to ride here is gone rather than pinned to
+    ``False``. A tool body is the case that argued hardest for a cap — a turn
+    holds dozens of calls where it holds one or two diffs, so the cost
+    multiplied — and it is also the case where a cap was least honest: an
+    ellipsis inside a command's own output is indistinguishable from output the
+    tool actually produced, which is why the flags had to exist at all. A reader
+    diffing a config, counting test failures or reading the tail of a build log
+    needs the bytes the tool returned, not a prefix of them.
+
+    ``body`` is how a WITHHELD body stays honest without becoming a cap. A
+    windowed ``/turns`` read may decline to carry a settled call's request and
+    response (see :meth:`SessionDetailView.withhold_settled_bodies`) — nothing
+    is truncated, the complete bytes are one drill-in away, and the three values
+    say which case a client is looking at:
+
+    * ``inline`` — ``input``/``result`` are carried here, whole.
+    * ``available`` — they were withheld and the tools drill-in serves them.
+    * ``none`` — the call has NO input and NO result to serve, so a client must
+      draw no fetch affordance. This is a fact about the call rather than about
+      the projection, which is why it survives ``bodies=all`` unchanged.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -237,6 +275,10 @@ class ToolCallView(BaseModel):
     input: dict[str, Any] | None = None
     result: str | None = None
     duration_ms: int | None = None
+    body: ToolBodyMode = "inline"
+    """Whether this view CARRIES the call's bodies, could fetch them, or has
+    none to fetch. Defaults to ``inline`` so an unwindowed construction — the
+    drill-in, a test, an older caller — keeps the shape it always had."""
 
     @classmethod
     def from_call(cls, c: ToolCall) -> ToolCallView:
@@ -247,7 +289,30 @@ class ToolCallView(BaseModel):
             input=c.input,
             result=c.result,
             duration_ms=c.duration_ms,
+            # Decided HERE, off the call itself, so "there is nothing to fetch"
+            # is answered once for both the inline and the withheld path. A
+            # settled call with neither an argument map nor a result body is
+            # `none` wherever it appears: withholding it later would advertise a
+            # drill-in that can only ever come back empty.
+            body="none" if _has_no_body(c) else "inline",
         )
+
+
+def _is_withholdable(tool: ToolCallView | None) -> bool:
+    """Whether this entry's call is one the windowed read may withhold.
+
+    ``running`` is excluded because the UI always expands a live call, and
+    ``none`` because there is nothing to withhold — leaving exactly the settled
+    calls that carry bytes a reader has not asked for yet.
+    """
+    return tool is not None and tool.status != "running" and tool.body == "inline"
+
+
+def _withheld(tool: ToolCallView | None) -> ToolCallView | None:
+    """The same call with its bodies dropped and the drop declared."""
+    if tool is None:
+        return None
+    return tool.model_copy(update={"input": None, "result": None, "body": "available"})
 
 
 class MailboxMessageView(BaseModel):
@@ -522,17 +587,14 @@ class SessionSummaryView(BaseModel):
             title=s.title,
             first_prompt=s.first_prompt,
             last_prompt=s.last_prompt,
-            activity=AgentActivityView.from_activity(s.activity),
-            # Free: the listing's one parse already produced it. Read off the
-            # engine dataclass rather than the view built beside it, so the
-            # two fields cannot drift through a `from_activity` change.
-            turn_count=s.activity.human_turns,
-            # NOT free, unlike `turn_count`: the two clocks come from the
-            # message spine (main + every sub-agent file), which the listing's
-            # summary parse does not cover. The explorer measures it at this
-            # scope rather than reading the catalog's cache, so the column is
-            # filled for a user who never opens the host-wide list; it is the
-            # same `duration_of` the cache stores, so the scopes agree.
+            activity=(
+                AgentActivityView.from_activity(s.activity) if s.activity is not None else None
+            ),
+            # Project scope now shares the catalog's metadata-only discipline, so
+            # both parse-derived columns come from the SAME durable cache entry
+            # and are present together or null together. An identity-keyed read
+            # that DID parse (the minted row) still answers from its own activity.
+            turn_count=(s.activity.human_turns if s.activity is not None else ls.turn_count),
             duration=ls.duration,
         )
 
@@ -821,6 +883,53 @@ class SessionDetailView(BaseModel):
             total_turns=len(turns) if total_turns is None else total_turns,
             first_turn_index=first_turn_index,
         )
+
+    def withhold_settled_bodies(self) -> SessionDetailView:
+        """Drop the request/result of every SETTLED call outside the tail turn,
+        marking each one ``body="available"`` so a client can fetch it.
+
+        **A projection, never a cap** — the sibling of
+        :meth:`_drop_superseded_todos` and bound by the same rule: nothing is
+        truncated, and what is withheld is named. The complete bytes stay
+        reachable, whole, through ``GET
+        /workspaces/{id}/sessions/{sid}/tools/{tool_use_id}`` (and
+        ``?bodies=all`` for a caller that wants the old payload in one read).
+        The argument against ``_TOOL_BODY_CAP`` is exactly what licenses this:
+        a cap cut the one place the complete text existed and left the client no
+        way to ask for the rest, while an ``available`` body costs a round trip
+        only for the bodies a reader actually opens. Measured: tool bodies were
+        2,119 KB of a 3,810,728-byte ``?last=40`` window (55.6%), and a
+        historical tool call mounts COLLAPSED — its body never reaches the DOM.
+
+        Two exemptions, both about what the UI always expands:
+
+        * **The tail turn keeps every body inline.** It is the turn a reader is
+          looking at when the transcript opens, so withholding there would trade
+          bytes for a round trip on the one turn that is certain to be read.
+        * **A ``running`` call keeps its body inline wherever it sits.** The UI
+          expands a live call unconditionally, and a drill-in for a call that
+          has not finished would serve an answer that is about to change.
+
+        ``none`` is untouched: a call with no body to serve must not advertise a
+        fetch, which is why that verdict is taken on the CALL in
+        :meth:`ToolCallView.from_call` rather than here.
+        """
+        if not self.turns:
+            return self
+        tail = len(self.turns) - 1
+        projected: list[SessionTurnView] = []
+        for index, turn in enumerate(self.turns):
+            if index == tail or not any(_is_withholdable(e.tool) for e in turn.entries):
+                projected.append(turn)
+                continue
+            entries = [
+                entry.model_copy(update={"tool": _withheld(entry.tool)})
+                if _is_withholdable(entry.tool)
+                else entry
+                for entry in turn.entries
+            ]
+            projected.append(turn.model_copy(update={"entries": entries}))
+        return self.model_copy(update={"turns": projected})
 
     @staticmethod
     def _drop_superseded_todos(turns: list[SessionTurnView]) -> list[SessionTurnView]:

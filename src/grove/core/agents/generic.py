@@ -89,9 +89,11 @@ class GenericAdapter:
         del cwd
         return []
 
-    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+    def session_summary(
+        self, cwd: Path, session_id: str, *, full: bool = False
+    ) -> SessionSummary | None:
         # No transcripts, so no session can be resolved by id either.
-        del cwd, session_id
+        del cwd, session_id, full
         return None
 
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:

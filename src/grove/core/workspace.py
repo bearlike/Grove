@@ -385,6 +385,7 @@ class TranscriptContext:
     CONFIG_DIR_ENV: ClassVar[dict[str, str]] = {
         "claude_code": "CLAUDE_CONFIG_DIR",
         "codex": "CODEX_HOME",
+        "opencode": "XDG_DATA_HOME",
     }
     """Agent kind → the env var whose value that kind's filesystem adapter
     resolves its data root from. A provider-protocol fact (see

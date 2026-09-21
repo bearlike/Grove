@@ -1,6 +1,6 @@
 ---
 name: using-grove
-description: Use when orchestrating Grove workspaces from outside, including creating or supervising host or container agents, steering a fleet, using Grove CLI or MCP tools, or enabling an owned Claude Code or Codex mailbox worker for peer messaging. Also use when splitting work across workspaces, reviewing a diff from several angles, managing ticket links, or checking who needs attention. For a worker reporting from inside a workspace use working-in-grove. For setup use configuring-grove.
+description: Use when orchestrating Grove workspaces from outside, including creating or supervising host or container agents, steering a fleet, using Grove CLI or MCP tools, or having agents write to each other through the mailbox. Also use when splitting work across workspaces, reviewing a diff from several angles, managing ticket links, or checking who needs attention. For a worker reporting from inside a workspace use working-in-grove. For setup use configuring-grove.
 ---
 
 # Using Grove
@@ -278,8 +278,8 @@ runtimes. Ordinary container workspaces may not have the Grove CLI or a general
 Grove MCP registration, so handle lifecycle and ticket links from outside.
 
 Mailbox workers are the deliberate exception. Grove supplies their private
-coordinator connection and mailbox only MCP server when the container meets the
-mailbox prerequisites. That grants peer messaging only. It does not expose the
+coordinator connection when the container meets the native prerequisites. That
+grants the session's control channel. It does not expose the
 general fleet control surface.
 
 Attach the pull request the agent opens from outside when the agent cannot reach
@@ -305,34 +305,31 @@ Peer mail is never a way to send text to an arbitrary interactive TUI or to
 retrofit a socket into an existing session. A native session is not resumable
 and does not attach to an existing conversation.
 
-The worker learns its own identity and generation from `peers`. Have it discover
-exact peers immediately before a fresh send; a peer listing is a capability
-snapshot, not consent. The receipt reports only coordinator transport state:
-`queued`, `delivered`, or `unknown` never means a model processed the message.
-Do not retry an `unknown` send, type a fallback into a pane, or add typing/status
-emulation. A reply names only the original message id, so Grove resolves its
-recipient rather than trusting quoted envelope data.
+## Agents writing to each other
 
-The worker receives a launch-bound `GROVE_MAILBOX_TOKEN`; `GROVE_MAILBOX_URL`
-and `GROVE_MAILBOX_SOCKET` are optional transport overrides. It needs the Grove
-package and an authenticated private coordinator connection in its runtime. It
-is the primary agent only, not a facility for extra container agents. Mailbox
-workers cannot pause or resume native history. Stop or recreate one instead.
+Any live agent in the fleet can write to any other, addressed like email:
+`--from`, `--to`, a subject and a body. Native and interactive terminal sessions
+are both ordinary recipients, because delivery reuses whatever channel Grove
+already steers that workspace through. Nothing is enrolled and no peer holds a
+credential of its own.
 
-A container workspace is native only when the daemon exposes its private
-mailbox socket (`GROVE_MAILBOX_SOCKET`); otherwise Grove warns and runs the
-terminal. It also needs Grove in the image and a reachable private agent config
-root. Linux runs covered host and
-container workers, a mixed host and container Claude pair, and separate Claude
-and Codex host cases. They do not prove every cross-provider container pairing,
-other operating systems, or federation.
+```bash
+grove mailbox contacts
+grove mailbox send --from <id> --to <id> --subject "Ready for review" --body "PR #42 is open."
+```
 
-From outside, use `grove mailbox peers`, `grove mailbox send`, `grove mailbox
-reply`, and `grove mailbox status`. The MCP tools are
-`grove_list_mailbox_peers`, `grove_send_mailbox_message`, and
-`grove_get_mailbox_message_status`. The agent-facing workflow belongs in
-`working-in-grove`; configuration belongs in `configuring-grove`. Run
-`grove mailbox --help` and read the installed MCP schema before supplying flags.
+A contact reports whether it is `live`; a paused or offline workspace is listed
+and refused with `not_live` rather than silently swallowed. The MCP tools are
+`grove_list_mailbox_contacts` and `grove_send_mailbox_message`.
+
+A receipt reports Grove's own observation and nothing more: `delivered` means
+the text reached that session, never that a model read or obeyed it. Do not
+retry an `unknown` send or type a fallback into a pane. A reply is an ordinary
+send with the addresses swapped, so a conversation survives a daemon restart.
+
+The agent-facing workflow belongs in `working-in-grove`; configuration belongs
+in `configuring-grove`. Run `grove mailbox --help` and read the installed MCP
+schema before supplying flags.
 
 ## The other Grove skills
 
@@ -349,8 +346,8 @@ reply`, and `grove mailbox status`. The MCP tools are
 
 Use `grove <command> --help` for installed CLI syntax and each MCP tool schema
 for its inputs. `grove skills list --details` and `grove_get_skill(details=True)`
-list richer skill metadata without a mailbox token. Retain the existing skill
-names. A mailbox message never grants a default native tool permission.
+list richer skill metadata. Retain the existing skill names. A mailbox message
+never grants a default native tool permission.
 
 ## Configuration
 

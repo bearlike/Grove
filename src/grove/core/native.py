@@ -11,7 +11,7 @@ is the ``_steer_remote`` mirror, injected the same way (``mewbo_client`` ↔
 
 Two clients, one Protocol, and which one a process holds is what keeps the
 daemon from calling itself: the daemon injects its coordinator-backed client
-(``grove.daemon.mailboxes.CoordinatorSteerClient``) into every manager it
+(``grove.daemon.mailboxes.OwnerSteerClient``) into every manager it
 mints, so a route reaches the owner worker in-process; the CLI and TUI build
 managers with no injection and fall through to :class:`DaemonSteerClient`,
 which POSTs the same verbs to the daemon's ordinary workspace routes. The
@@ -57,6 +57,10 @@ class NativeSteerClient(Protocol):
     def interrupt(self, state: WorkspaceState) -> None: ...
 
     def set_model(self, state: WorkspaceState, model: str) -> None: ...
+
+    def compact(self, state: WorkspaceState) -> None: ...
+
+    def invoke_control(self, state: WorkspaceState, name: str) -> None: ...
 
     def answer(self, state: WorkspaceState, plan: str) -> None:
         """Resolve the standing ask; ``plan`` is the manager's rendered JSON."""
@@ -120,6 +124,19 @@ class ChannelSteerClient:
             "needs a native session"
         )
 
+    def compact(self, state: WorkspaceState) -> None:
+        self._session_id(state)
+        raise SteeringUnsupported(
+            "the channel receiver carries messages only; compaction needs a native session"
+        )
+
+    def invoke_control(self, state: WorkspaceState, name: str) -> None:
+        del name
+        self._session_id(state)
+        raise SteeringUnsupported(
+            "the channel receiver carries messages only; commands need a native session"
+        )
+
     def answer(self, state: WorkspaceState, plan: str) -> None:
         del plan
         self._session_id(state)
@@ -174,6 +191,12 @@ class DaemonSteerClient:
 
     def set_model(self, state: WorkspaceState, model: str) -> None:
         self._post(state, "controls/model", {"model": model})
+
+    def compact(self, state: WorkspaceState) -> None:
+        self._post(state, "controls/invoke", {"name": "compact"})
+
+    def invoke_control(self, state: WorkspaceState, name: str) -> None:
+        self._post(state, "controls/invoke", {"name": name})
 
     def answer(self, state: WorkspaceState, plan: str) -> None:
         # The daemon's answer route takes the wire shape, not the rendered

@@ -554,11 +554,31 @@ def test_list_sessions_builds_summary(adapter: CodexAdapter, codex_home: Path) -
     assert summary.cwd == str(BASIC_CWD)
     assert summary.git_branch == "feature/widget"  # from session_meta.git.branch
     assert summary.first_prompt == "Add a healthcheck endpoint to the service"
-    assert summary.last_prompt == "Add a healthcheck endpoint to the service"
     assert summary.size_bytes > 0
     assert summary.modified_at is not None
+    # Metadata-only by cost (#805), the same guarantee the Claude adapter keeps.
+    assert summary.activity is None
+    assert summary.last_prompt is None
+
+
+def test_session_summary_full_carries_the_parse_products_the_listing_omits(
+    adapter: CodexAdapter, codex_home: Path
+) -> None:
+    """Codex takes the identical split: the scan head-reads, the identity-keyed
+    read buys the parse."""
+    _install(codex_home, BASIC_SID, BASIC)
+
+    summary = adapter.session_summary(BASIC_CWD, BASIC_SID, full=True)
+
+    assert summary is not None
+    assert summary.last_prompt == "Add a healthcheck endpoint to the service"
+    assert summary.activity is not None
     assert summary.activity.human_turns == 1
     assert summary.activity.state is AgentActivityState.WAITING
+    metadata_only = adapter.session_summary(BASIC_CWD, BASIC_SID)
+    assert metadata_only is not None
+    assert metadata_only.activity is None
+    assert metadata_only.first_prompt == "Add a healthcheck endpoint to the service"
 
 
 def test_list_sessions_empty_when_nothing_recorded(adapter: CodexAdapter, codex_home: Path) -> None:
@@ -1612,6 +1632,7 @@ def test_context_window_rides_the_same_token_count_record_and_the_latest_wins(
     assert act.context.size == 258400
     assert act.context.used == 19928
     assert round(act.context.used_fraction, 4) == round(19928 / 258400, 4)
+    assert act.context_unavailable_reason is None
 
 
 def test_context_window_is_absent_not_zero_when_the_record_does_not_carry_it(

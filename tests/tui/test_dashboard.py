@@ -209,7 +209,10 @@ async def test_card_shows_agent_state_label(fake_tmux: FakeTmux, tmp_path: Path)
         assert "task" in card.body_text
 
 
-def test_killed_workspace_event_removes_the_projected_card(tmp_path: Path) -> None:
+def test_killed_workspace_event_removes_the_projected_card(
+    fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    del fake_tmux
     registry, service, _, _ = _env(tmp_path)
     repo = _init_repo(tmp_path / "repo")
     state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="task"))

@@ -57,6 +57,14 @@ class SendKey(StrEnum):
 SendOp = SendKey | str
 
 
+# Shells whose interactive startup is rich enough that sourcing it to run one
+# throwaway command is a bad trade. Not a judgement on the shell -- only on
+# using it as a wrapper: these are the ones whose rc files routinely install
+# prompt daemons (powerlevel10k's `gitstatusd`, fish's universal-variable
+# server) that outlive the command and have to be reaped separately.
+_RC_HEAVY_SHELLS: Final = frozenset({"zsh", "fish"})
+
+
 @dataclass(frozen=True, slots=True)
 class HostAttach:
     """Attach to a session on THIS host's tmux server.
@@ -415,6 +423,11 @@ def kill_session(name: str, *, wait_for_exit: bool = False) -> None:
     """Kill a session; optionally verify its old processes cannot overlap a relaunch."""
     if not has_session(name):
         return
+    # Enumerate BEFORE the kill. `list-panes -s -t <name>` against a session
+    # that no longer exists fails, so a sweep that reads the pane list
+    # afterwards can only ever find nothing -- which is why the post-hoc reap
+    # below never reclaimed the survivors it was written for.
+    survivor_pids = _session_pane_pids(name)
     try:
         server = _server()
         if wait_for_exit:
@@ -428,6 +441,64 @@ def kill_session(name: str, *, wait_for_exit: bool = False) -> None:
         server.kill_session(target_session=name)
     except Exception as exc:
         raise TmuxError(f"failed to kill tmux session {name}: {exc}") from exc
+    # `kill-session` sends SIGHUP to each pane's own process group and returns.
+    # That is enough for the pane shell and anything it started as a JOB, and
+    # not enough for a subshell the prompt forked: oh-my-zsh's async prompt
+    # forks via `exec {fd}< <(...)` and, when MONITOR is off, explicitly leaves
+    # such a child in the PARENT's process group -- its own comment says "they
+    # may be orphaned and left behind". Those survivors reparent to
+    # `systemd --user`, keep the dead worktree as their cwd, and (with a
+    # git/node-aware prompt) spin a full core forever re-globbing a path that
+    # no longer exists. Measured on the reference host 2026-09-17: seven
+    # survivors, 6.72 of 8 cores, 109 CPU-hours.
+    # Sweeping unconditionally -- not just under `wait_for_exit` -- is the
+    # point: the observed survivors came from ordinary pause/kill, which never
+    # set that flag. Best-effort by construction, because a session that is
+    # already gone is exactly the success case.
+    _reap_session_survivors(survivor_pids)
+
+
+def _session_pane_pids(name: str) -> tuple[int, ...]:
+    """Every pane pid of a LIVE session. Never raises."""
+    try:
+        panes = _server().cmd("list-panes", "-s", "-t", name, "-F", "#{pane_pid}")
+        return tuple(int(pid) for pid in (panes.stdout or ()) if str(pid).strip().isdigit())
+    except Exception as exc:
+        logger.debug("could not enumerate panes of {}: {}", name, exc)
+        return ()
+
+
+def _reap_session_survivors(pids: Sequence[int]) -> None:
+    """SIGTERM, then SIGKILL, anything still alive under a killed session's panes.
+
+    Takes pids captured BEFORE `kill-session` -- see the call site. Every pid
+    here has already been given tmux's SIGHUP and declined to act on it, so a
+    second polite signal is frequently declined too: the survivors are prompt
+    subshells wedged in a startup loop on an unlinked cwd, which never reach a
+    point where they handle anything. `terminate_and_wait` raises on timeout
+    rather than escalating, so SIGKILL is the backstop that actually reclaims
+    the core.
+
+    Never raises: reclaiming strays is a courtesy on a teardown path whose real
+    work already succeeded.
+    """
+    if not pids:
+        return
+    try:
+        # include_roots=True: the pane shell itself can be the survivor when the
+        # fork happened to outlive its own parent's exit.
+        tree = ProcessTree.capture(tuple(pids), include_roots=True)
+    except Exception as exc:
+        logger.debug("could not capture survivors to reap: {}", exc)
+        return
+    try:
+        tree.terminate_and_wait(timeout=2.0)
+    except Exception as exc:
+        logger.warning("survivors declined SIGTERM ({}); escalating to SIGKILL", exc)
+        try:
+            tree.kill_and_wait(timeout=2.0)
+        except Exception as kill_exc:
+            logger.warning("could not reap tmux session survivors: {}", kill_exc)
 
 
 def build_workspace_layout(
@@ -525,24 +596,82 @@ def build_workspace_layout(
         logger.debug("could not select agent window: {}", exc)
 
 
+def agent_launch_shell() -> str:
+    """The shell that *wraps* an agent launch -- deliberately not `$SHELL`.
+
+    `$SHELL` is the shell a human wants a prompt in; this is a wrapper that
+    runs one command and exits. Those are different jobs, and conflating them
+    is what made the wrapper expensive. Read with `-lic`, a rich interactive
+    `$SHELL` sources the user's full rc on every launch: measured on the
+    reference host 2026-09-19, each zsh wrapper pulled in powerlevel10k and
+    left a `gitstatusd` daemon beside it -- 311 of them across a leaked fleet,
+    none of which any agent needed.
+
+    The rc is also what makes a stranded wrapper unkillable. A shell wedged
+    part-way through `.zshrc` never reaches its first prompt, so it never
+    handles a catchable signal, and `reap_cwd_holders` has to escalate to
+    SIGKILL. `sh` has no such startup: it execs the command and gets out of
+    the way, so the wrapper is signal-responsive for its whole life.
+
+    `SHELL` still wins when it is a plain POSIX shell, which keeps the honest
+    case (a user on `dash`/`bash`) behaving exactly as before. Anything richer
+    falls back to `/bin/sh`.
+    """
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    if Path(shell).name in _RC_HEAVY_SHELLS:
+        return "/bin/sh"
+    return shell
+
+
 def _agent_window_shell(
     command: str,
     *,
     env: Mapping[str, str] | None,
     env_unset: Sequence[str],
 ) -> str:
-    """Launch atomically through the user's login-interactive shell.
+    """Launch atomically through a POSIX wrapper shell.
 
     Environment statements precede the agent, and a final interactive shell
     keeps the window attachable after it exits. This preserves ordinary shell
     startup while avoiding key injection into a prompt that is not ready yet.
+
+    Two shells, two jobs: the *wrapper* is `agent_launch_shell()` (cheap, no
+    rc, signal-responsive), while the trailing shell the human lands in is
+    still their own `$SHELL -l`. The window stays as attachable as it ever
+    was; only the throwaway wrapper got cheaper.
     """
-    shell = os.environ.get("SHELL") or "/bin/sh"
+    shell = agent_launch_shell()
+    login_shell = os.environ.get("SHELL") or "/bin/sh"
     statements = [*(f"unset {key}" for key in env_unset)]
     statements.extend(f"export {key}={_shell_quote(value)}" for key, value in (env or {}).items())
-    statements.extend((command, f"exec {shlex.quote(shell)} -l"))
+    # Re-root the trailing shell if the worktree vanished while the agent ran.
+    # `exec` inherits the dead cwd otherwise, and a shell that cannot resolve a
+    # working directory at startup wedges: zsh sets PWD="." in that case, and
+    # nvm's `nvm_find_project_dir` walks parents via `${path_%/*}` -- "." has no
+    # "/" to strip, so the loop never terminates and burns a full core.
+    #
+    # Note what this does NOT cover, because it cannot: measured on the
+    # reference host 2026-09-18, all nine survivors were wedged part-way
+    # through sourcing `.zshrc` (each still holding an open fd on it; 0 of 60
+    # healthy shells do). The worktree was removed AFTER this guard ran and
+    # WHILE the exec'd shell was still starting up. No statement composed here
+    # can close that window -- the shell is already inside its own rc file, and
+    # a `precmd` hook by definition never fires on a shell that dies before its
+    # first prompt. Grove's half of the fix is to stop CREATING the condition:
+    # see `process.reap_cwd_holders`, called before every worktree removal.
+    #
+    # That exposure is now limited to the shell on THIS line. The wrapper
+    # around the whole script used to be an interactive `$SHELL -lic` and so
+    # carried the same risk for the agent's entire run; it is a plain `sh -c`
+    # below, which sources nothing and stays signal-responsive throughout.
+    statements.extend(
+        (command, '[ -d "$PWD" ] || cd -- "${HOME:-/}"', f"exec {shlex.quote(login_shell)} -l")
+    )
     script = "; ".join(statements)
-    return f"{shlex.quote(shell)} -lic {shlex.quote(script)}"
+    # `-c` only: the wrapper runs one command and execs away, so a login or
+    # interactive rc would only add startup it never uses. The human-facing
+    # `exec $SHELL -l` above is what sources a login profile.
+    return f"{shlex.quote(shell)} -c {shlex.quote(script)}"
 
 
 def run_init_script(

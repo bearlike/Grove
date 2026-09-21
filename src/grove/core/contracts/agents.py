@@ -74,7 +74,7 @@ class AgentSummaryView(BaseModel):
     False for every kind with no native protocol, whatever the spec says."""
 
     models: tuple[str, ...] = ()
-    """Model ids the create-form picker OFFERS for this agent (≤10) — resolved
+    """Model ids the create-form picker OFFERS for this agent, resolved
     daemon-side by ``agents.resolve_models`` (config override, else live
     discovery). A hint, not an allowlist: the client may still submit any id as
     ``CreateWorkspaceRequest.model``. Empty when the agent exposes no catalog (a

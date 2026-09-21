@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from grove.client import BackendConfig, GroveClient, ProtocolError
+from grove.core import tmux as tmux_mod
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.contracts.requests import CreateWorkspaceRequest
 
@@ -58,6 +59,23 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_repo
     config_home.mkdir()
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    # Pin this file's sessions to their OWN tmux server. A tmux server is
+    # started once and then outlives every client, keeping the environment of
+    # whichever process happened to start it -- so a server born here would
+    # hold these tmp-dir XDG values forever, and later sessions created on it
+    # (including the developer's real workspaces) would resolve
+    # `paths.agent_exit_path` into a pytest tmp dir that no longer exists.
+    # A private socket means the server dies with the run that created it.
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path))
+    # Point HOME at the tmp dir too, so the fresh server above finds NO
+    # `~/.tmux.conf`. On a developer box a new server sources the user's real
+    # one, which runs their plugin manager: `tpm` forks a `source_plugins.sh`
+    # chain and a plugin like tmux-resurrect tries to restore unrelated old
+    # sessions, and those forks outlive the session that triggered them.
+    # Measured 2026-09-19: 4 such processes survived every run of this file.
+    # None of it is Grove's or under test. CI has no `~/.tmux.conf`, which is
+    # why this only ever leaked on a workstation.
+    monkeypatch.setenv("HOME", str(tmp_path))
     # Sandbox the daemon subprocess's claude transcript dir too, so a resume-ref
     # resolution can find a session the test materializes under tmp_path.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
@@ -110,7 +128,22 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_repo
 
 @pytest.fixture
 def cleanup_tmux() -> Iterator[None]:
-    """Kill any tmux sessions this file created, even on failure."""
+    """Leave no session, and no SERVER, behind -- even on failure.
+
+    Sessions go through `grove.core.tmux.kill_session` rather than bare
+    `tmux kill-session`: the raw command signals only the pane's own process
+    group, so a pane leader dies while the agent it spawned is reparented to
+    init and survives the run. Grove's own version captures the pane's
+    descendants first and escalates SIGTERM -> SIGKILL over them
+    (`_reap_session_survivors`).
+
+    Then `kill-server`, because killing every session is NOT the same as
+    killing the server. An empty tmux server stays resident, and it still
+    holds this test's `TMUX_TMPDIR`/`XDG_*` environment plus whatever its
+    control-mode clients forked (a `tpm` plugin run, a prompt daemon). With a
+    per-test socket there is nothing else on this server to protect, so the
+    server is ours to end.
+    """
     yield
     out = subprocess.run(
         ["tmux", "list-sessions", "-F", "#{session_name}"],
@@ -120,11 +153,9 @@ def cleanup_tmux() -> Iterator[None]:
     ).stdout
     for name in out.splitlines():
         if name.startswith(_SESSION_PREFIX):
-            subprocess.run(
-                ["tmux", "kill-session", "-t", name],
-                capture_output=True,
-                check=False,
-            )
+            with contextlib.suppress(Exception):
+                tmux_mod.kill_session(name)
+    subprocess.run(["tmux", "kill-server"], capture_output=True, check=False)
 
 
 @pytest.fixture

@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/resizable";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PublicWorkspaceView } from "@/lib/grove/api";
-import { usePublicTurns, usePublicWorkspace } from "@/lib/grove/hooks";
+import { ToolBodyProvider, usePublicTurns, usePublicWorkspace } from "@/lib/grove/hooks";
 import { GroveProtocolError } from "@/lib/grove/api";
 import {
   clearSharePasscode,
@@ -193,6 +193,7 @@ export function PublicWorkspace(): React.ReactNode {
               <ResizablePanel defaultSize="55" minSize="30">
                 <PrintSection>Transcript</PrintSection>
                 <PublicTranscript
+                  token={token}
                   pending={turns.isPending}
                   error={turns.error}
                   retry={() => void turns.refetch()}
@@ -225,6 +226,7 @@ export function PublicWorkspace(): React.ReactNode {
               <section className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <PrintSection>Transcript</PrintSection>
                 <PublicTranscript
+                  token={token}
                   pending={turns.isPending}
                   error={turns.error}
                   retry={() => void turns.refetch()}
@@ -657,12 +659,16 @@ function AboutGrove({
 
 /** The public transcript has the catalog page's read-only runtime, and no public-specific renderer. */
 function PublicTranscript({
+  token,
   pending,
   error,
   retry,
   runtime,
   isEmpty,
 }: {
+  /** The share token — the only coordinate a public tool-body drill-in takes,
+   * exactly as `/turns` takes none. */
+  token: string;
   pending: boolean;
   error: Error | null;
   retry: () => void;
@@ -692,12 +698,14 @@ function PublicTranscript({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <GroveDataParts />
-      <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
-        data-testid="public-transcript"
-      >
-        <Thread components={SUPPRESSED_WELCOME_COMPONENTS} />
-      </div>
+      <ToolBodyProvider source={{ kind: "public", token }}>
+        <div
+          className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+          data-testid="public-transcript"
+        >
+          <Thread components={SUPPRESSED_WELCOME_COMPONENTS} />
+        </div>
+      </ToolBodyProvider>
     </AssistantRuntimeProvider>
   );
 }

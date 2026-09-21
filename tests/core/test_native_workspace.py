@@ -53,6 +53,8 @@ class FakeNativeSteer:
         self.interrupts: list[str] = []
         self.models: list[tuple[str, str]] = []
         self.answers: list[tuple[str, dict[str, object]]] = []
+        self.compactions: list[str] = []
+        self.controls: list[tuple[str, str]] = []
 
     def owner_connected(self, state: WorkspaceState) -> bool:
         del state
@@ -69,6 +71,12 @@ class FakeNativeSteer:
 
     def answer(self, state: WorkspaceState, plan: str) -> None:
         self.answers.append((state.id, json.loads(plan)))
+
+    def compact(self, state: WorkspaceState) -> None:
+        self.compactions.append(state.id)
+
+    def invoke_control(self, state: WorkspaceState, name: str) -> None:
+        self.controls.append((state.id, name))
 
 
 @pytest.fixture
@@ -140,6 +148,22 @@ def test_steer_verbs_take_the_control_channel_and_never_the_pane(
     # A named key is terminal input, and a native pane shows the worker's log.
     with pytest.raises(SteeringUnsupported, match="live terminal"):
         manager.send_keys(state.id, tmux.SendKey.TAB)
+
+
+def test_native_invoke_control_uses_the_provider_operation_not_a_slash_message(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, steer: FakeNativeSteer
+) -> None:
+    """OpenCode commands/compaction have their own HTTP routes; native dispatch
+    must not type a plausible `/command` string into the session."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="opencode", title="native"))
+
+    manager.invoke_control(state.id, "review --staged")
+    manager.invoke_control(state.id, "compact")
+
+    assert steer.controls == [(state.id, "review --staged")]
+    assert steer.compactions == [state.id]
+    assert steer.messages == []
+    assert fake_tmux.sent_texts == []
 
 
 def test_the_record_decides_not_the_roster(

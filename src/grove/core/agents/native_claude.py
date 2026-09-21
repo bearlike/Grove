@@ -81,9 +81,15 @@ class ClaudeNativeOwner:
         # Outstanding `control_request`s by request_id; the matching
         # `control_response` resolves each with the raw response frame.
         self._controls: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        # Context is queried off the control channel, not inferred from terminal
+        # result usage (which is cumulative across the session). Each root result
+        # advances this epoch; a slow older answer can never overwrite a newer
+        # turn or a post-compaction reading.
+        self._context_epoch = 0
+        self._context_task: asyncio.Task[None] | None = None
+        self._session_id: str | None = None
         self._write_lock = asyncio.Lock()
         self._closed = False
-        self.mailbox_mcp_ready = False
 
     @property
     def process(self) -> asyncio.subprocess.Process | None:
@@ -118,6 +124,10 @@ class ClaudeNativeOwner:
                 resumed_id = str(UUID(self._command[index + 1]))
                 if await self._control({"subtype": "initialize"}) is None:
                     raise RuntimeError("native resume initialization was not acknowledged")
+                self._session_id = resumed_id
+                if self._asks is not None:
+                    self._asks.bind(resumed_id)
+                self._request_context()
                 if not self._init.done():
                     self._init.set_result(resumed_id)
             return await asyncio.wait_for(asyncio.shield(self._init), self._timeout_seconds)
@@ -172,6 +182,15 @@ class ClaudeNativeOwner:
         400), so a ``True`` means the next turn runs on ``model``.
         """
         return await self._control({"subtype": "set_model", "model": model}) is not None
+
+    async def compact(self) -> bool:
+        """Claude stream-json has no provider-native compaction control."""
+        return False
+
+    async def invoke_control(self, name: str) -> bool:
+        """Claude stream-json exposes no provider-native named-command control."""
+        del name
+        return False
 
     async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool:
         """Resolve the standing ``can_use_tool`` for ``tool_use_id`` with the answers.
@@ -251,6 +270,10 @@ class ClaudeNativeOwner:
             return
         self._closed = True
         self._finish_pending()
+        context_task, self._context_task = self._context_task, None
+        if context_task is not None:
+            context_task.cancel()
+            await asyncio.gather(context_task, return_exceptions=True)
         reader, self._reader = self._reader, None
         if reader is not None:
             reader.cancel()
@@ -316,6 +339,8 @@ class ClaudeNativeOwner:
         elif kind == "assistant":
             for text in self._assistant_text(frame):
                 self._report(text)
+            if frame.get("parent_tool_use_id") is None:
+                self._request_context()
         elif kind == "result":
             self._result(frame)
         elif kind == "control_response":
@@ -326,19 +351,18 @@ class ClaudeNativeOwner:
             self._report(_CONTROL_NOTICE)
 
     def _initialized(self, frame: Mapping[str, Any]) -> None:
-        tools = frame.get("tools")
-        required = {
-            "mcp__grove__grove_list_mailbox_peers",
-            "mcp__grove__grove_send_mailbox_message",
-            "mcp__grove__grove_get_mailbox_message_status",
-        }
-        self.mailbox_mcp_ready = isinstance(tools, list) and required.issubset(
-            item for item in tools if isinstance(item, str)
-        )
         session_id = frame.get("session_id")
         init = self._init
-        if isinstance(session_id, str) and session_id and init is not None and not init.done():
-            init.set_result(session_id)
+        if isinstance(session_id, str) and session_id:
+            self._session_id = session_id
+            if self._asks is not None:
+                # The current-context request follows init, before NativeWorker
+                # receives `start()`'s return. Binding here prevents a fast
+                # response from being discarded during that hand-off.
+                self._asks.bind(session_id)
+            if init is not None and not init.done():
+                init.set_result(session_id)
+            self._request_context()
 
     def _replayed(self, frame: Mapping[str, Any]) -> None:
         native_id = frame.get("uuid")
@@ -346,6 +370,10 @@ class ClaudeNativeOwner:
             replayed = self._pending.pop(native_id, None)
             if replayed is not None and not replayed.done():
                 replayed.set_result(None)
+                # A new root input invalidates any earlier current-context
+                # response. The coalesced control task observes the new epoch
+                # and reads again; no timer polls while the turn runs.
+                self._request_context()
 
     def _controlled(self, frame: Mapping[str, Any]) -> None:
         response = frame.get("response")
@@ -370,18 +398,6 @@ class ClaudeNativeOwner:
         if facts is None:
             return
         fleet = facts.fleet
-        # `modelUsage[<model>].contextWindow` is the harness's own window size,
-        # and the frame's `usage` is the same four token classes the statusLine
-        # channel publishes — which is silent in `-p` mode, so this frame is
-        # the ONLY place a native Claude session states its context pressure.
-        # One model per frame in practice; the largest window wins, because a
-        # mid-session switch moves it and the reading has to describe the model
-        # that just answered rather than an earlier, smaller one.
-        window = max(
-            (model.context_window for model in facts.models if model.context_window),
-            default=None,
-        )
-        used = _context_used(frame.get("usage"))
         self._asks.facts(
             cost_usd=facts.total_cost_usd,
             ttft_ms=facts.ttft_ms,
@@ -390,9 +406,44 @@ class ClaudeNativeOwner:
             subagents_spawned=None if fleet is None else fleet.spawned,
             subagents_completed=None if fleet is None else fleet.completed,
             subagents_failed=None if fleet is None else fleet.failed,
-            context_size=window,
-            context_used=used if window else None,
         )
+        # Result usage is a cumulative session counter. The control response is
+        # the only current-window source, and only the root session may publish it.
+        if facts.session_id == self._session_id:
+            self._request_context()
+
+    def _request_context(self) -> None:
+        """Coalesce one current-context query after init or a root result.
+
+        ``summary`` is Claude Code's local current estimate (not its expensive
+        per-category count). It has the right temporal semantics for a meter;
+        unsupported or malformed answers deliberately clear it to unknown.
+        """
+        if self._asks is None or self._closed:
+            return
+        self._context_epoch += 1
+        if self._context_task is None or self._context_task.done():
+            self._context_task = asyncio.create_task(
+                self._refresh_context(), name="grove-claude-context"
+            )
+
+    async def _refresh_context(self) -> None:
+        """Publish the newest root context response, then catch up once if needed."""
+        while not self._closed:
+            epoch = self._context_epoch
+            response = await self._control({"subtype": "get_context_usage", "detail": "summary"})
+            context = _context_window(response)
+            if epoch == self._context_epoch and self._asks is not None:
+                if context is None:
+                    self._asks.facts(context_state="clear")
+                else:
+                    self._asks.facts(
+                        context_state="native_control",
+                        context_size=context[0],
+                        context_used=context[1],
+                    )
+            if epoch == self._context_epoch:
+                return
 
     def _asked_by_provider(self, frame: Mapping[str, Any]) -> None:
         """Hold a ``can_use_tool`` for a question until a human answers it.
@@ -477,27 +528,19 @@ class ClaudeNativeOwner:
         )
 
 
-def _context_used(usage: object) -> int | None:
-    """How much of the window the LAST request occupied, off a ``result`` frame.
+def _context_window(response: object) -> tuple[int, int] | None:
+    """Read the same occupancy pair Claude presents in its context report.
 
-    The same four token classes ``_context_from_statusline`` sums one layer
-    over — every one of them occupies the window whether or not it is billed —
-    read here because the statusLine channel Claude Code publishes the window
-    on is SILENT under ``-p`` (measured 2.1.270), so an owned session has no
-    other source. ``None`` when the frame stated none of them: a window beside
-    a fabricated zero would render a confident 0 % on a session one turn from
-    compaction, which is the reading `ContextWindow` exists to prevent.
+    Claude's report divides ``totalTokens`` by ``rawMaxTokens``. Its schema
+    defaults an absent raw capacity to ``maxTokens``. The summary is a provider
+    estimate of current context, not a sum of historical billed requests.
     """
-    if not isinstance(usage, dict):
+    if not isinstance(response, dict):
         return None
-    counted = [
-        value
-        for key in (
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_read_input_tokens",
-        )
-        if isinstance(value := usage.get(key), int) and not isinstance(value, bool)
-    ]
-    return sum(counted) if counted else None
+    used = response.get("totalTokens")
+    size = response.get("rawMaxTokens", response.get("maxTokens"))
+    if not isinstance(used, int) or isinstance(used, bool) or used < 0:
+        return None
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        return None
+    return size, used

@@ -195,7 +195,10 @@ export function InfoTab({
             that says something about the NEXT turn — every fact below is a
             total of what already happened. Absent when the harness has not
             said, never a 0 % (see the meter). */}
-        <ContextMeter context={activity?.sessions[0]?.activity.context} />
+        <ContextMeter
+          context={activity?.sessions[0]?.activity.context}
+          unavailable={activity?.sessions[0]?.activity.context_unavailable_reason}
+        />
         {facts ? (
           // The container is the CARD BODY, so the columns respond to the space
           // the cells actually have. Six facts fold 6 → 3 → 2 → 1 and four fold

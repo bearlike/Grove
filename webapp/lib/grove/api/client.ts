@@ -15,6 +15,7 @@ import type {
   TicketProviderView,
   TicketRef,
   TodoListView,
+  ToolCallView,
   UpdateWorkspaceRequest,
   UsageActivityView,
   UsageBashInsightView,
@@ -26,6 +27,7 @@ import type {
   UsageSessionPageView,
   UsageSummaryView,
   WhoamiView,
+  WorkspaceActivityView,
   WorkspaceDiffView,
   WorkspaceHistoryView,
   WorkspacePaneView,
@@ -38,6 +40,7 @@ import type {
   GalleryPreviewView,
 } from "./types";
 import type { WorkspacePanelView } from "./panels";
+import type { SubagentFleetData } from "./fleet";
 import type {
   DiagramDocumentView,
   DiagramOpenRequest,
@@ -111,6 +114,11 @@ export class GroveClient {
     return `${GroveClient.basePath}/workspaces/${encodeURIComponent(id)}/pane/stream`;
   }
 
+  static fleetStreamUrl(id: string, sessionId: string): string {
+    const query = new URLSearchParams({ session_id: sessionId });
+    return `${GroveClient.basePath}/workspaces/${encodeURIComponent(id)}/fleet/stream?${query}`;
+  }
+
   async listWorkspaces(): Promise<WorkspaceStateView[]> {
     return this.get("/workspaces");
   }
@@ -126,9 +134,24 @@ export class GroveClient {
   async getPeek(id: string): Promise<WorkspacePeekView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/peek`);
   }
+  /**
+   * One workspace's activity row — the per-workspace half of `/activity`.
+   *
+   * Same `WorkspaceActivityView` the fleet snapshot carries for this id, so a
+   * page holds one shape whether the row arrived here or on the stream. It
+   * exists because reading a session id off the cross-project snapshot made a
+   * page about ONE workspace wait for every workspace on the host.
+   */
+  async getWorkspaceActivity(id: string): Promise<WorkspaceActivityView> {
+    return this.get(`/workspaces/${encodeURIComponent(id)}/activity`);
+  }
   /** The harness's own steer queue — bounded, fetch-on-demand; the ~1 Hz tick carries only its depth. */
   async getQueue(id: string): Promise<WorkspaceQueueView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/queue`);
+  }
+  async getSubagentFleet(id: string, sessionId: string): Promise<SubagentFleetData> {
+    const query = new URLSearchParams({ session_id: sessionId });
+    return this.get(`/workspaces/${encodeURIComponent(id)}/fleet${this.suffix(query)}`);
   }
   /**
    * The agent's current plan/checklist — fetch-on-demand; 404s
@@ -332,14 +355,34 @@ export class GroveClient {
   async getSessionTurns(
     id: string,
     sessionId: string,
-    options: { last?: number; afterTurn?: number } = {},
+    options: { last?: number; afterTurn?: number; beforeTurn?: number } = {},
   ): Promise<SessionDetailView> {
     const query = new URLSearchParams();
     if (options.last !== undefined) query.set("last", String(options.last));
     if (options.afterTurn !== undefined)
       query.set("after_turn", String(options.afterTurn));
+    if (options.beforeTurn !== undefined)
+      query.set("before_turn", String(options.beforeTurn));
     return this.get(
       `/workspaces/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/turns${this.suffix(query)}`,
+    );
+  }
+
+  /**
+   * One tool call's complete request and result.
+   *
+   * The drill-in behind a windowed read's `body: "available"`. Deliberately a
+   * separate method rather than a flag on {@link getSessionTurns}: it answers
+   * about ONE call, so a caller that conflated them would be asking for a
+   * transcript to get a body.
+   */
+  async getSessionTool(
+    id: string,
+    sessionId: string,
+    toolUseId: string,
+  ): Promise<ToolCallView> {
+    return this.get(
+      `/workspaces/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/tools/${encodeURIComponent(toolUseId)}`,
     );
   }
 

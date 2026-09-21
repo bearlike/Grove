@@ -66,6 +66,22 @@ async function chooseAgent(page: Page): Promise<void> {
 }
 
 async function pickFile(page: Page, trigger: Locator, name: string, body: string): Promise<void> {
+  // The button renders `disabled` until its handler is wired, and the landing
+  // composer's handler forwards to a hidden `<input type="file">` through a
+  // ref. A click landing before either is ready opens no chooser at all, which
+  // surfaces as an unexplained 90s timeout rather than as a mount race.
+  //
+  // The two composers mount that input differently — the landing one renders it
+  // as the button's own sibling, the workspace one gets it from assistant-ui's
+  // AddAttachment primitive — so the input is located page-wide rather than
+  // relative to the trigger, and the chooser stays the fallback for any mount
+  // that has no input to drive.
+  await expect(trigger).toBeEnabled({ timeout: 60_000 });
+  const picker = page.locator('input[type="file"]').last();
+  if (await picker.count()) {
+    await picker.setInputFiles({ name, mimeType: "text/plain", buffer: Buffer.from(body) });
+    return;
+  }
   const chooser = page.waitForEvent("filechooser");
   await trigger.click();
   await (await chooser).setFiles({ name, mimeType: "text/plain", buffer: Buffer.from(body) });
@@ -178,6 +194,13 @@ async function surfaceLuminances(locator: Locator): Promise<number[]> {
     });
   });
 }
+
+// The first-visit tour is its own e2e contract. It would otherwise overlay the
+// launch composer after its 600ms delay and turn these component assertions into
+// unrelated intercepted clicks.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("grove.onboarding.seen", "true"));
+});
 
 test.describe("the shared native composer", () => {
   test("landing writes in one native bar with its configuration shelf outside it", async ({ page }, testInfo) => {
@@ -429,10 +452,10 @@ test.describe("the shared native composer", () => {
       expect(image, `${theme} card paints no gradient`).toContain("linear-gradient(");
 
       // The container role (5.75px at the default scale), not the 2.3px inner
-      // cell the row used to take — which is what made it read as a chip.
-      const container = await page.locator('[data-slot="composer-bar"]')
-        .evaluate((element) => getComputedStyle(element).borderTopLeftRadius);
-      expect(radius, `${theme} card corner`).toBe(container);
+      // cell the row used to take — which is what made it read as a chip. The
+      // composer bar is the documented 20%-softer 6.9px exception, so it is
+      // intentionally not this card's geometry peer.
+      expect(radius, `${theme} card corner`).toBe("5.75px");
     }
   });
 

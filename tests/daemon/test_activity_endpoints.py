@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.middleware.gzip import GZipMiddleware
 
 from grove.core.activity import ActivityService, DashboardDelta
 from grove.core.config import GroveConfig
@@ -83,10 +85,89 @@ def test_activity_returns_snapshot_shape(client: TestClient) -> None:
     assert {p["repo_name"] for p in body["projects"]} == {"repo-a", "repo-b"}
 
 
+# ─── GET /workspaces/{id}/activity ──────────────────────────────────────────
+
+
+def test_workspace_activity_returns_one_row(client: TestClient) -> None:
+    resp = client.get("/workspaces/a1/activity")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"]["id"] == "a1"
+    assert "sessions" in body
+    assert "observed_at" in body
+
+
+def test_workspace_activity_row_matches_the_snapshot_row(client: TestClient) -> None:
+    """The per-workspace read and the fleet snapshot must answer identically.
+
+    The whole point of the route is that a client can hold ONE shape whether the
+    row arrived here or on the stream. Two seams building "the same" row is
+    exactly how a page comes to render something the stream then contradicts, so
+    pin them against each other rather than each against a literal.
+    """
+    one = client.get("/workspaces/a1/activity").json()
+    snapshot = client.get("/activity").json()
+    rows = [w for p in snapshot["projects"] for w in p["workspaces"] if w["state"]["id"] == "a1"]
+    assert len(rows) == 1
+    # `observed_at` is stamped per read and legitimately differs between two
+    # calls; everything else describes the workspace and must agree.
+    assert {k: v for k, v in one.items() if k != "observed_at"} == {
+        k: v for k, v in rows[0].items() if k != "observed_at"
+    }
+
+
+def test_workspace_activity_never_builds_the_fleet_snapshot(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route must cost ONE workspace, not the host.
+
+    This is the entire story: a first reader after a daemon start paid for a
+    fleet bootstrap merely to learn one session id. Asserting by READ rather
+    than by timing — this host is contended, so a millisecond assertion is
+    noise, while a call that must never happen is a counting question with a
+    definite answer.
+    """
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("per-workspace activity must not scan the fleet")
+
+    monkeypatch.setattr(ActivityService, "snapshot", _boom)
+    monkeypatch.setattr(ActivityService, "bootstrap", _boom)
+    assert client.get("/workspaces/a1/activity").status_code == 200
+
+
+def test_workspace_activity_reuses_the_maintained_row(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A warm route is a projection lookup, never another workspace refresh.
+
+    The first implementation correctly avoided the FLEET and still took 1.4 s:
+    it bypassed the maintained row and recomputed one workspace from scratch on
+    every request, while `/activity` answered in 2 ms from the projection. This
+    guard pins the positive half — use the row the poll already paid for — so a
+    later refactor cannot reintroduce that N=1 overwork while keeping the
+    snapshot/bootstrap guards green.
+    """
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("maintained activity must not be recomputed")
+
+    monkeypatch.setattr(ActivityService, "_workspace_activity", _boom)
+    assert client.get("/workspaces/a1/activity").status_code == 200
+
+
+def test_workspace_activity_404s_for_an_unknown_workspace(client: TestClient) -> None:
+    resp = client.get("/workspaces/nope/activity")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "workspace_not_found"
+
+
 # ─── GET /events framing ────────────────────────────────────────────────────
 
 
-async def _first_sse_frame(app: FastAPI, path: str) -> tuple[dict[str, Any], str]:
+async def _first_sse_frame(
+    app: FastAPI, path: str, *, accept_encoding: str | None = None
+) -> tuple[dict[str, Any], str]:
     """Drive the ASGI app directly, capture the first SSE body chunk, disconnect.
 
     An infinite SSE stream deadlocks the sync TestClient and buffers under httpx's
@@ -105,7 +186,9 @@ async def _first_sse_frame(app: FastAPI, path: str) -> tuple[dict[str, Any], str
         "raw_path": path.encode(),
         "query_string": b"",
         "root_path": "",
-        "headers": [],
+        "headers": (
+            [(b"accept-encoding", accept_encoding.encode())] if accept_encoding is not None else []
+        ),
         "client": ("127.0.0.1", 12345),
         "server": ("127.0.0.1", 80),
     }
@@ -224,6 +307,50 @@ async def test_events_emits_snapshot_first(tmp_state_dir: Path) -> None:
     payload = json.loads(data_line[len("data:") :].strip())
     assert payload["kind"] == "snapshot"
     assert payload["snapshot"]["total_workspaces"] == 2
+
+
+async def test_events_are_never_gzipped_even_when_the_client_accepts_gzip(
+    tmp_state_dir: Path,
+) -> None:
+    """SSE stays uncompressed: proxies buffer compressed streams before forwarding."""
+    store = JsonWorkspaceStore()
+    store.save(_state("a1", str(tmp_state_dir / "repo-a")))
+    app = build_app(cfg=daemon_test_config(), store=store)
+
+    assert any(
+        middleware.cls is GZipMiddleware and middleware.kwargs == {"minimum_size": 1024}
+        for middleware in app.user_middleware
+    )
+    start, _frame_text = await _first_sse_frame(app, "/events", accept_encoding="gzip")
+
+    headers = {key.decode(): value.decode() for key, value in start["headers"]}
+    assert headers["content-type"].startswith("text/event-stream")
+    assert headers["x-accel-buffering"] == "no"
+    assert "content-encoding" not in headers
+
+
+async def test_gzip_middleware_excludes_sse_even_when_the_client_accepts_gzip() -> None:
+    """The actual middleware's media-type exclusion protects live streams."""
+    app = FastAPI()
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+    @app.get("/events")
+    async def events() -> StreamingResponse:
+        async def stream() -> AsyncIterator[str]:
+            yield "event: snapshot\\ndata: {}\\n\\n"
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        )
+
+    start, _frame_text = await _first_sse_frame(app, "/events", accept_encoding="gzip")
+
+    headers = {key.decode(): value.decode() for key, value in start["headers"]}
+    assert headers["content-type"].startswith("text/event-stream")
+    assert headers["x-accel-buffering"] == "no"
+    assert "content-encoding" not in headers
 
 
 # ─── the heartbeat producer ───────────────────────────────────────────────────

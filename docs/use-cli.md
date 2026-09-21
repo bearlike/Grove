@@ -13,7 +13,7 @@ Every command and flag reaches the same engine as the TUI.
 
 - `grove --help` lists commands and `grove <topic> --help` lists a topic's flags.
 - `grove skills list --details` lists every installed workflow and `grove skills show <name>` reads one, with no daemon needed.
-- An enrolled native worker starts with `grove mailbox --help`, lists its peers, then sends and replies. A missing `GROVE_MAILBOX_TOKEN` means it is not enrolled, never that it should invent one. See [native sessions](configure-agents.md#native-sessions-and-terminal-twins) and the [MCP learning path](use-mcp.md#mailbox-workers).
+- Any agent writes to another with `grove mailbox contacts` then `grove mailbox send --to <id> --subject … --body …`. A reply is the same command with the addresses swapped. See [native sessions](configure-agents.md#native-sessions-and-terminal-twins) and the [MCP learning path](use-mcp.md#agents-writing-to-each-other).
 
 ## The contract
 

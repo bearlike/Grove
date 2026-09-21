@@ -30,6 +30,16 @@ describe("catalog_changed stream migration", () => {
 });
 
 describe("session_activity query migration", () => {
+  it("writes the delivered row into the per-workspace activity cache", () => {
+    const start = stream.indexOf('case "apply":');
+    const end = stream.indexOf('case "drop":', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const apply = stream.slice(start, end);
+    expect(apply).toContain("groveKeys.workspaceActivity(action.workspace.state.id)");
+    expect(apply).toContain("action.workspace");
+  });
+
   it("invalidates the stream-covered workspace reads", () => {
     const start = stream.indexOf("function refreshWorkspaceQueries(");
     const end = stream.indexOf("function refreshPeekFromStream(", start);

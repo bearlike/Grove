@@ -19,16 +19,19 @@ from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.codex import CodexAdapter
 from grove.core.agents.generic import GenericAdapter
 from grove.core.agents.mewbo import MewboAdapter
+from grove.core.agents.opencode import OpencodeAdapter
 
 # Built once; adapters carry no mutable state so sharing is safe and cheap.
 _CLAUDE_CODE = ClaudeCodeAdapter()
 _CODEX = CodexAdapter()
 _GENERIC = GenericAdapter()
 _MEWBO = MewboAdapter()
+_OPENCODE = OpencodeAdapter()
 
 _ADAPTERS: dict[str, AgentAdapter] = {
     ClaudeCodeAdapter.kind: _CLAUDE_CODE,
     CodexAdapter.kind: _CODEX,
+    OpencodeAdapter.kind: _OPENCODE,
     GenericAdapter.kind: _GENERIC,
     MewboAdapter.kind: _MEWBO,
 }
@@ -60,19 +63,11 @@ def all_adapters() -> tuple[AgentAdapter, ...]:
 
 
 MODEL_CATALOG_CAP = 10
-"""Max models DISCOVERY may offer for one agent, so a picker stays scannable.
+"""Legacy picker size, retained for import compatibility only.
 
-Display only — a caller can still submit any id (the provider boundary).
-
-**It does not apply to a configured list, and that asymmetry is the point.** The
-cap exists because live discovery answers with whatever a tool happens to
-publish: `codex debug models` returns everything, and a gateway measured on a
-real host returned 22 models under one prefix. Nobody chose those, so trimming
-them is a kindness. A list in `AgentSpec.models` is the opposite — somebody
-typed it, in order, to say *these are the ones I use*. Capping that silently
-discards the back half of an explicit answer with nothing said, which is the
-failure this repo keeps re-learning: a truncated list is indistinguishable from
-a complete one, so it reads as Grove ignoring its own config."""
+Catalogs are no longer truncated. Searchable pickers must be able to find every
+model the native resource offers, not just the first page of its ordering.
+"""
 
 
 CONTEXT_VARIANT_SUFFIX = "[1m]"
@@ -107,7 +102,7 @@ def _collapse_context_variants(ids: Sequence[str]) -> tuple[str, ...]:
 
 def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tuple[str, ...]:
     """The single per-agent model catalog a picker offers: configured override,
-    else the adapter's live discovery — de-duped, order-preserving, capped.
+    else the adapter's live discovery, de-duped and order-preserving.
 
     ``configured`` (``AgentSpec.models``) wins WHOLESALE when non-empty — a
     pin/curate/reorder seam (mechanism, not policy). Empty falls through to
@@ -122,11 +117,6 @@ def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tup
     for model in raw:
         if model and model not in seen:
             seen[model] = None
-    # Both halves of a `[1m]` pair are one choice to a reader, so the redundant
-    # one is folded out BEFORE the cap — otherwise a catalog of pairs spends
-    # half its allowance showing each model twice.
-    models = _collapse_context_variants(tuple(seen))
-    # A curated list is returned WHOLE; only discovery is capped. See
-    # MODEL_CATALOG_CAP for why silently trimming an explicit answer is worse
-    # than a long picker.
-    return models if curated else models[:MODEL_CATALOG_CAP]
+    # Both halves of a `[1m]` pair are one choice to a reader. Preserve every
+    # distinct choice so a searchable picker cannot hide a supported model.
+    return _collapse_context_variants(tuple(seen))

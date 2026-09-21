@@ -570,7 +570,7 @@ def test_resumable_kinds_derived_from_adapter_layer() -> None:
     """The resumable-kinds set is DERIVED from each adapter's ``resumable``
     flag, not hand-listed — so a future resumable adapter can't be missed."""
     derived = frozenset(a.kind for a in all_adapters() if a.resumable)
-    expected = {"claude_code", "codex"}
+    expected = {"claude_code", "codex", "opencode"}
     assert derived == _RESUMABLE_KINDS
     assert set(_RESUMABLE_KINDS) == expected
 

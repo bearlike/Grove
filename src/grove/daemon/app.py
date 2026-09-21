@@ -32,6 +32,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Web
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.gzip import GZipMiddleware
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import WebSocketException
 
@@ -56,8 +57,10 @@ from grove.core.container_infra import ProjectInfra
 from grove.core.contracts.activity import (
     DashboardEvent,
     DashboardSnapshotView,
+    SessionActivityView,
     SubagentActivityView,
     SubagentFleetView,
+    WorkspaceActivityView,
 )
 from grove.core.contracts.agents import AgentSummaryView, ModelOptionView
 from grove.core.contracts.assignment_events import AssignmentTicketEvent
@@ -92,6 +95,7 @@ from grove.core.contracts.sessions import (
     SessionQueryView,
     SessionSummaryView,
     TodoListView,
+    ToolCallView,
     WorkspaceQueueView,
 )
 from grove.core.contracts.share_policy import SharePolicyUpdateRequest, SharePolicyView
@@ -145,9 +149,9 @@ from grove.core.errors import (
 )
 from grove.core.gallery import DiagramGallery, GalleryItem
 from grove.core.issueops import AssigneePoller, IssueOpsEngine, TicketStatusPublisher
-from grove.core.mailboxes import MailboxCoordinator
 from grove.core.manager import WorkspaceManager
 from grove.core.model_catalog import model_options
+from grove.core.native_owners import NativeOwnerRegistry
 from grove.core.notifications import NotificationBroker
 from grove.core.pane_events import (
     PaneEventHub,
@@ -168,6 +172,12 @@ from grove.core.workspace_history import WorkspaceHistoryStore
 from grove.daemon._audience import _PollAudience
 from grove.daemon._catalog import _CatalogMemo, _GalleryMemo
 from grove.daemon._catalog_sources import _CatalogSources
+from grove.daemon._fleet_stream import (
+    FleetSnapshot,
+    FleetSnapshotStream,
+    fleet_heartbeat_frame,
+    fleet_sse_frame,
+)
 from grove.daemon._lifecycle import _LifecycleRunner
 from grove.daemon._pane_stream import _PaneStreamer
 from grove.daemon._public import PublicWorkspaceReader, ShareNotFound
@@ -179,11 +189,10 @@ from grove.daemon._turns import turn_window
 from grove.daemon.auth import (
     build_auth_router,
     make_require_hook_token,
-    make_require_mailbox_session,
     make_require_session,
 )
 from grove.daemon.mailbox_socket import MailboxSocket
-from grove.daemon.mailboxes import CoordinatorSteerClient, MailboxRouter
+from grove.daemon.mailboxes import MailboxRouter, OwnerSteerClient
 from grove.daemon.repos import RepoRegistry
 from grove.daemon.usage import _default_usage_service, build_usage_router
 
@@ -194,12 +203,6 @@ if TYPE_CHECKING:
     # importing `grove.core.telemetry.receiver` unconditionally pulls in
     # `opentelemetry-proto` even for a daemon that never turns the receiver on).
     from grove.core.telemetry.receiver import OtlpIngest
-
-# How often the lifespan task recomputes activity and emits ``session_activity``
-# deltas. Transcript/pane changes aren't lifecycle events, so this poll is what
-# streams them; lifecycle changes (create/kill) arrive promptly via the bus. A
-# couple seconds matches the dashboard's slow-tick feel without hammering git/tmux.
-_POLL_INTERVAL_SECONDS = 2.0
 
 # How long a minted panel URL stays usable. Long enough that a dashboard left
 # open all day keeps its browser tile alive without a refetch, short enough that
@@ -534,12 +537,12 @@ def build_app(  # noqa: PLR0915
     # that wires this: it is the one with a long-lived event loop for the build
     # to run on, and the hook is best-effort — it can never block or fail
     # registration (see `ProjectInfra.registration_hook`).
-    # The coordinator is built BEFORE the registry so every manager the daemon
-    # mints can steer a native workspace's owner in-process (see
-    # `CoordinatorSteerClient`); the loop it needs is bound at lifespan start.
+    # The owner registry is built BEFORE the registry so every manager the
+    # daemon mints can steer a native workspace's owner in-process (see
+    # `OwnerSteerClient`); the loop it needs is bound at lifespan start.
     configure_transcript_caches(cfg.transcript_cache)
-    mailbox_coordinator = MailboxCoordinator()
-    native_steer = CoordinatorSteerClient(mailbox_coordinator)
+    native_owners = NativeOwnerRegistry()
+    native_steer = OwnerSteerClient(native_owners)
     registry = RepoRegistry(
         cfg=cfg,
         store=store,
@@ -665,16 +668,12 @@ def build_app(  # noqa: PLR0915
     if share_policy_store is None:
         share_policy_store = SharePolicyStore()
     require_session = make_require_session(auth_store=auth_store, enabled=cfg.auth.enabled)
-    require_mailbox_session = make_require_mailbox_session(
-        auth_store=auth_store, enabled=cfg.auth.enabled
-    )
     auth_dep = [Depends(require_session)]
     mailbox_router = MailboxRouter(
-        coordinator=mailbox_coordinator,
+        owners=native_owners,
         registry=registry,
         store=store,
-        auth_store=auth_store,
-        require_mailbox_session=require_mailbox_session,
+        auth_dep=require_session,
         lifecycle=lifecycle,
     )
     mailbox_socket = (
@@ -715,7 +714,7 @@ def build_app(  # noqa: PLR0915
         app.state.usage = usage_service
         app.state.workspace_history = history_store
         app.state.sse_hub = sse_hub
-        app.state.mailbox_coordinator = mailbox_coordinator
+        app.state.native_owners = native_owners
         app.state.mailbox_router = mailbox_router
         if mailbox_socket is not None:
             await mailbox_socket.start()
@@ -845,6 +844,18 @@ def build_app(  # noqa: PLR0915
         version=_GROVE_VERSION,
         lifespan=lifespan,
     )
+
+    # A JSON transcript is mostly ASCII prose and code, so gzip is the single
+    # cheapest byte reduction on the wire. `minimum_size=1024` skips framing
+    # overhead on small bodies where compression would net-lose. Starlette's
+    # default `DEFAULT_EXCLUDED_CONTENT_TYPES` already excludes
+    # `text/event-stream` — load-bearing, not incidental: a proxy that buffers a
+    # compressed stream before forwarding it breaks the live dashboard, so
+    # `/events` and the pane stream must never be gzipped. The activity endpoint
+    # test mutation-tests this exclusion by asserting it rather than reading it.
+    # The sentry test attaches the real middleware before an SSE fixture, so its
+    # result cannot pass after this registration is deleted.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     if otlp_ingest is not None:
         # A MOUNT, never routes re-declared here: `build_receiver_app` is what
@@ -1398,14 +1409,19 @@ def build_app(  # noqa: PLR0915
         x_grove_share_passcode: Annotated[str | None, Header()] = None,
         last: Annotated[int | None, Query(ge=1)] = None,
         after_turn: Annotated[int | None, Query(ge=0)] = None,
+        before_turn: Annotated[int | None, Query(ge=0)] = None,
     ) -> SessionDetailView | None:
         """The shared workspace's transcript, windowed — the LIVE half.
 
         Takes no session id: the token names a workspace and the daemon picks
         the session, so an unauthenticated caller holds no coordinate it could
-        tamper with. ``after_turn`` and ``last`` mean exactly what they mean on
-        the authenticated route (one ``turn_window``, shared), which is what
-        lets the browser reuse its whole cursor-merge path unchanged.
+        tamper with. ``after_turn``, ``before_turn`` and ``last`` mean exactly
+        what they mean on the authenticated route (one ``turn_window``, shared),
+        which is what lets the browser reuse its whole cursor-merge path
+        unchanged. Settled tool bodies are withheld here too, and the public
+        drill-in below serves them; there is deliberately no ``bodies=all``
+        escape on this namespace — the whole-payload read exists for a CLI or
+        script holding a session, and a share link is neither.
 
         ``null`` means this workspace has no readable transcript yet — a real
         state for a workspace shared right after it was created, not an error.
@@ -1418,9 +1434,45 @@ def build_app(  # noqa: PLR0915
                     "message": "`last` and `after_turn` are mutually exclusive",
                 },
             )
+        if before_turn is not None and after_turn is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "invalid_turn_window",
+                    "message": "`before_turn` and `after_turn` are mutually exclusive",
+                },
+            )
         try:
             reader = await asyncio.to_thread(_share_reader, token, x_grove_share_passcode)
-            return await asyncio.to_thread(reader.turns, last=last, after_turn=after_turn)
+            return await asyncio.to_thread(
+                reader.turns, last=last, after_turn=after_turn, before_turn=before_turn
+            )
+        except ShareNotFound as exc:
+            raise _share_404(exc) from exc
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get("/public/{token}/tools/{tool_use_id}", response_model=ToolCallView)
+    async def public_tool(
+        token: str,
+        tool_use_id: str,
+        x_grove_share_passcode: Annotated[str | None, Header()] = None,
+    ) -> ToolCallView:
+        """One tool call's complete body, for the session the TOKEN names.
+
+        The public sibling of the authenticated drill-in, and it takes no
+        workspace or session coordinate for the same reason ``/turns`` does not:
+        the reader holds a token, the daemon picks the session, so there is
+        nothing here an anonymous caller could point at another workspace. A
+        tool id belonging to any other session is the flat share 404 every
+        public failure answers with — never a hint that the id exists elsewhere.
+        """
+        try:
+            reader = await asyncio.to_thread(_share_reader, token, x_grove_share_passcode)
+            call = await asyncio.to_thread(reader.tool_call, tool_use_id)
+            if call is None:
+                raise ShareNotFound("no such tool call on this shared transcript")
+            return call
         except ShareNotFound as exc:
             raise _share_404(exc) from exc
         except GroveError as exc:
@@ -2317,6 +2369,52 @@ def build_app(  # noqa: PLR0915
         return WorkspacePeekView.from_peek(peek)
 
     @app.get(
+        "/workspaces/{ws_id}/activity",
+        response_model=WorkspaceActivityView,
+        dependencies=auth_dep,
+    )
+    async def workspace_activity(ws_id: str) -> WorkspaceActivityView:
+        """One workspace's activity row — the per-workspace half of ``/activity``.
+
+        A page about ONE workspace needs one session id, and reading it off the
+        cross-project snapshot made it wait for every workspace on the host:
+        measured on the reference host, two OFFLINE workspaces contributed
+        22.4 s of a 40.6 s bootstrap that a transcript page sat behind before
+        its first paint. This answers the same question at O(1) workspaces.
+
+        The frame is byte-identical to that workspace's row in the snapshot —
+        same ``WorkspaceActivityView``, built by the same engine seam — so a
+        client can hold one shape whether it arrived here or on the stream, and
+        the ``session_activity`` frames keep it current afterwards.
+
+        ``workspace_row`` reconciles status and shells git/tmux, so it rides the
+        executor like every other blocking manager read.
+        """
+        try:
+            state = store.get(ws_id)
+        except WorkspaceNotFound as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace with id {ws_id!r}",
+                },
+            ) from exc
+        row = await asyncio.to_thread(activity_service.workspace_row, state.repo_root, ws_id)
+        if row is None:
+            # Raced a kill between the store read and the row build. The engine
+            # answers None rather than raising, so the 404 envelope is owned
+            # here — the same shape `_state_for` would have produced.
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "workspace_not_found",
+                    "message": f"no workspace with id {ws_id!r}",
+                },
+            )
+        return WorkspaceActivityView.from_activity(row)
+
+    @app.get(
         "/workspaces/{ws_id}/pane",
         response_model=WorkspacePaneView,
         dependencies=auth_dep,
@@ -2448,9 +2546,9 @@ def build_app(  # noqa: PLR0915
         """Every agent session recorded for the workspace's directory, newest-first.
 
         Fetch-on-demand by design — session history never rides the SSE stream.
-        The scan full-parses each transcript in one cwd (the documented
-        ``list_sessions`` cost model), so it runs in the executor like
-        ``/activity``.
+        The scan uses one bounded head read per transcript in the workspace's
+        cwd; parse-derived fields come only from the durable cache. It still runs
+        in the executor because filesystem discovery is blocking.
 
         ``candidates=true`` flips the scan to the UNGATED
         :meth:`SessionExplorer.candidates_for` — the remap-picker set,
@@ -2461,12 +2559,15 @@ def build_app(  # noqa: PLR0915
         """
         mgr = _manager_for(ws_id)
         explorer = SessionExplorer(mgr)
-        scan = explorer.candidates_for if candidates else explorer.for_workspace
         try:
-            listings = await asyncio.to_thread(scan, ws_id)
+            if candidates:
+                listings = await asyncio.to_thread(explorer.candidates_for, ws_id)
+                listings = listings[:limit]
+            else:
+                listings = await asyncio.to_thread(explorer.for_workspace, ws_id, limit=limit)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
-        return [SessionSummaryView.from_listing(ls) for ls in listings[:limit]]
+        return [SessionSummaryView.from_listing(ls) for ls in listings]
 
     @app.get(
         "/workspaces/{ws_id}/diff",
@@ -2515,6 +2616,8 @@ def build_app(  # noqa: PLR0915
         session_id: str,
         last: Annotated[int | None, Query(ge=1)] = None,
         after_turn: Annotated[int | None, Query(ge=0)] = None,
+        before_turn: Annotated[int | None, Query(ge=0)] = None,
+        bodies: Annotated[Literal["head", "all"], Query()] = "head",
     ) -> SessionDetailView:
         """The session's conversation, oldest-first; ``last`` keeps only the tail.
 
@@ -2537,6 +2640,22 @@ def build_app(  # noqa: PLR0915
         it falls back rather than silently skipping turns. ``after_turn`` and
         ``last`` are mutually exclusive (422): ``last`` counts from the end, so
         combining them makes the reported index ambiguous.
+
+        ``before_turn=<n>`` is the BACKWARD page — turns preceding ``n``,
+        exclusive — and it is what makes "load earlier" transfer only the
+        earlier turns instead of re-downloading the tail it already holds. It
+        combines with ``last``, which is its page size, and refuses
+        ``after_turn`` (422): a request cannot both resume forward and page
+        back.
+
+        ``bodies=head`` (the default) withholds the request/result of every
+        SETTLED tool call outside the tail turn, marking each ``body:
+        "available"`` for the drill-in below. Tool bodies were measured at 55.6%
+        of a ``?last=40`` window while a historical tool call mounts collapsed
+        and never puts its body in the DOM. It is a PROJECTION, not a cap —
+        nothing is truncated and the response says what it withheld — and
+        ``bodies=all`` opts a CLI, TUI or script back into the complete payload
+        in one read.
         """
         if last is not None and after_turn is not None:
             raise HTTPException(
@@ -2546,8 +2665,19 @@ def build_app(  # noqa: PLR0915
                     "message": "`last` and `after_turn` are mutually exclusive",
                 },
             )
+        if before_turn is not None and after_turn is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "invalid_turn_window",
+                    "message": "`before_turn` and `after_turn` are mutually exclusive",
+                },
+            )
         mgr = _manager_for(ws_id)
         explorer = SessionExplorer(mgr)
+
+        def _projected(detail: SessionDetailView) -> SessionDetailView:
+            return detail if bodies == "all" else detail.withhold_settled_bodies()
 
         def _read() -> SessionDetailView:
             listings = explorer.for_workspace(ws_id)
@@ -2560,28 +2690,79 @@ def build_app(  # noqa: PLR0915
             # parse, and only the complete list can report an honest
             # `total_turns`.
             if listing is not None:
-                window = turn_window(explorer.turns_for(listing), last=last, after_turn=after_turn)
-                return SessionDetailView.from_listing_turns(
-                    listing,
-                    window.turns,
-                    total_turns=window.total,
-                    first_turn_index=window.first_index,
-                    incremental=window.incremental,
+                window = turn_window(
+                    explorer.turns_for(listing),
+                    last=last,
+                    after_turn=after_turn,
+                    before_turn=before_turn,
+                )
+                return _projected(
+                    SessionDetailView.from_listing_turns(
+                        listing,
+                        window.turns,
+                        total_turns=window.total,
+                        first_turn_index=window.first_index,
+                        incremental=window.incremental,
+                    )
                 )
             fallback = explorer.subagent_turns(ws_id, session_id)
             if fallback is not None:
                 fleet_listing, turns = fallback
-                window = turn_window(turns, last=last, after_turn=after_turn)
-                return SessionDetailView.from_listing_turns(
-                    fleet_listing,
-                    window.turns,
-                    total_turns=window.total,
-                    first_turn_index=window.first_index,
-                    incremental=window.incremental,
+                window = turn_window(
+                    turns, last=last, after_turn=after_turn, before_turn=before_turn
+                )
+                return _projected(
+                    SessionDetailView.from_listing_turns(
+                        fleet_listing,
+                        window.turns,
+                        total_turns=window.total,
+                        first_turn_index=window.first_index,
+                        incremental=window.incremental,
+                    )
                 )
             raise AgentSessionNotFound(
                 f"no session {session_id!r} recorded for workspace {ws_id!r}"
             )
+
+        try:
+            return await asyncio.to_thread(_read)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/workspaces/{ws_id}/sessions/{session_id}/tools/{tool_use_id}",
+        response_model=ToolCallView,
+        dependencies=auth_dep,
+    )
+    async def workspace_session_tool(ws_id: str, session_id: str, tool_use_id: str) -> ToolCallView:
+        """ONE tool call's complete request and result — the drill-in member of
+        the head+drill-in pairing ``/turns`` heads.
+
+        The same shape ``/diff`` + ``?path=`` already has, applied to a
+        transcript: the windowed turn list carries every call's identity and
+        status while withholding a settled body it marks ``body: "available"``,
+        and this serves that body WHOLE. Byte-for-byte what ``?bodies=all``
+        carries for the same id, because both render the same
+        ``ToolCallView.from_call`` over the same spine — a drill-in that
+        disagreed with the unwindowed read would make the projection a cap in
+        disguise.
+
+        Resolved by id against that session's own messages
+        (``SessionExplorer.tool_call``), so an unknown id is a typed 404 rather
+        than a neighbouring call. Off the loop like every other transcript read
+        here.
+        """
+        mgr = _manager_for(ws_id)
+        explorer = SessionExplorer(mgr)
+
+        def _read() -> ToolCallView:
+            call = explorer.tool_call(ws_id, session_id, tool_use_id)
+            if call is None:
+                raise AgentSessionNotFound(
+                    f"no tool call {tool_use_id!r} in session {session_id!r} "
+                    f"for workspace {ws_id!r}"
+                )
+            return ToolCallView.from_call(call)
 
         try:
             return await asyncio.to_thread(_read)
@@ -2642,7 +2823,7 @@ def build_app(  # noqa: PLR0915
             # opens a sqlite store, and resolving the kind reads the store and
             # reconciles (which for a container workspace reaches `docker`).
             queued = mgr.pending_queue(ws_id)
-            supported = get_adapter(mgr.effective_kind(mgr.get(ws_id))).reports_queue
+            supported = mgr.queue_supported(ws_id)
             return WorkspaceQueueView(
                 messages=tuple(QueuedMessageView.from_message(m) for m in queued),
                 supported=supported,
@@ -2658,38 +2839,167 @@ def build_app(  # noqa: PLR0915
         response_model=SubagentFleetView,
         dependencies=auth_dep,
     )
-    async def workspace_fleet(ws_id: str) -> SubagentFleetView:
-        """The workspace's live sub-agent roster, full detail.
+    async def workspace_fleet(
+        ws_id: str, session_id: Annotated[str, Query()] | None = None
+    ) -> SubagentFleetView:
+        """The workspace's live child-session roster, full detail, for one root.
 
         The ``/todo``/``/queue`` sibling: a fleet is unbounded in count exactly
         like a checklist or a message queue, so only counts ride the ~1 Hz
         stream (``WorkspaceActivityView.fleet``) and the roster itself is
-        fetch-on-demand. Sourced from the Claude Code hook's per-
-        ``(session_id, agent_id)`` sidecar (``ClaudeHook.list_subagents``) — a
-        handful of small file reads, never a transcript parse — so this is
-        claude_code-only (no other kind's hook payload carries ``agent_id``
-        today). Unlike ``/todo``, a workspace of another kind or one with no
-        minted session answers an EMPTY roster rather than 404: "no sub-agents"
-        is a real, common answer for a session that never spawned one, not a
-        missing-session refusal.
+        fetch-on-demand. ``session_id`` selects the root session (default: the
+        workspace's readable primary) — any of the workspace's own sessions,
+        never a foreign workspace's.
+
+        ``sessions`` is the provider-neutral transcript-derived child
+        projection (``SessionExplorer.fleet_activity``, generic across every
+        adapter exposing the capability); ``subagents`` stays Claude Code's
+        hook-pushed live roster, filtered to entries the transcript
+        projection has not yet surfaced (a just-started child with no thread
+        messages) so the same child never appears twice. ``supported=False``
+        means this root's adapter has no child-reader capability, distinct
+        from a supported root with no children (``sessions=[]``,
+        ``supported=True``). A read failure sets ``error`` rather than being
+        reported as an empty fleet.
         """
         mgr = _manager_for(ws_id)
 
         def _read() -> SubagentFleetView:
+            explorer = SessionExplorer(mgr)
+            resolved_id, supported, children = explorer.fleet_activity(ws_id, session_id)
+            subagents: list[SubagentActivityView] = []
             state = mgr.get(ws_id)
-            if mgr.effective_kind(state) != "claude_code" or not state.agent_session_id:
-                return SubagentFleetView(subagents=[])
-            records = ClaudeHook.list_subagents(
-                state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
-            )
+            if (
+                mgr.effective_kind(state) == "claude_code"
+                and state.agent_session_id
+                and resolved_id == state.agent_session_id
+            ):
+                known_child_ids = {c.session.session_id for c in children}
+                records = ClaudeHook.list_subagents(
+                    state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                )
+                subagents = [
+                    SubagentActivityView.from_record(r)
+                    for r in records
+                    if r.agent_id not in known_child_ids
+                ]
             return SubagentFleetView(
-                subagents=[SubagentActivityView.from_record(r) for r in records]
+                subagents=subagents,
+                sessions=[SessionActivityView.from_session_activity(c) for c in children],
+                session_id=resolved_id,
+                supported=supported,
             )
 
         try:
             return await asyncio.to_thread(_read)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
+
+    @app.get(
+        "/workspaces/{ws_id}/fleet/stream",
+        dependencies=auth_dep,
+        responses={
+            200: {
+                "description": (
+                    "text/event-stream of `fleet_snapshot` SubagentFleetView JSON "
+                    "frames for one workspace root session. Coalesced: a burst of "
+                    "activity edges produces at most one in-flight re-read at a "
+                    "time, offloaded to a worker thread so a slow snapshot never "
+                    "blocks `/message` or any other route. Heartbeats every 15s."
+                ),
+            }
+        },
+    )
+    async def workspace_fleet_stream(
+        ws_id: str, session_id: Annotated[str, Query()] | None = None
+    ) -> StreamingResponse:
+        """Live scoped fleet replacement for one workspace root session.
+
+        Reuses the existing activity bus and its bounded-queue audience
+        discipline — no new always-on poller, no host-wide roster payload, no
+        child transcript bodies (a selected child's turns stay behind the
+        existing cursor-aware ``/turns`` route). Authorization is the
+        workspace's own tree: any session belonging to this workspace, never a
+        stranger's. Teardown on disconnect or when the workspace/session is
+        removed — the reader answers honestly rather than wedging the stream.
+        """
+        mgr = _manager_for(ws_id)
+        explorer = SessionExplorer(mgr)
+
+        def _read() -> FleetSnapshot:
+            try:
+                resolved_id, supported, children = explorer.fleet_activity(ws_id, session_id)
+            except GroveError as exc:
+                return FleetSnapshot(
+                    SubagentFleetView(session_id=session_id, supported=False, error=str(exc)),
+                    terminal=True,
+                )
+            subagents: list[SubagentActivityView] = []
+            try:
+                state = mgr.get(ws_id)
+                if (
+                    mgr.effective_kind(state) == "claude_code"
+                    and state.agent_session_id
+                    and resolved_id == state.agent_session_id
+                ):
+                    known_child_ids = {c.session.session_id for c in children}
+                    records = ClaudeHook.list_subagents(
+                        state.agent_session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                    )
+                    subagents = [
+                        SubagentActivityView.from_record(r)
+                        for r in records
+                        if r.agent_id not in known_child_ids
+                    ]
+            except GroveError:
+                # The workspace vanished between the fleet read above and this
+                # lookup — the snapshot below still answers honestly for the
+                # session projection it already has.
+                pass
+            return FleetSnapshot(
+                SubagentFleetView(
+                    subagents=subagents,
+                    sessions=[SessionActivityView.from_session_activity(c) for c in children],
+                    session_id=resolved_id,
+                    supported=supported,
+                )
+            )
+
+        fleet_stream = FleetSnapshotStream(
+            activity_service, audience, workspace_id=ws_id, reader=_read
+        )
+        fleet_stream.start()
+
+        async def stream() -> AsyncIterator[str]:
+            try:
+                initial = await fleet_stream.snapshot()
+                yield fleet_sse_frame(initial.view)
+                if initial.terminal:
+                    return
+                while True:
+                    try:
+                        await asyncio.wait_for(
+                            fleet_stream.changed(), timeout=_HEARTBEAT_INTERVAL_SECONDS
+                        )
+                    except TimeoutError:
+                        yield fleet_heartbeat_frame(session_id)
+                        continue
+                    snap = await fleet_stream.snapshot()
+                    yield fleet_sse_frame(snap.view)
+                    if snap.terminal:
+                        return
+            finally:
+                fleet_stream.stop()
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.get(
         "/workspaces/{ws_id}/provision",

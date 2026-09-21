@@ -30,7 +30,7 @@ async function proxyParams(request: NextRequest, context: Context): Promise<Resp
 }
 
 function isEventStream(path: string[]): boolean {
-  return (path.length === 1 && path[0] === "events") || (path.length === 4 && path[0] === "workspaces" && path[2] === "pane" && path[3] === "stream");
+  return (path.length === 1 && path[0] === "events") || (path.length === 4 && path[0] === "workspaces" && path[2] === "pane" && path[3] === "stream") || (path.length === 4 && path[0] === "workspaces" && path[2] === "fleet" && path[3] === "stream");
 }
 
 async function proxyStream(request: NextRequest, path: string[]): Promise<Response> {
@@ -50,7 +50,15 @@ async function proxyStream(request: NextRequest, path: string[]): Promise<Respon
 async function proxy(request: NextRequest, path: string[]): Promise<Response> {
   const auth = await resolveAuth(request);
   if (!isAuthOk(auth)) return auth;
-  const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${auth.daemonToken}` };
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${auth.daemonToken}`,
+    // Node's fetch auto-decompresses upstream gzip while retaining its stale
+    // content-encoding/content-length headers. Asking the daemon for identity
+    // keeps the streamed body and downstream headers in agreement. Next's
+    // server then negotiates gzip on the browser-facing response.
+    "accept-encoding": "identity",
+  };
   const init: RequestInit = { method: request.method, headers, cache: "no-store" };
   if (request.method !== "GET" && request.method !== "HEAD") {
     init.body = await request.text();
@@ -58,7 +66,10 @@ async function proxy(request: NextRequest, path: string[]): Promise<Response> {
   }
   try {
     const response = await fetch(upstreamUrl(path, request), init);
-    const output = new NextResponse([204, 205, 304].includes(response.status) ? null : await response.text(), { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } });
+    const output = new NextResponse([204, 205, 304].includes(response.status) ? null : response.body, {
+      status: response.status,
+      headers: { "content-type": response.headers.get("content-type") ?? "application/json" },
+    });
     if (response.status === 401) await clearInvalidCookie(request, output);
     return output;
   } catch (error: unknown) { return daemonUnreachable(error); }

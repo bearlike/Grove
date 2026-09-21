@@ -49,7 +49,7 @@ Grove is a terminal program first. The web dashboard puts the same fleet on any 
 The landing route is a composer, not a dashboard ([`launch-surface.tsx`](repo:webapp/components/grove/launch/launch-surface.tsx)). Type the task and send it.
 
 - Project, directory, agent, model, runtime and branch fill from the [configuration cascade](features-cascade.md) as pills. Touch one to change it.
-- The Agent pill carries **Session mode** for Claude Code and Codex, a [native session](configure-agents.md#native-sessions-and-terminal-twins) or the terminal.
+- The Agent pill carries **Session mode** for Claude Code, Codex and OpenCode, a [native session](configure-agents.md#native-sessions-and-terminal-twins) or the terminal.
 - **Custom…** on the model pill takes any typed id, forwarded unchanged.
 - **More options** opens the [full create form](#creating-a-workspace). **Go to fleet** shows everything running.
 
@@ -75,7 +75,7 @@ A collapsible rail ([`app-sidebar.tsx`](repo:webapp/components/grove/shell/app-s
 **New workspace** and **More options** open one form ([`create-workspace-dialog.tsx`](repo:webapp/components/grove/fleet/create-workspace-dialog.tsx)). Project, title and agent are required, the rest falls through to the cascade.
 
 - **Task**, the agent's first message, or blank to type it once the workspace opens.
-- **Agent**, **Model**, and **Session mode** for Claude Code and Codex.
+- **Agent**, **Model**, and **Session mode** for Claude Code, Codex and OpenCode.
 - **Runtime**, *Host* or *Container*, and **Brief**, whether Grove sends its own briefing.
 - **Branch**, auto named from the title, an existing branch, or a new name.
 - **Ticket**, an issue on Gitea, GitHub or Linear to [publish progress to](features-ticket-providers.md).

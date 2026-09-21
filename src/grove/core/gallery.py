@@ -38,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -60,6 +61,13 @@ if TYPE_CHECKING:
 _SUFFIX: Final = ".drawio"
 _PREVIEW_DIR: Final = "diagram-previews"
 _HEX64: Final = frozenset("0123456789abcdef")
+# How many worktrees the census reads at once. Each read is one `git ls-files`
+# plus a small directory walk — process spawn and filesystem wait, not this
+# process's CPU — so a modest pool collapses the wall clock without making the
+# daemon a fork bomb on a host with hundreds of worktrees. Measured on the
+# reference host (189 worktrees): 4409 ms serial, 622 ms at 16, and 32 was no
+# better, so the curve is flat well before anything worth raising this for.
+_CENSUS_WORKERS: Final = 16
 
 
 @dataclass(slots=True, frozen=True)
@@ -160,6 +168,42 @@ class DiagramGallery:
         # worktree comes first in git's order and wins; a worktree that has
         # actually CHANGED the file carries a different digest and keeps its row.
         seen_content: set[tuple[Path, str, str]] = set()
+        for root, worktree, diagrams in self.census():
+            for path in diagrams:
+                if path in seen:
+                    continue
+                seen.add(path)
+                item = self._item(root, worktree, path, by_worktree, sessions_by_cwd)
+                if item is None:
+                    continue
+                content_key = (root, item.relative_path, item.digest)
+                if content_key in seen_content:
+                    continue
+                seen_content.add(content_key)
+                items.append(item)
+        items.sort(key=lambda item: item.modified_at, reverse=True)
+        return tuple(items)
+
+    def census(self) -> list[tuple[Path, Path, list[Path]]]:
+        """Every known worktree paired with its diagrams, in git's own order.
+
+        The per-worktree read is a subprocess and a directory walk, and a fleet
+        host has a lot of worktrees — measured on the reference host, 189 of them
+        across 10 repositories cost 4.4 s serially, for 4 distinct diagrams. They
+        are independent and dominated by process spawn and filesystem wait rather
+        than by this process's CPU, so they run on a bounded pool.
+
+        **The ORDER of the result is load-bearing and must stay git's**, because
+        the content dedupe in ``scan`` resolves a tracked diagram to whichever
+        worktree reports it first and that is meant to be the main one.
+        ``Executor.map`` yields in submission order, so concurrency here changes
+        timing and never attribution.
+
+        Public because the daemon's watch-root discovery needs the same answer
+        and used to re-derive it with a second full pass, so daemon startup paid
+        this twice. One census, two consumers.
+        """
+        scopes: list[tuple[Path, Path]] = []
         for root in self._registry.known_roots():
             if not root.is_dir():
                 continue
@@ -170,27 +214,21 @@ class DiagramGallery:
                     "gallery bootstrap skipped unavailable repository: {}", type(exc).__name__
                 )
                 continue
-            for worktree in worktrees:
-                # `git worktree list` reports every registered worktree, including
-                # one a CONTAINER registered under its own namespace (`/workspaces/…`)
-                # that does not exist on this host — and `subprocess.run(cwd=…)`
-                # raises before git can say so. Measured on the reference host.
-                if not worktree.is_dir():
-                    continue
-                for path in self._diagram_paths(worktree):
-                    if path in seen:
-                        continue
-                    seen.add(path)
-                    item = self._item(root, worktree, path, by_worktree, sessions_by_cwd)
-                    if item is None:
-                        continue
-                    content_key = (root, item.relative_path, item.digest)
-                    if content_key in seen_content:
-                        continue
-                    seen_content.add(content_key)
-                    items.append(item)
-        items.sort(key=lambda item: item.modified_at, reverse=True)
-        return tuple(items)
+            # `git worktree list` reports every registered worktree, including
+            # one a CONTAINER registered under its own namespace (`/workspaces/…`)
+            # that does not exist on this host — and `subprocess.run(cwd=…)`
+            # raises before git can say so. Measured on the reference host.
+            scopes.extend((root, worktree) for worktree in worktrees if worktree.is_dir())
+        if not scopes:
+            return []
+        workers = min(_CENSUS_WORKERS, len(scopes))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="grove-gallery") as pool:
+            found = list(pool.map(lambda scope: self._diagram_paths(scope[1]), scopes))
+        # strict: a short result would pair a worktree with another's diagrams,
+        # i.e. silently wrong attribution rather than a missing row.
+        return [
+            (root, worktree, paths) for (root, worktree), paths in zip(scopes, found, strict=True)
+        ]
 
     @staticmethod
     def read_source(item: GalleryItem) -> bytes:

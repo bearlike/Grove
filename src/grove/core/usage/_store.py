@@ -45,9 +45,6 @@ from grove.core.usage._schema import DDL, SCHEMA_VERSION
 SCHEMA_VERSION_KEY: Final = "schema_version"
 """``meta`` row holding the version the file on disk was written under."""
 
-LAST_REFRESH_KEY: Final = "last_refresh_at"
-"""``meta`` row holding the epoch second of the last completed refresh."""
-
 MAX_DAY_BUCKETS: Final = 3660
 """Ten years of day buckets. A bound rather than a policy: an unbounded range
 (a caller passing ``datetime.min``) would otherwise materialize millions of rows

@@ -1,21 +1,26 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 
 import { ErrorState } from "@/components/elements/error-state";
 import { findWorkspaceActivity } from "@/lib/grove/adapters";
 import {
+  ToolBodyProvider,
   useActivityStream,
   useSessionTurns,
+  useSubagentFleet,
+  useSubagentFleetStream,
   useWorkspaceQueue,
 } from "@/lib/grove/hooks";
-import type { WorkspaceQueueView } from "@/lib/grove/api";
+import type { SubagentFleetData, WorkspaceQueueView } from "@/lib/grove/api";
 import type { GroveThreadState } from "@/lib/grove/runtime";
 import { GroveDataParts } from "./data-parts";
 import { PendingQuestion } from "./pending-question";
 import { QueuePanel } from "./queue-panel";
 import { SessionPicker } from "./session-picker";
+import { SubagentFleetPanel } from "./subagent-fleet";
+import { SubagentTranscriptDialog } from "./subagent-transcript-dialog";
 import { WorkspaceComposerSurface } from "./composer";
 import { Thread, type ThreadComponents } from "./thread";
 import { THREAD_INSET, THREAD_WIDTH } from "./thread-width";
@@ -106,6 +111,17 @@ export function Transcript({
   const activity = useActivityStream();
   const exitReason = native ? agentExited(findWorkspaceActivity(activity.snapshot, workspaceId)) : null;
 
+  // ONE subscription for the one mounted, visible root — never a second stream
+  // per card. Its cache is independent of `groveKeys.turns`, so a child update
+  // never invalidates or refetches this pane's own transcript.
+  const fleet = useSubagentFleet(sessionId === null ? null : workspaceId, sessionId);
+  const fleetStale = useSubagentFleetStream(workspaceId, sessionId, sessionId !== null);
+  const [openChild, setOpenChild] = useState<{ sessionId: string; label: string } | null>(null);
+  const openSubagentTranscript = useCallback(
+    (childSessionId: string, label: string) => setOpenChild({ sessionId: childSessionId, label }),
+    [],
+  );
+
   // No resolvable session means there is no transcript to render at all — the
   // only useful thing this pane can do is offer the remap that fixes it. But
   // `sessionId` is ITSELF derived from the activity snapshot, which is a query
@@ -136,18 +152,34 @@ export function Transcript({
   return (
     <AssistantRuntimeProvider runtime={thread.runtime}>
       <GroveDataParts />
-      <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
-        data-testid="transcript"
-      >
-        <ThreadPane
+      {/* The coordinate a withheld tool body is fetched with. It belongs here
+          rather than on the part: assistant-ui mounts `ToolCallPart` from a
+          message part several providers down, with no route for a prop. */}
+      <ToolBodyProvider source={{ kind: "workspace", workspaceId, sessionId }}>
+        <div
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+          data-testid="transcript"
+        >
+          <ThreadPane
+            workspaceId={workspaceId}
+            thread={thread}
+            narrow={narrow}
+            queue={queue.data ?? null}
+            fleet={fleet.data ?? null}
+            fleetStale={fleetStale}
+            onOpenSubagentTranscript={openSubagentTranscript}
+            exitReason={exitReason}
+          />
+        </div>
+        <SubagentTranscriptDialog
           workspaceId={workspaceId}
-          thread={thread}
-          narrow={narrow}
-          queue={queue.data ?? null}
-          exitReason={exitReason}
+          sessionId={openChild?.sessionId ?? null}
+          label={openChild?.label ?? null}
+          onOpenChange={(open) => {
+            if (!open) setOpenChild(null);
+          }}
         />
-      </div>
+      </ToolBodyProvider>
     </AssistantRuntimeProvider>
   );
 }
@@ -180,6 +212,9 @@ function ThreadPane({
   thread,
   narrow,
   queue,
+  fleet,
+  fleetStale,
+  onOpenSubagentTranscript,
   exitReason,
 }: {
   workspaceId: string;
@@ -187,6 +222,11 @@ function ThreadPane({
   narrow: boolean;
   /** The workspace's steer queue, or null while it has not loaded yet. */
   queue: WorkspaceQueueView | null;
+  /** The root session's live child roster, or null while it has not loaded yet. */
+  fleet: SubagentFleetData | null;
+  /** The fleet's own stream disconnected; the card still shows its last snapshot. */
+  fleetStale: boolean;
+  onOpenSubagentTranscript: (sessionId: string, label: string) => void;
   /** The primary native owner ended; sending revives it. */
   exitReason: string | null;
 }) {
@@ -237,6 +277,18 @@ function ThreadPane({
             {working && <WorkingLoader />}
             {todo && <TodoPanel todo={todo} />}
             {queue && <QueuePanel queue={queue} />}
+            {/* Directly above the composer, below Queue — the approved
+                mockup's placement: a live subagent roster reads as
+                "what is happening right now", the same shelf as the queue
+                and the plan, never inside the parent's own transcript. */}
+            {fleet && (
+              <SubagentFleetPanel
+                fleet={fleet}
+                workspaceId={workspaceId}
+                stale={fleetStale}
+                onOpenTranscript={onOpenSubagentTranscript}
+              />
+            )}
             {pending.map((group) => (
               <PendingQuestion
                 key={group.groupId}
@@ -262,6 +314,9 @@ function ThreadPane({
       narrow,
       todo,
       queue,
+      fleet,
+      fleetStale,
+      onOpenSubagentTranscript,
       pending,
       answering,
       answer,

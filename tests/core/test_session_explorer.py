@@ -11,12 +11,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from grove.core.agents.claude_code import _ClaudeHome
+from grove.core.agents import SessionRef, claude_code, transcript_cache
+from grove.core.agents.claude_code import ClaudeCodeAdapter, _ClaudeHome
 from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig
 from grove.core.contracts.branch_plan import RootBranch
@@ -25,6 +27,7 @@ from grove.core.errors import GroveError, WorkspaceNotFound
 from grove.core.manager import WorkspaceManager
 from grove.core.sessions import SessionExplorer
 from grove.core.store import JsonWorkspaceStore
+from grove.core.turn_count import TurnCountCache
 from grove.core.workspace import Placement
 from tests.conftest import FakeTmux
 
@@ -711,3 +714,255 @@ def test_for_workspace_finds_minted_session_after_transcript_relocation(
     # its content is what the turns route serves.
     assert listing.summary.transcript_path == moved
     assert SessionExplorer(manager).turns_for(listing)
+
+
+# ─── the metadata-only cost guarantee (#805) ─────────────────────────────────
+
+
+@pytest.fixture
+def count_parsers(monkeypatch: pytest.MonkeyPatch) -> Callable[[], int]:
+    """Count WHOLE-TRANSCRIPT reads — the read-count seam.
+
+    Asserting by COUNT rather than by elapsed time is the point: this host is
+    contended, so a timing assertion measures the neighbours' load rather than
+    this code.
+
+    It counts TWO events, and the second is why: ``_TranscriptParser`` is the
+    obvious one, but ``read_messages`` (which is how the deleted per-row
+    ``duration`` column was computed) never constructs one — it projects the
+    spine straight off ``TranscriptCache``. A fixture watching only the parser
+    was VACUOUS against exactly that regression: restoring the second full parse
+    per row left all five guards green. ``TranscriptCache._consume`` is the seam
+    every whole-file read flows through, head reads included in neither.
+    """
+    calls = 0
+    original_parser = claude_code._TranscriptParser.__init__
+    original_consume = transcript_cache.TranscriptCache._consume
+
+    def counting_init(self: object, *args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        original_parser(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    def counting_consume(self: object, *args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return original_consume(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(claude_code._TranscriptParser, "__init__", counting_init)
+    monkeypatch.setattr(transcript_cache.TranscriptCache, "_consume", counting_consume)
+    return lambda: calls
+
+
+def _workspace_with_neighbours(
+    manager: WorkspaceManager, claude_home: Path, *, neighbours: int, title: str = "crowded"
+) -> tuple[str, str]:
+    """A workspace whose own cwd already holds ``neighbours`` foreign transcripts.
+
+    The shape the issue measured: a shared cwd where the listing's cost tracked
+    the number of strangers in the directory rather than the session asked for.
+    ``title`` is a parameter because a branch name derives from it at
+    one-second resolution, so two workspaces made in the same test collide.
+    """
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title=title))
+    assert state.agent_session_id is not None
+    worktree = Path(state.worktree_path)
+    born = state.created_at + timedelta(seconds=1)
+    _write_transcript(
+        claude_home, state.agent_session_id, worktree, mtime=2_000, prompt="mine", born_at=born
+    )
+    for index in range(neighbours):
+        _write_transcript(
+            claude_home,
+            f"{index:08d}-1111-4111-8111-{title[:4]:x<4}11111111",
+            worktree,
+            mtime=3_000 + index,
+            prompt=f"neighbour {index}",
+            born_at=born,
+        )
+    return (state.id, state.agent_session_id)
+
+
+def test_for_workspace_parses_no_transcript_at_all(
+    manager: WorkspaceManager, claude_home: Path, count_parsers: Callable[[], int]
+) -> None:
+    """The listing is built from bounded head reads — ZERO full parses.
+
+    Before this guard the scan constructed one parser per transcript sharing the
+    directory (plus a second, on a different fold key, for the duration column),
+    so opening one workspace cost every neighbour's whole file. The row still
+    carries everything a head read can answer.
+    """
+    workspace_id, minted = _workspace_with_neighbours(manager, claude_home, neighbours=6)
+
+    listings = SessionExplorer(manager).for_workspace(workspace_id)
+
+    assert count_parsers() == 0
+    assert len(listings) == 7
+    row = next(ls for ls in listings if ls.summary.session_id == minted)
+    # Head-readable facts survive; parse products are honestly absent.
+    assert row.summary.cwd == manager.get(workspace_id).worktree_path
+    assert row.summary.git_branch == "main"
+    assert row.summary.created_at is not None
+    assert row.summary.first_prompt == "mine"
+    assert row.summary.activity is None
+    assert row.summary.title is None
+    assert row.summary.last_prompt is None
+
+
+def test_listing_cost_does_not_grow_with_the_number_of_neighbours(
+    manager: WorkspaceManager, claude_home: Path, count_parsers: Callable[[], int]
+) -> None:
+    """O(neighbours) was the defect, so the guard is stated over two fleet sizes.
+
+    A count that stays flat as the directory fills is the property; a single-size
+    assertion could pass on a scan that merely got cheaper per file.
+    """
+    small, _ = _workspace_with_neighbours(manager, claude_home, neighbours=2, title="small")
+    baseline = count_parsers()
+    assert len(SessionExplorer(manager).for_workspace(small)) == 3
+    after_small = count_parsers() - baseline
+
+    large, _ = _workspace_with_neighbours(manager, claude_home, neighbours=12, title="large")
+    baseline = count_parsers()
+    assert len(SessionExplorer(manager).for_workspace(large)) == 13
+    after_large = count_parsers() - baseline
+
+    assert (after_small, after_large) == (0, 0)
+
+
+def test_candidates_for_is_metadata_only_too(
+    manager: WorkspaceManager, claude_home: Path, count_parsers: Callable[[], int]
+) -> None:
+    """The ungated remap-picker scan shares the gated scan's one derivation, so
+    it must share its cost model — it is the surface a human opens to CHOOSE,
+    where a multi-second stall is most visible."""
+    workspace_id, _ = _workspace_with_neighbours(manager, claude_home, neighbours=5)
+
+    listings = SessionExplorer(manager).candidates_for(workspace_id)
+
+    assert count_parsers() == 0
+    assert len(listings) == 6
+
+
+def test_project_wide_list_is_metadata_only_until_enrichment_is_asked_for(
+    manager: WorkspaceManager, claude_home: Path, count_parsers: Callable[[], int]
+) -> None:
+    """`list` is the browse scan and stays free; `enrich=True` is the opt-in the
+    `grove sessions` table pays for, and it is bounded by DISPLAYED rows.
+
+    Both halves matter: a scan that never enriched would silently drop the CLI's
+    STATE/TURNS columns, and an enrichment applied before the limit would put the
+    O(neighbours) cost straight back.
+    """
+    _workspace_with_neighbours(manager, claude_home, neighbours=5)
+    explorer = SessionExplorer(manager)
+
+    plain = explorer.list()
+    assert count_parsers() == 0
+    assert len(plain) == 6  # every transcript listed, none of them read
+    assert all(ls.summary.activity is None for ls in plain)
+
+    # Caches are cleared between the two measurements so this compares COLD
+    # against COLD — otherwise the second call re-reads nothing it already read
+    # and the scaling claim measures the memo instead of the scan.
+    ClaudeCodeAdapter.clear_caches()
+    baseline = count_parsers()
+    one = explorer.list(limit=1, enrich=True)
+    per_row = count_parsers() - baseline
+
+    ClaudeCodeAdapter.clear_caches()
+    baseline = count_parsers()
+    three = explorer.list(limit=3, enrich=True)
+    # Cost tracks DISPLAYED rows, never the six transcripts on disk — the whole
+    # defect restated: the scan used to pay per neighbour. Stated as a ratio so
+    # it pins the SCALING, not one identity-keyed read's own cost.
+    assert per_row > 0
+    assert count_parsers() - baseline == 3 * per_row
+
+    assert (len(one), len(three)) == (1, 3)
+    assert all(ls.summary.activity is not None for ls in three)
+    top = three[0].summary.activity
+    assert top is not None and top.human_turns == 1
+
+
+def test_for_workspace_limit_bounds_the_rows_it_returns(
+    manager: WorkspaceManager, claude_home: Path
+) -> None:
+    """`limit` reaches the scan rather than being applied to its output, and the
+    bounded newest-first selection must agree with slicing the full sort."""
+    workspace_id, _ = _workspace_with_neighbours(manager, claude_home, neighbours=6)
+    explorer = SessionExplorer(manager)
+
+    everything = explorer.for_workspace(workspace_id)
+    bounded = explorer.for_workspace(workspace_id, limit=3)
+
+    assert len(bounded) == 3
+    assert [ls.summary.session_id for ls in bounded] == [
+        ls.summary.session_id for ls in everything[:3]
+    ]
+
+
+def test_duration_comes_from_the_durable_cache_not_a_second_parse(
+    manager: WorkspaceManager, claude_home: Path, tmp_path: Path, count_parsers: Callable[[], int]
+) -> None:
+    """`duration` was a SECOND full parse per row, on a different fold key.
+
+    It now reads the same durable parse-fact cache the host catalog fills off the
+    request path. A row the cache has not reached renders `None` — "not measured
+    yet", never "no work" — and resolves to a number once a background pass has
+    run, with no parse on the read path either way.
+    """
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="timed"))
+    assert state.agent_session_id is not None
+    born = state.created_at + timedelta(seconds=1)
+    path = _write_transcript(
+        claude_home,
+        state.agent_session_id,
+        Path(state.worktree_path),
+        mtime=2_000,
+        prompt="do the work",
+        born_at=born,
+    )
+    # The reply lands two minutes after the prompt, so the derived active span is
+    # a real number. Both stamps ride the SAME clock as the birth: mixing a fixed
+    # date with the workspace's own `created_at` produces a months-long span.
+    replied = (born + timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"type":"assistant","uuid":"a1","requestId":"r1","isSidechain":false,'
+            f'"cwd":"{state.worktree_path}","timestamp":"{replied}",'
+            '"message":{"id":"m1","role":"assistant",'
+            '"model":"claude-opus-5","stop_reason":"end_turn",'
+            '"usage":{"input_tokens":5,"output_tokens":2},'
+            '"content":[{"type":"text","text":"done"}]}}\n'
+        )
+    os.utime(path, (2_000, 2_000))
+    cache = TurnCountCache(path=tmp_path / "turns.json")
+    explorer = SessionExplorer(manager, turn_counts=cache)
+
+    cold = explorer.for_workspace(state.id)[0]
+    assert count_parsers() == 0
+    assert cold.duration is None
+    assert cold.turn_count is None
+
+    # The background pass pays the one parse, off the request path.
+    cache.fill(
+        [
+            SessionRef(
+                session_id=state.agent_session_id,
+                adapter_kind="claude_code",
+                cwd=state.worktree_path,
+                transcript_path=path,
+                birth=None,
+                mtime=2_000.0,
+            )
+        ]
+    )
+    baseline = count_parsers()
+    warm = explorer.for_workspace(state.id)[0]
+
+    assert count_parsers() - baseline == 0
+    assert warm.duration is not None
+    assert warm.duration.active_ms == 2 * 60_000
+    assert warm.turn_count == 1

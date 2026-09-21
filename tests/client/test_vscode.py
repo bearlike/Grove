@@ -1,4 +1,4 @@
-"""VS Code attach: URI builder, mount contribution, launch."""
+"""VS Code attach: URI builder and launch."""
 
 from __future__ import annotations
 
@@ -9,12 +9,7 @@ from dataclasses import dataclass
 import pytest
 
 from grove.client.errors import TransportError
-from grove.client.vscode import (
-    VolumeMount,
-    VsCodeAttach,
-    build_vscode_uri,
-    vscode_server_mount,
-)
+from grove.client.vscode import VsCodeAttach, build_vscode_uri
 
 
 def test_build_vscode_uri_matches_known_hex() -> None:
@@ -40,21 +35,6 @@ def test_build_vscode_uri_carries_non_default_context() -> None:
 def test_build_vscode_uri_no_context_omits_settings() -> None:
     uri = build_vscode_uri("grove-abc123", "/workspace")
     assert "settings" not in uri  # no stray key when context is unset
-
-
-def test_vscode_server_mount_default_home() -> None:
-    mount = vscode_server_mount("grove-vscode-server-myproject")
-    assert mount == VolumeMount(
-        source="grove-vscode-server-myproject", target="/root/.vscode-server"
-    )
-    assert mount.to_flag() == (
-        "type=volume,source=grove-vscode-server-myproject,target=/root/.vscode-server"
-    )
-
-
-def test_vscode_server_mount_custom_home() -> None:
-    mount = vscode_server_mount("vol", remote_home="/home/vscode")
-    assert mount.target == "/home/vscode/.vscode-server"
 
 
 @dataclass(slots=True)

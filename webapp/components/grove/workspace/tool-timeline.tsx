@@ -109,7 +109,7 @@ function ToolIconStack({ icons, open }: { icons: readonly string[]; open: boolea
 }
 
 export function ToolTimelineStep({
-  verb, chip, summary, icon, running, metadata, status, callId, name, children,
+  verb, chip, summary, icon, running, metadata, status, callId, name, onOpenChange, children,
 }: PropsWithChildren<{
   verb: string;
   chip: string;
@@ -120,9 +120,13 @@ export function ToolTimelineStep({
   status: string;
   callId?: string;
   name: string;
+  /** Observes the disclosure without controlling it: a withheld tool body is
+   * fetched when a reader opens this step, and the caller cannot see the
+   * vendored root's own uncontrolled state. */
+  onOpenChange?: (open: boolean) => void;
 }>): ReactNode {
   return (
-    <ToolFallbackRoot data-testid="tool-call" data-tool-status={status} data-tool-use-id={callId}>
+    <ToolFallbackRoot data-testid="tool-call" data-tool-status={status} data-tool-use-id={callId} onOpenChange={onOpenChange}>
       <CollapsibleTrigger
         data-slot="tool-timeline-step"
         title={`${name}: ${chip}`}

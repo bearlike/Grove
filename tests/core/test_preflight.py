@@ -196,7 +196,13 @@ def test_host_ready_subset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(HostPreflight, "_run", staticmethod(lambda argv: _completed()))
     preflight = HostPreflight(_cfg())
     subset = {c.name for c in preflight.host_ready()}
-    assert subset == {"git", "tmux", "agent CLI (claude)", "agent CLI (codex)"}
+    assert subset == {
+        "git",
+        "tmux",
+        "agent CLI (claude)",
+        "agent CLI (codex)",
+        "agent CLI (opencode)",
+    }
 
 
 def test_default_runtime_checks_follows_container_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,6 +218,7 @@ def test_default_runtime_checks_follows_container_enabled(monkeypatch: pytest.Mo
         "tmux",
         "agent CLI (claude)",
         "agent CLI (codex)",
+        "agent CLI (opencode)",
     }
 
     container_default = HostPreflight(_cfg(container_enabled=True), devcontainer_cli=fake)  # type: ignore[arg-type]

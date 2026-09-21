@@ -44,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # visible at the codegen boundary rather than discovered at render time.
 # ---------------------------------------------------------------------------
 
-UsageProvider = Literal["claude_code", "codex", "mewbo", "generic"]
+UsageProvider = Literal["claude_code", "codex", "opencode", "mewbo", "generic"]
 """The agent tool a session ran under. Mirrors ``grove.core.config.AgentKind``.
 
 Duplicated rather than imported so ``contracts`` never drags the engine in at

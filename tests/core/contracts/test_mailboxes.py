@@ -1,70 +1,104 @@
-"""Mailbox wire inputs cannot choose sender authority or native controls."""
+"""The mail wire shapes: addressed, bounded, and honest about what it observed."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from grove.core.contracts.mailboxes import (
     MailboxAddress,
-    MailboxBody,
-    MailboxRequest,
+    MailboxContact,
+    MailboxDirectory,
+    MailboxReceipt,
     MailboxSendRequest,
 )
 
-
-def test_send_preserves_body_exactly() -> None:
-    body = '  review\n雪\t</channel> "quoted"\n  '
-    request = MailboxSendRequest(
-        recipient=MailboxAddress(workspace_id="a" * 32),
-        expected_generation="b" * 32,
-        body=body,
-    )
-    assert request.body == body
-    assert MailboxSendRequest.model_validate_json(request.model_dump_json()).body == body
+WORKSPACE = "a" * 32
+OTHER = "b" * 32
 
 
-@pytest.mark.parametrize("body", ["", " \t\n", "bad\ud800text"])
-def test_invalid_body_is_rejected(body: str) -> None:
-    with pytest.raises(ValidationError):
-        MailboxBody(body=body)
-
-
-@pytest.mark.parametrize(
-    "field", ["sender", "from", "socket", "permission_mode", "model", "fallback"]
-)
-def test_send_cannot_supply_authority(field: str) -> None:
-    with pytest.raises(ValidationError):
-        MailboxSendRequest.model_validate(
-            {
-                "recipient": {"workspace_id": "a" * 32},
-                "expected_generation": "b" * 32,
-                "body": "review",
-                field: "attacker-controlled",
-            }
-        )
-
-
-def test_reply_cannot_retarget_original_message() -> None:
-    adapter = TypeAdapter(MailboxRequest)
-    reply = {
-        "kind": "reply",
-        "reply_to": "mbx_" + "a" * 32,
-        "body": "finding",
+def _request(**overrides: object) -> MailboxSendRequest:
+    payload: dict[str, object] = {
+        "sender": MailboxAddress(workspace_id=WORKSPACE),
+        "recipient": MailboxAddress(workspace_id=OTHER),
+        "subject": "Ready for review",
+        "body": "The PR is open.",
     }
-    assert adapter.validate_python(reply).body == "finding"
+    payload.update(overrides)
+    return MailboxSendRequest.model_validate(payload)
+
+
+def test_a_send_names_both_ends_and_needs_no_generation() -> None:
+    """Knowing an address is enough — there is no token or fence to quote."""
+    request = _request()
+
+    assert request.sender.workspace_id == WORKSPACE
+    assert request.recipient.workspace_id == OTHER
+    assert request.in_reply_to is None
+    assert "generation" not in MailboxSendRequest.model_fields
+
+
+@pytest.mark.parametrize("field", ["subject", "body"])
+def test_whitespace_only_text_is_refused(field: str) -> None:
+    """An empty message wearing a costume is still an empty message."""
     with pytest.raises(ValidationError):
-        adapter.validate_python({**reply, "recipient": {"workspace_id": "b" * 32}})
+        _request(**{field: "   \n\t "})
 
 
-@pytest.mark.parametrize("agent", ["slot:window", "../other", "slot.name", "x\nname"])
-def test_agent_is_a_slot_not_a_transport_target(agent: str) -> None:
+def test_a_reply_correlates_but_does_not_route() -> None:
+    """`in_reply_to` is for the reader; the addresses alone decide delivery."""
+    original = _request()
+    reply = _request(
+        sender=original.recipient,
+        recipient=original.sender,
+        subject="Re: Ready for review",
+        in_reply_to="mbx_" + "c" * 32,
+    )
+
+    assert reply.recipient == original.sender
+    assert reply.in_reply_to is not None
+
+
+def test_an_agent_slot_is_part_of_the_address() -> None:
+    """A second agent in a container is addressable, not a special case."""
+    address = MailboxAddress(workspace_id=WORKSPACE, agent="reviewer")
+
+    assert address.agent == "reviewer"
+    assert MailboxAddress(workspace_id=WORKSPACE).agent == ""
+
+
+def test_a_contact_states_whether_it_can_be_written_to() -> None:
+    directory = MailboxDirectory(
+        body_limit_bytes=1024,
+        contacts=[
+            MailboxContact(
+                address=MailboxAddress(workspace_id=WORKSPACE),
+                display_name="review the parser",
+                provider="codex",
+                runtime="host",
+                live=False,
+            )
+        ],
+    )
+
+    assert directory.contacts[0].live is False
+    assert directory.protocol_version == 2
+
+
+def test_a_receipt_cannot_claim_more_than_submission() -> None:
+    """The vocabulary has no member meaning "the agent read it"."""
+    receipt = MailboxReceipt(
+        message_id="mbx_" + "d" * 32,
+        sender=MailboxAddress(workspace_id=WORKSPACE),
+        recipient=MailboxAddress(workspace_id=OTHER),
+        stage="delivered",
+        created_at=datetime.now(UTC),
+    )
+
+    assert receipt.stage == "delivered"
+    # `model_copy` skips validation, so the refusal has to be asserted where
+    # one actually runs — otherwise this guard passes with the literal absent.
     with pytest.raises(ValidationError):
-        MailboxAddress(workspace_id="a" * 32, agent=agent)
-
-
-def test_wire_union_is_discriminated_and_closed() -> None:
-    schema = TypeAdapter(MailboxRequest).json_schema()
-    assert schema["discriminator"]["propertyName"] == "kind"
-    for name in ("MailboxSendRequest", "MailboxReplyRequest"):
-        assert schema["$defs"][name]["additionalProperties"] is False
+        MailboxReceipt.model_validate({**receipt.model_dump(mode="json"), "stage": "read"})

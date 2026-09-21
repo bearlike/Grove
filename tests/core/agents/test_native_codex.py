@@ -5,12 +5,38 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from grove.core.agents.native_codex import CodexNativeOwner
 from grove.core.agents.native_owner import AskRecorder, NativeAnswer
+
+# How long a test may wait for a frame the fake server sends AFTER the response
+# that released `start()`. A real app server notifies in its own time, so an
+# `asyncio.sleep(0)` only yields the loop once and observes the notification
+# whenever the subprocess happens to have been scheduled first — which is
+# scheduling luck, not a contract, and it fails on a loaded host. Generous
+# because it is only ever paid on a genuine regression; the happy path returns
+# as soon as the predicate holds.
+_FRAME_TIMEOUT_SECONDS = 5.0
+
+
+async def _until(predicate: object, *, timeout: float = _FRAME_TIMEOUT_SECONDS) -> None:
+    """Yield to the loop until ``predicate()`` is true, or fail the test.
+
+    The alternative — a fixed sleep long enough to be safe — makes every run pay
+    the worst case and still races on a loaded machine.
+    """
+    assert callable(predicate)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline:
+            raise AssertionError(f"frame never arrived within {timeout}s")
+        await asyncio.sleep(0.01)
+
 
 _SERVER = r"""
 import json
@@ -138,6 +164,22 @@ def _requests(trace: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in trace.read_text().splitlines()]
 
 
+async def _until(condition: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    """Wait for a REAL subprocess's frames to arrive, bounded.
+
+    ``asyncio.sleep(0)`` yields the loop exactly once, which is enough only when
+    the child happens to have already written — so a test built on it passes or
+    fails with the scheduler rather than with the code. Poll the condition the
+    assertion actually depends on instead; a satisfied condition returns
+    immediately, so this costs nothing when the frame is already in.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() >= deadline:
+            return  # let the caller's own assertion report the real difference
+        await asyncio.sleep(0.01)
+
+
 @pytest.fixture
 def app_server(tmp_path: Path) -> tuple[str, ...]:
     script = tmp_path / "app_server.py"
@@ -220,7 +262,7 @@ async def test_pending_native_approval_rejects_without_answering_it(
 
     try:
         await transport.start("")
-        await asyncio.sleep(0)
+        await _until(lambda: len(_requests(trace)) >= 2)
 
         submission = await transport.send("message-8", "do not submit")
 
@@ -247,7 +289,14 @@ async def test_send_timeout_after_a_write_is_unknown_without_retry(tmp_path: Pat
         command=(sys.executable, "-u", str(script)),
         cwd=tmp_path,
         env={"GROVE_TEST_TRACE": str(trace)},
-        timeout_seconds=0.05,
+        # The same budget covers `start()`'s handshake, which must SUCCEED, and
+        # the send's acknowledgement, which must expire. At 0.05s the handshake
+        # was racing Python's own subprocess boot (~30-50ms), so a loaded host
+        # failed in `start()` with a TimeoutError — a flake that reads exactly
+        # like the send-timeout behaviour under test. The value only has to be
+        # short enough that waiting for it is cheap; nothing here is measuring
+        # how fast the timeout fires.
+        timeout_seconds=0.5,
     )
 
     try:
@@ -276,7 +325,9 @@ async def test_emit_receives_native_assistant_text(
 
     try:
         await transport.start("initial work")
-        await asyncio.sleep(0)
+        # The reply is a NOTIFICATION the server sends after the `turn/start`
+        # response, so it cannot have arrived by the time `start()` returns.
+        await _until(lambda: bool(emitted))
 
         assert emitted == ["native reply"]
     finally:
@@ -467,7 +518,7 @@ async def test_every_json_rpc_frame_is_traced_in_both_directions(
     )
     try:
         await transport.start("initial work")
-        await asyncio.sleep(0)
+        await _until(lambda: ("recv", "item/completed") in traced)
     finally:
         await transport.close()
 

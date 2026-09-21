@@ -289,7 +289,6 @@ it and let the ordinary word scan proceed."""
 
 _TWO_CHAR_OPERATORS: Final = frozenset({"&&", "||", ";;", "|&", ";&"})
 _TWO_CHAR_REDIRECTS: Final = frozenset({">>", "<&", ">&", "&>", "<>"})
-_SEGMENT_OPERATORS: Final = frozenset({"&&", "||", ";", ";;", "|", "|&", "&", "\n", "(", ")"})
 
 
 @dataclass(frozen=True, slots=True)

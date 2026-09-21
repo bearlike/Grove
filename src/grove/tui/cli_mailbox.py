@@ -1,9 +1,15 @@
-"""Mailbox command group over a separately bound daemon credential.
+"""`grove mailbox` — look up contacts and write to another agent.
 
-Mailbox delivery is always remote coordinator work. These commands use the
-client SDK's URL transport instead of building a local manager, and sends
-require ``GROVE_MAILBOX_TOKEN`` so an operator credential can never be minted
-implicitly for an agent-to-agent message.
+Delivery is the daemon's job (the recipient's transport is connected there and
+nowhere else), so these commands go over the client SDK's URL transport with the
+same same-host bearer every other local Grove process mints. There is no
+separate mailbox credential: on a loopback daemon serving one user, an agent
+writing to a peer is the principal already running the fleet.
+
+``--from`` defaults to this workspace, read from ``GROVE_PHASE_FILE`` — the one
+variable Grove already gives every agent, in its own namespace. It is a
+CONVENIENCE, never a proof: the value is a claim the envelope prints as one, so
+an agent that knows an address may always name it explicitly.
 """
 
 from __future__ import annotations
@@ -15,33 +21,26 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import typer
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from grove.client import BackendConfig, GroveClient, GroveClientError
-from grove.core.contracts.mailboxes import (
-    MailboxAddress,
-    MailboxReplyRequest,
-    MailboxSendRequest,
-)
+from grove.core.contracts.mailboxes import MailboxAddress, MailboxSendRequest
+from grove.core.phase import PhaseFile
 
 DEFAULT_DAEMON_URL = "http://127.0.0.1:7421"
-_BODY_FILE_OPTION = typer.Option(None, "--body-file")
+_BODY_FILE_OPTION = typer.Option(None, "--body-file", help="Read the body from a file, or '-'.")
 mailbox_app = typer.Typer(
     name="mailbox",
     help=(
-        "Discover and send native peer mail for enrolled workers. "
-        "Commands need GROVE_MAILBOX_TOKEN; help does not. "
-        "Learn: grove skills list --details; grove skills show working-in-grove. "
-        "Setup: grove skills show configuring-grove. Back: grove --help."
+        "Write to another Grove agent. `contacts` lists who is reachable; "
+        "`send` delivers one message. Learn: grove skills show working-in-grove. "
+        "Back: grove --help."
     ),
 )
 
 
 def mailbox_client() -> GroveClient:
-    """Build the bound URL client without ever minting a local owner credential."""
-    token = os.environ.get("GROVE_MAILBOX_TOKEN")
-    if not token:
-        raise GroveClientError("GROVE_MAILBOX_TOKEN is required for mailbox sends and replies")
+    """The local daemon client. No mailbox-specific credential exists."""
     return GroveClient(
         BackendConfig(
             label="mailbox",
@@ -51,7 +50,6 @@ def mailbox_client() -> GroveClient:
                 if (socket_path := os.environ.get("GROVE_MAILBOX_SOCKET"))
                 else None
             ),
-            daemon_token=token,
         )
     )
 
@@ -67,24 +65,28 @@ def _body(body: str | None, body_file: Path | None) -> str:
     return body_file.read_text(encoding="utf-8")
 
 
-async def _peers(
-    client: GroveClient, workspace_id: str | None, limit: int, cursor: str | None
-) -> BaseModel:
-    return await client.list_mailbox_peers(workspace_id=workspace_id, limit=limit, cursor=cursor)
+def _own_workspace_id() -> str:
+    """This agent's own workspace, from the variable Grove handed it.
 
-
-async def _send(
-    client: GroveClient, request: MailboxSendRequest | MailboxReplyRequest
-) -> BaseModel:
-    return await client.send_mailbox_message(request)
-
-
-async def _status(client: GroveClient, message_id: str) -> BaseModel:
-    return await client.get_mailbox_message_status(message_id)
+    `PhaseFile.workspace_id_in` reads the filename and the one directory above
+    it, which is what makes this correct for a containerized agent: the variable
+    carries a path in the AGENT's namespace, so every leading component may be
+    meaningless on this host while that tail is the part Grove composed. Never
+    inferred from the cwd — several workspaces legitimately share one worktree,
+    so a directory cannot say which agent is asking.
+    """
+    raw = os.environ.get(PhaseFile.PATH_ENV, "")
+    own = PhaseFile.workspace_id_in(raw) if raw else None
+    if own is None:
+        raise typer.BadParameter(
+            "could not tell which workspace is sending: pass --from <workspace-id> "
+            f"(no usable {PhaseFile.PATH_ENV} in this environment)"
+        )
+    return own
 
 
 def _call(operation: Callable[[GroveClient], Awaitable[BaseModel]]) -> BaseModel:
-    """Run one SDK call using the explicit mailbox credential."""
+    """Run one SDK call against the local daemon."""
     client = mailbox_client()
 
     async def execute() -> BaseModel:
@@ -97,71 +99,44 @@ def _call(operation: Callable[[GroveClient], Awaitable[BaseModel]]) -> BaseModel
     return asyncio.run(execute())
 
 
-@mailbox_app.command("peers")
-def peers(
-    workspace_id: str | None = typer.Option(None, "--workspace-id"),
-    limit: int = typer.Option(50, "--limit", min=1),
-    cursor: str | None = typer.Option(None, "--cursor"),
-) -> None:
-    """List mailbox peers visible to the bound coordinator credential."""
+@mailbox_app.command("contacts")
+def contacts() -> None:
+    """List every agent that can be written to right now."""
     try:
-        page = _call(lambda client: _peers(client, workspace_id, limit, cursor))
+        directory = _call(lambda client: client.list_mailbox_contacts())
     except GroveClientError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(page.model_dump_json(indent=2))
+    typer.echo(directory.model_dump_json(indent=2))
 
 
 @mailbox_app.command("send")
 def send(
-    workspace_id: str = typer.Argument(..., help="Recipient workspace id."),
     *,
-    generation: str = typer.Option(
-        ..., "--generation", help="Recipient generation from mailbox peers."
+    to: str = typer.Option(..., "--to", help="Recipient workspace id."),
+    subject: str = typer.Option(..., "--subject", help="What the message is about."),
+    to_agent: str = typer.Option("", "--to-agent", help="Recipient agent slot."),
+    sender: str | None = typer.Option(
+        None, "--from", help="Sender workspace id. Defaults to this workspace."
     ),
-    agent: str = typer.Option("", "--agent", help="Recipient agent slot."),
+    from_agent: str = typer.Option("", "--from-agent", help="Sender agent slot."),
     body: str | None = typer.Option(None, "--body"),
     body_file: Path | None = _BODY_FILE_OPTION,
-    intent: str = typer.Option("information", "--intent"),
+    in_reply_to: str | None = typer.Option(
+        None, "--in-reply-to", help="Message id this answers, for the reader's thread."
+    ),
 ) -> None:
-    """Send one mailbox message; transport failure leaves delivery unknown."""
+    """Send one message. A reply is this same command with the ends swapped."""
     try:
         request = MailboxSendRequest(
-            recipient=MailboxAddress(workspace_id=workspace_id, agent=agent),
-            expected_generation=generation,
-            intent=intent,
+            sender=MailboxAddress(workspace_id=sender or _own_workspace_id(), agent=from_agent),
+            recipient=MailboxAddress(workspace_id=to, agent=to_agent),
+            subject=subject,
             body=_body(body, body_file),
+            in_reply_to=in_reply_to,
         )
-        receipt = _call(lambda client: _send(client, request))
-    except (GroveClientError, OSError, ValueError) as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(receipt.model_dump_json(indent=2))
-
-
-@mailbox_app.command("reply")
-def reply(
-    message_id: str = typer.Argument(..., help="Original mailbox message id."),
-    *,
-    body: str | None = typer.Option(None, "--body"),
-    body_file: Path | None = _BODY_FILE_OPTION,
-) -> None:
-    """Reply through the coordinator without trusting quoted sender metadata."""
-    try:
-        request = MailboxReplyRequest(reply_to=message_id, body=_body(body, body_file))
-        receipt = _call(lambda client: _send(client, request))
-    except (GroveClientError, OSError, ValueError) as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(receipt.model_dump_json(indent=2))
-
-
-@mailbox_app.command("status")
-def status(message_id: str = typer.Argument(..., help="Mailbox message id.")) -> None:
-    """Read the latest coordinator delivery observation for a mailbox message."""
-    try:
-        receipt = _call(lambda client: _status(client, message_id))
-    except GroveClientError as exc:
+        receipt = _call(lambda client: client.send_mailbox_message(request))
+    except (GroveClientError, OSError, ValidationError, ValueError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(receipt.model_dump_json(indent=2))

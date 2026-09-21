@@ -75,6 +75,106 @@ def test_native_stop_failure_keeps_tmux_session_for_retry(
     assert killed == []
 
 
+def test_kill_session_reaps_survivors_on_an_ordinary_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pause/kill (no `wait_for_exit`) must still sweep forked subshells.
+
+    `kill-session` SIGHUPs each pane's process group and returns. A subshell
+    the prompt forked (oh-my-zsh async prompt, MONITOR off) is left in the
+    PARENT's group, survives, keeps the removed worktree as its cwd and spins
+    a core forever. The reap is what makes the teardown actually terminal.
+    """
+    killed: list[str] = []
+    reaped: list[tuple[int, ...]] = []
+    monkeypatch.setattr(tmux, "has_session", lambda name: True)
+    server = SimpleNamespace(
+        cmd=lambda *args: SimpleNamespace(stdout=["4242"], stderr=[]),
+        kill_session=lambda *, target_session: killed.append(target_session),
+    )
+    monkeypatch.setattr(tmux, "_server", lambda: server)
+    monkeypatch.setattr(
+        ProcessTree,
+        "capture",
+        classmethod(lambda cls, roots, **kwargs: reaped.append(tuple(roots)) or ProcessTree(())),
+    )
+    monkeypatch.setattr(ProcessTree, "terminate_and_wait", lambda self, **kwargs: None)
+
+    tmux.kill_session("workspace")  # note: no wait_for_exit
+
+    assert killed == ["workspace"]
+    assert reaped == [(4242,)]
+
+
+def test_kill_session_reap_failure_never_fails_the_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sweep is a courtesy after the real work succeeded — it cannot raise."""
+    killed: list[str] = []
+    monkeypatch.setattr(tmux, "has_session", lambda name: True)
+    server = SimpleNamespace(
+        cmd=lambda *args: SimpleNamespace(stdout=["4242"], stderr=[]),
+        kill_session=lambda *, target_session: killed.append(target_session),
+    )
+    monkeypatch.setattr(tmux, "_server", lambda: server)
+    monkeypatch.setattr(
+        ProcessTree, "capture", classmethod(lambda cls, roots, **kwargs: ProcessTree(()))
+    )
+
+    def refuse(self: ProcessTree, **kwargs: object) -> None:
+        raise ProcessError("stray would not die")
+
+    monkeypatch.setattr(ProcessTree, "terminate_and_wait", refuse)
+
+    tmux.kill_session("workspace")  # must not raise
+
+    assert killed == ["workspace"]
+
+
+def test_agent_window_shell_rescues_a_vanished_worktree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trailing `exec $SHELL -l` must not inherit a deleted cwd.
+
+    Without the re-root, a worktree removed while the agent ran leaves the
+    pane's final shell sitting in an unlinked directory, where a git/node-aware
+    prompt re-globs parents that never resolve and never settles.
+    """
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+
+    script = tmux._agent_window_shell("run-agent", env=None, env_unset=())
+
+    rescue = '[ -d "$PWD" ] || cd -- "${HOME:-/}"'
+    assert rescue in script
+    # Order is the point: rescue AFTER the agent exits, BEFORE exec inherits it.
+    assert script.index("run-agent") < script.index(rescue) < script.index("exec /usr/bin/zsh -l")
+
+
+def test_agent_window_wrapper_is_a_plain_posix_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An rc-heavy `$SHELL` wraps the launch as `sh -c`, never `zsh -lic`.
+
+    `-lic` sourced the user's full interactive rc for a command that only
+    execs away, which spawned a prompt daemon per launch and left the wrapper
+    wedged mid-rc (hence unkillable by SIGTERM) whenever its cwd vanished.
+    """
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+
+    script = tmux._agent_window_shell("run-agent", env=None, env_unset=())
+
+    assert script.startswith("/bin/sh -c ")
+    assert "-lic" not in script
+    # The human still lands in their own login shell once the agent exits.
+    assert "exec /usr/bin/zsh -l" in script
+
+
+def test_agent_window_wrapper_keeps_a_posix_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A plain `$SHELL` is cheap already and is kept as the wrapper."""
+    monkeypatch.setenv("SHELL", "/bin/bash")
+
+    assert tmux.agent_launch_shell() == "/bin/bash"
+    assert tmux._agent_window_shell("run-agent", env=None, env_unset=()).startswith("/bin/bash -c ")
+
+
 def test_capture_pane_snapshot_flags(fake_run: list[list[str]]) -> None:
     tmux.capture_pane_snapshot("sess:agent")
 

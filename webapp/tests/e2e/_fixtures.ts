@@ -2,6 +2,7 @@ import type {
   AgentSummaryView,
   BranchInfo,
   DashboardSnapshotView,
+  ModelOptionView,
   PhaseView,
   ProvisionProgressView,
   SessionControlsView,
@@ -1530,4 +1531,18 @@ export const FIXTURE_AGENTS: AgentSummaryView[] = [
 export const FIXTURE_BRANCHES: BranchInfo[] = [
   { name: "main", kind: "local", is_current: true, upstream: "origin/main", checked_out_in: null },
   { name: "feat/health-endpoint", kind: "local", is_current: false, upstream: null, checked_out_in: null },
+];
+
+/**
+ * `GET /models`'s enriched catalog — the ids match `FIXTURE_AGENTS`' bare
+ * `models` tuples, since the picker joins by id (see `lib/grove/adapters/model.ts`).
+ * Declared names and a context window on some rows, absent on others: a
+ * catalog that names or measures everything would never catch a picker that
+ * mishandles the fallback either case exists for.
+ */
+export const FIXTURE_MODELS: ModelOptionView[] = [
+  { id: "fable", name: null, context_window: null },
+  { id: "opus", name: "Opus", context_window: 1_000_000 },
+  { id: "sonnet", name: "Sonnet", context_window: 1_000_000 },
+  { id: "haiku", name: null, context_window: 200_000 },
 ];

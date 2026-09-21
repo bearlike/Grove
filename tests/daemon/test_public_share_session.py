@@ -264,6 +264,119 @@ def test_overview_reports_whether_the_session_is_pinned(
     assert legacy_turns.json()["session"]["session_id"] == legacy_overview.json()["session_id"]
 
 
+def _write_tool_transcript(
+    claude_home: Path, sid: str, cwd: Path, *, born_at: datetime, prefix: str = "tc"
+) -> None:
+    """Two turns, each issuing one settled tool call with a real body — enough
+    for the public read to withhold one and the public drill-in to serve it.
+
+    ``prefix`` distinguishes one transcript's call ids from another's, which is
+    what lets a test ask for a NEIGHBOUR's id through a shared token."""
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True, exist_ok=True)
+    born = born_at.isoformat().replace("+00:00", "Z")
+    lines = ['{"type":"mode","mode":"normal"}']
+    for i in range(2):
+        lines.append(
+            f'{{"type":"user","uuid":"h{i}","timestamp":"{born}","isSidechain":false,'
+            f'"cwd":"{cwd}","gitBranch":"main",'
+            f'"message":{{"role":"user","content":"turn-{i}"}}}}'
+        )
+        lines.append(
+            f'{{"type":"assistant","uuid":"a{i}","timestamp":"{born}","isSidechain":false,'
+            f'"message":{{"id":"m{i}","role":"assistant","stop_reason":"tool_use",'
+            f'"content":[{{"type":"tool_use","id":"{prefix}{i}","name":"Bash",'
+            f'"input":{{"command":"pytest -q"}}}}]}}}}'
+        )
+        lines.append(
+            f'{{"type":"user","uuid":"r{i}","timestamp":"{born}","isSidechain":false,'
+            f'"message":{{"role":"user","content":[{{"type":"tool_result",'
+            f'"tool_use_id":"{prefix}{i}","content":"2 passed"}}]}}}}'
+        )
+    (folder / f"{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_the_public_drill_in_serves_a_withheld_body_for_the_tokens_own_session(
+    manager: WorkspaceManager, claude_home: Path
+) -> None:
+    """The public read withholds settled bodies exactly as the authenticated one
+    does, and the sibling drill-in serves them WITHOUT any session coordinate —
+    the token names the workspace, the daemon picks the session."""
+    state = _root_workspace(manager, "shared root")
+    assert state.agent_session_id is not None
+    _write_tool_transcript(
+        claude_home, state.agent_session_id, state.agent_cwd, born_at=_born_after(state)
+    )
+    shared = manager.update(state.id, share=True)
+    assert shared.share_token is not None
+
+    with _client(manager) as client:
+        turns = client.get(f"/public/{shared.share_token}/turns")
+        drill = client.get(f"/public/{shared.share_token}/tools/tc0")
+
+    assert turns.status_code == 200, turns.text
+    tools = [e["tool"] for t in turns.json()["turns"] for e in t["entries"] if e.get("tool")]
+    assert [t["body"] for t in tools] == ["available", "inline"]
+    assert tools[0]["result"] is None
+    assert drill.status_code == 200, drill.text
+    assert drill.json()["result"] == "2 passed"
+    assert drill.json()["body"] == "inline"
+
+
+def test_a_public_drill_in_for_an_unknown_id_is_the_flat_share_404(
+    manager: WorkspaceManager, claude_home: Path
+) -> None:
+    """Every public failure is one code: a caller must not learn whether an id
+    exists on some other workspace's transcript."""
+    state = _root_workspace(manager, "shared root")
+    assert state.agent_session_id is not None
+    _write_tool_transcript(
+        claude_home, state.agent_session_id, state.agent_cwd, born_at=_born_after(state)
+    )
+    shared = manager.update(state.id, share=True)
+    assert shared.share_token is not None
+
+    with _client(manager) as client:
+        response = client.get(f"/public/{shared.share_token}/tools/not-a-call")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "share_not_found"
+
+
+def test_an_unshared_workspaces_tool_body_never_reaches_a_public_reader(
+    manager: WorkspaceManager, claude_home: Path
+) -> None:
+    """The drill-in is bound to the token's OWN session by the same resolver
+    ``turns`` uses, so a neighbour's call id is unreachable through this link
+    even though both transcripts sit in one shared ROOT cwd."""
+    first = _root_workspace(manager, "shared root")
+    neighbour = _root_workspace(manager, "private neighbour")
+    assert first.agent_session_id is not None
+    assert neighbour.agent_session_id is not None
+    born_at = _born_after(first, neighbour)
+    _write_tool_transcript(claude_home, first.agent_session_id, first.agent_cwd, born_at=born_at)
+    _write_tool_transcript(
+        claude_home,
+        neighbour.agent_session_id,
+        neighbour.agent_cwd,
+        born_at=born_at,
+        prefix="nb",
+    )
+    shared = manager.update(first.id, share=True)
+    assert shared.share_token is not None
+
+    with _client(manager) as client:
+        own = client.get(f"/public/{shared.share_token}/tools/tc0")
+        stranger = client.get(f"/public/{shared.share_token}/tools/nb0")
+
+    # `nb0` is a REAL call, in the same ROOT-placement cwd, reachable only
+    # through the neighbour's own (unshared) session — so a 404 here is the
+    # binding doing its job rather than the id simply not existing.
+    assert own.status_code == 200, own.text
+    assert stranger.status_code == 404
+    assert stranger.json()["detail"]["error"] == "share_not_found"
+
+
 def test_the_public_reader_selects_its_session_by_id_not_by_recency(
     manager: WorkspaceManager, claude_home: Path
 ) -> None:

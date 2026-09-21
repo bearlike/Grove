@@ -43,9 +43,8 @@ from grove.core.contracts.diagrams import (
 )
 from grove.core.contracts.keys import SendKey, SendKeysRequest
 from grove.core.contracts.mailboxes import (
-    MailboxPeerPage,
+    MailboxDirectory,
     MailboxReceipt,
-    MailboxReplyRequest,
     MailboxSendRequest,
 )
 from grove.core.contracts.phase import PhaseView
@@ -431,37 +430,19 @@ class GroveClient:
         if not resp.is_success:
             self._raise_for_status(resp)
 
-    async def list_mailbox_peers(
-        self,
-        *,
-        workspace_id: str | None = None,
-        limit: int = 50,
-        cursor: str | None = None,
-    ) -> MailboxPeerPage:
-        """List mailbox peers visible to this bound caller."""
-        params: dict[str, str] = {"limit": str(limit)}
-        if workspace_id is not None:
-            params["workspace_id"] = workspace_id
-        if cursor is not None:
-            params["cursor"] = cursor
-        body = await self._get("/mailboxes/peers", params=params)
-        return MailboxPeerPage.model_validate(body)
+    async def list_mailbox_contacts(self) -> MailboxDirectory:
+        """Every managed agent on the daemon's host that can be written to."""
+        body = await self._get("/mailboxes/contacts")
+        return MailboxDirectory.model_validate(body)
 
-    async def send_mailbox_message(
-        self, request: MailboxSendRequest | MailboxReplyRequest
-    ) -> MailboxReceipt:
-        """Submit a mailbox send or reply exactly once.
+    async def send_mailbox_message(self, request: MailboxSendRequest) -> MailboxReceipt:
+        """Submit one addressed message exactly once.
 
         A transport failure leaves the server-side outcome unknown, so it stays
         an exception from ``_request`` rather than becoming a receipt-like
         result a caller could mistake for a definitive rejection.
         """
         body = await self._post("/mailboxes/messages", json_payload=request.model_dump(mode="json"))
-        return MailboxReceipt.model_validate(body)
-
-    async def get_mailbox_message_status(self, message_id: str) -> MailboxReceipt:
-        """Read the coordinator's latest delivery observation for one message."""
-        body = await self._get(f"/mailboxes/messages/{message_id}")
         return MailboxReceipt.model_validate(body)
 
     async def get_attach(self, ws_id: str) -> AttachInstructionView:
@@ -558,7 +539,7 @@ class GroveClient:
     async def list_agents(self, repo: Path) -> list[AgentSummaryView]:
         """The agents a client may offer for ``repo`` — one row per merged
         ``cfg.agents`` entry, each carrying its per-agent model catalog
-        (``models``, ≤10) for a create-form picker. Mirrors ``GET /agents``;
+        (``models``) for a create-form picker. Mirrors ``GET /agents``;
         read-only and non-git, so an arbitrary path yields the default cascade
         rather than an error."""
         body = await self._get("/agents", params={"repo": str(repo)})

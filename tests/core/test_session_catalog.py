@@ -474,20 +474,21 @@ def test_the_project_and_host_scopes_report_the_same_duration(
     claude_home: Path,
     tmp_path: Path,
 ) -> None:
-    """One session, two listings, one number. The project scope derives it from
-    the spine it is already reading and the host scope reads it out of the
-    durable cache — different roads, one `duration_of`, so a client cannot be
-    shown two different costs for one session depending on which list it
-    opened."""
+    """One session, two listings, one number — and since #805 literally ONE
+    source: both scopes now READ the same durable cache entry, rather than the
+    project scope re-deriving it from a parse it no longer performs. That is
+    stronger than the agreement this test originally pinned, because the two
+    roads can no longer drift even in principle."""
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="timed work"))
     assert state.agent_session_id is not None
     _write_worked_transcript(
         claude_home, state.agent_session_id, Path(state.worktree_path), mtime=3_000
     )
-    catalog = SessionCatalog(registry, turn_counts=TurnCountCache(path=tmp_path / "turns.json"))
+    turn_counts = TurnCountCache(path=tmp_path / "turns.json")
+    catalog = SessionCatalog(registry, turn_counts=turn_counts)
     catalog.count_turns(catalog.scan())
 
-    project_row = SessionExplorer(manager).for_workspace(state.id)[0]
+    project_row = SessionExplorer(manager, turn_counts=turn_counts).for_workspace(state.id)[0]
     host_row = next(e for e in catalog.scan() if e.ref.session_id == state.agent_session_id)
 
     assert project_row.duration is not None
@@ -498,20 +499,36 @@ def test_the_project_and_host_scopes_report_the_same_duration(
     assert SessionSummaryView.from_catalog(host_row).duration == project_row.duration
 
 
-def test_a_project_row_is_timed_before_any_background_pass_has_run(
-    manager: WorkspaceManager, claude_home: Path
+def test_a_project_row_reads_unmeasured_until_a_background_pass_has_run(
+    manager: WorkspaceManager, registry: RepoRegistry, claude_home: Path, tmp_path: Path
 ) -> None:
-    """Project scope must not depend on the catalog's cache: a user who never
-    opens the host-wide list still gets the column, because this scope pays for
-    its own parse."""
+    """The verdict this test pinned is REVERSED by #805, and the reversal is the
+    point worth recording.
+
+    It used to assert that project scope pays its own parse so the column is
+    filled for a user who never opens the host-wide list. That convenience cost
+    a full parse of every transcript sharing the cwd on every listing request —
+    21.7 s for 46 neighbours on the reference host — to fill a column most
+    callers never render. The column now follows `turn_count`'s rule at BOTH
+    scopes: null means *not measured yet*, never *no work*, and it resolves on a
+    later fetch once the background pass has run."""
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="timed work"))
     assert state.agent_session_id is not None
     _write_worked_transcript(
         claude_home, state.agent_session_id, Path(state.worktree_path), mtime=3_000
     )
+    turn_counts = TurnCountCache(path=tmp_path / "turns.json")
+    explorer = SessionExplorer(manager, turn_counts=turn_counts)
 
-    row = SessionExplorer(manager).for_workspace(state.id)[0]
+    cold = explorer.for_workspace(state.id)[0]
+    assert cold.duration is None
+    assert cold.turn_count is None
 
-    assert row.duration is not None
-    assert row.duration.active_ms == 2 * 60_000
-    assert row.duration.confidence == "derived"
+    SessionCatalog(registry, turn_counts=turn_counts).count_turns(
+        SessionCatalog(registry, turn_counts=turn_counts).scan()
+    )
+    warm = explorer.for_workspace(state.id)[0]
+
+    assert warm.duration is not None
+    assert warm.duration.active_ms == 2 * 60_000
+    assert warm.duration.confidence == "derived"

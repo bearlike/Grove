@@ -15,6 +15,8 @@ from grove.core.activity import SessionActivity
 from grove.core.agents import (
     AgentActivity,
     AgentActivityState,
+    AgentQuestion,
+    AgentQuestionOption,
     AgentSession,
     DigestEntry,
     SessionTurn,
@@ -29,6 +31,7 @@ from grove.core.tmux import ContainerAttach
 from grove.core.workspace import ProvisionStatus, WorkspaceStatus
 from grove.tui.app import GroveApp
 from grove.tui.screens.list import WorkspaceListScreen
+from grove.tui.screens.native_controls import NativeControlsScreen
 from grove.tui.screens.remap_session import RemapSessionScreen
 from grove.tui.screens.sessions import SessionRow
 from grove.tui.widgets.card import WorkspaceCard
@@ -1193,5 +1196,110 @@ async def test_provision_progress_is_read_only_for_a_provisioning_selection(
         )
         degraded = screen._provision_progress(building)
         assert degraded is not None and degraded.lines == ()
+        await pilot.press("q")
+        await pilot.pause()
+
+
+class _PendingQuestionService:
+    """Stands in for ``ActivityService`` with one live pending question.
+
+    Mirrors ``_FakeActivityService``'s duck-typed shape — the list screen
+    only ever calls the public ``sessions_for`` — but carries a real
+    ``AgentQuestion`` batch so ``action_native_controls``'s worker read has
+    something to bundle for the modal.
+    """
+
+    def sessions_for(self, mgr: object, state: object) -> list[SessionActivity]:
+        del mgr, state
+        session = AgentSession(
+            session_id="s-pending",
+            transcript_path=None,
+            adapter_kind="claude_code",
+            provenance="grove_launched",
+            tmux_window="agent",
+        )
+        questions = (
+            AgentQuestion(
+                id="ask#0",
+                group_id="ask",
+                kind="single_select",
+                prompt="Which environment?",
+                options=(AgentQuestionOption("staging"), AgentQuestionOption("prod")),
+            ),
+        )
+        return [
+            SessionActivity(
+                session=session,
+                activity=AgentActivity(state=AgentActivityState.WAITING, questions=questions),
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_c_opens_native_controls_with_pending_question(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """`c` on a live selection opens the native-controls modal, and its worker
+    read bundles the pending question plus its answer-back session id from
+    the same public `ActivityService.sessions_for` seam the slow tick already
+    uses — never derived from `state.agent_session_id` alone."""
+    del fake_tmux
+    manager = _manager(tmp_repo, tmp_path)
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="alpha"))
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = WorkspaceListScreen(manager, service=_PendingQuestionService())  # type: ignore[arg-type]
+        await app.switch_screen(screen)
+        await pilot.pause()
+
+        await pilot.press("c")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        modal = app.screen
+        assert isinstance(modal, NativeControlsScreen)
+        assert modal._session_id == "s-pending"
+        assert len(modal._questions) == 1
+        assert modal._questions[0].prompt == "Which environment?"
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_c_with_nothing_selected_flashes_and_never_starts_the_read(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The guard mirrors every other selection-gated action: no crash, no
+    modal, an honest flash.
+
+    Asserts on the worker-read call count rather than on the modal's
+    absence: a fresh empty fleet also fails the *unrelated* stale-selection
+    check `on_native_controls_loaded` applies to every worker result, so a
+    test that only checked "no modal opened" would still pass with the
+    early-return guard deleted — the stale-selection check would silently
+    cover for it. Only counting the read itself pins the guard specifically.
+    """
+    del fake_tmux
+    app = GroveApp(_manager(tmp_repo, tmp_path))
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, WorkspaceListScreen)
+        calls: list[str] = []
+        original = screen._read_native_controls
+        screen._read_native_controls = lambda wid: (calls.append(wid), original(wid))[1]  # type: ignore[method-assign]
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert calls == [], "the nothing-selected guard must return before starting the read"
+        assert not isinstance(app.screen, NativeControlsScreen)
+        bar = app.screen.query_one(StatusBar)
+        rendered = bar.render()
+        plain = rendered.plain if hasattr(rendered, "plain") else str(rendered)
+        assert "nothing selected" in plain, plain
         await pilot.press("q")
         await pilot.pause()

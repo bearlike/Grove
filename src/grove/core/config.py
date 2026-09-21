@@ -247,7 +247,7 @@ class DefaultsScope(StrEnum):
 # WorkspaceState.agent_kind (workspace.py) shares one source of truth with the
 # config-side AgentSpec.kind — workspace already imports from config, so this
 # direction has no cycle.
-AgentKind = Literal["claude_code", "codex", "generic", "mewbo"]
+AgentKind = Literal["claude_code", "codex", "opencode", "generic", "mewbo"]
 
 
 class AgentSpec(BaseModel):
@@ -273,8 +273,7 @@ class AgentSpec(BaseModel):
 
     models: tuple[str, ...] = ()
     """Model ids offered in the create form picker. A convenience list, never a validated
-    allowlist. Empty falls through to the adapter's live discovery, which is capped at
-    ten.
+    allowlist. Empty uses the adapter's native discovery or maintained fallback catalog.
     """
 
     env_unset: tuple[str, ...] = ()
@@ -316,7 +315,7 @@ class AgentSpec(BaseModel):
     A native session cannot pause or resume; stop or recreate it instead.
     """
 
-    NATIVE_KINDS: ClassVar[frozenset[str]] = frozenset({"claude_code", "codex"})
+    NATIVE_KINDS: ClassVar[frozenset[str]] = frozenset({"claude_code", "codex", "opencode"})
 
     @property
     def owns_native_session(self) -> bool:
@@ -2848,6 +2847,19 @@ class AgentRoster:
             kind="codex",
             native=False,
             description="OpenAI Codex CLI (interactive terminal)",
+        ),
+        AgentSpec(
+            name="opencode",
+            command="opencode",
+            kind="opencode",
+            description="OpenCode",
+        ),
+        AgentSpec(
+            name="opencode-terminal",
+            command="opencode",
+            kind="opencode",
+            native=False,
+            description="OpenCode (interactive terminal)",
         ),
         AgentSpec(name="shell", command="$SHELL", description="Plain shell"),
     )

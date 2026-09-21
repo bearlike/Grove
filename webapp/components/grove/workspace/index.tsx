@@ -24,6 +24,7 @@ import { AdaptiveTabsList, AdaptiveTabsTrigger } from "./adaptive-tabs";
 import {
   findWorkspaceActivity,
   primarySessionId,
+  primarySessionIdOf,
 } from "@/lib/grove/adapters";
 import { diagramOf } from "@/lib/grove/api";
 import {
@@ -31,6 +32,7 @@ import {
   useRemapSession,
   useSessionTurns,
   useWorkspaceCommits,
+  useWorkspaceActivity,
   useWorkspacePeek,
   useWorkspaceSessions,
 } from "@/lib/grove/hooks";
@@ -135,8 +137,16 @@ export function Workspace({ id }: { id: string }) {
   const peek = useWorkspacePeek(id);
   const commits = useWorkspaceCommits(id);
   const { snapshot } = useActivityStream();
-  const activity = findWorkspaceActivity(snapshot, id);
-  const sessionId = primarySessionId(snapshot, id);
+  // The per-workspace read is the SOURCE for this page and the snapshot is the
+  // fallback, not the other way round: the snapshot describes every workspace
+  // on the host, so gating first paint on it made a page about one workspace
+  // wait for all of them (measured: 22.4 s of a 40.6 s bootstrap spent on two
+  // OFFLINE workspaces this page never renders). Once the stream connects its
+  // `session_activity` frames keep the row current exactly as before, which is
+  // why the snapshot stays preferred where it is already in hand.
+  const workspaceRow = useWorkspaceActivity(id);
+  const activity = findWorkspaceActivity(snapshot, id) ?? workspaceRow.data ?? null;
+  const sessionId = primarySessionId(snapshot, id) ?? primarySessionIdOf(workspaceRow.data);
 
   const sessions = useWorkspaceSessions(id);
   // A staged file belongs to this id's composer; an annotation pane open over

@@ -93,12 +93,20 @@ export type ContinuationPartData = Record<string, never>;
  * - `droppedTokens: null` is unmeasured, never `0`.
  * - `summary: ""` means the harness carries no post-compaction summary; an
  *   empty string is not "collapse this open onto nothing".
+ * - `durationMs: null` means the harness timed no compaction span — never that
+ *   it was instantaneous. Claude Code publishes one natively and it is
+ *   routinely seconds to minutes; Codex records a single instant and no span.
+ * - `model: null` means no model could be attributed. NO harness stamps one on
+ *   the boundary record, so this is the model that was in effect when the
+ *   compaction ran — never a default the reader could mistake for a report.
  */
 export interface CompactionPartData {
   trigger: "manual" | "auto" | null;
   at: string | null;
   droppedTokens: number | null;
   summary: string;
+  durationMs: number | null;
+  model: string | null;
 }
 
 /** Every Grove transcript row is post-hoc, so each assistant message pins
@@ -546,6 +554,8 @@ function compactionPartData(entry: DigestEntryView): CompactionPartData | null {
     at: payload?.at ?? null,
     droppedTokens: payload?.dropped_tokens ?? null,
     summary: payload?.summary ?? "",
+    durationMs: payload?.duration_ms ?? null,
+    model: payload?.model ?? null,
   };
 }
 

@@ -300,8 +300,8 @@ const TURNS: SessionTurnView[] = [
     sent_at: T0,
     entries: [
       { role: "assistant", text: "I'll orient on the router and the config loader first, then attach the ticket.", question: null, file_edit: null, todo: null },
-      { role: "tool", text: "Read src/api/routes.py", tool: { name: "Read", tool_use_id: "t1", status: "ok", input: { file_path: "src/api/routes.py" }, result: "from fastapi import FastAPI\n…", duration_ms: 42 }, question: null, file_edit: null, todo: null },
-      { role: "tool", text: "grove tickets attach 412", tool: { name: "Bash", tool_use_id: "t2", status: "ok", input: { command: "grove tickets attach 412" }, result: "  gitea#412  (issue)", duration_ms: 310 }, question: null, file_edit: null, todo: null },
+      { role: "tool", text: "Read src/api/routes.py", tool: { name: "Read", tool_use_id: "t1", status: "ok", input: { file_path: "src/api/routes.py" }, result: "from fastapi import FastAPI\n…", duration_ms: 42, body: "inline" }, question: null, file_edit: null, todo: null },
+      { role: "tool", text: "grove tickets attach 412", tool: { name: "Bash", tool_use_id: "t2", status: "ok", input: { command: "grove tickets attach 412" }, result: "  gitea#412  (issue)", duration_ms: 310, body: "inline" }, question: null, file_edit: null, todo: null },
       { role: "todo", text: "0/5 done", question: null, file_edit: null, todo: { items: DEMO_TODO.items.map((item) => ({ ...item, status: "pending" as const })) } },
       {
         role: "file_edit",
@@ -316,7 +316,7 @@ const TURNS: SessionTurnView[] = [
         },
       },
       { role: "assistant", text: "Endpoint added and wired into the app. Opening a draft PR against `main` that closes #412.", question: null, file_edit: null, todo: null },
-      { role: "tool", text: "tea pr create --draft", tool: { name: "Bash", tool_use_id: "t3", status: "ok", input: { command: "tea pr create --draft --base main --title '✨ feat(api): GET /healthz with per-root readability'" }, result: "#418 https://forge.example.com/acme/healthd/pulls/418", duration_ms: 1_204 }, question: null, file_edit: null, todo: null },
+      { role: "tool", text: "tea pr create --draft", tool: { name: "Bash", tool_use_id: "t3", status: "ok", input: { command: "tea pr create --draft --base main --title '✨ feat(api): GET /healthz with per-root readability'" }, result: "#418 https://forge.example.com/acme/healthd/pulls/418", duration_ms: 1_204, body: "inline" }, question: null, file_edit: null, todo: null },
     ],
   },
   {
@@ -324,7 +324,7 @@ const TURNS: SessionTurnView[] = [
     started_at: "2026-09-14T09:12:00.000Z",
     sent_at: "2026-09-14T09:12:00.000Z",
     entries: [
-      { role: "tool", text: "grove_open_diagram", tool: { name: "mcp__grove__grove_open_diagram", tool_use_id: "t4", status: "ok", input: { path: DEMO_DIAGRAM_PATH }, result: "{\"diagram\":{\"mode\":\"active\"}}", duration_ms: 88 }, question: null, file_edit: null, todo: null },
+      { role: "tool", text: "grove_open_diagram", tool: { name: "mcp__grove__grove_open_diagram", tool_use_id: "t4", status: "ok", input: { path: DEMO_DIAGRAM_PATH }, result: "{\"diagram\":{\"mode\":\"active\"}}", duration_ms: 88, body: "inline" }, question: null, file_edit: null, todo: null },
       { role: "assistant", text: "The diagram is open in the **Diagram** tab: clients on the left, the engine in the middle, side effects on the right. Drag any box and I'll see the change on my next read.", question: null, file_edit: null, todo: null },
     ],
   },
@@ -333,7 +333,7 @@ const TURNS: SessionTurnView[] = [
     started_at: "2026-09-14T09:26:00.000Z",
     sent_at: "2026-09-14T09:26:00.000Z",
     entries: [
-      { role: "tool", text: "pytest tests/api -q", tool: { name: "Bash", tool_use_id: "t5", status: "error", input: { command: "pytest tests/api -q" }, result: "29 passed, 1 failed\nFAILED tests/api/test_health.py::test_unreadable_root", duration_ms: 8_410 }, question: null, file_edit: null, todo: null },
+      { role: "tool", text: "pytest tests/api -q", tool: { name: "Bash", tool_use_id: "t5", status: "error", input: { command: "pytest tests/api -q" }, result: "29 passed, 1 failed\nFAILED tests/api/test_health.py::test_unreadable_root", duration_ms: 8_410, body: "inline" }, question: null, file_edit: null, todo: null },
       { role: "todo", text: "3/5 done", question: null, file_edit: null, todo: DEMO_TODO },
       { role: "assistant", text: "The stat error is swallowed before the report is built. Fixing the handler to keep the OS error, then re-running the suite.", question: null, file_edit: null, todo: null },
     ],

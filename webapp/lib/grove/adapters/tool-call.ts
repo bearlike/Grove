@@ -37,6 +37,29 @@ import type { DigestEntryView } from "@/lib/grove/api";
  */
 export type ToolCallView = NonNullable<DigestEntryView["tool"]>;
 
+/**
+ * Whether this call's body must be FETCHED, and whether now.
+ *
+ * The daemon's windowed `/turns` read withholds a settled call's request and
+ * result outside the tail turn, marking them `body: "available"`. The saving is
+ * only real if the client asks for exactly the bodies a reader opens — one
+ * request per rendered step would be strictly worse than the payload it
+ * replaced — so the gate is two facts ANDed, and neither is optional:
+ *
+ *   - `available` — anything else is already in hand (`inline`) or does not
+ *     exist (`none`), and asking for either is a round trip for nothing.
+ *   - the disclosure is OPEN — a historical tool step mounts collapsed and
+ *     Radix unmounts closed content, so a closed step's body is not on screen
+ *     and nobody has asked for it.
+ *
+ * Pure, and here rather than inside the hook, because this is the decision
+ * worth pinning: the hook around it is react-query wiring that a unit test can
+ * only observe through a browser.
+ */
+export function shouldFetchToolBody(body: ToolCallView["body"], open: boolean): boolean {
+  return body === "available" && open;
+}
+
 /** One request argument, already rendered to text so no two call sites can
  * format the same value differently. */
 export interface ToolCallField {

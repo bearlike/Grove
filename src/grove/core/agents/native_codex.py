@@ -175,6 +175,15 @@ class CodexNativeOwner:
             "thread/settings/update", {"threadId": self._thread_id, "model": model}
         )
 
+    async def compact(self) -> bool:
+        """The app-server protocol exposes no provider-native compaction verb."""
+        return False
+
+    async def invoke_control(self, name: str) -> bool:
+        """The app-server protocol exposes no provider-native named-command verb."""
+        del name
+        return False
+
     async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool:
         """Answer the server request whose item id is ``tool_use_id``.
 

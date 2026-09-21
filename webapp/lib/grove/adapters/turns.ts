@@ -105,7 +105,12 @@ export function turnCursor(held: HeldWindow | undefined): number | undefined {
  *     already "one contiguous range with no duplicated turns" — there is
  *     nothing left to splice.
  */
-export function mergeTurns(held: HeldWindow | undefined, window: TurnWindow): TurnMerge {
+export function mergeTurns(
+  held: HeldWindow | undefined,
+  window: TurnWindow,
+  direction: MergeDirection = "forward",
+): TurnMerge {
+  if (direction === "backward") return mergeEarlier(held, window);
   if (!window.incremental) {
     return { kind: "replace", turns: window.turns, first_turn_index: window.first_turn_index };
   }
@@ -132,4 +137,49 @@ export function mergeTurns(held: HeldWindow | undefined, window: TurnWindow): Tu
   const turns = [...held.turns.slice(0, prefixCount), ...window.turns];
   if (turns.length === held.turns.length && window.turns.length === 0) return { kind: "unchanged" };
   return { kind: "replace", turns, first_turn_index: held.first_turn_index };
+}
+
+/**
+ * Which END of the held window a response is being placed against.
+ *
+ * A third argument rather than a second function, because the caller's
+ * decision is already made when it chooses a cursor — `before_turn` in,
+ * `"backward"` here — and one entry point is what keeps the "prove contiguity
+ * or refetch" rule from being re-derived per direction.
+ */
+export type MergeDirection = "forward" | "backward";
+
+/**
+ * Place an EARLIER page in front of what we hold.
+ *
+ * The mirror of the incremental splice, and it proves contiguity the same way
+ * rather than trusting the request: a backward page is contiguous only when it
+ * ENDS exactly where `held` begins. `before_turn` is exclusive, so the daemon's
+ * answer to `before_turn=held.first_turn_index` satisfies that by construction
+ * — and anything else (a truncated page, a transcript that moved under the
+ * reader, a stale in-flight request answering after a widen) is a gap this must
+ * not splice through. `refetch` is the same fail-safe the forward branch uses:
+ * one extra round trip beats a transcript with a hole in it.
+ *
+ * `incremental` is deliberately NOT consulted. It reports whether a FORWARD
+ * cursor was honoured, and a backward page never claims it; reading it here
+ * would take the wholesale-replace branch and throw away the tail.
+ */
+function mergeEarlier(held: HeldWindow | undefined, window: TurnWindow): TurnMerge {
+  // Nothing held: the page IS the transcript, and its own index places it.
+  if (!held) {
+    return { kind: "replace", turns: window.turns, first_turn_index: window.first_turn_index };
+  }
+  // Already at the start, or an empty page — either way nothing precedes what
+  // we hold, and rewriting the array would rebuild every message for no change.
+  if (window.turns.length === 0) return { kind: "unchanged" };
+
+  const pageEnd = window.first_turn_index + window.turns.length;
+  if (pageEnd !== held.first_turn_index) return { kind: "refetch" };
+
+  return {
+    kind: "replace",
+    turns: [...window.turns, ...held.turns],
+    first_turn_index: window.first_turn_index,
+  };
 }

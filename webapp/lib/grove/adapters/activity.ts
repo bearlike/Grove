@@ -161,6 +161,19 @@ export function primarySessionId(
 }
 
 /**
+ * The same choice as {@link primarySessionId}, made from ONE workspace's row.
+ *
+ * The rule is identical — the engine places the workspace's own pinned session
+ * first — and it is stated once here so the two callers cannot drift on which
+ * element is "the" session. What differs is only where the row came from: the
+ * fleet snapshot, or the per-workspace read that exists so a page about one
+ * workspace does not wait for every workspace on the host.
+ */
+export function primarySessionIdOf(row: WorkspaceActivityView | null | undefined): string | null {
+  return row?.sessions[0]?.session.session_id ?? null;
+}
+
+/**
  * The questions a session is blocked on right now.
  *
  * These arrive on the stream rather than in the transcript because the agent

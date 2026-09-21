@@ -300,6 +300,21 @@ describe("agentBrand", () => {
     expect(agentBrand("gpt-5-codex")).toBe("codex");
     expect(agentBrand("gpt-4")).toBe("openai");
     expect(agentBrand("gemini-cli")).toBe("gemini");
+    expect(agentBrand("opencode")).toBe("opencode");
+  });
+
+  /**
+   * OpenCode and OpenAI are unrelated vendors that share three letters, and
+   * a real roster entry names the gateway it goes through — so this pins the
+   * ORDER, which is the thing that can silently regress. A laxer `open`
+   * pattern above it would draw OpenAI's mark on an OpenCode row, and nothing
+   * fails when it does: the row still renders, wearing the wrong vendor.
+   */
+  it("never lets OpenCode fall through to the OpenAI mark", () => {
+    expect(agentBrand("OpenCode (via KK Gateway)")).toBe("opencode");
+    expect(agentBrand("OpenCode (via KK Gateway, terminal)")).toBe("opencode");
+    // The neighbour it must not steal from.
+    expect(agentBrand("OpenAI o3")).toBe("openai");
   });
 
   it("falls back to a neutral mark rather than guessing a brand", () => {

@@ -223,9 +223,13 @@ nav:
           - Push Notifications: features-notifications.md
           - Status Semantics: features-status.md
           - Configuration Cascade: features-cascade.md
+      - Agents:
+          - Choosing an Agent: configure-agents.md
+          - Claude Code: agents-claude-code.md
+          - Codex: agents-codex.md
+          - OpenCode: agents-opencode.md
       - Configure:
           - Project Setup: configure-project.md
-          - Agents: configure-agents.md
           - Init Scripts: configure-init-scripts.md
           - Ticket Providers: configure-ticket-providers.md
           - Configuration Reference: configure-reference.md

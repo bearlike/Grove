@@ -130,9 +130,12 @@ def test_current_task_skips_a_relayed_teammate_message_for_the_real_prompt(
     # The two readers are one selection: capped and uncapped must never diverge.
     assert adapter.latest_task(cwd, sid) == "Rename the widget module"
     # `last_prompt` answers a DIFFERENT question — what was submitted last —
-    # and the relay genuinely was, so that field keeps reporting it.
-    assert adapter.list_sessions(cwd)[0].last_prompt is not None
-    assert "teammate-message" in adapter.list_sessions(cwd)[0].last_prompt
+    # and the relay genuinely was, so that field keeps reporting it. Read through
+    # the identity-keyed full summary: the listing scan is metadata-only now, so
+    # a parse product is absent there by design rather than filtered.
+    full = adapter.session_summary(cwd, sid, full=True)
+    assert full is not None and full.last_prompt is not None
+    assert "teammate-message" in full.last_prompt
 
 
 def test_resume_dedups_overlapping_records(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
@@ -1810,15 +1813,45 @@ def test_list_sessions_builds_summaries_newest_first(
     assert top.adapter_kind == "claude_code"
     assert top.cwd == str(cwd)
     assert top.git_branch == "feature/widget"
-    assert top.title == "Fix the widget"
     assert top.first_prompt == "Please fix the widget"
-    # The leafUuid-only last-prompt is skipped; the text-bearing one wins.
-    assert top.last_prompt == "Please fix the widget"
     assert top.size_bytes > 0
     assert top.modified_at is not None
     assert top.created_at == datetime.fromisoformat("2026-06-09T08:00:00.000Z")
-    assert top.activity.human_turns == 1
-    assert top.activity.state is AgentActivityState.WAITING
+    # Metadata-only by cost (#805): the scan head-reads, so the parse products
+    # are honestly absent rather than computed for every file in the directory.
+    assert top.activity is None
+    assert top.title is None
+    assert top.last_prompt is None
+
+
+def test_session_summary_full_carries_the_parse_products_the_listing_omits(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """The identity-keyed read is where a caller BUYS the parse.
+
+    The listing scan pays one head read per transcript in a shared directory;
+    this pays one whole-file parse for one named session. Pinned as the pair so
+    the split cannot quietly collapse back into "every row parses"."""
+    cwd = Path("/home/dev/work/listing")
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(cwd)
+    folder.mkdir(parents=True)
+    sid = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    _write_realistic_transcript(folder, sid, cwd, mtime=2_000)
+
+    summary = adapter.session_summary(cwd, sid, full=True)
+
+    assert summary is not None
+    assert summary.title == "Fix the widget"
+    # The leafUuid-only last-prompt is skipped; the text-bearing one wins.
+    assert summary.last_prompt == "Please fix the widget"
+    assert summary.activity is not None
+    assert summary.activity.human_turns == 1
+    assert summary.activity.state is AgentActivityState.WAITING
+    # Without `full`, the same id answers at the listing's cost model.
+    metadata_only = adapter.session_summary(cwd, sid)
+    assert metadata_only is not None
+    assert metadata_only.activity is None
+    assert metadata_only.first_prompt == "Please fix the widget"
 
 
 def test_list_sessions_empty_when_nothing_recorded(
@@ -1852,7 +1885,7 @@ def test_session_summary_finds_a_relocated_transcript(
 
     assert adapter.list_sessions(cwd) == []
 
-    summary = adapter.session_summary(cwd, sid)
+    summary = adapter.session_summary(cwd, sid, full=True)
 
     assert summary is not None
     assert summary.session_id == sid
@@ -1860,6 +1893,7 @@ def test_session_summary_finds_a_relocated_transcript(
     # A real parse of the relocated file, not a synthesized stub.
     assert summary.title == "Fix the widget"
     assert summary.first_prompt == "Please fix the widget"
+    assert summary.activity is not None
     assert summary.activity.human_turns == 1
 
 

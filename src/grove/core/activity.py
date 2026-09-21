@@ -699,6 +699,45 @@ class ActivityService:
         for session in row.sessions:
             self._session_workspaces.setdefault(session.session.session_id, set()).add(row.state.id)
 
+    def workspace_row(self, repo_root: str, workspace_id: str) -> WorkspaceActivity | None:
+        """One workspace's activity row, without ever scanning the fleet.
+
+        The per-request seam behind ``GET /workspaces/{id}/activity``. It exists
+        because a page about ONE workspace was reading its session id off
+        ``snapshot()``, and ``snapshot`` BOOTSTRAPS when no projection exists
+        yet — so the first reader after a daemon start paid for every workspace
+        on the host before the page could paint. Measured on the reference host:
+        a 40.6 s bootstrap, 22.4 s of it spent on two OFFLINE workspaces whose
+        transcripts that page never renders.
+
+        Two paths, and which one runs is the whole design:
+
+        - **The projection already holds this row** — the ordinary case, because
+          the ~1 Hz poll maintains it. Then this is a dict lookup under the
+          existing lock and costs nothing (measured: the maintained fleet read
+          answers in ~2 ms for exactly this reason). The row is the same object
+          the stream publishes, so a page cannot disagree with its own stream.
+        - **It does not** (no projection yet, or a workspace created since the
+          last tick). Then exactly ONE workspace is computed. This is the path
+          that used to be a fleet bootstrap, and the whole point is that a page
+          about one workspace now waits for one workspace.
+
+        Deliberately neither bootstraps nor publishes: a request must not build
+        the shared projection (that is the poll's job, and the cost this exists
+        to avoid) and must not advance a sequence the stream's consumers order
+        on. ``None`` for an unknown workspace, so the route owns the 404.
+        """
+        with self._projection_lock:
+            maintained = self._rows.get(workspace_id)
+        if maintained is not None:
+            return maintained
+        mgr = self._registry.get(Path(repo_root))
+        try:
+            state = mgr.reconciled(workspace_id)
+        except WorkspaceNotFound:
+            return None
+        return self._workspace_activity(mgr, state)
+
     def prepare_workspace_refresh(
         self,
         repo_root: str,
@@ -1569,8 +1608,17 @@ class ActivityService:
         # where it speaks: Codex's parser reads it off the rollout, Claude's
         # transcript never carries it and only the statusLine arm of the hook
         # sidecar does. A sidecar with none leaves the parser's answer alone.
-        if sidecar is not None and sidecar.context is not None:
-            transcript = replace(transcript, context=sidecar.context)
+        # Its unavailable reason is a separate fact: legacy native workers wrote
+        # cumulative usage, so the window is suppressed and a respawn is needed.
+        if sidecar is not None:
+            context = sidecar.context if sidecar.context is not None else transcript.context
+            transcript = replace(
+                transcript,
+                context=context,
+                context_unavailable_reason=(
+                    sidecar.context_unavailable_reason if context is None else None
+                ),
+            )
         # Stream facts exist only for a native session and only on its sidecar;
         # a terminal session's transcript never carries them, so `None` stands.
         if sidecar is not None and sidecar.native is not None:
@@ -1625,6 +1673,7 @@ class ActivityService:
             str(cwd),
             config_dir_override("CLAUDE_CONFIG_DIR"),
             config_dir_override("CODEX_HOME"),
+            config_dir_override("XDG_DATA_HOME"),
         )
         with self._spine_lock:
             cached = self._spine_cache.get(session_id)

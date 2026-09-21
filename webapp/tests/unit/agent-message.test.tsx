@@ -8,7 +8,7 @@ import { AgentMessage } from "@/components/grove/workspace/agent-message";
 import { outgoingAgentMessage } from "@/lib/grove/adapters/agent-message";
 import type { ToolCallView } from "@/lib/grove/adapters/tool-call";
 
-const call = (name: string, input: ToolCallView["input"]): ToolCallView => ({name,input,tool_use_id:"mail-1",status:"ok",result:null,duration_ms:10});
+const call = (name: string, input: ToolCallView["input"]): ToolCallView => ({name,input,tool_use_id:"mail-1",status:"ok",result:null,duration_ms:10,body:"inline"});
 
 describe("mailbox protocol presentation", () => {
   it("reads current and legacy Claude message fields", () => {

@@ -1,4 +1,23 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+/**
+ * A click that lands before React attaches its handler is silently dropped —
+ * the DOM looks identical either way, so nothing about the failure names the
+ * cause. `onboarding.spec.ts`'s `openTour` documents and fixes the same trap.
+ * This is the FIRST interactive click on a freshly navigated landing page in
+ * several of this file's tests; a typed `.fill()` or a resolved-value read
+ * elsewhere in the file happens to force hydration first, which is why only
+ * the true first click ever raced (observed on two different tests across
+ * two runs, never the same one twice — a hydration-timing race, not a
+ * per-test defect). Retry the click itself rather than waiting longer before
+ * it, so a slow hydration costs nothing on the common case.
+ */
+async function clickUntil(trigger: Locator, ready: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    await trigger.click();
+    await ready();
+  }).toPass({ timeout: 30_000 });
+}
 
 /**
  * The expanded task brief.
@@ -10,6 +29,15 @@ import { expect, test } from "@playwright/test";
  * structurally cannot see a dialog that opens on click.
  */
 test.describe("launch composer expand", () => {
+  // The first-visit tour auto-opens over the landing composer and its mask
+  // intercepts every click on the row it walks — `launch-expand`, the Agent
+  // combobox, `launch-attach` all sit inside its steps. Every other landing
+  // spec suppresses it before the first navigation; this file's tests each
+  // reproducibly hung 90s on a masked click without it.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("grove.onboarding.seen", "true"));
+  });
+
   test("moves the one draft into the dialog and back", async ({ page }) => {
     await page.goto("/");
 
@@ -93,8 +121,9 @@ test.describe("launch composer expand", () => {
     await page.goto("/");
     await expect(page.getByTestId("launch-input")).toBeVisible({ timeout: 60_000 });
 
-    await page.getByTestId("launch-expand").click();
-    await expect(page.getByTestId("launch-expanded")).toBeVisible();
+    await clickUntil(page.getByTestId("launch-expand"), () =>
+      expect(page.getByTestId("launch-expanded")).toBeVisible({ timeout: 2_000 }),
+    );
     const editorCountDuringClose = await page.getByTestId("launch-expanded").evaluate(async (dialog) => {
       (dialog.querySelector('[data-slot="dialog-close"]') as HTMLButtonElement).click();
       await new Promise(requestAnimationFrame);
@@ -120,11 +149,11 @@ test.describe("launch composer expand", () => {
     const shelf = page.getByTestId("launch-controls");
     await expect(shelf).toBeVisible({ timeout: 60_000 });
 
-    await shelf.getByRole("combobox", { name: "Agent", exact: true }).click();
+    const agent = shelf.getByRole("combobox", { name: "Agent", exact: true });
+    await clickUntil(agent, () => expect(agent).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 }));
     await page.getByText("Claude Code (default)", { exact: true }).click();
     const project = shelf.getByRole("combobox", { name: "Project" });
-    await project.click();
-    await expect(project).toHaveAttribute("aria-expanded", "true");
+    await clickUntil(project, () => expect(project).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 }));
 
     const model = page.getByRole("combobox", { name: "Model", exact: true });
     await model.click();
@@ -141,10 +170,15 @@ test.describe("launch composer expand", () => {
     const input = page.getByTestId("launch-input");
     await expect(input).toBeVisible({ timeout: 60_000 });
 
-    const choosing = page.waitForEvent("filechooser");
-    await page.getByTestId("launch-attach").click();
-    const chooser = await choosing;
-    await chooser.setFiles({
+    // The attach button renders `disabled` until its handler is wired, and
+    // the landing composer forwards the click to a hidden `<input
+    // type="file">` sibling — a click landing before both are ready opens no
+    // chooser at all and spends the whole 90s test budget on an event that
+    // never arrives (same race `shared-composer.spec.ts`'s `pickFile`
+    // documents and fixes). Drive the input directly instead of the chooser.
+    const attach = page.getByTestId("launch-attach");
+    await expect(attach).toBeEnabled({ timeout: 60_000 });
+    await page.locator('input[type="file"]').last().setInputFiles({
       name: "brief-notes.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("a staged file"),

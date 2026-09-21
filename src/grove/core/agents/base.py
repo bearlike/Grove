@@ -88,6 +88,48 @@ class AgentVersionProbe:
             return ""
         return parts[0] if parts else ""
 
+    @staticmethod
+    def probe_argv(command: str, *args: str) -> tuple[str, ...]:
+        """``command`` with ``args`` appended, kept INSIDE any credential wrapper.
+
+        A launch command is routinely a wrapper that injects credentials and
+        then execs the real tool after ``--`` (``ssm-cli run … -- opencode``).
+        :meth:`binary_of` returns the WRAPPER there, so a probe built from it
+        runs ``ssm-cli models`` — not a command — and the catalog comes back
+        empty. Measured on a real host: the OpenCode model picker rendered
+        disabled with nothing to choose, because an empty catalog is
+        indistinguishable from a provider that enumerates nothing.
+
+        Appending to the whole command instead fixes both halves at once: the
+        probe reaches the right binary AND inherits the very credentials the
+        wrapper exists to supply, which a bare-binary probe could never have.
+
+        **The wrapped tool's own LAUNCH FLAGS are dropped**, because they
+        configure an interactive session and a subcommand is not one. Measured:
+        ``opencode --auto`` is how a terminal profile starts, and
+        ``opencode --auto models`` makes OpenCode read ``models`` as the
+        positional DIRECTORY argument — it failed with "Failed to change
+        directory to /tmp/models" and the picker went dead. Reordering does not
+        help either; the flag is simply not valid on the subcommand. Only the
+        wrapper's arguments are load-bearing here (they name which credentials
+        to fetch), so everything after the wrapped binary is discarded.
+        """
+        try:
+            parts = shlex.split(command)
+        except ValueError:  # unbalanced quotes in a hand-edited command
+            return ()
+        if not parts:
+            return ()
+        # The wrapped tool's binary: after the LAST `--` (a wrapper may take
+        # its own), else the command's first token.
+        binary_at = len(parts) - parts[::-1].index("--") if "--" in parts else 0
+        if binary_at >= len(parts):  # a trailing `--` wraps nothing
+            return ()
+        # Keep the wrapper's own arguments — they name which credentials to
+        # fetch — and drop the wrapped tool's launch flags, which configure an
+        # interactive session a subcommand is not.
+        return (*parts[: binary_at + 1], *args)
+
     @classmethod
     def version(cls, command: str, *flags: str) -> str | None:
         """Whatever ``<binary> <flags>`` printed, VERBATIM, or ``None``.
@@ -360,17 +402,26 @@ class AgentAdapter(Protocol):
         """Every session the tool recorded for ``cwd``, newest-first by mtime.
 
         The session-exploration analogue of ``discover_sessions`` — same
-        read-only scan, but returning the normalized listing metadata (plus a
-        point-in-time activity parse) instead of bare ids, and *without* an
-        exclusion: Grove-launched and hand-started sessions both appear.
-        Best-effort: ``[]`` on error or for tools with no transcripts.
+        metadata-only scan, returning normalized rows instead of bare ids and
+        *without* an exclusion. A filesystem implementation MUST stay on bounded
+        head reads; parse products remain ``None``. Best-effort: ``[]`` on error
+        or for tools with no transcripts.
         """
         ...
 
-    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+    def session_summary(
+        self, cwd: Path, session_id: str, *, full: bool = False
+    ) -> SessionSummary | None:
         """One KNOWN session's listing row, resolved by IDENTITY rather than by
         scanning ``cwd`` — ``None`` when this adapter's store holds no such
         session.
+
+        ``full`` is what separates the two questions this seam answers. Resolving
+        a session is about LOCATION (a store may re-home a transcript), and that
+        costs one glob; reading its activity/title/last-prompt costs the whole
+        file. Defaulting to ``False`` keeps the listing path — which resolves the
+        minted id by identity on every scan — inside the metadata-only cost
+        guarantee, while a caller that RENDERS parse products asks for them.
 
         The identity-keyed counterpart to :meth:`list_sessions`, and the two
         answer genuinely different questions: that method asks *which sessions
@@ -385,10 +436,9 @@ class AgentAdapter(Protocol):
 
         Implementations resolve through :meth:`locate_transcripts` (already the
         relocation-tolerant lookup) and MUST NOT walk the store: this is an
-        O(1)-per-id read on request paths, never a census. The returned summary
-        is the same shape and the same parse ``list_sessions`` produces, so a
-        caller can substitute one for the other; ``None`` for a remote adapter,
-        for a tool with no transcripts, and for an id this store never held.
+        O(1)-per-id read on request paths, never a census. ``None`` for a remote
+        adapter, for a tool with no transcripts, and for an id this store never
+        held.
         """
         ...
 

@@ -64,6 +64,7 @@ if TYPE_CHECKING:
         ToolOutcome,
         final_result_from_messages,
         latest_todo_from_messages,
+        tool_call_from_messages,
         tool_outcomes,
     )
     from grove.core.agents.registry import (
@@ -131,6 +132,7 @@ _EXPORTS: dict[str, str] = {
     "final_result_from_messages": "grove.core.agents.model",
     "get_adapter": "grove.core.agents.registry",
     "latest_todo_from_messages": "grove.core.agents.model",
+    "tool_call_from_messages": "grove.core.agents.model",
     "resolve_models": "grove.core.agents.registry",
     "tool_outcomes": "grove.core.agents.model",
 }
@@ -189,6 +191,7 @@ __all__ = [
     "get_adapter",
     "latest_todo_from_messages",
     "resolve_models",
+    "tool_call_from_messages",
     "tool_outcomes",
 ]
 

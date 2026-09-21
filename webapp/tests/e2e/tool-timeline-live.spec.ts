@@ -7,7 +7,7 @@ function tool(id: string, status: "running" | "ok"): DigestEntryView {
     role: "tool", text: `Bash ${id}`, question: null, file_edit: null, todo: null,
     tool: { name: "Bash", input: { command: `echo ${id}` }, tool_use_id: id, status,
       duration_ms: status === "running" ? null : 120,
-      result: status === "running" ? null : `${id} complete` },
+      result: status === "running" ? null : `${id} complete`, body: "inline" },
   };
 }
 

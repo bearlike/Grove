@@ -33,6 +33,7 @@ import pytest
 from grove.core.agents import QueuedMessage
 from grove.core.agents.claude_code import (
     ClaudeCodeAdapter,
+    _QueueFolder,
     _Record,
     _sort_key,
     _stamp_deliveries,
@@ -416,6 +417,77 @@ def test_the_claude_adapter_reads_the_queue_off_the_transcript(
     (folder / f"{sid}.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
 
     assert [m.text for m in adapter.pending_queue(cwd, sid)] == ["hold this"]
+
+
+def test_the_queue_is_folded_incrementally_not_rebuilt_from_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Appending must not re-walk the transcript to answer the queue.
+
+    The ~1 Hz activity tick asks EVERY workspace on the host for its queue
+    depth, and the fold's inputs are a handful of ``queue-operation`` records
+    scattered through a history that is mostly assistant work — so rebuilding it
+    per tick read the whole transcript to answer a question whose state had not
+    moved.
+
+    Asserted by counting how many records the QUEUE FOLD examines, which is the
+    measurement that discriminates. Counting JSON decodes does not: ``_read``
+    goes through the same incremental cache, so each line is parsed once either
+    way and a rebuilt-from-history projection is exactly as green. What the old
+    shape paid was a walk of every record per READ — 31 here, and tens of
+    thousands on a real session — to re-derive a queue whose state had not moved.
+
+    A wall-clock assertion would be a flake on a loaded host, and the existing
+    correctness tests above cannot see this at all: they are all single-read.
+    """
+    cfg = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    adapter = ClaudeCodeAdapter()
+    adapter.clear_caches()
+
+    cwd = tmp_path / "work"
+    sid = "44444444-4444-4444-8444-444444444444"
+    folder = cfg / "projects" / "encoded"
+    folder.mkdir(parents=True)
+    transcript = folder / f"{sid}.jsonl"
+
+    def line(rec: dict[str, Any]) -> str:
+        return json.dumps(rec) + "\n"
+
+    # A history of ordinary turns with one enqueue buried in it.
+    rows = [
+        {
+            "type": "user",
+            "uuid": f"u{i}",
+            "timestamp": f"2026-08-01T09:{i:02d}:00Z",
+            "cwd": str(cwd),
+            "sessionId": sid,
+            "message": {"role": "user", "content": f"turn {i}"},
+        }
+        for i in range(30)
+    ]
+    rows.append(_op("enqueue", at="2026-08-01T10:00:00Z", content="hold this"))
+    transcript.write_text("".join(line(r) for r in rows))
+
+    assert [m.text for m in adapter.pending_queue(cwd, sid)] == ["hold this"]
+
+    examined = 0
+    real_add = _QueueFolder.add
+
+    def counted(self: _QueueFolder, rec: Any) -> None:
+        nonlocal examined
+        examined += 1
+        real_add(self, rec)
+
+    monkeypatch.setattr(_QueueFolder, "add", counted)
+    with transcript.open("a") as fh:
+        fh.write(line(_op("enqueue", at="2026-08-01T10:00:01Z", content="and this")))
+
+    assert [m.text for m in adapter.pending_queue(cwd, sid)] == ["hold this", "and this"]
+    # ONE record examined — the appended op. A rebuilt-from-history fold would
+    # walk all 32.
+    assert examined == 1
 
 
 # ── Codex: a SQLite store, and every absence is UNSUPPORTED ────────────────

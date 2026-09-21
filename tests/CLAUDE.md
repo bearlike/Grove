@@ -6,6 +6,8 @@ Conventions for the pytest suite under `tests/`: where the test seams sit, how t
 
 ## Test seams
 
+**When production stops calling a boundary, the tests that PATCH it keep passing and stop testing anything — so a patch target is part of the change.** Five `test_catalog_sources.py` tests patched `grove.daemon._catalog_sources.GitRepo.worktree_paths`/`list_files`; once the watch-root discovery consumed `DiagramGallery.census` instead of shelling out itself, that import was gone and the patches failed *loudly* (`ImportError: ... is not a package`), which is the lucky case. **The unlucky case is a patch on a symbol that still exists and is no longer reached**, which stays green forever. The fix is to state the new boundary on the double (`_Index.census` returning the scopes) rather than to re-point the patch one layer down — a double that answers the question production actually asks cannot go stale this way.
+
 **Patch the public module surface, never a private symbol.** `tests/conftest.py` monkey-patches `grove.core.tmux.create_session` and friends directly — no Protocol abstraction. Rename a public function and the test breaks loudly; that is the design. A test that patches a private symbol turns that path into an implicit contract: move it and the patch silently no-ops while the test still passes.
 
 **Promoting a private seam is a repo-wide rename, not a local test fix.** `mypy src/grove` does not inspect test imports, and a targeted run does not collect every consumer, so an old private import can survive both and fail only in full collection. Before or with the promotion, grep the whole repository for the old name and update every import, patch target, docstring, and assertion.

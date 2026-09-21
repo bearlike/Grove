@@ -187,12 +187,10 @@ describe("mergeTurns", () => {
     expect(result.turns.map((t) => t.user_text)).toEqual(["p", "q", "r (grown)", "s"]);
   });
 
-  // (c) — a "load earlier" widen. The daemon has no prefix-only instrument
-  // (only `last`, tail-anchored), so a widen re-fetches the WHOLE wider tail —
-  // both the new earlier turns and the ones already held — in one
-  // non-incremental response. That response is already the complete,
-  // contiguous, de-duplicated answer, so placing it is a wholesale replace:
-  // there is nothing left to splice, and nothing that could duplicate a turn.
+  // (c) — a pre-`before_turn` "load earlier" widen, kept because a daemon that
+  // does not implement the backward cursor (or any caller still asking for a
+  // wider tail) must still place correctly: the response is already the
+  // complete, contiguous, de-duplicated answer, so it is a wholesale replace.
   it("replaces wholesale with a widened (earlier) window — one contiguous range, no duplicates", () => {
     const tail = held([turn("e"), turn("f")], 2); // absolute 2..3
     const widened = window({
@@ -222,5 +220,96 @@ describe("mergeTurns", () => {
     const tail = held([turn("a"), turn("b")], 10); // absolute 10..11
     const merge = mergeTurns(tail, window({ turns: [turn("z")], first_turn_index: 5 }));
     expect(merge).toEqual({ kind: "refetch" });
+  });
+});
+
+/**
+ * The BACKWARD page — `before_turn=<first held index>&last=40`.
+ *
+ * The whole point is that the second transfer carries only turns the reader
+ * does not hold, so these cases are about placing a page that deliberately does
+ * NOT overlap what is on screen. Contiguity is therefore proved at the other
+ * end: a page is placeable only when it ENDS exactly where `held` begins.
+ */
+describe("mergeTurns, backward", () => {
+  it("prepends a page that ends exactly where the held window starts", () => {
+    const tail = held([turn("e"), turn("f")], 4); // absolute 4..5
+    const page = window({
+      turns: [turn("c"), turn("d")],
+      first_turn_index: 2,
+      total_turns: 6,
+      incremental: false,
+    });
+
+    const merge = mergeTurns(tail, page, "backward");
+
+    expect(merge).toEqual({
+      kind: "replace",
+      turns: [...page.turns, ...tail.turns],
+      first_turn_index: 2,
+    });
+  });
+
+  it("keeps the held tail rather than replacing the transcript with the page", () => {
+    // The defect this guards is the whole reason the direction is a parameter:
+    // `incremental` is false on a backward page, so the FORWARD branch would
+    // take it wholesale and throw away everything below it.
+    const tail = held([turn("e"), turn("f")], 4);
+    const page = window({ turns: [turn("c"), turn("d")], first_turn_index: 2, incremental: false });
+
+    const merge = mergeTurns(tail, page, "backward");
+    const turns = (merge as { turns: readonly SessionTurnView[] }).turns;
+
+    expect(turns.map((t) => t.user_text)).toEqual(["c", "d", "e", "f"]);
+  });
+
+  it("refuses a page that does not reach the held window — never splices a gap", () => {
+    const tail = held([turn("e"), turn("f")], 4); // needs a page ending at 4
+    const short = window({ turns: [turn("a")], first_turn_index: 0, incremental: false });
+
+    expect(mergeTurns(tail, short, "backward")).toEqual({ kind: "refetch" });
+  });
+
+  it("refuses a page that OVERLAPS the held window rather than duplicating turns", () => {
+    const tail = held([turn("e"), turn("f")], 4);
+    const overlapping = window({
+      turns: [turn("d"), turn("e")],
+      first_turn_index: 3,
+      incremental: false,
+    });
+
+    expect(mergeTurns(tail, overlapping, "backward")).toEqual({ kind: "refetch" });
+  });
+
+  it("is unchanged when there is nothing earlier to fetch", () => {
+    const tail = held([turn("a"), turn("b")], 0);
+    const empty = window({ turns: [], first_turn_index: 0, incremental: false });
+
+    expect(mergeTurns(tail, empty, "backward")).toEqual({ kind: "unchanged" });
+  });
+
+  it("takes the page as the whole transcript when nothing is held", () => {
+    const page = window({ turns: [turn("a")], first_turn_index: 0, incremental: false });
+
+    expect(mergeTurns(undefined, page, "backward")).toEqual({
+      kind: "replace",
+      turns: page.turns,
+      first_turn_index: 0,
+    });
+  });
+
+  it("reconstructs exactly what one wider read would have carried", () => {
+    // The acceptance: hold a tail, fetch the page before it, and the merged
+    // list equals a single `last=<both>` read — while the page itself carried
+    // only the turns that were missing.
+    const all = ["a", "b", "c", "d", "e", "f"].map(turn);
+    const tail = held(all.slice(3), 3);
+    const page = window({ turns: all.slice(0, 3), first_turn_index: 0, incremental: false });
+
+    const merge = mergeTurns(tail, page, "backward");
+    const turns = (merge as { turns: readonly SessionTurnView[] }).turns;
+
+    expect(page.turns).toHaveLength(3);
+    expect(turns).toEqual(all);
   });
 });

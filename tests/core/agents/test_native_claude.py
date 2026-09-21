@@ -514,6 +514,150 @@ for raw in sys.stdin:
 
 
 @pytest.mark.asyncio
+async def test_context_control_is_backgrounded_and_uses_current_summary(tmp_path: Path) -> None:
+    """A result never blocks on its context query or uses cumulative usage.
+
+    The protocol's summary response is the harness's current local estimate;
+    `result.usage` is cumulative across turns and is intentionally absent from
+    the drop.  The root session supplies the one session-wide reading, while a
+    child result cannot publish its own context.
+    """
+    child = r"""
+import json, sys, time
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "root"}), flush=True)
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") != "control_request":
+        continue
+    request = frame["request"]
+    if request["subtype"] == "get_context_usage":
+        assert request == {"subtype": "get_context_usage", "detail": "summary"}
+        time.sleep(0.2)
+        print(json.dumps({"type": "control_response", "response": {
+            "subtype": "success", "request_id": frame["request_id"], "response": {
+                "totalTokens": 250, "maxTokens": 900, "rawMaxTokens": 1000
+            }}}), flush=True)
+"""
+    spool = tmp_path / "spool"
+    asks = AskRecorder(spool)
+    asks.bind("root")
+    owner = ClaudeNativeOwner(_command(child), tmp_path, timeout_seconds=1, asks=asks)
+    try:
+        await owner.start("")
+        # Initialization itself schedules the first query. Let it finish before
+        # advancing the result epoch whose response this test asserts.
+        await asyncio.sleep(0.3)
+        owner._result(  # pyright: ignore[reportPrivateUsage]
+            {
+                "type": "result",
+                "session_id": "child",
+                "usage": {"input_tokens": 9_999_999},
+                "modelUsage": {"model": {"contextWindow": 1_000_000}},
+            }
+        )
+        owner._result(  # pyright: ignore[reportPrivateUsage]
+            {
+                "type": "result",
+                "session_id": "root",
+                "usage": {"input_tokens": 9_999_999},
+                "modelUsage": {"model": {"contextWindow": 1_000_000}},
+            }
+        )
+        # Result facts land immediately, while the protocol request independently
+        # awaits its delayed response rather than holding result processing.
+        immediate = [json.loads(path.read_text())["facts"] for path in spool.glob("*.facts.json")]
+        # Init may already have completed its own current-context query; result
+        # handling adds its facts without waiting for another answer.
+        assert any(facts.get("cost_usd") is None for facts in immediate)
+        await asyncio.sleep(0.4)
+    finally:
+        await owner.close()
+
+    drops = [json.loads(path.read_text())["facts"] for path in spool.glob("*.facts.json")]
+    controlled = next(facts for facts in drops if facts.get("context_state") == "native_control")
+    # Match the provider's displayed raw capacity, not its plotting capacity.
+    assert (controlled["context_size"], controlled["context_used"]) == (1000, 250)
+    assert "input_tokens" not in controlled
+
+
+@pytest.mark.asyncio
+async def test_new_root_input_discards_an_older_context_response(tmp_path: Path) -> None:
+    """A delayed reading predating the next turn can never win the sidecar."""
+    child = r"""
+import json, sys, time
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+query = 0
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") == "user" and "uuid" in frame:
+        print(json.dumps({"type": "user", "uuid": frame["uuid"]}), flush=True)
+    if frame.get("type") != "control_request":
+        continue
+    query += 1
+    total = 100 if query == 1 else 200
+    time.sleep(0.15)
+    print(json.dumps({"type": "control_response", "response": {
+        "subtype": "success", "request_id": frame["request_id"], "response": {
+            "totalTokens": total, "maxTokens": 900
+        }}}), flush=True)
+"""
+    spool = tmp_path / "spool"
+    asks = AskRecorder(spool)
+    asks.bind("s")
+    querying = asyncio.Event()
+
+    def trace(direction: str, frame: object) -> None:
+        if (
+            direction == "send"
+            and isinstance(frame, dict)
+            and frame.get("type") == "control_request"
+        ):
+            querying.set()
+
+    owner = ClaudeNativeOwner(_command(child), tmp_path, timeout_seconds=1, asks=asks, trace=trace)
+    try:
+        await owner.start("")
+        await asyncio.wait_for(querying.wait(), 1)
+        await owner.send("11223344-1122-3344-5566-112233445566", "next turn")
+        await asyncio.sleep(0.5)
+    finally:
+        await owner.close()
+
+    readings = [json.loads(path.read_text())["facts"] for path in spool.glob("*.facts.json")]
+    # Spool names are UUIDs, so filesystem enumeration is not chronology.
+    controlled = [facts for facts in readings if facts.get("context_state") == "native_control"]
+    assert controlled
+    assert all(facts["context_used"] == 200 for facts in controlled)
+
+
+@pytest.mark.asyncio
+async def test_context_control_failure_clears_the_prior_native_reading(tmp_path: Path) -> None:
+    """An unsupported or malformed response is unknown, never a stale meter."""
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") == "control_request":
+        print(json.dumps({"type": "control_response", "response": {
+            "subtype": "error", "request_id": frame["request_id"], "error": "unsupported"
+        }}), flush=True)
+"""
+    spool = tmp_path / "spool"
+    asks = AskRecorder(spool)
+    asks.bind("s")
+    owner = ClaudeNativeOwner(_command(child), tmp_path, timeout_seconds=1, asks=asks)
+    try:
+        await owner.start("")
+        await asyncio.sleep(0.1)
+    finally:
+        await owner.close()
+
+    drops = [json.loads(path.read_text())["facts"] for path in spool.glob("*.facts.json")]
+    assert any(drop.get("context_state") == "clear" for drop in drops)
+
+
+@pytest.mark.asyncio
 async def test_every_frame_crossing_stdio_is_traced_in_both_directions() -> None:
     """The trace sees what the owner wrote AND what it read, unknown kinds included.
 

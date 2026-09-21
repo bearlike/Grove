@@ -188,7 +188,7 @@ def test_unknown_defaults_field_fails_config_load(tmp_state_dir: Path, tmp_repo:
 # ─── the engine and the form resolve one answer ─────────────────────────────
 
 
-def _cfg(tmp_path: Path, **defaults: object) -> GroveConfig:
+def _cfg(tmp_path: Path, *, models: tuple[str, ...] = (), **defaults: object) -> GroveConfig:
     """A config whose CONTAINER SECTION IS ON — the shipped default, and the
     only setting under which the drift these tests pin was reachable."""
     return GroveConfig.model_validate(
@@ -197,7 +197,14 @@ def _cfg(tmp_path: Path, **defaults: object) -> GroveConfig:
             "tmux": {"session_prefix": "test-"},
             "container": {"enabled": True},
             "init_script": {"enabled": True, "shell": "bash", "inline": "true"},
-            "agents": [{"name": "claude", "command": "claude", "kind": "claude_code"}],
+            "agents": [
+                {
+                    "name": "claude",
+                    "command": "claude",
+                    "kind": "claude_code",
+                    "models": models,
+                }
+            ],
             "defaults": defaults,
         }
     )
@@ -277,6 +284,90 @@ def test_a_create_naming_no_model_forwards_the_saved_one_to_the_agent(
 
     decorations = dict(fake_tmux.launch_decorations)
     assert decorations[state.tmux_session][-2:] == ["--model", "anthropic-opus-5[1m]"]
+
+
+def test_a_plain_saved_model_promotes_to_its_offered_context_variant(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Deleting default-only promotion would re-launch the smaller saved id."""
+    cfg = _cfg(
+        tmp_path,
+        runtime="host",
+        model="anthropic-opus-5",
+        models=("anthropic-opus-5", "anthropic-opus-5[1m]"),
+    )
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="promoted")
+    )
+
+    assert dict(fake_tmux.launch_decorations)[state.tmux_session][-2:] == [
+        "--model",
+        "anthropic-opus-5[1m]",
+    ]
+
+
+def test_a_plain_saved_model_stays_unchanged_when_its_twin_is_not_offered(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Removing the catalog-membership guard would invent an unsupported id."""
+    cfg = _cfg(
+        tmp_path,
+        runtime="host",
+        model="anthropic-opus-5",
+        models=("anthropic-opus-5",),
+    )
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="not-promoted")
+    )
+
+    assert dict(fake_tmux.launch_decorations)[state.tmux_session][-2:] == [
+        "--model",
+        "anthropic-opus-5",
+    ]
+
+
+def test_an_explicit_model_is_forwarded_verbatim_despite_an_offered_twin(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Replacing explicit input with a catalog choice would narrow the provider boundary."""
+    cfg = _cfg(
+        tmp_path,
+        runtime="host",
+        model="anthropic-opus-5",
+        models=("anthropic-opus-5", "anthropic-opus-5[1m]"),
+    )
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(
+            agent_name="claude",
+            title="explicit",
+            model="anthropic-opus-5",
+        )
+    )
+
+    assert dict(fake_tmux.launch_decorations)[state.tmux_session][-2:] == [
+        "--model",
+        "anthropic-opus-5",
+    ]
+
+
+def test_an_already_marked_saved_model_is_unchanged(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Appending the marker unconditionally would corrupt an explicit capability choice."""
+    cfg = _cfg(
+        tmp_path,
+        runtime="host",
+        model="anthropic-opus-5[1m]",
+        models=("anthropic-opus-5[1m]", "anthropic-opus-5[1m][1m]"),
+    )
+    state = _manager(tmp_repo, cfg, tmp_path).create(
+        CreateWorkspaceRequest(agent_name="claude", title="already-marked")
+    )
+
+    assert dict(fake_tmux.launch_decorations)[state.tmux_session][-2:] == [
+        "--model",
+        "anthropic-opus-5[1m]",
+    ]
 
 
 def test_with_no_saved_model_the_agent_is_launched_with_no_model_flag_at_all(

@@ -37,7 +37,7 @@ from grove.core.contracts.public import (
     PublicSharedWorkspaceView,
     PublicWorkspaceView,
 )
-from grove.core.contracts.sessions import SessionDetailView
+from grove.core.contracts.sessions import SessionDetailView, ToolCallView
 from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.views import WorkspaceDiffView
 from grove.core.errors import GroveError
@@ -133,7 +133,9 @@ class PublicWorkspaceReader:
             grove=PublicGroveView(version=self.version),
         )
 
-    def turns(self, *, last: int | None, after_turn: int | None) -> SessionDetailView | None:
+    def turns(
+        self, *, last: int | None, after_turn: int | None, before_turn: int | None = None
+    ) -> SessionDetailView | None:
         """The workspace's primary transcript, windowed.
 
         THE SESSION IS NOT A PARAMETER, and that is the point. The token names a
@@ -158,28 +160,65 @@ class PublicWorkspaceReader:
         ``None`` means this workspace has no readable transcript yet, which is a
         legitimate state for a freshly-created workspace somebody shared early —
         and for a pin whose transcript has not materialized — not an error.
+
+        Settled tool bodies outside the tail turn are withheld exactly as on the
+        authenticated route (``body: "available"``, fetched through
+        :meth:`tool_call`) — same projection, so the public page's renderer and
+        its private twin stay one code path.
         """
-        session_id = self.manager.shared_session_id(self.state)
-        if session_id is None:
-            return None
-        explorer = SessionExplorer(self.manager)
-        listing: SessionListing | None = next(
-            (
-                ls
-                for ls in explorer.for_workspace(self.state.id)
-                if ls.summary.session_id == session_id
-            ),
-            None,
-        )
+        listing = self._session_listing()
         if listing is None:
             return None
-        window = turn_window(explorer.turns_for(listing), last=last, after_turn=after_turn)
+        explorer = SessionExplorer(self.manager)
+        window = turn_window(
+            explorer.turns_for(listing),
+            last=last,
+            after_turn=after_turn,
+            before_turn=before_turn,
+        )
         return SessionDetailView.from_listing_turns(
             listing,
             window.turns,
             total_turns=window.total,
             first_turn_index=window.first_index,
             incremental=window.incremental,
+        ).withhold_settled_bodies()
+
+    def tool_call(self, tool_use_id: str) -> ToolCallView | None:
+        """One withheld tool body from the shared transcript, whole.
+
+        BOUND TO THE TOKEN'S OWN SESSION, through the same
+        :meth:`_session_listing` resolver :meth:`turns` uses — so a body served
+        here can only ever come from the transcript the page is displaying, and
+        no session coordinate exists for a caller to supply. ``None`` for an id
+        this session does not hold; the route flattens that into the one share
+        404, like every other public failure.
+        """
+        listing = self._session_listing()
+        if listing is None:
+            return None
+        call = SessionExplorer(self.manager).tool_call_for(listing, tool_use_id)
+        return ToolCallView.from_call(call) if call is not None else None
+
+    def _session_listing(self) -> SessionListing | None:
+        """The one listing this token's page reads, or ``None``.
+
+        Shared by :meth:`turns` and :meth:`tool_call` so a drill-in can never
+        resolve against a different transcript from the one whose turns named
+        the id — the same "two locally-correct resolutions silently diverged"
+        trap that put the id-selected lookup here in the first place.
+        """
+        session_id = self.manager.shared_session_id(self.state)
+        if session_id is None:
+            return None
+        explorer = SessionExplorer(self.manager)
+        return next(
+            (
+                ls
+                for ls in explorer.for_workspace(self.state.id)
+                if ls.summary.session_id == session_id
+            ),
+            None,
         )
 
     def _resolve_ticket(self, ref: TicketRef) -> TicketRef:

@@ -1,10 +1,8 @@
 """`resolve_models` composes the one catalog every create surface offers.
 
-The property under test is the asymmetry between the two sources: discovery is
-capped because nobody chose what a tool publishes, a configured list is not
-because somebody typed it. A cap applied to both is invisible — a truncated
-list looks exactly like a complete one — so this file is the only thing
-standing between that and an operator concluding Grove ignores its own config.
+Both sources remain complete: a searchable picker must find a model beyond
+the former ten-row discovery limit. Configuration still replaces discovery
+rather than appending unrelated native choices to an explicit list.
 """
 
 from __future__ import annotations
@@ -50,7 +48,7 @@ def test_a_configured_catalog_keeps_its_order_and_drops_duplicates() -> None:
     assert offered == ("opus", "haiku", "sonnet")
 
 
-def test_discovery_is_still_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_discovery_offers_every_model_past_the_legacy_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     discovered = tuple(f"discovered-{i}" for i in range(MODEL_CATALOG_CAP + 5))
     monkeypatch.setattr(
         "grove.core.agents.claude_code.ClaudeCodeAdapter.available_models",
@@ -59,7 +57,7 @@ def test_discovery_is_still_capped(monkeypatch: pytest.MonkeyPatch) -> None:
 
     offered = resolve_models(kind="claude_code", command="claude", configured=())
 
-    assert offered == discovered[:MODEL_CATALOG_CAP]
+    assert offered == discovered
 
 
 @pytest.mark.usefixtures("_no_discovery")
@@ -117,12 +115,10 @@ def test_an_unpaired_id_is_untouched_whichever_half_it_is() -> None:
     assert offered == ("anthropic-gpt-6-astra", "anthropic-qwen3.8-max-preview[1m]", "opus")
 
 
-def test_the_fold_runs_before_the_discovery_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Otherwise a catalog of pairs spends half its allowance on duplicates.
-
-    Twelve ids, six pairs: capped first this offers 5 real models (10 rows
-    minus the folded half), folded first it offers all 6.
-    """
+def test_discovered_context_pairs_are_folded_without_losing_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Variant normalization must not reintroduce an implicit discovery limit."""
     discovered = tuple(
         f"gw-model-{i}{suffix}" for i in range(6) for suffix in ("", CONTEXT_VARIANT_SUFFIX)
     )

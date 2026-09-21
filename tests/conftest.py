@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Final
 
 import pytest
 
@@ -282,6 +282,49 @@ def _no_inherited_phase_file(monkeypatch: pytest.MonkeyPatch) -> None:
     test that means the env-var branch sets the variable itself.
     """
     monkeypatch.delenv(PhaseFile.PATH_ENV, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_mailbox_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test inherits the DEVELOPER's own mailbox credentials.
+
+    ``GroveMcpServer`` registers its three mailbox tools when it finds a
+    ``GROVE_MAILBOX_TOKEN``, and Grove exports exactly that variable into every
+    native session it launches. So the suite grows three extra tools precisely
+    when it is run BY an agent inside a Grove workspace, and the published
+    tool-surface census fails naming tools the test never asked for. It passes
+    in CI, where no agent launched the run, which is the same split
+    ``_no_inherited_phase_file`` closes one fixture up.
+
+    The URL and socket travel with it, or a half-cleared environment would
+    point a bound client at the developer's real coordinator. Every test that
+    means the mailbox branch sets all three itself.
+    """
+    for name in ("GROVE_MAILBOX_TOKEN", "GROVE_MAILBOX_URL", "GROVE_MAILBOX_SOCKET"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_opencode_database(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No test reads the DEVELOPER's own OpenCode session database.
+
+    The other two filesystem adapters scope their reads with an env var a test
+    sets (``CLAUDE_CONFIG_DIR``/``CODEX_HOME``), so a test that forgets simply
+    finds nothing. OpenCode keeps every session on the host in ONE database
+    under ``XDG_DATA_HOME``, and ``discover_all`` is reached by anything
+    touching ``SessionCatalog.scan`` or ``SessionExplorer.list`` — so a
+    developer who has ever run OpenCode had their real sessions outrank the
+    fixture's, sorted newest-first, and the assertion failed naming a session id
+    from their own machine. It passes in CI, where no such database exists,
+    which is the split this file already closes for ``GROVE_PHASE_FILE``.
+
+    Autouse and unconditional for that same reason: a test cannot opt into
+    protection from an environment it does not know it has. A test that means
+    the adapter points ``XDG_DATA_HOME`` at its own fixture itself.
+    """
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg-data")))
 
 
 @pytest.fixture(autouse=True)
@@ -1031,6 +1074,58 @@ class FakeTmux:
 
     def attach_instruction(self, session_name: str, *, read_only: bool = False) -> HostAttach:
         return HostAttach(tmux_session=session_name, inside_outer_tmux=False, read_only=read_only)
+
+
+# `create_session` alone, because it is the only seam that leaves a tmux
+# SERVER behind -- the thing that outlives the run and keeps a pane's agent
+# alive. Every other seam is either scoped to a session that cannot exist
+# without this one (`build_workspace_layout`) or is a plain subprocess that
+# exits on its own (`run_init_script`), and all of them are unit-tested
+# directly against a fake `subprocess.run`. Stubbing those would replace the
+# function under test instead of guarding a boundary.
+_SESSION_CREATING_SEAMS: Final = ("create_session",)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_tmux(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the real tmux boundary unreachable unless a test opts in.
+
+    Every other side-effect boundary in this file is autouse -- network, the
+    container runtime, hook paths. tmux was the exception, and being the
+    exception is what made it expensive: a test that built a workspace without
+    naming `fake_tmux` silently got a REAL session running the REAL `claude`
+    binary from `AgentRoster.BUILTINS`, and nothing in the test's teardown ever
+    killed it. Those sessions outlived the run, their tmp dirs were unlinked
+    underneath them, and they accumulated until they were measured in
+    gigabytes (reference host 2026-09-19: ~2.4k processes, 6.6 GB resident).
+
+    Failing loudly is the point. A leak this shape is invisible while the suite
+    stays green -- the test passes either way, so only the machine notices, and
+    only days later. An AttributeError names the test on the spot instead.
+
+    Opt out by requesting `fake_tmux` (the normal path) or by marking a test
+    `integration`/`requires_tmux` (the real-tmux suite, which owns its own
+    session teardown).
+    """
+    if "fake_tmux" in request.fixturenames:
+        return  # the fake patches these itself, immediately after us
+    for marker in ("integration", "requires_tmux"):
+        if request.node.get_closest_marker(marker) is not None:
+            return
+
+    def _refuse(name: str) -> Callable[..., object]:
+        def _boom(*args: object, **kwargs: object) -> object:
+            raise AssertionError(
+                f"grove.core.tmux.{name} reached the real tmux server during a unit test. "
+                "Request the `fake_tmux` fixture, or mark the test "
+                "`@pytest.mark.integration` if it genuinely needs a live server "
+                "(and then it must kill its own session)."
+            )
+
+        return _boom
+
+    for name in _SESSION_CREATING_SEAMS:
+        monkeypatch.setattr(tmux_mod, name, _refuse(name))
 
 
 @pytest.fixture

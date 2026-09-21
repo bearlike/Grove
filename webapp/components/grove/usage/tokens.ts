@@ -244,7 +244,7 @@ export function windowSeconds(window: SubscriptionWindowView): number | null {
 /** What the provider says is used, whichever half of the pair it reported.
  * `remaining_percent` is the same statement inverted, so reading it is not a
  * derivation — it is the other half of one reported fact. */
-function usedPercent(window: SubscriptionWindowView): number | null {
+export function usedPercent(window: SubscriptionWindowView): number | null {
   if (typeof window.used_percent === "number") return window.used_percent;
   if (typeof window.remaining_percent === "number") return 100 - window.remaining_percent;
   return null;

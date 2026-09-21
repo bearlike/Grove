@@ -81,7 +81,10 @@ test("workspace chrome closes the shell, work strip, and active tab sub-bar as 3
         })(),
         background: getComputedStyle(resizer).backgroundColor,
         split: (() => {
-          const box = split.getBoundingClientRect();
+          // The split handle belongs to the workspace pane group, below the
+          // 32px shell header. `annotation-split` wraps that group and begins
+          // at the viewport top, so it cannot be the handle's geometry peer.
+          const box = resizer.parentElement!.getBoundingClientRect();
           return { y: box.y, height: box.height };
         })(),
       },

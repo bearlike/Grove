@@ -49,7 +49,7 @@ import sys
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import islice
 from pathlib import Path
@@ -1352,21 +1352,6 @@ def _spawn_meta(transcript_path: Path | None) -> _SpawnMeta:
     )
 
 
-def _spawning_tool_use_id(transcript_path: Path | None) -> str | None:
-    """The main-thread ``tool_use`` id that spawned a sub-agent thread, read
-    from its sibling ``<transcript>.meta.json`` sidecar's ``toolUseId`` field
-    (the same sidecar ``ClaudeCodeAdapter.fleet_activity`` reads for identity).
-
-    Deliberately NOT read off ``AgentMessage.parent_tool_use_id`` — verified
-    on-host (see ``claude_code.py``'s ``read_subagent_meta``) that field
-    mirrors the sub-agent's own same-thread ``parentUuid``, never the main
-    transcript's spawning call, so it cannot correlate a thread back to its
-    spawn. Best-effort like every other sidecar read here: missing/malformed
-    → ``None``, never raised.
-    """
-    return _spawn_meta(transcript_path).tool_use_id
-
-
 def price_book_estimator(prices: PriceBook) -> CostEstimator:
     """Adapt a :class:`~grove.core.usage._pricing.PriceBook` into the
     :data:`CostEstimator` shape :meth:`TraceInstrumentor.__init__` takes.
@@ -1880,6 +1865,17 @@ class TraceInstrumentor:
         records: list[SpanRecord] = []
         emit_content = content in {"messages", "all"}
         for message in messages:
+            if message.role == "compaction" and message.compaction is not None:
+                record = self._compaction_span(
+                    session_id,
+                    message,
+                    trace_id=trace_id,
+                    agent_span_id=agent_span_id,
+                    turn_id=turn_id,
+                )
+                if record is not None:
+                    records.append(record)
+                continue
             if message.role != "assistant":
                 parts = _incoming_parts(message)
                 if parts:
@@ -1984,6 +1980,62 @@ class TraceInstrumentor:
         return [
             replace(record, attributes={**record.attributes, **provenance}) for record in records
         ]
+
+    def _compaction_span(
+        self,
+        session_id: str,
+        message: AgentMessage,
+        *,
+        trace_id: int,
+        agent_span_id: int,
+        turn_id: str | None,
+    ) -> SpanRecord | None:
+        """One compaction, as a GENERATION under the turn that compacted.
+
+        A compaction IS a model call — a model read the conversation and wrote a
+        summary — so it takes the existing generation shape rather than a fourth
+        observation kind nothing else would ever emit. What makes it worth its
+        own span is that it is the one event whose inputs are DESTROYED: the
+        harness discards the turns it summarized, so how much context was
+        dropped and how long the reader waited for it are unrecoverable from any
+        later record.
+
+        Unlike an ordinary generation this span has a REAL width whenever the
+        harness published one (Claude Code's ``durationMs``, into the minutes),
+        so the zero-width rule above does not apply — the duration here is
+        measured by the provider rather than inferred from message timestamps.
+
+        Returns ``None`` for an untimed boundary: a span needs a start instant,
+        and inventing one would place the compaction somewhere it did not happen.
+        """
+        compaction = message.compaction
+        if compaction is None:
+            return None
+        start = compaction.at or message.timestamp
+        if start is None:
+            return None
+        end = (
+            start + timedelta(milliseconds=compaction.duration_ms)
+            if compaction.duration_ms is not None
+            else start
+        )
+        suffix = (turn_id,) if turn_id is not None else ()
+        attributes: dict[str, AttributeValue] = {
+            GroveLiveAttr.COMPACTION_TRIGGER: compaction.trigger or "unknown"
+        }
+        if compaction.dropped_tokens is not None:
+            attributes[GroveLiveAttr.COMPACTION_DROPPED_TOKENS] = compaction.dropped_tokens
+        if compaction.duration_ms is not None:
+            attributes[GroveLiveAttr.COMPACTION_DURATION_MS] = compaction.duration_ms
+        record = SpanRecord.generation(
+            trace_id=trace_id,
+            span_id=derive_span_id(session_id, "compaction", start.isoformat(), *suffix),
+            parent_span_id=agent_span_id,
+            start_time=start,
+            end_time=end,
+            model=compaction.model,
+        )
+        return replace(record, attributes={**record.attributes, **attributes})
 
     def _estimate_cost(self, usage: TokenUsage | None, model: str | None) -> CostParts | None:
         """``cost_details`` is emitted only when known. This stays ``None``

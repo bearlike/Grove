@@ -123,7 +123,7 @@ title: Grove
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools for creating, listing, inspecting, pausing and steering workspaces">
-        <figcaption>MCP. Claude Code, Codex and other orchestrators can create workspaces and steer the fleet themselves.</figcaption>
+        <figcaption>MCP. Claude Code, Codex, OpenCode and other orchestrators can create workspaces and steer the fleet themselves.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">

@@ -600,10 +600,6 @@ class HttpTicketProvider(ABC):
             self._http.close()
             self._http = None
 
-    def _enrich_logged(self, ticket_id: str, exc: TicketProviderError) -> None:
-        """Uniform debug log for a best-effort enrichment miss (callers swallow)."""
-        logger.debug("ticket enrich failed for {} {}: {}", self.name, ticket_id, exc)
-
 
 class NumberTicketProvider(HttpTicketProvider):
     """Branch grammar shared by trackers keyed by a bare issue number (Gitea, GitHub).

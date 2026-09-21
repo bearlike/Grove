@@ -24,6 +24,11 @@ import Gemini from "@lobehub/icons/es/Gemini/components/Color";
 // component can render. There is no vendored colour artwork to switch to, so
 // this one stays on `Mono` until lobehub ships one — not a stylistic choice.
 import OpenAI from "@lobehub/icons/es/OpenAI/components/Mono";
+// OpenCode ships no `Color` leaf either — only `Mono`, `Avatar`, `Combine` and
+// `Text` — so it takes `Mono` for the same reason OpenAI does, and its import
+// chain was verified identical to OpenAI's (react, `../style`, jsx-runtime,
+// nothing from `@lobehub/ui`) before adopting it.
+import OpenCode from "@lobehub/icons/es/OpenCode/components/Mono";
 
 import { agentBrand, type AgentBrand } from "@/components/grove/fleet/tokens";
 
@@ -55,6 +60,7 @@ import { agentBrand, type AgentBrand } from "@/components/grove/fleet/tokens";
 const MARKS: Record<AgentBrand, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
   claude: Claude,
   codex: Codex,
+  opencode: OpenCode,
   openai: OpenAI,
   gemini: Gemini,
   generic: TerminalIcon,

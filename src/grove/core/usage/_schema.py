@@ -169,6 +169,11 @@ CREATE TABLE IF NOT EXISTS usage_events (
     failure_category  TEXT,
     is_error          INTEGER NOT NULL DEFAULT 0,
     duration_ms       INTEGER,
+    -- 'derived' (Grove paired two message timestamps) or 'provider' (the
+    -- harness measured and published the span itself, e.g. Claude Code's
+    -- `compactMetadata.durationMs`). The distinction matters because a derived
+    -- duration includes message round-trip latency the provider's own figure
+    -- excludes. NULL means untimed, never instantaneous.
     duration_source   TEXT,
     thread_id         TEXT,
     fresh_input       INTEGER,
@@ -241,18 +246,6 @@ DDL: Final = (
 )
 """Every statement needed to bring an empty file to the current schema, in
 dependency order. Applied in one transaction by ``_store.UsageStore``."""
-
-EVENT_KINDS: Final = frozenset(
-    {"generation", "tool_call", "tool_result", "file_edit", "compaction", "subagent"}
-)
-"""What may appear in ``usage_events.kind``.
-
-Not a SQL ``CHECK`` constraint deliberately: a constraint here would make an
-unrecognized provider record abort the whole file's ingest, where the contract
-for every read in this codebase is that a strange record degrades itself. The
-projector validates against this set and drops what it cannot classify, with the
-drop recorded on the source's health rather than raised.
-"""
 
 TOKEN_COLUMNS: Final = (
     "fresh_input",

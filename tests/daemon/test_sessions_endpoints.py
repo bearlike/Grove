@@ -215,9 +215,10 @@ def test_sessions_listing_newest_first_with_provenance(client: TestClient) -> No
     assert by_id[HAND_SID]["provenance"] == "fs_discovered"
     assert by_id[MINTED_SID]["first_prompt"] == "minted"
     assert by_id[MINTED_SID]["workspace_id"] == "a1"
-    # A project-scoped row is fully parsed, so it carries what a catalog row
-    # cannot; only the transcript's own path stays host-private.
-    assert by_id[MINTED_SID]["activity"] is not None
+    # A project-scoped row is metadata-only too since #805 — it costs one head
+    # read per transcript in the cwd, so `activity` is null at BOTH scopes while
+    # the head-readable facts (cwd, branch, first prompt, size) still cross.
+    assert by_id[MINTED_SID]["activity"] is None
     assert by_id[MINTED_SID]["size_bytes"] > 0
     assert "transcript_path" not in by_id[MINTED_SID]
 
@@ -406,6 +407,200 @@ def test_turns_refuses_last_and_after_turn_together(client: TestClient) -> None:
     )
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "invalid_turn_window"
+
+
+# ─── before_turn: the BACKWARD page ──────────────────────────────────────────
+
+
+def test_turns_before_turn_pages_backwards_without_the_tail(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The point of the cursor: "load earlier" transfers the earlier turns and
+    NOT the tail the client already holds. Exclusive of its own index, because
+    the client holds that turn and — unlike the forward case — it is frozen."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=6)
+
+    body = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns",
+        params={"before_turn": 4, "last": 2},
+    ).json()
+    assert [t["user_text"] for t in body["turns"]] == ["turn-2", "turn-3"]
+    assert body["first_turn_index"] == 2
+    assert body["total_turns"] == 6
+    # A backward page is placed by its own index against a prefix; it is not a
+    # resumption, so it never claims the cursor contract.
+    assert body["incremental"] is False
+
+
+def test_turns_before_turn_without_last_is_everything_earlier(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=5)
+
+    body = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns", params={"before_turn": 3}
+    ).json()
+    assert [t["user_text"] for t in body["turns"]] == ["turn-0", "turn-1", "turn-2"]
+    assert body["first_turn_index"] == 0
+
+
+def test_turns_before_turn_past_the_end_clamps_rather_than_falling_back(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The asymmetry with ``after_turn`` is deliberate. A forward cursor asserts
+    "I have seen turn n", so a shorter transcript means it was replaced under the
+    reader; a backward one only asks for history before an endpoint, and an
+    endpoint past the end is satisfied by everything there is."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=3)
+
+    body = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns",
+        params={"before_turn": 99, "last": 2},
+    ).json()
+    assert [t["user_text"] for t in body["turns"]] == ["turn-1", "turn-2"]
+    assert body["first_turn_index"] == 1
+    assert body["total_turns"] == 3
+
+
+def test_turns_before_and_after_together_is_refused(client: TestClient) -> None:
+    """A request cannot both resume forward and page back; answering one of them
+    silently would give the client a window it thinks is the other."""
+    resp = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns",
+        params={"before_turn": 2, "after_turn": 1},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_turn_window"
+
+
+def test_a_backward_page_plus_the_tail_equals_one_wider_read(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The acceptance the feature exists for: two transfers reconstruct exactly
+    what one wide read carries, while the second one carries ONLY the page the
+    client did not already hold."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_multi_turn_transcript(claude_home, MINTED_SID, worktree, turns=12)
+    base = f"/workspaces/a1/sessions/{MINTED_SID}/turns"
+
+    tail = client.get(base, params={"last": 4}).json()
+    earlier = client.get(base, params={"before_turn": tail["first_turn_index"], "last": 4}).json()
+    wide = client.get(base, params={"last": 8}).json()
+
+    assert len(earlier["turns"]) == 4  # the second transfer carries only the page
+    assert earlier["turns"] + tail["turns"] == wide["turns"]
+    assert earlier["first_turn_index"] == wide["first_turn_index"]
+
+
+# ─── bodies: head + drill-in ─────────────────────────────────────────────────
+
+
+def _write_tool_transcript(claude_home: Path, sid: str, cwd: str, *, turns: int) -> None:
+    """A transcript whose every turn issues one SETTLED Bash call with a real
+    body, so a windowed read has something to withhold and a drill-in something
+    to serve."""
+    folder = claude_home / "projects" / _ClaudeHome.encode_cwd(Path(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = ['{"type":"mode","mode":"normal"}']
+    for i in range(turns):
+        stamp = f"2026-06-09T08:{i:02d}"
+        lines.append(
+            f'{{"type":"user","uuid":"h{i}","timestamp":"{stamp}:00.000Z",'
+            f'"isSidechain":false,"cwd":"{cwd}","gitBranch":"main",'
+            f'"message":{{"role":"user","content":"turn-{i}"}}}}'
+        )
+        lines.append(
+            f'{{"type":"assistant","uuid":"a{i}","timestamp":"{stamp}:01.000Z",'
+            f'"isSidechain":false,"message":{{"id":"m{i}","role":"assistant",'
+            f'"stop_reason":"tool_use","content":[{{"type":"tool_use","id":"tc{i}",'
+            f'"name":"Bash","input":{{"command":"{"pytest -q " * 40}"}}}}]}}}}'
+        )
+        lines.append(
+            f'{{"type":"user","uuid":"r{i}","timestamp":"{stamp}:02.000Z","isSidechain":false,'
+            f'"message":{{"role":"user","content":[{{"type":"tool_result",'
+            f'"tool_use_id":"tc{i}","content":"{"passed " * 60}"}}]}}}}'
+        )
+    (folder / f"{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _tools_in(body: dict) -> list[dict]:
+    return [e["tool"] for t in body["turns"] for e in t["entries"] if e.get("tool")]
+
+
+def test_the_default_read_withholds_settled_bodies_and_keeps_the_tail_inline(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_tool_transcript(claude_home, MINTED_SID, worktree, turns=5)
+
+    body = client.get(f"/workspaces/a1/sessions/{MINTED_SID}/turns").json()
+    modes = [t["body"] for t in _tools_in(body)]
+    assert modes[:-1] == ["available"] * (len(modes) - 1)
+    assert modes[-1] == "inline"
+    withheld = _tools_in(body)[0]
+    assert (withheld["input"], withheld["result"]) == (None, None)
+    assert withheld["status"] == "ok"  # status survives; it is what a row renders
+
+
+def test_bodies_all_opts_back_into_the_complete_payload(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The CLI/TUI/script escape: one flag, no client-side stitching."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_tool_transcript(claude_home, MINTED_SID, worktree, turns=5)
+
+    body = client.get(
+        f"/workspaces/a1/sessions/{MINTED_SID}/turns", params={"bodies": "all"}
+    ).json()
+    assert [t["body"] for t in _tools_in(body)] == ["inline"] * 5
+    assert all(t["result"] for t in _tools_in(body))
+
+
+def test_the_default_read_is_at_least_40_percent_smaller_than_the_whole_payload(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """The measured acceptance. Tool bodies were 55.6% of a real ``?last=40``
+    window; withholding every settled one outside the tail turn is what removes
+    roughly half the default read."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_tool_transcript(claude_home, MINTED_SID, worktree, turns=40)
+    base = f"/workspaces/a1/sessions/{MINTED_SID}/turns"
+
+    whole = len(client.get(base, params={"last": 40, "bodies": "all"}).content)
+    head = len(client.get(base, params={"last": 40}).content)
+    assert head < whole * 0.6, f"only {100 - head * 100 / whole:.1f}% smaller ({head}/{whole})"
+
+
+def test_the_drill_in_serves_the_same_bytes_bodies_all_carries(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    """A drill-in that disagreed with the unwindowed read would make the
+    projection a cap in disguise, so the two are compared field-for-field for
+    the SAME id rather than merely "looks complete"."""
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_tool_transcript(claude_home, MINTED_SID, worktree, turns=4)
+    base = f"/workspaces/a1/sessions/{MINTED_SID}"
+
+    whole = client.get(f"{base}/turns", params={"bodies": "all"}).json()
+    expected = next(t for t in _tools_in(whole) if t["tool_use_id"] == "tc0")
+    resp = client.get(f"{base}/tools/tc0")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == expected
+    assert resp.json()["body"] == "inline"
+
+
+def test_the_drill_in_404s_an_id_this_session_does_not_hold(
+    client: TestClient, claude_home: Path, tmp_state_dir: Path
+) -> None:
+    worktree = f"{tmp_state_dir / 'repo-a'}/.grove/worktrees/a1"
+    _write_tool_transcript(claude_home, MINTED_SID, worktree, turns=2)
+
+    resp = client.get(f"/workspaces/a1/sessions/{MINTED_SID}/tools/nope")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "agent_session_not_found"
 
 
 def test_turns_bogus_id_404s_even_with_a_fleet_child_present(

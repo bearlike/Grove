@@ -1,10 +1,14 @@
 """Generate the README's support tiles from pinned upstream icon assets.
 
 The README strip is a small product-support census, not a second icon library.
-It has five fixed members because those are Grove's real provider boundaries:
-two agent adapters and three ticket providers. Each tile gets the same canvas,
-corner radius, highlight and shadow so logos from two upstream collections read
-as one family without redrawing or semantically altering any mark.
+Its members are Grove's real provider boundaries: the native agent adapters and
+the ticket providers. Each tile gets the same canvas, corner radius, highlight
+and shadow so logos from two upstream collections read as one family without
+redrawing or semantically altering any mark.
+
+Two tiles are maintainer supplied and therefore absent below, because they
+arrive as finished marks with their own shells and have no upstream asset to
+regenerate from.
 
 Run from the repo root:
 
@@ -48,7 +52,7 @@ class IconSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Literal["claude-code", "codex", "linear", "github", "gitea"]
+    name: Literal["codex", "linear", "github", "gitea"]
     provider: Literal["lobe-avatar", "lobe-png", "selfhst"]
     member: str
     sha256: str
@@ -57,15 +61,12 @@ class IconSource(BaseModel):
     white_mark: bool = False
 
 
+#: ``claude-code`` is deliberately absent. Its tile is now a maintainer
+#: supplied mark that carries its own shell, so there is no upstream asset to
+#: reset it to. Leaving the old LobeHub entry here would let a reset silently
+#: restore a mark the project no longer uses, which is the one outcome a
+#: destructive tool must not produce quietly.
 SOURCES: Final[tuple[IconSource, ...]] = (
-    IconSource(
-        name="claude-code",
-        provider="lobe-avatar",
-        member="package/avatars/claudecode.webp",
-        sha256="7096eefe0cb2cae91f58f17ef9c53d6b6593648eb7111357d55586da0e8d9ce1",
-        background=("#09090b", "#18181b"),
-        scale=1.12,
-    ),
     IconSource(
         name="codex",
         provider="lobe-png",
@@ -155,8 +156,7 @@ def _rounded_mask() -> Image.Image:
 def _prepare_logo(source: IconSource, payload: bytes) -> Image.Image:
     """Contain one upstream mark in the common optical box.
 
-    Claude Code's avatar is already a finished square tile, so it is scaled as
-    a whole. Codex deliberately uses LobeHub's standalone transparent mark —
+    Codex deliberately uses LobeHub's standalone transparent mark —
     using its Avatar here nests one rounded square inside another. The selfh.st
     files are transparent logo canvases too. Those are cropped to visible
     artwork before scaling, which keeps a wide Gitea cup and a circular GitHub

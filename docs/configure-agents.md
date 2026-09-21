@@ -2,7 +2,7 @@
 
 ## Choose what runs in each workspace
 
-Grove runs your existing coding agents in isolated workspaces. Claude Code and Codex have native adapters that let you send messages, interrupt work and answer questions from Grove without attaching to their terminal UI.
+Grove runs your existing coding agents in isolated workspaces. Claude Code, Codex and OpenCode have native adapters that let you send messages, interrupt work and answer questions from Grove without attaching to their terminal UI.
 
 - **Native session.** Grove starts the agent's protocol process and keeps its control connection open between turns.
 - **Headless command.** A standalone command such as `claude -p` runs without an interactive UI, but Grove does not own its control protocol.
@@ -10,12 +10,12 @@ Grove runs your existing coding agents in isolated workspaces. Claude Code and C
 
 ## Native sessions and terminal twins
 
-Choose native mode when you want to control Claude Code or Codex from Grove. Choose a headed terminal when you need the agent's own interactive UI. A standalone headless command suits a scripted task that can finish without further input.
+Choose native mode when you want to control Claude Code, Codex or OpenCode from Grove. Choose a headed terminal when you need the agent's own interactive UI. A standalone headless command suits a scripted task that can finish without further input.
 
 | Decision | Native session | Headed terminal | Standalone headless command |
 |---|---|---|---|
 | Best for | Managing agents from Grove | Working directly in the agent UI | Running a predefined task |
-| Select | `claude` or `codex` | `claude-terminal` or `codex-terminal` | A command such as `claude -p …` with `native: false` |
+| Select | `claude`, `codex` or `opencode` | `claude-terminal`, `codex-terminal` or `opencode-terminal` | A command such as `claude -p …` with `native: false` |
 | Messages and controls | Agent protocol calls | Terminal input and agent shortcuts | No persistent Grove control channel |
 | Questions and approvals | Depends on the adapter below | Respond in the agent UI | Requires the command's own input or approval policy |
 | Attach | Read the protocol log | Use the interactive terminal | Read command output |
@@ -36,36 +36,21 @@ Choose native mode when you want to control Claude Code or Codex from Grove. Cho
 }
 ```
 
-Peer mail reaches a native session through a private coordinator connection, and mailbox text is untrusted agent data that cannot authorize a tool, a config change, or a bypass of native permissions.
+Mail reaches every live agent, native or interactive, through the channel Grove already steers it with. Mailbox text is untrusted agent data that cannot authorize a tool, a config change, or a bypass of native permissions.
 
 ## Native adapters
 
-Only Claude Code and Codex have first party native adapters. Both run without the agent's interactive UI, but their protocols and approval support differ.
+Three agents have first party native adapters. All three run without the agent's interactive UI, and each page below covers its protocol, its approval support and what it cannot do.
 
-### Claude Code
-
-- Grove starts `claude -p` with JSON streaming on stdin and stdout. The worker stays connected so later messages can continue the conversation.
-- A sent message carries an ID. Grove waits for Claude Code to replay that ID before marking it delivered.
-- Interrupt and model changes use control requests. A successful model change validates the model through the provider and applies to the next turn.
-- Grove answers structured `AskUserQuestion` requests. Ordinary tool permissions and plan approvals cannot be approved through this native adapter. Choose `claude-terminal` when your workflow needs those interactive dialogs.
-
-### Codex
-
-- Grove starts `codex app-server --stdio`, initializes its JSON RPC connection and creates a thread. The app server owns turns within that thread.
-- A message starts a turn when idle or steers the current turn when busy. Steering names the expected turn, so a changed turn can reject the request instead of receiving stale input.
-- Interrupt targets the current turn. A model change updates thread settings, but its acknowledgement does not prove the provider accepts that model.
-- Grove answers supported user input requests and command or file change approvals. Approval choices are accept or decline. Session wide grants, cancellation and separate permission grant requests are not supported.
-
-| Capability | Native Claude Code | Native Codex |
-|---|---|---|
-| Protocol | JSON streaming through `claude -p` | JSON RPC through `codex app-server` |
-| Message acknowledgement | Matching replay confirms delivery | Submission is queued, not proof of delivery |
-| Model change | Provider validates before success | App server records the setting |
-| Questions | Structured `AskUserQuestion` | `request_user_input` requires Codex plan collaboration mode |
-| Tool approvals | Not answered by this adapter | Accept or decline supported command and file changes |
-| Plan approval | Requires the interactive terminal | No general plan approval control |
-
-Codex app server policy comes from its configuration. Do not assume a terminal shortcut such as `--yolo` configures thread approvals. Set `approval_policy` and `sandbox_mode` deliberately through Codex configuration, keeping the permissions your task requires.
+| Capability | [Claude Code](agents-claude-code.md) | [Codex](agents-codex.md) | [OpenCode](agents-opencode.md) |
+|---|---|---|---|
+| Transport | JSON streaming through `claude -p` | JSON RPC through `codex app-server` | HTTP and events through `opencode serve` |
+| Message acknowledgement | Matching replay confirms delivery | Submission is queued, not proof of delivery | The reply itself confirms delivery |
+| Model change | Provider validates before success | App server records the setting | Applied per message |
+| Questions | Structured `AskUserQuestion` | `request_user_input` requires Codex plan collaboration mode | Answered when OpenCode raises one |
+| Tool approvals | Not answered by this adapter | Accept or decline supported command and file changes | Once, always or reject |
+| Plan approval | Requires the interactive terminal | No general plan approval control | No general plan approval control |
+| Transcript | One file per session | One file per session | One shared database, read only |
 
 ## Agent spec fields
 
@@ -73,17 +58,17 @@ Codex app server policy comes from its configuration. Do not assume a terminal s
 |---|---|---|---|
 | `name` | string | yes | Picker name and merge key across configuration layers. |
 | `command` | string | yes | Agent command. Grove adapts it for native mode or launches it in the terminal. |
-| `kind` | string | no | Adapter selection. Use `claude_code`, `codex`, `mewbo` or `generic`. See [below](#telling-grove-what-kind-of-agent-it-is). |
+| `kind` | string | no | Adapter selection. Use `claude_code`, `codex`, `opencode`, `mewbo` or `generic`. See [below](#telling-grove-what-kind-of-agent-it-is). |
 | `description` | string | no | Short label in the picker. |
 | `env` | object | no | Environment variables supplied to the agent. |
 | `env_unset` | `array<string>` | no | Variables removed before applying `env`. |
 | `models` | `array<string>` | no | Model ids to add, reorder or pin in the picker. |
-| `tools_offline` | boolean | no | Disallow network tools for Claude Code and Codex. |
-| `native` | boolean | no | Default to a Grove controlled native session. Supported for Claude Code and Codex. |
+| `tools_offline` | boolean | no | Disallow network tools where the adapter supports it. |
+| `native` | boolean | no | Default to a Grove controlled native session. Supported for Claude Code, Codex and OpenCode. |
 
 ## Defaults
 
-Grove ships five agents, and they always merge into your roster, listed or not. See [Hiding the built-ins](#hiding-the-built-ins) to run a closed set instead.
+Grove ships seven agents, and they always merge into your roster, listed or not. See [Hiding the built-ins](#hiding-the-built-ins) to run a closed set instead.
 
 | Name | Command | Kind | Notes |
 |---|---|---|---|
@@ -91,6 +76,8 @@ Grove ships five agents, and they always merge into your roster, listed or not. 
 | `claude-terminal` | `claude` | `claude_code` | Headed Claude Code terminal twin. |
 | `codex` | `codex` | `codex` | Native Codex by default. |
 | `codex-terminal` | `codex` | `codex` | Headed Codex terminal twin. |
+| `opencode` | `opencode` | `opencode` | Native OpenCode by default. |
+| `opencode-terminal` | `opencode` | `opencode` | Headed OpenCode terminal twin. |
 | `shell` | `$SHELL` | `generic` | A plain interactive shell for testing or agent-free work. |
 
 ## Adding a custom agent
@@ -115,7 +102,7 @@ Drop the entry into your project config. Grove merges it by `name`, so the list 
 
 `kind` tells Grove whether it can look inside a session for the [Activity Dashboard](features-activity.md).
 
-- `claude_code` and `codex` support native control and read transcripts for live state, turns, tokens and title.
+- `claude_code`, `codex` and `opencode` support native control and read transcripts for live state, turns, tokens and title.
 - `mewbo` reads a remote session over REST, configured in the `mewbo` section. It is a remote adapter, not a local native process.
 - `generic`, the default, launches the command without session introspection or native control. Use it for other terminal agents.
 - A custom named Claude agent such as `code-agent` must declare `kind: "claude_code"` itself. An omitted `kind` silently defaults to `generic` with no transcript for the dashboard.
@@ -164,18 +151,9 @@ Set `builtin_agents: false` and your `agents` list becomes the whole roster, an 
 - `builtin_agents` cascades, so a committed config can restore the roster for one repo. It is not a security boundary.
 - Issue ops looks for an agent named `claude`. Without one, point [issue ops](issue-ops.md)'s `agent` at your own.
 
-## Exact status with hooks
-
-By default Grove derives Claude Code state from its transcript, accurate but slightly behind. Opt in to managed hooks for exact, push based status.
-
-```json
-{ "hooks": { "enabled": true } }
-```
-
-Grove launches `claude_code` agents with an extra `--settings` file and a hook reports each lifecycle change as it happens, so a permission prompt reads as blocked rather than quiet. Your `.claude/settings.json` stays untouched.
-
 ## See also
 
+- [Claude Code](agents-claude-code.md), [Codex](agents-codex.md), [OpenCode](agents-opencode.md): each native adapter in depth.
 - [Project setup](configure-project.md): where the agent list lives.
 - [Configuration cascade](features-cascade.md): merge-by-name in context.
 - [Agent activity and sessions](features-activity.md): what `kind` unlocks.

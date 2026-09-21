@@ -115,6 +115,17 @@ grove sessions list --host              # every repo on this host
 - The [web dashboard's Sessions screen](use-webapp.md#the-session-catalog) and the TUI `h` key show the same catalog.
 - It is read only and adopts nothing.
 
+## Where the context was compacted
+
+An agent compacts when its context fills, replacing the conversation so far with a summary. The transcript marks that cut rather than leaving a silent gap, because a jump with no marker reads as an agent that inexplicably forgot.
+
+- **Each boundary reports what it cost.** The mark carries the tokens dropped, how long the compaction took and which model performed it, alongside the replacement summary.
+- **The summary is kept whole.** It is the only surviving record of the turns the agent discarded, so it opens in full rather than being trimmed.
+- **A missing figure is stated as missing, never as zero.** Providers record different amounts, so a fact none of them reported is left out of the line instead of being printed as a measured zero.
+- **Compaction is recorded for the audit too.** Each event lands in the usage history and, when telemetry is on, as its own span, so a session's compactions are countable after the fact.
+
+Trigger reporting differs by agent. Claude Code records whether a compaction was manual or automatic and how long it took. Codex records neither, so Grove shows the compaction without claiming a cause.
+
 ## How the rail keeps up
 
 - Every helper is best effort. A failure leaves a slot empty, never a blocked render loop, so observation stays quiet while [Workspace lifecycle](features-workspace-lifecycle.md) reports action failures out loud.

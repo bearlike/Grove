@@ -11,12 +11,15 @@ O(delta).
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
 from pydantic import BaseModel
 
+import grove.core.agents.transcript_cache as module
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 
 
@@ -515,3 +518,227 @@ def test_project_does_not_recharge_a_replaced_snapshot_while_idle(tmp_path: Path
     assert len(cache.project([transcript], project)) == 1
     assert len(cache.project([transcript], project)) == 1
     assert len(_ProjectionFolder.instances) == 1
+
+
+def test_disjoint_path_tuples_fold_concurrently(tmp_path: Path) -> None:
+    """Two workspaces' transcripts must not serialize behind each other.
+
+    The daemon folds one transcript per workspace on its poll thread while
+    request threads fold others; under a single instance lock every one of those
+    waited on whichever fold happened to be running, which is the contention this
+    cache was measured spending most of its wall time in.
+
+    Proved by DEADLOCK rather than by timing: the two folders block until both
+    have entered, so a cache that serializes them cannot finish at all. A
+    stopwatch assertion would be a flake on a loaded host.
+    """
+    both_inside = threading.Barrier(2, timeout=5)
+
+    class _BarrierFolder:
+        def __init__(self) -> None:
+            self._records: list[dict] = []
+
+        def add(self, raw: dict, source: str) -> dict:
+            del source
+            both_inside.wait()
+            self._records.append(raw)
+            return raw
+
+        def records(self) -> list[dict]:
+            return self._records
+
+    cache = TranscriptCache(_BarrierFolder)
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    _write_lines(a, [{"n": 1}])
+    _write_lines(b, [{"n": 2}])
+
+    failures: list[BaseException] = []
+
+    def read(path: Path) -> None:
+        try:
+            cache.read([path])
+        except BaseException as exc:  # reported, not swallowed
+            failures.append(exc)
+
+    threads = [threading.Thread(target=read, args=(p,)) for p in (a, b)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not [t for t in threads if t.is_alive()], "a fold did not finish"
+    assert not failures, failures
+
+
+def test_one_path_tuple_still_folds_under_a_single_lock(tmp_path: Path) -> None:
+    """Per-entry locking must not let two threads fold ONE transcript at once.
+
+    The point of striping is disjoint keys; the SAME key still has exactly one
+    fold, or two threads advance one cursor and each parses half the appended
+    bytes into the same folder.
+    """
+    concurrent = 0
+    peak = 0
+    guard = threading.Lock()
+
+    class _WitnessFolder:
+        def __init__(self) -> None:
+            self._records: list[dict] = []
+
+        def add(self, raw: dict, source: str) -> dict:
+            del source
+            nonlocal concurrent, peak
+            with guard:
+                concurrent += 1
+                peak = max(peak, concurrent)
+            time.sleep(0.02)
+            with guard:
+                concurrent -= 1
+            self._records.append(raw)
+            return raw
+
+        def records(self) -> list[dict]:
+            return self._records
+
+    cache = TranscriptCache(_WitnessFolder)
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": i} for i in range(4)])
+
+    threads = [threading.Thread(target=lambda: cache.read([transcript])) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert peak == 1
+    # Each line folded exactly once, by whichever thread won the lock.
+    assert len(cache.read([transcript])) == 4
+
+
+def test_the_folder_capacity_is_measured_once_per_chunk_not_once_per_line(
+    tmp_path: Path,
+) -> None:
+    """The accounting walk must not scale with the number of appended lines.
+
+    ``_folder_shallow_size`` is O(fields) but calls ``sys.getsizeof`` on each,
+    and it ran after EVERY admitted record — so a session catching up on 4000
+    lines paid it 4000 times to observe a handful of list growths. It decides
+    eviction, and eviction is decided per read, so per-chunk is the honest
+    granularity.
+    """
+    calls = 0
+    real = module._folder_shallow_size
+
+    def counted(folder: object) -> int:
+        nonlocal calls
+        calls += 1
+        return real(folder)  # type: ignore[arg-type]
+
+    cache = _cache()
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 0}])
+    cache.read([transcript])
+
+    _append_lines(transcript, [{"n": i} for i in range(1, 51)])
+    module._folder_shallow_size = counted  # type: ignore[assignment]
+    try:
+        assert len(cache.read([transcript])) == 51
+    finally:
+        module._folder_shallow_size = real  # type: ignore[assignment]
+
+    # One chunk ingested plus the post-projection charge — never one per line.
+    assert calls <= 4, calls
+
+
+def test_concurrent_memo_misses_compute_once(tmp_path: Path) -> None:
+    """A cold key under concurrent readers runs its projection ONCE.
+
+    ``compute`` deliberately runs outside the memo's lock (it re-enters the fold
+    cache, and holding both would invert the lock order), which left the ~1 Hz
+    poll and a request free to miss the same cold key and each run a full
+    projection — the second result discarded. The per-key gate closes that
+    without re-introducing the inversion.
+    """
+    memo = ResultMemo()
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+    computes = 0
+    guard = threading.Lock()
+    start = threading.Barrier(4, timeout=5)
+
+    def compute() -> str:
+        nonlocal computes
+        with guard:
+            computes += 1
+        time.sleep(0.05)
+        return "value"
+
+    results: list[str] = []
+
+    def read() -> None:
+        start.wait()
+        results.append(memo.get_or_compute(("k",), [transcript], compute))
+
+    threads = [threading.Thread(target=read) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert results == ["value"] * 4
+    assert computes == 1
+
+
+def test_a_failed_memo_compute_leaves_no_gate_behind(tmp_path: Path) -> None:
+    """A raising ``compute`` must not leak its gate into an unbounded map.
+
+    Mutation-tested, and the FIRST version of this test was vacuous in exactly
+    the way this repo keeps re-learning: it asserted that the next read still
+    succeeds, which it does either way — a stranded gate is released by its own
+    ``with`` as the exception unwinds, so nothing blocks. The real defect is
+    that ``_inflight`` is keyed by memo key and bounded by nothing (unlike
+    ``_entries``, which has a maxsize), so a projection that raises — a
+    transcript vanishing mid-read, an ordinary event — grows it for the life of
+    the process. Assert the MAP, not the recovery.
+    """
+    memo = ResultMemo()
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}])
+
+    def boom() -> str:
+        raise RuntimeError("projection failed")
+
+    for i in range(5):
+        with pytest.raises(RuntimeError):
+            memo.get_or_compute((f"k{i}",), [transcript], boom)
+
+    assert memo._inflight == {}
+    assert memo.get_or_compute(("k0",), [transcript], lambda: "recovered") == "recovered"
+
+
+def test_the_cache_counts_what_an_operator_needs_to_read_it(tmp_path: Path) -> None:
+    """Hits, misses, resets, evictions and parsed bytes, as counts not samples.
+
+    A profiler cannot distinguish a cold parse from a budget-driven re-parse —
+    both are ``json.loads`` in a stack sample — so the question "is this budget
+    too small for this fleet" was unanswerable without these.
+    """
+    cache = _cache()
+    transcript = tmp_path / "t.jsonl"
+    _write_lines(transcript, [{"n": 1}, {"n": 2}])
+
+    cache.read([transcript])
+    assert cache.metrics.misses == 1
+    assert cache.metrics.hits == 0
+    assert cache.metrics.parsed_bytes > 0
+
+    cache.read([transcript])
+    assert cache.metrics.hits == 1
+
+    # Truncation is unsalvageable, so the fold rebuilds: a RESET, not a miss.
+    # It must SHRINK — a same-size rewrite is the one change the cursor
+    # genuinely cannot see, so an equal-length fixture would assert nothing.
+    _write_lines(transcript, [{"n": 9}])
+    cache.read([transcript])
+    assert cache.metrics.resets == 1
+    assert cache.metrics.misses == 1

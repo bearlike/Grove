@@ -173,19 +173,20 @@ or a resumable existing session.
 }
 ```
 
-The worker receives a launch-bound `GROVE_MAILBOX_TOKEN`; optional
-`GROVE_MAILBOX_URL` and `GROVE_MAILBOX_SOCKET` select its coordinator transport.
-It must have the Grove package and an authenticated private coordinator
-connection in its runtime. The primary agent alone can receive mailbox traffic.
+The worker needs the Grove package and a reachable daemon in its runtime;
+optional `GROVE_MAILBOX_URL` and `GROVE_MAILBOX_SOCKET` select that transport.
 A native session cannot pause or resume, so respawn or recreate it.
 
-For containers, Grove mounts only the private mailbox socket. The image needs
-Grove and a reachable private agent config root. Linux runs covered host and
-container workers, a mixed host and container Claude pair, and separate Claude
-and Codex host cases. They do not prove every cross-provider container pairing,
-other operating systems, or federation. Configure the worker here, supervise it
-with `using-grove`, and give the agent the peer-message workflow in
-`working-in-grove`.
+For containers, Grove mounts the private daemon socket. The image needs Grove
+and a reachable private agent config root. Linux runs covered host and container
+workers, a mixed host and container Claude pair, and separate Claude and Codex
+host cases. They do not prove every cross-provider container pairing, other
+operating systems, or federation. Configure the worker here, supervise it with
+`using-grove`, and give the agent the messaging workflow in `working-in-grove`.
+
+**Mail does not depend on any of this.** A workspace running its interactive
+terminal is an ordinary mailbox contact — the native switch decides whether
+Grove holds a control channel, never whether other agents can write to it.
 
 ### `init_script`
 Optional setup run in its own tmux window before the agent starts:
@@ -514,17 +515,15 @@ Project config (`<repo>/.grove/config.json`): a shared standard, committed.
 
 ## Mailbox MCP scope
 
-A normal `grove-mcp` process does not register mailbox tools without a bound
-`GROVE_MAILBOX_TOKEN`. Grove launches the native worker's server with
-`--mailbox-only`, or `GROVE_MCP_MAILBOX_ONLY=true`. That mode requires the
-worker token and registers mailbox tools plus `grove_get_skill` only. It does
-not expose fleet lifecycle or workspace control. Do not distribute a mailbox
-token in shared client configuration.
+Every `grove-mcp` process registers `grove_list_mailbox_contacts` and
+`grove_send_mailbox_message`; there is no separate mode or token. `--read-only`
+withholds the send, as it withholds every other mutating tool — withholding is
+the only honest denial, since a tool an agent can see is one it will try.
 
 Read `grove-mcp --help` for installed options and MCP tool schemas for inputs.
 `grove skills list --details` and `grove_get_skill(details=True)` list richer
-skill metadata without a mailbox token. A mailbox message never grants a default
-native tool permission.
+skill metadata. A mailbox message never grants a default native tool
+permission.
 
 ## 7. Verify before you finish (required)
 

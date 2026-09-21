@@ -83,9 +83,9 @@ webapp/                     # Next.js and its BFF
 
 ## The native session control plane
 
-- Claude Code and Codex default to Grove owned native sessions. Their tmux pane runs `grove-native-worker`, which owns the provider channel.
+- Claude Code, Codex and OpenCode default to Grove owned native sessions. Their tmux pane runs `grove-native-worker`, which owns the provider channel.
 - The worker starts `claude -p` or `codex app-server` and registers through `/mailboxes/connection` SSE.
-- Steering reaches the coordinator through `CoordinatorSteerClient` inside the daemon or `DaemonSteerClient` over HTTP.
+- Steering reaches a native owner through `OwnerSteerClient` inside the daemon or `DaemonSteerClient` over HTTP.
 - Each sent or received frame becomes a timestamped stdout line. Dashboards expose this wire log as Stream.
 - Questions and stream facts enter the hook spool. `ClaudeHook.drain` folds them into the existing session sidecar rather than adding another activity reader.
 

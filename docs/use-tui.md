@@ -104,7 +104,7 @@ worktrees.
 ++n++ opens a nine-step modal.
 
 1. **Agent.** Radio list of agents the cascade resolved.
-2. **Native session.** A checkbox for Claude Code and Codex. It starts at the entry's mode and chooses a Grove-owned native session instead of the terminal.
+2. **Native session.** A checkbox for Claude Code, Codex and OpenCode. It starts at the entry's mode and chooses a Grove-owned native session instead of the terminal.
 3. **Runtime.** Host or Container (`container.enabled` default).
 4. **First-turn brief.** Cascade default, On, or Off (`--brief` on
    [CLI](use-cli.md)).

@@ -217,6 +217,17 @@ class GroveLiveAttr:
     # other is a clock, and a reader comparing two sub-agents needs to know
     # which they are looking at.
     AGENT_ATTACHMENT: Final = "grove.agent.attachment"
+    # A compaction's own three facts. They ride a generation span (a compaction
+    # is a model call) but none of them is a GenAI-convention concept, so they
+    # stay in Grove's namespace rather than being bent onto a usage key: the
+    # dropped count is context LEAVING the window, which is the opposite of the
+    # input tokens `gen_ai.usage.input_tokens` means. `unknown` is written for
+    # an unreported trigger rather than omitting the key, because a reader
+    # comparing compactions needs to tell "nobody recorded this" from a filter
+    # that simply did not match — Codex records no trigger on any version.
+    COMPACTION_TRIGGER: Final = "grove.compaction.trigger"
+    COMPACTION_DROPPED_TOKENS: Final = "grove.compaction.dropped_tokens"
+    COMPACTION_DURATION_MS: Final = "grove.compaction.duration_ms"
 
 
 FILTERABLE_IDENTITY_KEYS: Final = (

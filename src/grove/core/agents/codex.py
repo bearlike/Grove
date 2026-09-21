@@ -109,6 +109,7 @@ from grove.core.agents.model import (
 )
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 from grove.core.agents.transcript_scope import config_dir_override
+from grove.core.agents.turn_projection import TurnProjection, window_turns
 
 # A ``response_item message`` is the human prompt EXCEPT the injected preamble:
 # the first user message wraps ``# AGENTS.md`` instructions and an
@@ -313,12 +314,21 @@ class _CodexHome:
         so the cheap adoption pre-filter reads a session's birth without a
         full parse.
         """
+        payload, birth, _first_prompt = cls._head_metadata(path, max_lines=8)
+        return (payload, birth)
+
+    @staticmethod
+    def _head_metadata(
+        path: Path, *, max_lines: int = 200
+    ) -> tuple[dict[str, Any], datetime | None, str | None]:
+        """Meta, birth and first real prompt from one bounded rollout head read."""
         payload: dict[str, Any] = {}
         birth: datetime | None = None
+        first_prompt: str | None = None
         try:
             with path.open(encoding="utf-8") as fh:
                 for index, line in enumerate(fh):
-                    if index >= 8:
+                    if index >= max_lines:
                         break
                     stripped = line.strip()
                     if not stripped:
@@ -334,11 +344,15 @@ class _CodexHome:
                     if not payload and rec.get("type") == "session_meta":
                         candidate = rec.get("payload")
                         payload = candidate if isinstance(candidate, dict) else {}
-                    if payload and birth is not None:
+                    if first_prompt is None:
+                        wrapped = _RolloutLine(rec, index)
+                        if wrapped.is_human_turn:
+                            first_prompt = _truncate(wrapped.message_text(), _TASK_TEXT_CAP)
+                    if payload and birth is not None and first_prompt is not None:
                         break
         except OSError:
-            return ({}, None)
-        return (payload, birth)
+            return ({}, None, None)
+        return (payload, birth, first_prompt)
 
     @classmethod
     def _meta_id(cls, path: Path) -> str | None:
@@ -815,6 +829,13 @@ class _RolloutLine:
           so manual vs automatic is genuinely unknown. Defaulting it either way
           would be indistinguishable on the wire from Claude's measured value.
         * **``dropped_tokens``** — no per-compaction token accounting exists.
+        * **``duration_ms``** — the record carries one timestamp and no span, so
+          how long the compaction took is unrecorded (Claude Code publishes
+          ``durationMs`` natively; Codex has no counterpart on any version
+          measured).
+
+        ``model`` is likewise absent from the record and is stamped on by
+        ``_MessageProjector``, which already tracks the ``turn_context`` model.
 
         ``summary`` reads ``payload.message`` because that is where the field
         lives, but it measured EMPTY on 132 of 132 real records: the
@@ -1370,6 +1391,12 @@ class _MessageProjector:
             # A fresh prompt makes an unreported prior response permanently
             # unknown; a later claim belongs to a later response, never it.
             self._pending = None
+        elif message.role == "compaction" and message.compaction is not None:
+            # The `compacted` record carries no model of its own, so the model
+            # in effect — the one this folder already tracks from `turn_context`
+            # — is what compacted. Stamped here rather than in `to_message`
+            # because only the fold knows it.
+            message = replace(message, compaction=replace(message.compaction, model=self._model))
         self._was_assistant = False
         self._message_list.append(message)
         self._dirty = True
@@ -1581,7 +1608,41 @@ class _RolloutParser:
         under a leading turn with an empty ``user_text`` rather than being
         dropped.
         """
-        messages = self.messages()
+        return self._turns_from_messages(self.messages(), last=last)
+
+    @staticmethod
+    def starts_turn(message: AgentMessage) -> bool:
+        """Whether ``message`` opens a new turn in :meth:`_turns_from_messages`.
+
+        Published beside the builder so the incremental projection freezes turns
+        at the boundaries the builder itself cuts; a predicate that disagreed
+        would freeze a prefix corresponding to no turn it would emit.
+        """
+        return message.role == "user"
+
+    @classmethod
+    def render_turn_span(
+        cls, messages: Sequence[AgentMessage], carry: None
+    ) -> tuple[SessionTurn, ...]:
+        """Render ONE span of the spine — the incremental projection's entry.
+
+        Codex carries no cross-turn fold state (it has no Task-system analog),
+        so the carry is ``None`` and exists only to satisfy the shared
+        projection's shape.
+        """
+        del carry
+        return cls._turns_from_messages(messages)
+
+    @classmethod
+    def _turns_from_messages(
+        cls, messages: Sequence[AgentMessage], *, last: int | None = None
+    ) -> tuple[SessionTurn, ...]:
+        """The one Codex turn-builder — unchanged in what it renders.
+
+        Split out of :meth:`turns` so the incremental projection can render a
+        SPAN of the spine rather than always the whole of it; the per-span
+        outcome pre-scan below still sees every message in the span it is given.
+        """
         # Pre-scan every function_call_output for the call→outcome map so a
         # question renders resolved and a tool entry knows its response, error
         # flag and end time, wherever the output landed. The SAME
@@ -1614,7 +1675,7 @@ class _RolloutParser:
                     _flush()
                 current[0] = (message.text(), message.timestamp)
             elif message.role == "assistant":
-                for entry in self._assistant_entries(message, outcomes):
+                for entry in cls._assistant_entries(message, outcomes):
                     _add(entry, message.timestamp)
             elif message.role == "compaction" and message.compaction is not None:
                 # An entry inside the turn it happened in, never a turn of its
@@ -1780,35 +1841,44 @@ class _RolloutParser:
         return None
 
 
-_MODELS_PROBE_TIMEOUT = 5.0
+_MODELS_PROBE_TIMEOUT = 15.0
 """Seconds to wait on ``codex debug models``. The bundled catalog is instant
-and offline; the bound only guards a wedged binary — best-effort never hangs."""
+and offline, so this is sized for the WRAPPER rather than for Codex: a gateway
+profile runs the probe through a credential injector that fetches secrets over
+the network first (measured 5.03 s for the equivalent OpenCode profile). The
+bound only guards a wedged binary — best-effort never hangs."""
 
 
-def _probe_codex_models(binary: str) -> str | None:
-    """Raw stdout of ``<binary> debug models``, or ``None`` on any failure.
+def _probe_codex_models(argv: tuple[str, ...]) -> str | None:
+    """Raw stdout of ``codex debug models``, or ``None`` on any failure.
 
     The ONE subprocess in this adapter — a read-only introspection of Codex's
     own bundled model catalog (offline, structured JSON). Best-effort by
     contract, exactly like the filesystem reads: a missing binary, a non-zero
     exit, or a timeout returns ``None`` (the caller offers an empty catalog),
-    never raises. ``shell=False`` with a fixed list argv keeps it injection-safe;
+    never raises. ``shell=False`` with a list argv keeps it injection-safe;
     the bounded timeout keeps it non-hanging. This is the seam tests patch so
     the suite never shells out to a real ``codex``.
+
+    ``argv`` is the caller's whole command plus ``debug models``, so a profile
+    that wraps the binary in a credential injector probes through the wrapper
+    rather than running the wrapper's own name as if it were Codex.
     """
+    if not argv:
+        return None
     try:
         proc = subprocess.run(
-            [binary, "debug", "models"],  # fixed argv, shell=False, bounded
+            list(argv),  # shell=False, bounded
             capture_output=True,
             text=True,
             timeout=_MODELS_PROBE_TIMEOUT,
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        logger.debug("codex debug models ({}) failed: {}", binary, exc)
+        logger.debug("codex debug models ({}) failed: {}", argv, exc)
         return None
     if proc.returncode != 0:
-        logger.debug("codex debug models ({}) exited {}", binary, proc.returncode)
+        logger.debug("codex debug models ({}) exited {}", argv, proc.returncode)
         return None
     return proc.stdout
 
@@ -1932,12 +2002,16 @@ class CodexAdapter:
 
         The real *auto-refresh* path: Codex ships a structured, offline model
         catalog, so Grove READS it rather than hard-coding slugs that drift each
-        release. The binary comes from the configured ``command`` (its first
-        shell token). Best-effort — an unreadable catalog yields ``()`` and the
+        release. Best-effort — an unreadable catalog yields ``()`` and the
         picker falls back to a free-text field. The value is still forwarded
         verbatim on create, so an id absent from this list works fine.
+
+        The probe rides the WHOLE configured command rather than its first
+        token, for the reason ``AgentVersionProbe.probe_argv`` documents: a
+        gateway profile wraps the binary in a credential injector, and probing
+        the wrapper's own name runs a subcommand it does not have.
         """
-        raw = _probe_codex_models(AgentVersionProbe.binary_of(command))
+        raw = _probe_codex_models(AgentVersionProbe.probe_argv(command, "debug", "models"))
         return _parse_codex_models(raw) if raw is not None else ()
 
     def tool_version(self, command: str) -> str | None:
@@ -1994,7 +2068,9 @@ class CodexAdapter:
             return []
         return [self._summarize(sid, path, mtime) for sid, path, mtime, _ in scanned]
 
-    def session_summary(self, cwd: Path, session_id: str) -> SessionSummary | None:
+    def session_summary(
+        self, cwd: Path, session_id: str, *, full: bool = False
+    ) -> SessionSummary | None:
         """One known rollout's row, resolved by id through
         :meth:`locate_transcripts`.
 
@@ -2013,17 +2089,22 @@ class CodexAdapter:
             mtime = main.stat().st_mtime
         except OSError:  # vanished between the glob and the stat
             return None
+        if full:
+            return self._summarize_full(session_id, main, mtime)
         return self._summarize(session_id, main, mtime)
 
     def read_turns(
         self, cwd: Path, session_id: str, *, last: int | None = None
     ) -> tuple[SessionTurn, ...]:
+        """The session's rendered turns, oldest first, windowed by ``last``.
+
+        Folder-owned for the reason ``read_messages`` is: an outer memo keyed on
+        a stat signature invalidates on any appended byte, so a live rollout
+        re-rendered its whole history on every record. ``last`` is a slice over
+        the complete tuple here, never part of a cache key.
+        """
         paths = self.locate_transcripts(cwd, session_id)
-        return _MEMO.get_or_compute(
-            ("turns", str(cwd), session_id, last),
-            paths,
-            lambda: _RolloutParser(self._read(paths)).turns(last=last),
-        )
+        return window_turns(self._read_turns(paths), last)
 
     def read_messages(self, cwd: Path, session_id: str) -> tuple[AgentMessage, ...]:
         """The session's incrementally normalized agentic-loop spine.
@@ -2125,16 +2206,42 @@ class CodexAdapter:
 
     # ── internal ──────────────────────────────────────────────────────────
     def _summarize(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
-        """One session's listing row, from a single parse of its main rollout."""
-        return _MEMO.get_or_compute(
-            ("summary", session_id, str(path)),
-            [path],
-            lambda: self._summarize_uncached(session_id, path, mtime),
-        )
+        """One metadata-only listing row, from one bounded rollout head read."""
+        return self._summarize_uncached(session_id, path, mtime)
 
     def _summarize_uncached(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
-        lines = self._read([path])
-        parser = _RolloutParser(lines)
+        meta, birth, first_prompt = _CodexHome._head_metadata(path)
+        cwd = meta.get("cwd")
+        cwd = cwd if isinstance(cwd, str) and cwd else None
+        git = meta.get("git")
+        branch = git.get("branch") if isinstance(git, dict) else None
+        branch = branch if isinstance(branch, str) and branch else None
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = 0
+        return SessionSummary(
+            session_id=session_id,
+            adapter_kind=self.kind,
+            transcript_path=path,
+            cwd=cwd,
+            created_at=birth,
+            modified_at=(datetime.fromtimestamp(mtime, tz=UTC) if mtime > 0 else None),
+            size_bytes=size_bytes,
+            git_branch=branch,
+            first_prompt=first_prompt,
+        )
+
+    def _summarize_full(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
+        """One identity-keyed row, with the parse products an explicit read earns."""
+        return _MEMO.get_or_compute(
+            ("summary-full", session_id, str(path)),
+            [path],
+            lambda: self._summarize_full_uncached(session_id, path, mtime),
+        )
+
+    def _summarize_full_uncached(self, session_id: str, path: Path, mtime: float) -> SessionSummary:
+        parser = _RolloutParser(self._read([path]))
         try:
             size_bytes = path.stat().st_size
         except OSError:
@@ -2185,6 +2292,15 @@ class CodexAdapter:
 
         return _TRANSCRIPTS.project(paths, project)  # type: ignore[arg-type]
 
+    @staticmethod
+    def _read_turns(paths: Sequence[Path]) -> tuple[SessionTurn, ...]:
+        """Read the retained turn projection from the shared raw-line fold."""
+
+        def project(folder: _TurnFolder) -> tuple[tuple[SessionTurn, ...], None]:
+            return folder.turn_projection()
+
+        return _TRANSCRIPTS.project(paths, project)  # type: ignore[arg-type]
+
 
 class _ActivityFolder(Protocol):
     """The Codex-only activity product exposed within a cache projection."""
@@ -2198,10 +2314,16 @@ class _MessageFolder(Protocol):
     def messages(self) -> tuple[AgentMessage, ...]: ...
 
 
+class _TurnFolder(Protocol):
+    """The Codex-only turn product exposed within a cache projection."""
+
+    def turn_projection(self) -> tuple[tuple[SessionTurn, ...], None]: ...
+
+
 class _LineFolder:
     """One fold retains raw lines and an incremental normalized message spine."""
 
-    __slots__ = ("_activity", "_index", "_last_sort_key", "_lines", "_projector")
+    __slots__ = ("_activity", "_index", "_last_sort_key", "_lines", "_projector", "_turns")
 
     def __init__(self) -> None:
         self._activity = _ActivityProjector()
@@ -2209,6 +2331,11 @@ class _LineFolder:
         self._index = 0
         self._last_sort_key: tuple[float, int] | None = None
         self._projector = _MessageProjector()
+        self._turns: TurnProjection[None] = TurnProjection(
+            render=_RolloutParser.render_turn_span,
+            starts_turn=_RolloutParser.starts_turn,
+            fork_carry=lambda _carry: None,
+        )
 
     def add(self, raw: dict[str, Any], source: str) -> tuple[object, ...]:  # noqa: ARG002
         line = _RolloutLine(raw=raw, index=self._index)
@@ -2243,6 +2370,19 @@ class _LineFolder:
     def messages(self) -> tuple[AgentMessage, ...]:
         """The stable normalized snapshot retained beside the raw rollout."""
         return self._projector.messages()
+
+    def turns(self) -> tuple[SessionTurn, ...]:
+        """The complete turn projection, advanced only over appended messages.
+
+        A ``_rebuild`` publishes a wholly new message tuple, so the projection's
+        own identity check discards its frozen prefix and re-renders — which is
+        the correct answer for a resorted fold.
+        """
+        return self._turns.turns(self.messages())
+
+    def turn_projection(self) -> tuple[tuple[SessionTurn, ...], None]:
+        """The turn tuple, for the ``TranscriptCache.project`` callback shape."""
+        return (self.turns(), None)
 
 
 _TRANSCRIPTS = TranscriptCache(_LineFolder)

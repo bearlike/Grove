@@ -58,6 +58,12 @@ EXPECTED_UNAUTHENTICATED: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/hooks/agent-events"),
         ("GET", "/public/{token}"),
         ("GET", "/public/{token}/turns"),
+        # The drill-in half of `/turns`: the windowed public read withholds a
+        # settled tool body and this serves it. It widens nothing — the body
+        # already crossed on this namespace before the projection existed, and
+        # the reader binds it to the TOKEN's own session, so there is no
+        # workspace or session coordinate a caller could point elsewhere.
+        ("GET", "/public/{token}/tools/{tool_use_id}"),
         ("GET", "/public/{token}/diff"),
         # Capability-scoped invalidations only; never the private fleet payload.
         ("GET", "/public/{token}/events"),

@@ -61,11 +61,14 @@ export async function GET(
  */
 function isPublicPath(path: string[] | undefined): boolean {
   const segments = path ?? [];
-  return (
-    segments.length === 0 ||
-    (segments.length === 1 &&
-      (segments[0] === "turns" || segments[0] === "diff" || segments[0] === "events"))
-  );
+  if (segments.length === 0) return true;
+  if (segments.length === 1)
+    return segments[0] === "turns" || segments[0] === "diff" || segments[0] === "events";
+  // `tools/<tool_use_id>` is the only TWO-segment shape, and it is still
+  // structural: the id is a path parameter the daemon resolves against the
+  // token's own session, never a subpath a caller could extend. A wildcard tail
+  // here would be the unreviewed spelling this allowlist exists to refuse.
+  return segments.length === 2 && segments[0] === "tools" && segments[1].length > 0;
 }
 
 function acceptsEventStream(path: string[] | undefined): boolean {

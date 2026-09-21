@@ -53,7 +53,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeGuard
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeGuard
 
 from loguru import logger
 
@@ -283,6 +283,14 @@ class HookRecord:
     # there until the first request completes, and a fabricated 0 % would read
     # as an empty window rather than an unknown one.
     context: ContextWindow | None = None
+    # The producer that measured `context`. Native control summaries must be
+    # distinguished from terminal statusline readings so an older native worker
+    # cannot carry its cumulative result usage over a newer daemon's reading.
+    context_source: Literal["statusline", "native_control"] | None = None
+    # Why a context reading is absent despite stale native-sidecar bytes. This
+    # is distinct from `context is None` with no reason: the former needs a
+    # worker respawn, while the latter has simply never been measured.
+    context_unavailable_reason: Literal["stale_native_worker"] | None = None
     # What the owned stream said about a NATIVE session (cost, TTFT, the last
     # shell exit code); ``None`` for every hook-driven terminal session. Written
     # by the owner through the spool (`record_native_facts`) and carried
@@ -304,6 +312,8 @@ class HookRecord:
                 if self.context is not None
                 else None
             ),
+            "context_source": self.context_source,
+            "context_unavailable_reason": self.context_unavailable_reason,
             "native": (
                 {
                     "cost_usd": self.native.cost_usd,
@@ -342,7 +352,9 @@ class HookRecord:
                 # A malformed question is dropped without failing the whole
                 # record — the status half of the sidecar still stands.
                 question=PendingQuestion.from_json(data.get("question")),
-                context=_context_from_json(data.get("context")),
+                context=_context_from_sidecar(data),
+                context_source=_context_source(data.get("context_source")),
+                context_unavailable_reason=_context_unavailable_reason(data),
                 native=_native_from_json(data.get("native")),
             )
         except (KeyError, ValueError, TypeError):
@@ -804,6 +816,10 @@ class ClaudeHook:
             # No hook event carries the window; only the statusLine arm does.
             # Dropping it here would blank the meter on every tool call.
             context=prior.context if prior is not None else None,
+            context_source=prior.context_source if prior is not None else None,
+            context_unavailable_reason=(
+                prior.context_unavailable_reason if prior is not None else None
+            ),
             native=prior.native if prior is not None else None,
         )
         cls.write(record, sidecar_dir=sidecar_dir)
@@ -813,22 +829,32 @@ class ClaudeHook:
     def _fold_native_facts(cls, payload: dict[str, Any], *, sidecar_dir: Path) -> None:
         """One spooled ``*.facts.json`` → `record_native_facts`.
 
-        The drop carries the CONTEXT WINDOW in the same body, because the
-        statusLine channel that publishes it for a terminal session is silent
-        under ``-p`` (measured 2.1.270) and the owner's ``result`` frame is the
-        only place a native session states it. It folds into the record's own
-        ``context`` field rather than into `NativeFacts`, so every existing
-        meter reads it with no change: one drop, two fields.
+        Context readings share this transport but carry producer provenance.
+        Older native result counters were cumulative rather than occupancy;
+        only an explicit current-context control reading replaces the window.
         """
         session_id = payload.get("session_id")
         body = payload.get("facts")
         facts = _native_from_json(body)
         if not isinstance(session_id, str) or not session_id or facts is None:
             return
+        state = body.get("context_state") if isinstance(body, dict) else None
+        context = _context_from_facts(body) if state == "native_control" else None
+        # An ordinary cost/exit update carries no context claim and preserves a
+        # valid statusline/control reading. An old owner does carry the former
+        # context keys, though, so it must clear rather than inherit a marker.
+        legacy_context = (
+            state is None
+            and isinstance(body, dict)
+            and ("context_size" in body or "context_used" in body)
+        )
         cls.record_native_facts(
             session_id,
             facts,
-            context=_context_from_facts(body),
+            context=context,
+            clear_context=state == "clear"
+            or legacy_context
+            or (state == "native_control" and context is None),
             sidecar_dir=sidecar_dir,
         )
 
@@ -839,6 +865,7 @@ class ClaudeHook:
         facts: NativeFacts,
         *,
         context: ContextWindow | None = None,
+        clear_context: bool = False,
         sidecar_dir: Path,
     ) -> HookRecord:
         """Merge stream facts into a native session's sidecar, field by field.
@@ -852,12 +879,29 @@ class ClaudeHook:
         """
         prior = cls._read(session_id, sidecar_dir=sidecar_dir)
         merged = _merge_native(prior.native if prior is not None else None, facts)
-        # A drop that stated no window keeps the standing one: the same
-        # carry-forward the statusline arm applies, so a frame reporting only an
-        # exit code cannot blank the meter.
-        window = context if context is not None else (prior.context if prior is not None else None)
+        # A native context is trustworthy only when this current owner stated a
+        # control summary. An older worker's ordinary facts may arrive after one;
+        # clear rather than letting its cumulative result usage inherit a marker.
+        if clear_context:
+            window: ContextWindow | None = None
+            source: Literal["statusline", "native_control"] | None = None
+            reason: Literal["stale_native_worker"] | None = "stale_native_worker"
+        elif context is not None:
+            window = context
+            source = "native_control"
+            reason = None
+        else:
+            window = prior.context if prior is not None else None
+            source = prior.context_source if prior is not None else None
+            reason = prior.context_unavailable_reason if prior is not None else None
         if prior is not None:
-            record = replace(prior, native=merged, context=window)
+            record = replace(
+                prior,
+                native=merged,
+                context=window,
+                context_source=source,
+                context_unavailable_reason=reason,
+            )
         else:
             record = HookRecord(
                 session_id=session_id,
@@ -868,6 +912,8 @@ class ClaudeHook:
                 tmux_pane=None,
                 ts=datetime.now(UTC),
                 context=window,
+                context_source=source,
+                context_unavailable_reason=reason,
                 native=merged,
             )
         cls.write(record, sidecar_dir=sidecar_dir)
@@ -955,7 +1001,12 @@ class ClaudeHook:
             return None
         prior = cls._read(session_id, sidecar_dir=sidecar_dir)
         if prior is not None:
-            record = replace(prior, context=context)
+            record = replace(
+                prior,
+                context=context,
+                context_source="statusline",
+                context_unavailable_reason=None,
+            )
         else:
             record = HookRecord(
                 session_id=session_id,
@@ -966,6 +1017,8 @@ class ClaudeHook:
                 tmux_pane=tmux_pane,
                 ts=now,
                 context=context,
+                context_source="statusline",
+                context_unavailable_reason=None,
             )
         cls.write(record, sidecar_dir=sidecar_dir)
         return record
@@ -1485,6 +1538,40 @@ def _opt_str(value: Any) -> str | None:
 def _measured_int(value: Any) -> TypeGuard[int]:
     """A reported non-negative integer — ``bool`` is an ``int`` and is NOT one."""
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _context_source(value: object) -> Literal["statusline", "native_control"] | None:
+    """The known sidecar provenance, or ``None`` for legacy/foreign data."""
+    if value == "statusline":
+        return "statusline"
+    if value == "native_control":
+        return "native_control"
+    return None
+
+
+def _context_from_sidecar(data: dict[str, Any]) -> ContextWindow | None:
+    """Read context unless a legacy native record could have fabricated it."""
+    if data.get("native") is not None and _context_source(data.get("context_source")) is None:
+        return None
+    return _context_from_json(data.get("context"))
+
+
+def _context_unavailable_reason(
+    data: dict[str, Any],
+) -> Literal["stale_native_worker"] | None:
+    """Why a native context was suppressed, if the legacy producer proves it.
+
+    Old native workers wrote cumulative session usage under ``context`` without
+    provenance. That is not an unmeasured window: a respawn starts a producer
+    that writes current occupancy. The shape is inferred from the old on-disk
+    record rather than a new producer field, preserving the safety guard for
+    workers that have not restarted yet.
+    """
+    if data.get("context_unavailable_reason") == "stale_native_worker":
+        return "stale_native_worker"
+    if data.get("native") is not None and _context_source(data.get("context_source")) is None:
+        return "stale_native_worker" if _context_from_json(data.get("context")) else None
+    return None
 
 
 def _context_from_json(data: Any) -> ContextWindow | None:

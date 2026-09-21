@@ -1190,3 +1190,122 @@ def test_native_facts_ride_the_spool_and_merge_field_by_field(tmp_path: Path) ->
     record = ClaudeHook.read("s-native", sidecar_dir=tmp_path)
     assert record is not None and record.question is None
     assert record.native is not None and record.native.cost_usd == 0.42
+
+
+def test_native_context_decreases_and_malformed_reading_clears_only_context(tmp_path: Path) -> None:
+    asks = AskRecorder(paths.agent_hook_spool_dir(tmp_path))
+    asks.bind("context-root")
+    for used in (900, 125):
+        asks.facts(context_state="native_control", context_size=1_000, context_used=used)
+        ClaudeHook.drain(sidecar_dir=tmp_path)
+        record = ClaudeHook.read("context-root", sidecar_dir=tmp_path)
+        assert record is not None and record.context is not None
+        assert record.context.used == used
+    asks.facts(cost_usd=0.42)
+    ClaudeHook.drain(sidecar_dir=tmp_path)
+    record = ClaudeHook.read("context-root", sidecar_dir=tmp_path)
+    assert record is not None and record.context is not None and record.context.used == 125
+    asks.facts(context_state="native_control", context_size=0, context_used=1)
+    ClaudeHook.drain(sidecar_dir=tmp_path)
+    record = ClaudeHook.read("context-root", sidecar_dir=tmp_path)
+    assert record is not None and record.context is None
+    assert record.native is not None and record.native.cost_usd == 0.42
+
+
+def test_native_control_context_replaces_and_a_legacy_native_writer_clears_it(
+    tmp_path: Path,
+) -> None:
+    """Only an identified native control reading may publish native context.
+
+    The former native writer summed result-frame session counters.  Its drops
+    lack a provenance marker, so they must clear a newer daemon's valid reading
+    rather than carrying it forward.  Statusline remains an independent,
+    interactive source.
+    """
+    spool = paths.agent_hook_spool_dir(tmp_path)
+    asks = AskRecorder(spool)
+    asks.bind("s-native")
+    asks.facts(
+        context_state="native_control",
+        context_size=1_000,
+        context_used=900,
+    )
+
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+    controlled = ClaudeHook.read("s-native", sidecar_dir=tmp_path)
+    assert controlled is not None
+    assert controlled.context is not None
+    assert (controlled.context.size, controlled.context.used) == (1_000, 900)
+    assert controlled.context_source == "native_control"
+
+    carried = ClaudeHook.record_event(
+        {"hook_event_name": "PreToolUse", "session_id": "s-native", "tool_name": "Read"},
+        sidecar_dir=tmp_path,
+        tmux_pane="%7",
+        now=NOW,
+    )
+    assert carried is not None
+    assert carried.context == controlled.context
+    assert carried.context_source == "native_control"
+
+    # An older still-running owner sends ordinary facts after the new one.  It
+    # cannot inherit the verified marker or re-publish its cumulative context.
+    asks.facts(context_size=9_999_999, context_used=9_999_999, cost_usd=0.42)
+    assert ClaudeHook.drain(sidecar_dir=tmp_path) == 1
+    legacy = ClaudeHook.read("s-native", sidecar_dir=tmp_path)
+    assert legacy is not None
+    assert legacy.context is None
+    assert legacy.context_source is None
+
+    interactive = ClaudeHook.record_statusline(
+        _STATUSLINE_AFTER_A_TURN, sidecar_dir=tmp_path, tmux_pane="%7", now=NOW
+    )
+    assert interactive is not None
+    assert interactive.context is not None
+    assert interactive.context_source == "statusline"
+
+
+def test_legacy_native_context_identifies_the_stale_worker_that_wrote_it() -> None:
+    """An unprovenanced native window is suppressed with its remedy available.
+
+    Native workers predating the control-context format keep writing cumulative
+    result usage. The raw counts must not render as occupancy, but treating this
+    known stale producer as an unmeasured session hides the required respawn.
+    """
+    record = HookRecord.from_json(
+        {
+            "session_id": "legacy-native",
+            "state": "waiting",
+            "event": "native_facts",
+            "cwd": None,
+            "transcript_path": None,
+            "tmux_pane": None,
+            "ts": NOW.isoformat(),
+            "context": {"size": 1_000_000, "used": 29_415_905},
+            "context_source": None,
+            "native": {},
+        }
+    )
+
+    assert record is not None
+    assert record.context is None
+    assert record.context_unavailable_reason == "stale_native_worker"
+
+
+def test_unmeasured_sidecar_has_no_context_unavailable_reason() -> None:
+    """A session the harness never measured remains distinct from suppression."""
+    record = HookRecord.from_json(
+        {
+            "session_id": "unmeasured",
+            "state": "waiting",
+            "event": "Stop",
+            "cwd": None,
+            "transcript_path": None,
+            "tmux_pane": None,
+            "ts": NOW.isoformat(),
+        }
+    )
+
+    assert record is not None
+    assert record.context is None
+    assert record.context_unavailable_reason is None

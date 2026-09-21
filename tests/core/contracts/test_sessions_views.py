@@ -536,3 +536,109 @@ def test_a_structured_card_carries_the_tool_call_too() -> None:
 def test_an_entry_that_is_not_a_tool_call_has_no_tool_payload() -> None:
     view = _tool_detail(DigestEntry(role="assistant", text="thinking out loud")).turns[0].entries[0]
     assert view.tool is None
+
+
+# ─── withhold_settled_bodies: a projection that STATES what it withheld ───────
+
+
+def _call(tool_use_id: str, **over: object) -> ToolCall:
+    fields: dict[str, object] = {
+        "name": "Bash",
+        "tool_use_id": tool_use_id,
+        "status": "ok",
+        "input": {"command": "pytest -q"},
+        "result": "2 passed",
+    }
+    fields.update(over)
+    return ToolCall(**fields)  # type: ignore[arg-type]
+
+
+def _tool_turn(*calls: ToolCall) -> SessionTurn:
+    return SessionTurn(
+        user_text="go",
+        entries=tuple(DigestEntry(role="tool", text=c.name, tool=c) for c in calls),
+    )
+
+
+def _windowed(*turns: SessionTurn) -> SessionDetailView:
+    listing = SessionListing(summary=_summary(), provenance="fs_discovered")
+    return SessionDetailView.from_listing_turns(listing, turns)
+
+
+def test_a_settled_body_outside_the_tail_turn_is_withheld_and_says_so() -> None:
+    """The head half of head+drill-in: the call's identity, name, status and
+    duration still cross, the bytes do not, and ``available`` is what tells the
+    client it may fetch them."""
+    detail = _windowed(_tool_turn(_call("t1")), _tool_turn(_call("t2"))).withhold_settled_bodies()
+    earlier = detail.turns[0].entries[0].tool
+    assert earlier is not None
+    assert earlier.body == "available"
+    assert (earlier.input, earlier.result) == (None, None)
+    # Withholding a body must not withhold the facts a collapsed row renders.
+    assert (earlier.name, earlier.tool_use_id, earlier.status) == ("Bash", "t1", "ok")
+
+
+def test_the_tail_turn_keeps_every_body_inline() -> None:
+    """The turn the reader is looking at when the transcript opens: withholding
+    there trades bytes for a round trip on the one turn certain to be read."""
+    detail = _windowed(_tool_turn(_call("t1")), _tool_turn(_call("t2"))).withhold_settled_bodies()
+    tail = detail.turns[-1].entries[0].tool
+    assert tail is not None
+    assert tail.body == "inline"
+    assert tail.result == "2 passed"
+
+
+def test_a_running_call_keeps_its_body_wherever_it_sits() -> None:
+    """The UI always expands a live call, so a round trip there is a regression
+    — and a drill-in would serve an answer that is about to change."""
+    running = _call("t1", status="running", result=None)
+    detail = _windowed(_tool_turn(running), _tool_turn(_call("t2"))).withhold_settled_bodies()
+    view = detail.turns[0].entries[0].tool
+    assert view is not None
+    assert (view.body, view.status) == ("inline", "running")
+    assert view.input == {"command": "pytest -q"}
+
+
+def test_a_settled_call_with_no_body_at_all_crosses_none_not_available() -> None:
+    """``none`` is a fact about the CALL, so it survives the projection: a client
+    must draw no fetch affordance for a body that does not exist. The guard is on
+    the call itself, which is why an empty one in the TAIL reads ``none`` too."""
+    empty = _call("t1", input=None, result=None)
+    detail = _windowed(_tool_turn(empty), _tool_turn(_call("t2"))).withhold_settled_bodies()
+    earlier = detail.turns[0].entries[0].tool
+    assert earlier is not None
+    assert earlier.body == "none"
+    assert (earlier.input, earlier.result) == (None, None)
+    # An empty INPUT MAP is the same absence as a missing one, and the tail
+    # exemption cannot turn it into a fetchable body either.
+    tail_empty = _windowed(_tool_turn(_call("t9", input={}, result=None))).turns[0].entries[0].tool
+    assert tail_empty is not None and tail_empty.body == "none"
+
+
+def test_a_call_with_only_a_result_is_still_withholdable() -> None:
+    """Either side alone is bytes a reader might open, so only BOTH being empty
+    makes a call unfetchable — otherwise a result-only call (the common shape for
+    a no-argument tool) would lose its body with no way to ask for it."""
+    detail = _windowed(
+        _tool_turn(_call("t1", input=None)), _tool_turn(_call("t2"))
+    ).withhold_settled_bodies()
+    earlier = detail.turns[0].entries[0].tool
+    assert earlier is not None
+    assert earlier.body == "available"
+
+
+def test_withholding_a_body_shifts_no_entry_and_no_turn() -> None:
+    """Same contract as ``_drop_superseded_todos``: only the payload disappears,
+    so a client's entry count and positions never move under it."""
+    before = _windowed(_tool_turn(_call("t1"), _call("t2")), _tool_turn(_call("t3")))
+    after = before.withhold_settled_bodies()
+    assert [len(t.entries) for t in after.turns] == [len(t.entries) for t in before.turns]
+    assert [e.role for e in after.turns[0].entries] == [e.role for e in before.turns[0].entries]
+    assert [e.text for e in after.turns[0].entries] == [e.text for e in before.turns[0].entries]
+
+
+def test_an_entry_with_no_tool_call_is_untouched_by_the_projection() -> None:
+    prose = SessionTurn(user_text="go", entries=(DigestEntry(role="assistant", text="hello"),))
+    detail = _windowed(prose, _tool_turn(_call("t2"))).withhold_settled_bodies()
+    assert detail.turns[0].entries[0].tool is None
+    assert detail.turns[0].entries[0].text == "hello"

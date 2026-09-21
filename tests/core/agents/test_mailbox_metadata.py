@@ -8,10 +8,9 @@ import pytest
 
 from grove.core.agents.claude_code import ClaudeCodeAdapter, _TranscriptParser
 from grove.core.contracts.mailboxes import (
-    MailboxAccess,
     MailboxAddress,
-    MailboxIdentity,
     MailboxReceipt,
+    MailboxSendRequest,
 )
 from grove.core.contracts.sessions import SessionTurnView
 from grove.core.mailboxes import MailboxEnvelope
@@ -93,19 +92,21 @@ def test_groves_own_envelope_projects_as_a_peer_handoff(tmp_path: Path) -> None:
     HUMAN TURN and carried no mailbox payload. Both halves are asserted.
     """
     now = datetime.now(UTC)
+    request = MailboxSendRequest(
+        sender=MailboxAddress(workspace_id="a" * 32),
+        recipient=MailboxAddress(workspace_id="b" * 32),
+        subject="Please review the parser fix",
+        body="Please review PR #42",
+    )
     receipt = MailboxReceipt(
         message_id="mbx_" + "a" * 32,
-        sender=MailboxIdentity(address=MailboxAddress(workspace_id="a" * 32), generation="a" * 32),
-        recipient=MailboxIdentity(
-            address=MailboxAddress(workspace_id="b" * 32), generation="b" * 32
-        ),
-        stage="accepted",
+        sender=request.sender,
+        recipient=request.recipient,
+        stage="delivered",
         created_at=now,
     )
-    body = "Please review PR #42"
-    envelope = MailboxEnvelope.render(
-        receipt, body, "request", MailboxAccess(cli=True, mcp=True, can_reply=True)
-    )
+    body = request.body
+    envelope = MailboxEnvelope.render(receipt, request)
     path = tmp_path / "session.jsonl"
     rows = [
         {
@@ -131,10 +132,9 @@ def test_groves_own_envelope_projects_as_a_peer_handoff(tmp_path: Path) -> None:
     assert mail.mailbox.model_dump() == {
         "sender": "a" * 32,
         "recipient": "b" * 32,
-        # The envelope carries no subject; the delivery INTENT is the nearest
-        # honest thing, and summarizing the body would be Grove paraphrasing a
-        # peer in its own voice.
-        "subject": "request",
+        # The writer's own subject line, carried verbatim — never a paraphrase
+        # of the body in Grove's voice.
+        "subject": "Please review the parser fix",
         "body": body,
         "kind": "peer",
     }

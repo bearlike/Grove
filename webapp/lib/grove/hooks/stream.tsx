@@ -203,6 +203,10 @@ function useStreamTransport(): ActivityStream {
           return;
         case "apply":
           queryClient.setQueryData(groveKeys.activity, action.snapshot);
+          queryClient.setQueryData(
+            groveKeys.workspaceActivity(action.workspace.state.id),
+            action.workspace,
+          );
           refreshPeekFromStream(queryClient, action.workspace);
           refreshWorkspaceQueries(queryClient, action.workspace.state.id);
           return;

@@ -711,6 +711,15 @@ class TaskBoard:
         self._items[task_id] = replace(current, **changes)
         return True
 
+    def copy(self) -> TaskBoard:
+        """An independent board carrying this one's state.
+
+        The incremental turn projection re-renders its open turn on every read
+        and must not advance the fold that describes the frozen prefix, so the
+        open span folds into a copy while the persistent board stays put.
+        """
+        return TaskBoard(_order=list(self._order), _items=dict(self._items))
+
     def snapshot(self) -> TodoList:
         """The board's current state as the shared card shape, in creation
         order — a task is never dropped once created, only its fields move."""
@@ -778,6 +787,20 @@ class CompactionBoundary:
       boundary by the whole session's history.
     * ``at`` — when the compaction happened, ``None`` for a record with no
       readable timestamp.
+    * ``duration_ms`` — how long the harness spent compacting. Claude Code
+      reports it natively (``compactMetadata.durationMs``, present on 52 of 52
+      real boundaries on-host and ranging into minutes — 263 s on one measured
+      record, so this is a real wait rather than a rounding detail). No Codex
+      or OpenCode record carries an equivalent, hence ``None`` there.
+    * ``model`` — which model performed the compaction. **No harness records
+      this on the boundary itself** (measured: 0 of 52 Claude records carry any
+      model-shaped key, and Codex's ``compacted`` payload carries none either),
+      so it is DERIVED from the model in effect when the boundary was written —
+      the nearest preceding assistant message's own reported model, which
+      resolves on 47 of 48 real boundaries. A session with no assistant turn
+      before its first compaction leaves it ``None`` rather than guessing the
+      session default, because a mid-session ``/model`` switch makes that
+      default the wrong answer precisely when it differs.
 
     ``summary`` is ``""`` (never ``None``) when the harness carries no readable
     summary text: Codex encrypts the replacement history and writes an empty
@@ -789,6 +812,8 @@ class CompactionBoundary:
     at: datetime | None
     dropped_tokens: int | None
     summary: str
+    duration_ms: int | None = None
+    model: str | None = None
 
     def headline(self) -> str:
         """The one-liner for ``DigestEntry.text`` — defined once so both adapters
@@ -913,10 +938,17 @@ class ContextWindow:
 
     @property
     def used_fraction(self) -> float:
-        """``used / size``, clamped to ``[0, 1]`` — a window is never over-full."""
+        """The raw ``used / size`` ratio, with only a zero-size safety guard.
+
+        Context occupancy is a current provider reading, not a bounded UI value.
+        Clamping hid a reported ``29,415,905 / 1,000,000`` as a confident 100%,
+        making an overflow indistinguishable from an ordinary full window. Raw
+        counts already cross the wire, and this ratio must agree with them so a
+        client can state an overage while bounding only its physical meter track.
+        """
         if self.size <= 0:
             return 0.0
-        return min(1.0, max(0.0, self.used / self.size))
+        return self.used / self.size
 
 
 @dataclass(slots=True, frozen=True)
@@ -1221,6 +1253,33 @@ class FinalResult:
     timestamp: datetime | None = None
 
 
+def tool_call_from_messages(
+    messages: tuple[AgentMessage, ...], tool_use_id: str
+) -> ToolCall | None:
+    """Project the spine onto ONE call, addressed by its ``tool_use_id``.
+
+    The drill-in behind a windowed ``/turns`` read that withheld settled bodies
+    (``ToolCallView.body == "available"``). Same recipe as its
+    :func:`final_result_from_messages` siblings — one pass over the
+    already-normalized messages, zero re-parsing — so the fetch costs a walk of
+    a spine the turn list already made the caller pay for, never a second parse.
+
+    Deliberately NOT sidechain-filtered: a sub-agent's call is addressed by the
+    same id space and a reader who can see the step can open it. The LAST block
+    with this id wins, matching :func:`tool_outcomes`'s own last-write-wins rule
+    so the call and its result can never be taken from different records.
+    ``None`` when no block carries the id, which the route turns into its 404 —
+    an unknown id must never resolve to a neighbouring call.
+    """
+    outcomes = tool_outcomes(messages)
+    found: ToolCall | None = None
+    for message in messages:
+        for block in message.content:
+            if block.type == "tool_use" and block.tool_use_id == tool_use_id:
+                found = ToolCall.from_block(block, outcomes, called_at=message.timestamp)
+    return found
+
+
 def final_result_from_messages(messages: tuple[AgentMessage, ...]) -> FinalResult | None:
     """Project the agentic-loop spine onto its :class:`FinalResult`, or
     ``None`` when no assistant has replied yet (session just started).
@@ -1448,6 +1507,10 @@ class AgentActivity:
     # a lookup table is a second, silently stale copy of a number the harness
     # already states.
     context: ContextWindow | None = None
+    # A known reason this session has no usable context although its stale
+    # native sidecar carried one. `None` remains the distinct "not measured"
+    # state; `stale_native_worker` tells a client that respawning is the remedy.
+    context_unavailable_reason: Literal["stale_native_worker"] | None = None
     # Facts only the owned stream states (cost, TTFT, a shell's exit code) —
     # ``None`` for every terminal workspace, filled from the sidecar for a
     # native one. See ``NativeFacts``.
@@ -1536,11 +1599,13 @@ class SessionSummary:
     Field names deliberately mirror the official Agent SDK's ``SDKSessionInfo``
     (``first_prompt`` / ``git_branch`` / ``cwd`` / ``created_at``) so Grove's
     normalized model stays recognizable next to the documented contract.
-    ``activity`` is the same point-in-time parse the dashboard computes — one
-    pass over the file yields both the metadata and the metrics, so listing
-    never reads a transcript twice. ``transcript_path`` is ``None`` for a
-    remote-backed session (no local file) — and it stays off the wire either
-    way (``contracts/sessions.py``).
+    Project-scoped listings obey the same metadata-only cost guarantee as the
+    host catalog: filesystem adapters fill rows from bounded head reads, so
+    parse products (``activity``, ``title`` and ``last_prompt``) are ``None``.
+    The identity-keyed ``session_summary`` read may still populate them for a
+    caller that explicitly asks for one known session. ``transcript_path`` is
+    ``None`` for a remote-backed session (no local file) — and it stays off the
+    wire either way (``contracts/sessions.py``).
     """
 
     session_id: str
@@ -1554,7 +1619,7 @@ class SessionSummary:
     title: str | None = None
     first_prompt: str | None = None
     last_prompt: str | None = None
-    activity: AgentActivity = field(default_factory=AgentActivity.empty)
+    activity: AgentActivity | None = None
 
 
 # What kind of input control this is. Drives only *display grouping* on the wire

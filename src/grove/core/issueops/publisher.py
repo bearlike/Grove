@@ -187,6 +187,7 @@ _PHASE_LABEL: dict[str, str] = {
 _AGENT_KIND_LABEL: dict[str, str] = {
     "claude_code": "Claude Code",
     "codex": "Codex",
+    "opencode": "OpenCode",
     "mewbo": "Mewbo",
     "generic": "Generic",
 }

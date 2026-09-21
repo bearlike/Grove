@@ -24,7 +24,6 @@ import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from grove._mcp_sdk import McpSdk
@@ -96,7 +95,6 @@ class McpServerConfig:
     path: str = DEFAULT_PATH
     auth_token: str | None = None
     read_only: bool = False
-    mailbox_only: bool = False
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()
 
@@ -151,7 +149,6 @@ class McpServerConfig:
         port: int | None = None,
         path: str | None = None,
         read_only: bool = False,
-        mailbox_only: bool = False,
     ) -> McpServerConfig:
         return cls(
             api_url=api_url or environ.get("GROVE_API_URL") or cls.DEFAULT_API_URL,
@@ -173,7 +170,6 @@ class McpServerConfig:
             # A CLI --read-only can only ever tighten: an operator who set the
             # env var must not have it silently loosened by omitting the flag.
             read_only=read_only or cls._as_bool(environ.get("GROVE_MCP_READ_ONLY")),
-            mailbox_only=mailbox_only or cls._as_bool(environ.get("GROVE_MCP_MAILBOX_ONLY")),
             allowed_hosts=cls._as_csv(environ.get("GROVE_MCP_ALLOWED_HOSTS")),
             allowed_origins=cls._as_csv(environ.get("GROVE_MCP_ALLOWED_ORIGINS")),
         )
@@ -187,10 +183,6 @@ class McpServerConfig:
         ``--insecure`` escape hatch: setting a token is one env var, and an
         opt-out flag is the kind of thing that survives into production.
         """
-        if self.mailbox_only and not os.environ.get("GROVE_MAILBOX_TOKEN"):
-            raise ValueError(
-                "--mailbox-only requires a bound mailbox token: set GROVE_MAILBOX_TOKEN."
-            )
         if not self.is_networked:
             return
         if not self.auth_token:
@@ -246,37 +238,14 @@ class GroveMcpServer:
     def __init__(self, config: McpServerConfig, *, client: GroveClient | None = None) -> None:
         config.validate()
         self._config = config
-        mailbox_token = os.environ.get("GROVE_MAILBOX_TOKEN")
-        mailbox_socket = os.environ.get("GROVE_MAILBOX_SOCKET")
-        self._mailbox_client = (
-            GroveClient(
-                BackendConfig(
-                    label="mcp-mailbox",
-                    daemon_url=os.environ.get("GROVE_MAILBOX_URL", config.api_url),
-                    daemon_socket=Path(mailbox_socket) if mailbox_socket else None,
-                    daemon_token=mailbox_token,
-                )
-            )
-            if mailbox_token
-            else None
-        )
-        # A native worker receives a per-worker mailbox credential. It must not
-        # construct (and later auto-mint through) an owner-capable client.
-        self._client = (
-            None
-            if config.mailbox_only
-            else client
-            or GroveClient(
-                BackendConfig(
-                    label="mcp",
-                    daemon_url=config.api_url,
-                    daemon_token=config.api_token,
-                )
+        self._client = client or GroveClient(
+            BackendConfig(
+                label="mcp",
+                daemon_url=config.api_url,
+                daemon_token=config.api_token,
             )
         )
-        tool_client = self._mailbox_client if config.mailbox_only else self._client
-        assert tool_client is not None
-        self._tools = GroveTools(tool_client, mailbox_client=self._mailbox_client)
+        self._tools = GroveTools(self._client)
         fastmcp = _load_fastmcp()
         self._mcp: FastMCP = fastmcp(
             "grove",
@@ -363,19 +332,12 @@ class GroveMcpServer:
     @asynccontextmanager
     async def _lifespan(self, _server: FastMCP) -> AsyncIterator[None]:
         # Connect once for the whole stdio session instead of per tool call:
-        # token resolution (the local mint writes auth.json) is not free. In
-        # mailbox-only mode, connecting just the bound client preserves the
-        # native worker boundary and never triggers that owner-token mint.
-        clients = tuple(
-            client for client in (self._client, self._mailbox_client) if client is not None
-        )
-        for client in clients:
-            await client.connect()
+        # token resolution (the local mint writes auth.json) is not free.
+        await self._client.connect()
         try:
             yield
         finally:
-            for client in reversed(clients):
-                await client.close()
+            await self._client.close()
 
     def _register_tools(self) -> None:
         # Tool names are the published contract — renaming one breaks every
@@ -384,58 +346,38 @@ class GroveMcpServer:
         # deny it, since a registered tool an agent can see it will try to call.
         t = self._tools
         registrations = (
-            (
-                (t.get_skill, "grove_get_skill", False),
-                (t.list_mailbox_peers, "grove_list_mailbox_peers", False),
-                (t.get_mailbox_message_status, "grove_get_mailbox_message_status", False),
-                (t.send_mailbox_message, "grove_send_mailbox_message", True),
-            )
-            if self._config.mailbox_only
-            else (
-                (t.list_projects, "grove_list_projects", False),
-                (t.list_workspaces, "grove_list_workspaces", False),
-                (t.get_workspace, "grove_get_workspace", False),
-                (t.get_skill, "grove_get_skill", False),
-                (t.read_diagram, "grove_read_diagram", False),
-                (t.read_diagram_preview, "grove_read_diagram_preview", False),
-                (t.list_agents, "grove_list_agents", False),
-                (t.list_sessions, "grove_list_sessions", False),
-                (t.recollect_session, "grove_recollect_session", False),
-                (t.peek_workspace, "grove_peek_workspace", False),
-                (t.get_fleet_status, "grove_get_fleet_status", False),
-                (t.get_workspace_phase, "grove_get_workspace_phase", False),
-                (t.get_workspace_todo, "grove_get_workspace_todo", False),
-                (t.list_mailbox_peers, "grove_list_mailbox_peers", False),
-                (t.get_mailbox_message_status, "grove_get_mailbox_message_status", False),
-                (t.attach_instruction, "grove_attach_instruction", False),
-                (t.create_workspace, "grove_create_workspace", True),
-                (t.open_diagram, "grove_open_diagram", True),
-                (t.update_diagram, "grove_update_diagram", True),
-                (t.stop_diagram, "grove_stop_diagram", True),
-                (t.update_workspace, "grove_update_workspace", True),
-                (t.pause_workspace, "grove_pause_workspace", True),
-                (t.resume_workspace, "grove_resume_workspace", True),
-                (t.respawn_workspace, "grove_respawn_workspace", True),
-                (t.kill_workspace, "grove_kill_workspace", True),
-                (t.send_workspace_message, "grove_send_workspace_message", True),
-                (t.send_mailbox_message, "grove_send_mailbox_message", True),
-                (t.remap_workspace_session, "grove_remap_workspace_session", True),
-                (t.attach_ticket, "grove_attach_ticket", True),
-                (t.detach_ticket, "grove_detach_ticket", True),
-                (t.set_workspace_phase, "grove_set_workspace_phase", True),
-            )
+            (t.list_projects, "grove_list_projects", False),
+            (t.list_workspaces, "grove_list_workspaces", False),
+            (t.get_workspace, "grove_get_workspace", False),
+            (t.get_skill, "grove_get_skill", False),
+            (t.read_diagram, "grove_read_diagram", False),
+            (t.read_diagram_preview, "grove_read_diagram_preview", False),
+            (t.list_agents, "grove_list_agents", False),
+            (t.list_sessions, "grove_list_sessions", False),
+            (t.recollect_session, "grove_recollect_session", False),
+            (t.peek_workspace, "grove_peek_workspace", False),
+            (t.get_fleet_status, "grove_get_fleet_status", False),
+            (t.get_workspace_phase, "grove_get_workspace_phase", False),
+            (t.get_workspace_todo, "grove_get_workspace_todo", False),
+            (t.list_mailbox_contacts, "grove_list_mailbox_contacts", False),
+            (t.attach_instruction, "grove_attach_instruction", False),
+            (t.create_workspace, "grove_create_workspace", True),
+            (t.open_diagram, "grove_open_diagram", True),
+            (t.update_diagram, "grove_update_diagram", True),
+            (t.stop_diagram, "grove_stop_diagram", True),
+            (t.update_workspace, "grove_update_workspace", True),
+            (t.pause_workspace, "grove_pause_workspace", True),
+            (t.resume_workspace, "grove_resume_workspace", True),
+            (t.respawn_workspace, "grove_respawn_workspace", True),
+            (t.kill_workspace, "grove_kill_workspace", True),
+            (t.send_workspace_message, "grove_send_workspace_message", True),
+            (t.send_mailbox_message, "grove_send_mailbox_message", True),
+            (t.remap_workspace_session, "grove_remap_workspace_session", True),
+            (t.attach_ticket, "grove_attach_ticket", True),
+            (t.detach_ticket, "grove_detach_ticket", True),
+            (t.set_workspace_phase, "grove_set_workspace_phase", True),
         )
         for fn, name, mutates in registrations:
-            if (
-                name
-                in {
-                    "grove_list_mailbox_peers",
-                    "grove_get_mailbox_message_status",
-                    "grove_send_mailbox_message",
-                }
-                and self._mailbox_client is None
-            ):
-                continue
             if mutates and self._config.read_only:
                 continue
             # Native image blocks are not JSON structured output. Let FastMCP
@@ -517,14 +459,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             "respawn/message/remap. Also settable via GROVE_MCP_READ_ONLY."
         ),
     )
-    parser.add_argument(
-        "--mailbox-only",
-        action="store_true",
-        help=(
-            "Register only mailbox tools and local skills for a bound native worker. "
-            "Requires GROVE_MAILBOX_TOKEN; also settable via GROVE_MCP_MAILBOX_ONLY."
-        ),
-    )
     args = parser.parse_args(argv)
     try:
         config = McpServerConfig.from_env(
@@ -535,7 +469,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             port=args.port,
             path=args.path,
             read_only=args.read_only,
-            mailbox_only=args.mailbox_only,
         )
         server = GroveMcpServer(config)
     except ImportError as exc:

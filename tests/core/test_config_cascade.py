@@ -177,6 +177,8 @@ def test_project_agents_refine_builtins_instead_of_replacing(
         "claude-terminal",
         "codex",
         "codex-terminal",
+        "opencode",
+        "opencode-terminal",
         "shell",
     }
     claude = cfg.find_agent("claude")
@@ -205,6 +207,8 @@ def test_user_agent_override_inherits_builtin_kind(tmp_state_dir: Path, tmp_repo
         "claude-terminal",
         "codex",
         "codex-terminal",
+        "opencode",
+        "opencode-terminal",
         "shell",
     }
     claude = cfg.find_agent("claude")
@@ -228,6 +232,8 @@ def test_load_defaults_when_no_layers(
         "claude-terminal",
         "codex",
         "codex-terminal",
+        "opencode",
+        "opencode-terminal",
         "shell",
     }
 

@@ -10,6 +10,7 @@ import {
   FIXTURE_AGENTS,
   FIXTURE_BRANCHES,
   FIXTURE_CONTROLS,
+  FIXTURE_MODELS,
   FIXTURE_PEEK,
   FIXTURE_PHASE,
   FIXTURE_PROVISION,
@@ -392,6 +393,13 @@ export function startFakeDaemon(port: number): Promise<Server> {
     // function` inside the create dialog — which is how this was found.
     app.get("/agents", (_req, res) => res.json(FIXTURE_AGENTS));
     app.get("/branches", (_req, res) => res.json(FIXTURE_BRANCHES));
+
+    // `useModels` (ModelPill, the create dialog, the workspace composer) calls
+    // this unconditionally once a repo is chosen. Its absence here — not a 404
+    // response but a route that was never registered — left `catalog.data`
+    // permanently empty and `ModelSelectorItem`'s active row pinned on
+    // "Custom…" for every e2e run, regardless of which agent was selected.
+    app.get("/models", (_req, res) => res.json(FIXTURE_MODELS));
 
     // An SSE endpoint that stays OPEN and silent. Closing it would make every
     // page's stream hook flip to its error path and mask a real regression.

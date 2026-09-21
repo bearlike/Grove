@@ -1,6 +1,6 @@
 """The daemon's steer routes on a NATIVE workspace reach the owner in-process.
 
-`build_app` injects `CoordinatorSteerClient` into every manager it mints, so
+`build_app` injects `OwnerSteerClient` into every manager it mints, so
 `/message`, `/interrupt` and `/controls/model` on a native workspace queue a
 frame onto the connected owner's delivery stream — never a tmux keystroke — and
 refuse with the pane-shaped 409 when no owner is connected.
@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from grove.core.contracts.mailboxes import MailboxAccess, MailboxAddress, MailboxIdentity
-from grove.core.mailboxes import MailboxCoordinator
+from grove.core.contracts.mailboxes import MailboxAddress
+from grove.core.native_owners import NativeOwnerRegistry, OwnerIdentity
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon import build_app
 from tests.conftest import FakeTmux
@@ -47,27 +47,26 @@ def native_ws(daemon: TestClient, tmp_repo: Path) -> str:
     return body["id"]
 
 
-def _connect_owner(daemon: TestClient, workspace_id: str) -> MailboxCoordinator:
-    coordinator: MailboxCoordinator = daemon.app.state.mailbox_coordinator
-    coordinator.register(
-        MailboxIdentity(address=MailboxAddress(workspace_id=workspace_id), generation="1" * 32),
+def _connect_owner(daemon: TestClient, workspace_id: str) -> NativeOwnerRegistry:
+    owners: NativeOwnerRegistry = daemon.app.state.native_owners
+    owners.register(
+        OwnerIdentity(address=MailboxAddress(workspace_id=workspace_id), generation="1" * 32),
         "provider-session",
-        MailboxAccess(can_discover=True, can_send=True, can_reply=True, cli=True),
     )
-    return coordinator
+    return owners
 
 
 def test_steer_routes_queue_control_frames_for_the_connected_owner(
     daemon: TestClient, native_ws: str, fake_tmux: FakeTmux
 ) -> None:
-    coordinator = _connect_owner(daemon, native_ws)
+    owners = _connect_owner(daemon, native_ws)
 
     assert daemon.post(f"/workspaces/{native_ws}/message", json={"text": "hi"}).status_code == 204
     assert daemon.post(f"/workspaces/{native_ws}/interrupt").status_code == 204
     resp = daemon.post(f"/workspaces/{native_ws}/controls/model", json={"model": "opus"})
     assert resp.status_code == 204
 
-    binding = coordinator.owner_for(native_ws)
+    binding = owners.owner_for(native_ws)
     assert binding is not None
     frames = [binding.queue.get_nowait()[2] for _ in range(3)]
     assert [(f.op, f.text) for f in frames if f is not None] == [

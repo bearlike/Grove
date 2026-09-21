@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from grove.core.activity import FleetSummary, SessionActivity
-from grove.core.agents import AgentActivity, AgentActivityState, AgentSession
+from grove.core.agents import AgentActivity, AgentActivityState, AgentSession, ContextWindow
 from grove.core.agents.hook import SubagentHookRecord
 from grove.core.contracts.activity import (
     FleetProgressView,
@@ -98,6 +100,80 @@ def _session_activity(
         duration=duration,
         tokens=tokens,
     )
+
+
+def test_context_view_preserves_a_raw_overflow() -> None:
+    """Clients receive an over-capacity reading rather than a clamped 100%."""
+    view = SessionActivityView.from_session_activity(
+        SessionActivity(
+            session=AgentSession(
+                session_id="s1",
+                transcript_path=None,
+                adapter_kind="claude_code",
+                provenance="grove_launched",
+            ),
+            activity=AgentActivity(
+                state=AgentActivityState.WAITING,
+                context=ContextWindow(size=1_000_000, used=29_415_905),
+            ),
+        )
+    )
+
+    assert view.activity.context is not None
+    assert view.activity.context.used == 29_415_905
+    assert view.activity.context.used_fraction == pytest.approx(29.415905)
+
+
+def test_context_view_carries_the_stale_worker_remedy_without_a_window() -> None:
+    """Suppression names a respawn instead of looking like no measurement."""
+    view = SessionActivityView.from_session_activity(
+        SessionActivity(
+            session=AgentSession(
+                session_id="s1",
+                transcript_path=None,
+                adapter_kind="claude_code",
+                provenance="grove_launched",
+            ),
+            activity=AgentActivity(
+                state=AgentActivityState.WAITING,
+                context_unavailable_reason="stale_native_worker",
+            ),
+        )
+    )
+
+    assert view.activity.context is None
+    assert view.activity.context_unavailable_reason == "stale_native_worker"
+
+
+def test_context_unavailable_reason_defaults_for_an_older_daemon_payload() -> None:
+    """The new wire field is additive, so an older payload still decodes."""
+    view = SessionActivityView.model_validate(
+        {
+            "session": {
+                "session_id": "s1",
+                "adapter_kind": "claude_code",
+                "provenance": "grove_launched",
+                "tmux_window": None,
+            },
+            "activity": {
+                "state": "waiting",
+                "title": None,
+                "current_task": None,
+                "human_turns": 0,
+                "assistant_replies": 0,
+                "replies_per_turn": [],
+                "tool_calls": 0,
+                "model": None,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "last_event_at": None,
+                "needs_attention": False,
+                "error_detail": None,
+            },
+        }
+    )
+
+    assert view.activity.context_unavailable_reason is None
 
 
 def test_session_activity_view_carries_duration_through() -> None:

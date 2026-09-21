@@ -11,29 +11,31 @@ from grove.mcp.instructions import SERVER_INSTRUCTIONS
 ROOT = Path(__file__).parents[2]
 
 
-def test_mailbox_help_covers_the_owned_native_worker_and_mail_contract() -> None:
-    """The cold-start help must name the only supported mailbox control plane."""
+def test_mailbox_help_teaches_the_whole_surface_from_a_cold_start() -> None:
+    """An agent reading only the bundled help must be able to write to a peer."""
     using = SkillLibrary.read("using-grove")
     working = SkillLibrary.read("working-in-grove")
     configuring = SkillLibrary.read("configuring-grove")
 
     assert "mailbox" in using.lower()
-    assert "mailbox" in working.lower()
     assert "mailbox" in configuring.lower()
     # The terminal twin is the documented alternative to the (default) native session.
     assert '"native": false' in configuring
     assert "claude-terminal" in configuring
-    assert "GROVE_MAILBOX_TOKEN" in working
-    assert "grove mailbox peers" in working
+    # Both roads to a message, named where an agent will look for them.
+    assert "grove mailbox contacts" in working
     assert "grove mailbox send" in working
-    assert "grove mailbox reply" in working
-    assert "grove mailbox status" in working
-    assert "grove_list_mailbox_peers" in working
+    assert "grove_list_mailbox_contacts" in working
     assert "grove_send_mailbox_message" in working
-    assert "grove_get_mailbox_message_status" in working
-    assert "grove_list_mailbox_peers" in SERVER_INSTRUCTIONS
+    assert "grove_list_mailbox_contacts" in SERVER_INSTRUCTIONS
     assert "grove_send_mailbox_message" in SERVER_INSTRUCTIONS
-    assert "grove_get_mailbox_message_status" in SERVER_INSTRUCTIONS
+
+
+def test_the_server_instructions_state_the_receipt_and_trust_limits() -> None:
+    """The tool descriptions are what most agents read instead of a skill."""
+    assert "never that a model read" in SERVER_INSTRUCTIONS
+    assert "never consent" in SERVER_INSTRUCTIONS
+    assert "interactive terminal" in SERVER_INSTRUCTIONS
 
 
 def test_marketplace_description_does_not_publish_a_stale_skill_count() -> None:

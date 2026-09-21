@@ -39,6 +39,8 @@ def test_default_roster_is_exactly_the_builtins(tmp_state_dir: Path, tmp_repo: P
         "claude-terminal",
         "codex",
         "codex-terminal",
+        "opencode",
+        "opencode-terminal",
         "shell",
     }
 

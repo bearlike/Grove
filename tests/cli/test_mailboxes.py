@@ -1,152 +1,160 @@
-"""Mailbox CLI delegates exclusively to the bound URL client."""
+"""`grove mailbox` — addressing, the sender default, and honest refusals."""
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from grove.core.contracts.mailboxes import MailboxPeerPage, MailboxReceipt
-from grove.tui.cli import app
+from grove.core.contracts.mailboxes import (
+    MailboxAddress,
+    MailboxContact,
+    MailboxDirectory,
+    MailboxReceipt,
+    MailboxSendRequest,
+)
+from grove.core.phase import PhaseFile
+from grove.tui import cli_mailbox
+
+WORKSPACE = "a" * 32
+OTHER = "b" * 32
+runner = CliRunner()
 
 
-class _MailboxClient:
+class _FakeClient:
+    """Stands in at the HTTP boundary; records exactly what the CLI composed."""
+
     def __init__(self) -> None:
-        self.calls: list[tuple[str, object]] = []
+        self.sent: list[MailboxSendRequest] = []
 
     async def connect(self) -> None:
-        self.calls.append(("connect", None))
+        return None
 
     async def close(self) -> None:
-        self.calls.append(("close", None))
+        return None
 
-    async def list_mailbox_peers(
-        self, *, workspace_id: str | None = None, limit: int = 50, cursor: str | None = None
-    ) -> MailboxPeerPage:
-        self.calls.append(
-            ("peers", {"workspace_id": workspace_id, "limit": limit, "cursor": cursor})
-        )
-        return MailboxPeerPage.model_validate(
-            {
-                "protocol_version": 1,
-                "caller": None,
-                "access": {
-                    "can_discover": True,
-                    "can_send": True,
-                    "can_reply": True,
-                    "cli": True,
-                    "mcp": True,
-                },
-                "body_limit_bytes": 2048,
-                "receipt_ttl_seconds": 60,
-                "peers": [],
-                "next_cursor": None,
-            }
+    async def list_mailbox_contacts(self) -> MailboxDirectory:
+        return MailboxDirectory(
+            body_limit_bytes=65536,
+            contacts=[
+                MailboxContact(
+                    address=MailboxAddress(workspace_id=OTHER),
+                    display_name="review the parser",
+                    provider="codex",
+                    runtime="host",
+                    live=True,
+                )
+            ],
         )
 
-    async def send_mailbox_message(self, request: object) -> MailboxReceipt:
-        self.calls.append(("send", request))
-        return MailboxReceipt.model_validate(
-            {
-                "message_id": "mbx_" + "e" * 32,
-                "stage": "accepted",
-                "created_at": "2026-09-12T00:00:00Z",
-            }
-        )
-
-    async def get_mailbox_message_status(self, message_id: str) -> MailboxReceipt:
-        self.calls.append(("status", message_id))
-        return MailboxReceipt.model_validate(
-            {"message_id": message_id, "stage": "delivered", "created_at": "2026-09-12T00:00:00Z"}
+    async def send_mailbox_message(self, request: MailboxSendRequest) -> MailboxReceipt:
+        self.sent.append(request)
+        return MailboxReceipt(
+            message_id="mbx_" + "c" * 32,
+            sender=request.sender,
+            recipient=request.recipient,
+            stage="delivered",
+            created_at=datetime.now(UTC),
         )
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
+def client(monkeypatch: pytest.MonkeyPatch) -> _FakeClient:
+    fake = _FakeClient()
+    monkeypatch.setattr(cli_mailbox, "mailbox_client", lambda: fake)
+    return fake
 
 
-def test_mailbox_peers_uses_the_url_client_and_emits_json(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    client = _MailboxClient()
-    monkeypatch.setattr("grove.tui.cli_mailbox.mailbox_client", lambda: client)
-
-    result = runner.invoke(app, ["mailbox", "peers", "--workspace-id", "a" * 32, "--limit", "9"])
+def test_contacts_needs_no_credential_and_prints_the_directory(client: _FakeClient) -> None:
+    result = runner.invoke(cli_mailbox.mailbox_app, ["contacts"])
 
     assert result.exit_code == 0, result.output
-    assert '"body_limit_bytes": 2048' in result.output
-    assert client.calls == [
-        ("connect", None),
-        ("peers", {"workspace_id": "a" * 32, "limit": 9, "cursor": None}),
-        ("close", None),
-    ]
+    assert OTHER in result.output
+    assert '"live": true' in result.output
 
 
-def test_mailbox_send_reads_body_file_stdin_verbatim_and_requires_generation(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+def test_send_defaults_the_sender_to_this_workspace(
+    client: _FakeClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    client = _MailboxClient()
-    monkeypatch.setattr("grove.tui.cli_mailbox.mailbox_client", lambda: client)
+    """The one variable Grove already gives every agent, in its own namespace."""
+    monkeypatch.setenv(PhaseFile.PATH_ENV, str(tmp_path / PhaseFile.RELDIR / f"{WORKSPACE}.json"))
 
     result = runner.invoke(
-        app,
+        cli_mailbox.mailbox_app,
+        ["send", "--to", OTHER, "--subject", "Ready", "--body", "PR is open."],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.sent[0].sender.workspace_id == WORKSPACE
+    assert client.sent[0].recipient.workspace_id == OTHER
+
+
+def test_an_explicit_sender_always_wins(
+    client: _FakeClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The default is a convenience; the address is never proven, so it is free."""
+    monkeypatch.setenv(PhaseFile.PATH_ENV, str(tmp_path / PhaseFile.RELDIR / f"{WORKSPACE}.json"))
+
+    result = runner.invoke(
+        cli_mailbox.mailbox_app,
+        ["send", "--from", OTHER, "--to", WORKSPACE, "--subject", "Re", "--body", "ack"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.sent[0].sender.workspace_id == OTHER
+
+
+def test_send_without_a_resolvable_sender_refuses_and_names_the_flag(
+    client: _FakeClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refusing beats guessing: a cwd cannot say which agent is asking."""
+    monkeypatch.delenv(PhaseFile.PATH_ENV, raising=False)
+
+    result = runner.invoke(
+        cli_mailbox.mailbox_app,
+        ["send", "--to", OTHER, "--subject", "Ready", "--body", "PR is open."],
+    )
+
+    assert result.exit_code != 0
+    assert "--from" in result.output
+    assert client.sent == []
+
+
+def test_agent_slots_reach_the_request(
+    client: _FakeClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(PhaseFile.PATH_ENV, str(tmp_path / PhaseFile.RELDIR / f"{WORKSPACE}.json"))
+
+    result = runner.invoke(
+        cli_mailbox.mailbox_app,
         [
-            "mailbox",
             "send",
-            "c" * 32,
-            "--agent",
-            "worker",
-            "--generation",
-            "d" * 32,
-            "--body-file",
-            "-",
+            "--to",
+            OTHER,
+            "--to-agent",
+            "reviewer",
+            "--subject",
+            "Ready",
+            "--body",
+            "PR is open.",
         ],
-        input="first line\n\nlast line\n",
     )
 
     assert result.exit_code == 0, result.output
-    request = client.calls[1][1]
-    assert request.body == "first line\n\nlast line\n"
-    assert request.recipient.agent == "worker"
-    assert '"stage": "accepted"' in result.output
+    assert client.sent[0].recipient.agent == "reviewer"
 
 
-def test_mailbox_reply_uses_the_reply_variant(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+def test_body_and_body_file_are_mutually_exclusive(
+    client: _FakeClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    client = _MailboxClient()
-    monkeypatch.setattr("grove.tui.cli_mailbox.mailbox_client", lambda: client)
-
-    result = runner.invoke(app, ["mailbox", "reply", "mbx_" + "e" * 32, "--body", "ack"])
-
-    assert result.exit_code == 0, result.output
-    request = client.calls[1][1]
-    assert request.kind == "reply"
-    assert request.body == "ack"
-
-
-def test_mailbox_status_uses_the_url_client(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    client = _MailboxClient()
-    monkeypatch.setattr("grove.tui.cli_mailbox.mailbox_client", lambda: client)
-
-    result = runner.invoke(app, ["mailbox", "status", "mbx_" + "e" * 32])
-
-    assert result.exit_code == 0, result.output
-    assert client.calls[1] == ("status", "mbx_" + "e" * 32)
-    assert '"stage": "delivered"' in result.output
-
-
-def test_mailbox_send_without_bound_token_fails_closed(
-    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("GROVE_MAILBOX_TOKEN", raising=False)
+    monkeypatch.setenv(PhaseFile.PATH_ENV, str(tmp_path / PhaseFile.RELDIR / f"{WORKSPACE}.json"))
 
     result = runner.invoke(
-        app,
-        ["mailbox", "send", "c" * 32, "--generation", "d" * 32, "--body", "no credential"],
+        cli_mailbox.mailbox_app,
+        ["send", "--to", OTHER, "--subject", "Ready", "--body", "a", "--body-file", "-"],
     )
 
-    assert result.exit_code == 1
-    assert "GROVE_MAILBOX_TOKEN" in result.output
+    assert result.exit_code != 0
+    assert client.sent == []

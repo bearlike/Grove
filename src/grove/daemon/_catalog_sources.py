@@ -21,7 +21,6 @@ from grove.core.agents.codex import _CodexHome
 from grove.core.agents.transcript_scope import config_dir_scope
 from grove.core.attachments import AttachmentStore
 from grove.core.file_events import FileEvent, FileEventBatch, FileEventRecovery, FileEventSource
-from grove.core.git import GitRepo
 from grove.core.registry import RepoRegistry
 from grove.core.workspace import TranscriptContext
 from grove.daemon._catalog import _CatalogMemo, _GalleryMemo
@@ -220,34 +219,22 @@ class _CatalogSources:
         A worktree root catches direct additions.  Existing nested diagrams add
         only their parent directory, as supplied by Git, so the watcher never
         recursively descends through dependency or build trees.
+
+        It reads ``DiagramGallery.census`` rather than re-walking the worktrees
+        itself. The two used to enumerate independently, so daemon startup ran
+        one ``git ls-files`` per worktree TWICE — measured on the reference host,
+        189 worktrees for the same 4 diagrams both times.
         """
         roots: set[Path] = set()
         attachments: set[Path] = set()
-        seen_worktrees: set[Path] = set()
-        for repo_root in self._registry.known_roots():
-            try:
-                worktrees = GitRepo(repo_root).worktree_paths()
-            except Exception as exc:
-                logger.debug("catalog gallery worktree discovery skipped {}: {}", repo_root, exc)
-                continue
-            for candidate in worktrees:
-                worktree = candidate.resolve()
-                if worktree in seen_worktrees or not worktree.is_dir():
-                    continue
-                seen_worktrees.add(worktree)
-                roots.add(worktree)
-                try:
-                    files = GitRepo(worktree).list_files(worktree, "*.drawio")
-                except Exception as exc:
-                    logger.debug("catalog gallery file discovery skipped {}: {}", worktree, exc)
-                    continue
-                for relative_path in files:
-                    path = worktree / relative_path
-                    if path.suffix.lower() == ".drawio" and path.parent.is_dir():
-                        roots.add(path.parent.resolve())
-                attachment_root = AttachmentStore.root(worktree)
-                if attachment_root.is_dir():
-                    attachments.add(attachment_root.resolve())
+        for _repo_root, worktree, diagrams in self._gallery.census():
+            roots.add(worktree.resolve())
+            for path in diagrams:
+                if path.parent.is_dir():
+                    roots.add(path.parent.resolve())
+            attachment_root = AttachmentStore.root(worktree)
+            if attachment_root.is_dir():
+                attachments.add(attachment_root.resolve())
         return roots, attachments
 
     def _on_batch(self, batch: FileEventBatch) -> None:

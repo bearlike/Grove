@@ -68,11 +68,10 @@ async def test_initial_rejection_closes_native_owner(monkeypatch: pytest.MonkeyP
         ),
     )
     config = NativeWorkerConfig(
+        workspace_id="a" * 32,
         provider="claude_code",
         command=["unused"],
         initial_prompt="do the thing",
-        registration_token="owner",
-        peer_token="peer",
     )
     with pytest.raises(RuntimeError, match="rejected"):
         await NativeWorker(config).run()
@@ -124,11 +123,10 @@ async def test_an_unechoed_task_keeps_the_session_and_sends_it_once(
         lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
     )
     config = NativeWorkerConfig(
+        workspace_id="a" * 32,
         provider="claude_code",
         command=["unused"],
         initial_prompt="do the thing",
-        registration_token="owner",
-        peer_token="peer",
     )
     await NativeWorker(config).run()
     assert len(native.sent) == 1 and native.sent[0].endswith("do the thing")
@@ -202,11 +200,10 @@ async def test_initial_task_stays_submitted_when_the_connection_fails_after_send
         lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
     )
     config = NativeWorkerConfig(
+        workspace_id="a" * 32,
         provider="claude_code",
         command=["unused"],
         initial_prompt="do the thing",
-        registration_token="owner",
-        peer_token="peer",
     )
 
     await NativeWorker(config).run()
@@ -269,11 +266,10 @@ async def test_connection_failure_before_initial_task_leaves_it_unsent(
         lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
     )
     config = NativeWorkerConfig(
+        workspace_id="a" * 32,
         provider="claude_code",
         command=["unused"],
         initial_prompt="do the thing",
-        registration_token="owner",
-        peer_token="peer",
     )
 
     await NativeWorker(config).run()
@@ -341,11 +337,10 @@ async def test_worker_relays_operator_controls_and_never_acks_them(
     )
     monkeypatch.setattr("grove.core.native_worker._RECONNECT_FLOOR_SECONDS", 0.01)
     config = NativeWorkerConfig(
+        workspace_id="a" * 32,
         provider="claude_code",
         command=["unused"],
         initial_prompt="do the thing",
-        registration_token="owner",
-        peer_token="peer",
     )
     await NativeWorker(config).run()
 
@@ -417,11 +412,10 @@ async def test_worker_relays_an_answer_frame_as_structured_answers(
     )
     monkeypatch.setattr("grove.core.native_worker._RECONNECT_FLOOR_SECONDS", 0.01)
     config = NativeWorkerConfig(
+        workspace_id="a" * 32,
         provider="claude_code",
         command=["unused"],
         initial_prompt="do the thing",
-        registration_token="owner",
-        peer_token="peer",
     )
     await NativeWorker(config).run()
     assert native.answered == [
@@ -477,9 +471,7 @@ async def test_reader_termination_ends_worker_even_while_daemon_is_unavailable(
             base_url="http://localhost", transport=httpx.MockTransport(handler)
         ),
     )
-    config = NativeWorkerConfig(
-        provider="claude_code", command=["unused"], registration_token="owner", peer_token="peer"
-    )
+    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
     expected = ValueError if failure is not None else RuntimeError
     with pytest.raises(expected, match=r"reader failed|provider output closed"):
         await asyncio.wait_for(NativeWorker(config).run(), timeout=1)
@@ -553,11 +545,10 @@ async def test_interrupt_bypasses_slow_input_and_preserves_queued_text(
         lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
     )
     config = NativeWorkerConfig(
+        workspace_id="a" * 32,
         provider="claude_code",
         command=["unused"],
         initial_prompt="first" if kind == "initial" else "",
-        registration_token="owner",
-        peer_token="peer",
     )
     await asyncio.wait_for(NativeWorker(config).run(), timeout=1)
     assert interrupted.is_set()
@@ -623,9 +614,7 @@ async def test_reconnect_reserves_unacknowledged_input_without_resending_it(
             base_url="http://localhost", transport=httpx.MockTransport(handler)
         ),
     )
-    config = NativeWorkerConfig(
-        provider="claude_code", command=["unused"], registration_token="owner", peer_token="peer"
-    )
+    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
     await asyncio.wait_for(NativeWorker(config).run(), timeout=1)
     assert connections == [[], [message_id], []]
     assert sent == ["once"]
@@ -651,9 +640,7 @@ async def test_entrypoint_signals_cancel_worker_and_remove_handlers(
             closed.set()
 
     monkeypatch.setattr(NativeWorker, "run", run)
-    config = NativeWorkerConfig(
-        provider="claude_code", command=["unused"], registration_token="owner", peer_token="peer"
-    )
+    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
     entry = asyncio.create_task(_run(config))
     await asyncio.sleep(0)
     await asyncio.sleep(0)
@@ -735,10 +722,78 @@ async def test_a_resumed_worker_sends_no_boot_prompt_and_no_task(
         "grove.core.native_worker.httpx.AsyncClient",
         lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
     )
-    config = NativeWorkerConfig(
-        provider="claude_code", command=["unused"], registration_token="owner", peer_token="peer"
-    )
+    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
     await NativeWorker(config).run()
 
     assert native.started == [""]  # no boot prompt on a resume
     assert native.sent == []  # and no workspace brief either
+
+
+@pytest.mark.asyncio
+async def test_worker_routes_compact_and_command_to_dedicated_native_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Controls must reach native provider verbs, never become a text prompt."""
+
+    class Native:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def start(self, prompt: str) -> str:
+            return "native-session"
+
+        async def send(self, message_id: str, text: str) -> NativeSubmission:
+            self.calls.append(("send", text))
+            return NativeSubmission(stage="delivered", evidence=message_id)
+
+        async def interrupt(self) -> bool:
+            self.calls.append(("interrupt", ""))
+            return True
+
+        async def set_model(self, model: str) -> bool:
+            self.calls.append(("set_model", model))
+            return True
+
+        async def compact(self) -> bool:
+            self.calls.append(("compact", ""))
+            return True
+
+        async def invoke_control(self, name: str) -> bool:
+            self.calls.append(("command", name))
+            return True
+
+        async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool:
+            return True
+
+        async def wait_closed(self) -> None:
+            await asyncio.Future()
+
+        async def close(self) -> None:
+            pass
+
+    native = Native()
+    monkeypatch.setattr(NativeWorker, "transport", lambda self: native)
+    stream = (
+        'event: registered\ndata: {"generation":"test"}\n\n'
+        'event: delivery\ndata: {"op":"compact","message_id":"","text":""}\n\n'
+        'event: delivery\ndata: {"op":"command","message_id":"","text":"review --staged"}\n\n'
+    )
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(
+        _once_then_revoked(lambda request: httpx.Response(200, text=stream))
+    )
+    monkeypatch.setattr(
+        "grove.core.native_worker.httpx.AsyncClient",
+        lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
+    )
+    monkeypatch.setattr("grove.core.native_worker._RECONNECT_FLOOR_SECONDS", 0.01)
+
+    await NativeWorker(
+        NativeWorkerConfig(
+            workspace_id="a" * 32,
+            provider="claude_code",
+            command=["unused"],
+        )
+    ).run()
+
+    assert native.calls == [("compact", ""), ("command", "review --staged")]

@@ -12,7 +12,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Terminal UI | Create, attach, pause and kill in one keypress beside a live peek rail. | [TUI tour](use-tui.md) |
 | CLI | Every verb as a command, with tab completion and an agent friendly contract. | [CLI](use-cli.md) |
 | Web dashboard | The fleet, one workspace's transcript and work panel, sessions and usage from any device. | [Web dashboard](use-webapp.md) |
-| MCP server | Claude Code and Codex drive workspaces themselves over stdio or HTTP. | [MCP server](use-mcp.md) |
+| MCP server | Claude Code, Codex and OpenCode drive workspaces themselves over stdio or HTTP. | [MCP server](use-mcp.md) |
 | Issue ops | A tracker comment or assignment starts and steers a workspace. | [Issue ops](issue-ops.md) |
 | Device pairing | A new browser pairs once with a code the host approves. | [Authentication](use-auth.md) |
 
@@ -40,7 +40,11 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Mockups and specs | Approve a UI mockup or an architecture plan as a picture before code exists. | [Diagram collaboration](features-diagrams.md#two-jobs-for-one-file) |
 | Model per workspace | Each agent exposes its own catalog and a workspace picks one. | [Web dashboard](use-webapp.md#starting-a-workspace) |
 | First turn brief | Grove tells the agent where it is and how to report. | [Project setup](configure-project.md#tailor-the-first-turn-brief) |
-| Native sessions | Grove owns each Claude Code / Codex session by default, routes its controls through the provider protocol, lets each workspace override the mode, and names the event log tab Stream. | [Agents](configure-agents.md#native-sessions-and-terminal-twins) |
+| Native sessions | Grove owns each Claude Code, Codex and OpenCode session by default, routes its controls through the provider protocol, lets each workspace override the mode, and names the event log tab Stream. | [Agents](configure-agents.md#native-sessions-and-terminal-twins) |
+| Claude Code adapter | Confirmed message delivery, validated model changes and structured questions over JSON streaming. | [Claude Code](agents-claude-code.md) |
+| Codex adapter | Turn steering with expected turn checks, plus command and file change approvals over JSON RPC. | [Codex](agents-codex.md) |
+| OpenCode adapter | A Grove owned HTTP server, per session event filtering and a read only shared transcript database. | [OpenCode](agents-opencode.md) |
+| Compaction record | Each context cut reports the tokens dropped, its duration and the model that compacted. | [Agent activity](features-activity.md#where-the-context-was-compacted) |
 | Peek rail | Read the selected pane live without attaching. | [Peek rail](features-activity.md#the-peek-rail) |
 
 ## Trackers

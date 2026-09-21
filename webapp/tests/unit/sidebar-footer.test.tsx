@@ -1,30 +1,8 @@
 import { readFileSync } from "node:fs";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-
-import {
-  DaemonServiceStrip,
-  UpdateHint,
-} from "@/components/grove/shell/daemon-status";
-import type { WhoamiView } from "@/lib/grove/api";
 
 const sidebar = readFileSync("components/grove/shell/app-sidebar.tsx", "utf8");
 const account = readFileSync("components/grove/account/index.tsx", "utf8");
-
-function identity(patch: Partial<WhoamiView> = {}): WhoamiView {
-  return {
-    version: "0.4.2",
-    started_at: "2026-08-10T09:00:00Z",
-    uptime_seconds: 3600,
-    host: "example-host",
-    user: "example-user",
-    platform: "Linux-x86_64",
-    python_version: "3.13.0",
-    latest_version: null,
-    update_available: false,
-    ...patch,
-  } as WhoamiView;
-}
 
 describe("sidebar footer", () => {
   it("keeps the existing rail-route census in two focused footer layouts", () => {
@@ -44,25 +22,22 @@ describe("sidebar footer", () => {
     expect(account).not.toContain("title={`${user}@${host}`}");
   });
 
-  it("makes the collapsed update control discoverable through native hover and focus help", () => {
-    const html = renderToStaticMarkup(<UpdateHint version="0.5.0" collapsed />);
-
-    expect(html).toContain('data-slot="tooltip-trigger"');
-    expect(html).toContain('aria-label="Update to 0.5.0"');
-  });
-
-  it("renders version and accruing uptime on one labelled baseline with native tooltips", () => {
-    const html = renderToStaticMarkup(
-      <DaemonServiceStrip identity={identity()} />,
-    );
-
-    expect(html).toContain('data-testid="daemon-service-strip"');
-    expect(html).toContain("items-baseline");
-    expect(html).toContain('data-testid="daemon-version"');
-    expect(html).toContain('data-testid="uptime"');
-    expect(html).toContain("max-w-28 shrink-0 truncate");
-    expect(html).not.toContain("Running since");
-    expect(html.match(/data-slot="tooltip-trigger"/g)).toHaveLength(2);
-    expect(html).not.toContain("font-mono");
+  /**
+   * The service strip MOVED to the status footer (#814) — it was not deleted
+   * and it must not be duplicated. Pinned as an absence here because an absent
+   * mechanism has no runtime artifact to assert against, and re-mounting it in
+   * the rail is exactly the regression that would put two copies of the
+   * version on one screen.
+   */
+  it("renders no daemon service facts of its own", () => {
+    // MUTATION-TESTED. Grepping the source for `DaemonStatus` SURVIVED a
+    // re-mount, because the word also appears in prose and in comments — a
+    // token census cannot tell a mention from a mount. Assert on the IMPORT
+    // (a component cannot be rendered without one) and on the daemon-fact
+    // queries, which is what a re-implementation would have to reach for.
+    expect(sidebar).not.toMatch(/import\s*{[^}]*DaemonStatus[^}]*}\s*from/);
+    expect(sidebar).not.toContain("useWhoami");
+    expect(sidebar).not.toContain("daemon-service-strip");
+    expect(sidebar).not.toContain("started_at");
   });
 });

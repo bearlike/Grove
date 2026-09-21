@@ -30,7 +30,7 @@ from textual.screen import Screen
 from textual.widgets import Header, ListItem, ListView, Static
 
 from grove.core import GroveError, RepoRegistry, SessionExplorer, SessionListing, WorkspaceStatus
-from grove.core.agents import SessionSummary, SessionTurn
+from grove.core.agents import AgentActivityState, SessionSummary, SessionTurn
 from grove.core.sessions import CatalogEntry, SessionCatalog
 from grove.tui._status import (
     agent_state_color,
@@ -463,7 +463,11 @@ def _render_session_row(
     name gets plain bold (no ref color owns "which repo" today).
     """
     summary = listing.summary
-    state = summary.activity.state
+    # A metadata-only row (the listing scan never parses) reports UNKNOWN rather
+    # than a fabricated state, and renders its turn column as the not-measured
+    # dash the catalog scope already uses.
+    activity = summary.activity
+    state = activity.state if activity is not None else AgentActivityState.UNKNOWN
     state_style = f"bold {agent_state_color(state, dark=dark)}"
     muted = chrome_color("muted", dark=dark)
     text = Text()
@@ -477,7 +481,8 @@ def _render_session_row(
     text.append("\n")
     text.append(summary.adapter_kind, style=f"bold {ref_color('info', dark=dark)}")
     text.append(" · ", style=muted)
-    text.append(str(summary.activity.human_turns), style="bold")
+    turns = activity.human_turns if activity is not None else listing.turn_count
+    text.append("-" if turns is None else str(turns), style="bold")
     text.append(" turns", style=muted)
     text.append(" · ", style=muted)
     text.append(agent_state_label(state), style=state_style)

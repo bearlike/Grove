@@ -8,6 +8,7 @@ import { Explain } from "@/components/grove/glossary";
 import { RelativeTime } from "@/components/grove/relative-time";
 import { AbbreviatedNumber } from "@/components/grove/usage/abbreviated-number";
 import type { CompactionPartData } from "@/lib/grove/adapters";
+import { formatToolDuration } from "@/lib/grove/adapters/tool-call";
 import { CodeBlock } from "./code-block";
 
 /**
@@ -33,6 +34,12 @@ import { CodeBlock } from "./code-block";
  *   as "0 tokens dropped" or "not measured" — there is nothing wrong with the
  *   session that would make "not measured" the honest word here, the harness
  *   simply logs no delta for this event.
+ * - `durationMs: null` and `model: null` are omitted on the same rule. The
+ *   duration reuses `formatToolDuration` rather than a second formatter, so a
+ *   compaction that took four minutes reads the way a four-minute tool call
+ *   does. The model is the one in effect when the harness compacted — no
+ *   provider stamps it on the boundary — so it is stated plainly and never
+ *   filled in from the session's configured default.
  * - `summary: ""` renders NO disclosure at all. An empty `CardDisclosure` that
  *   opens onto nothing is worse than no disclosure — it invites a click for
  *   zero content.
@@ -44,10 +51,20 @@ import { CodeBlock } from "./code-block";
  * part's payload (see that component's docstring for the longer version). A
  * third bespoke collapsible here would be a third way to ask "show more" in
  * one transcript.
+ *
+ * IT ALSO TAKES THE FULL COLUMN, like every other card in the transcript. It
+ * shipped `self-center w-full max-w-md`, which was the only width cap on any
+ * transcript card — the summary is a multi-KB wall of wrapped prose and code,
+ * so capping it at 28rem inside a column the reader already sized (the thread's
+ * own width policy, `thread-width.ts`) spent that decision twice and squeezed
+ * the one body in the stream that needs the measure most. The one-line meta
+ * row above stays centred under the scissors: it is a caption on the rule, not
+ * a body to read.
  */
 export function CompactionBoundary({ data }: { data: CompactionPartData }) {
   const [open, setOpen] = useState(false);
   const summaryLines = data.summary ? data.summary.split("\n") : [];
+  const duration = formatToolDuration(data.durationMs);
 
   return (
     <div className="flex flex-col gap-2 py-1" data-testid="compaction-boundary">
@@ -73,10 +90,26 @@ export function CompactionBoundary({ data }: { data: CompactionPartData }) {
             </span>
           </>
         )}
+        {duration !== null && (
+          <>
+            <span aria-hidden>·</span>
+            <span className="tabular-nums" data-testid="compaction-duration">
+              took {duration}
+            </span>
+          </>
+        )}
+        {data.model !== null && (
+          <>
+            <span aria-hidden>·</span>
+            <span className="truncate" data-testid="compaction-model">
+              {data.model}
+            </span>
+          </>
+        )}
       </div>
       {summaryLines.length > 0 && (
         <CardShell
-          className="self-center w-full max-w-md"
+          className="w-full"
           data-testid="compaction-summary"
           data-collapsed={!open}
         >

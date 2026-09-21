@@ -7,18 +7,27 @@ finishing pass is intentionally narrow:
     uv run --group dev python -m tools.refine_support_icons
 
 It regularizes only the outer alpha edge on Codex, Linear and Gitea, leaving
-every RGB pixel unchanged, and enlarges only Claude Code's clay mark over its
-existing dark shell. GitHub is not touched.
+every RGB pixel unchanged. GitHub is not touched, and neither are the two
+maintainer supplied tiles, which carry their own shells.
 
 `tools/support_icons.py --from-upstream` is the explicit destructive reset to
 the pinned library sources. Its digests make an upstream change fail closed.
 
-- claude-code.png: avatar asset from LobeHub Icons static-avatar, version 1.13.0.
+- claude-code.png: supplied by the maintainer as a finished 512x512 mark and
+  resized to the shared 192x192 grid with Lanczos. It replaces the LobeHub
+  static-avatar tile used until 2026-09-17. The mark is cream on a clay shell,
+  the inverse of that tile, so the finishing pass no longer runs against it.
+  Source: https://claude.ai
 - codex.png: standalone transparent mark from LobeHub Icons static-png, version
   1.95.0. The standalone form avoids nesting LobeHub's ready-made Codex square
   inside Grove's own rounded tile.
   Source: https://github.com/lobehub/lobe-icons
   License: MIT, https://github.com/lobehub/lobe-icons/blob/master/LICENSE
+
+- opencode.png: supplied by the maintainer as a finished 240x240 tile and
+  resized to the shared 192x192 grid with Lanczos. It carries its own rounded
+  shell, so neither the finishing pass nor the upstream reset touches it.
+  Source: https://opencode.ai
 
 - linear.png, github.png, gitea.png: logo assets from selfh.st/icons, retrieved
   2026-08-21.

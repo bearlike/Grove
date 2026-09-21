@@ -11,6 +11,7 @@ function tool(tool_use_id: string): ToolCallView {
     input: null,
     result: null,
     duration_ms: null,
+    body: "none",
   };
 }
 

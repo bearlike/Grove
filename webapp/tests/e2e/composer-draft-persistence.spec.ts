@@ -250,6 +250,11 @@ test("re-adding through a same-runtime remount (the expand dialog) never shows a
 });
 
 test("landing drafts restore text and attachment intent", async ({ page }) => {
+  // The first-visit tour auto-opens over the landing composer after a delay
+  // and its mask intercepts clicks (`reactour__mask` `tour-highlight` rect),
+  // which is what timed out "Add attachment" here. Every other landing spec
+  // suppresses it the same way before the first navigation.
+  await page.addInitScript(() => localStorage.setItem("grove.onboarding.seen", "true"));
   await page.goto("/");
   const input = page.getByRole("textbox", { name: "Task brief", exact: true });
   await input.fill("Landing draft");

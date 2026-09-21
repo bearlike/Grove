@@ -21,9 +21,16 @@ Two atomic classes, both pure mechanism (no provider knowledge, no policy):
   (activity/messages/turns/digest), so an unchanged transcript costs one
   ``stat`` per file instead of a record walk.
 
-Thread-safety: one lock per instance — the daemon reads from the poll executor
-thread and request executor threads concurrently. Memo values must be
-immutable (frozen dataclasses / tuples); they are shared across callers.
+Thread-safety: the lock is PER FOLD STATE, with a short instance lock over the
+LRU map and the byte totals. The daemon folds several workspaces' transcripts
+concurrently (the poll executor thread and request executor threads), and those
+path tuples are disjoint, so a single instance lock made every one of them wait
+on whichever fold happened to be running. Lock order is always *state then
+instance*, never the reverse — ``_state_for`` and ``_rebuild`` take the instance
+lock holding no state lock, and ``_project`` takes it while holding one.
+
+Memo values must be immutable (frozen dataclasses / tuples); they are shared
+across callers.
 """
 
 from __future__ import annotations
@@ -96,6 +103,38 @@ def _retained_size(value: object, seen: set[int] | None = None) -> int:
     return total
 
 
+@dataclass(slots=True)
+class CacheMetrics:
+    """Deterministic counters for one cache instance — an operator's evidence.
+
+    Every earlier decision about this cache was argued from a profiler, which
+    can say where time went and not *why*: a cold parse and a warm reset look
+    identical in a stack sample. These are counts of the events that decide it,
+    so "the budget is too small for this fleet" (``resets`` climbing with
+    ``evictions``) is distinguishable from "the transcripts are simply growing"
+    (``parsed_bytes`` climbing alone) without attaching anything to the daemon.
+
+    Cumulative for the process's life and never reset by ``clear()``, which is a
+    test seam rather than an operational event.
+    """
+
+    hits: int = 0
+    misses: int = 0
+    resets: int = 0
+    evictions: int = 0
+    parsed_bytes: int = 0
+
+    def snapshot(self) -> CacheMetrics:
+        """A detached copy — the counters keep moving under the caller."""
+        return CacheMetrics(
+            hits=self.hits,
+            misses=self.misses,
+            resets=self.resets,
+            evictions=self.evictions,
+            parsed_bytes=self.parsed_bytes,
+        )
+
+
 class RecordFolder(Protocol):
     """An adapter's per-line fold policy: ``add`` sees each parsed line exactly
     once (in file order per path, paths in the order given to ``read``);
@@ -139,6 +178,9 @@ class _Cursor:
 @dataclass(slots=True)
 class _State:
     folder: RecordFolder
+    #: Serializes this fold alone. Disjoint path tuples fold concurrently; only
+    #: the LRU map and the byte totals need the cache-wide lock.
+    lock: threading.Lock = field(default_factory=threading.Lock)
     cursors: dict[str, _Cursor] = field(default_factory=dict)
     retained_bytes: int = 0
     source_bytes: int = 0
@@ -149,6 +191,22 @@ class _State:
     def __post_init__(self) -> None:
         # Even a missing-file state has a folder, cursor map, and LRU entry.
         self.folder_shallow_bytes = _folder_shallow_size(self.folder)
+        self.retained_bytes = (
+            sys.getsizeof(self) + sys.getsizeof(self.cursors) + self.folder_shallow_bytes
+        )
+
+    def reset(self, folder: RecordFolder) -> None:
+        """Rebuild this fold in place, keeping the identity its lock protects.
+
+        A rebuild replaces the folder rather than the ``_State``, because a
+        waiting thread already holds a reference to this object's lock — swapping
+        the map entry under it would let two threads fold the same paths into two
+        different folders and publish whichever finished last.
+        """
+        self.folder = folder
+        self.cursors = {}
+        self.source_bytes = 0
+        self.folder_shallow_bytes = _folder_shallow_size(folder)
         self.retained_bytes = (
             sys.getsizeof(self) + sys.getsizeof(self.cursors) + self.folder_shallow_bytes
         )
@@ -197,6 +255,13 @@ class TranscriptCache:
         self._retained_bytes = 0
         self._source_bytes = 0
         self._lock = threading.Lock()
+        self._metrics = CacheMetrics()
+
+    @property
+    def metrics(self) -> CacheMetrics:
+        """A snapshot of this cache's counters. See :class:`CacheMetrics`."""
+        with self._lock:
+            return self._metrics.snapshot()
 
     def read(self, paths: Sequence[Path]) -> list[Any]:
         """Return a safe snapshot, retaining the fold only while it fits its budget."""
@@ -224,13 +289,11 @@ class TranscriptCache:
         consume: Callable[[RecordFolder], tuple[_T, object | None]],
     ) -> _T:
         key = tuple(str(path) for path in paths)
-        with self._lock:
-            state = self._states.get(key)
-            if state is None:
-                state = self._admit(key)
+        state = self._state_for(key)
+        with state.lock:
             if not self._advance_all(state, paths):
-                self._discard(key)
-                state = self._admit(key)
+                state.reset(self._folder_factory())
+                self._count("resets")
                 self._advance_all(state, paths)
             result, retained_roots = consume(state.folder)
             if retained_roots is not None:
@@ -238,19 +301,60 @@ class TranscriptCache:
             # Folders may retain a derived immutable tuple during projection.
             # Measuring their shallow containers charges pointer arrays in
             # O(fields), without walking all prior records.
-            new_shallow_bytes = _folder_shallow_size(state.folder)
-            state.retained_bytes += new_shallow_bytes - state.folder_shallow_bytes
-            state.folder_shallow_bytes = new_shallow_bytes
+            self._charge_shallow(state)
+            self._publish(key, state)
+        return result
+
+    def _state_for(self, key: tuple[str, ...]) -> _State:
+        """The fold for these paths, admitted if absent — under the SHORT lock.
+
+        Returns before any file is read, so the cache-wide lock covers a dict
+        lookup rather than a whole ingest. Taken while holding no state lock;
+        see the lock-order note in the module docstring.
+        """
+        with self._lock:
+            state = self._states.get(key)
+            if state is not None:
+                self._states.move_to_end(key)
+                self._metrics.hits += 1
+                return state
+            self._metrics.misses += 1
+            state = _State(folder=self._folder_factory())
+            self._states[key] = state
+            self._refresh_totals(state)
+            return state
+
+    def _publish(self, key: tuple[str, ...], state: _State) -> None:
+        """Fold this state's byte deltas into the cache totals and re-evict.
+
+        Called holding ``state.lock`` — the one place the two locks nest, and
+        always in this order.
+        """
+        with self._lock:
+            if self._states.get(key) is not state:
+                # Evicted while this fold ran: its bytes were already subtracted
+                # and the next reader will re-admit it cold.
+                return
             self._refresh_totals(state)
             self._states.move_to_end(key)
             self._evict()
-            return result
 
-    def _admit(self, key: tuple[str, ...]) -> _State:
-        state = _State(folder=self._folder_factory())
-        self._states[key] = state
-        self._refresh_totals(state)
-        return state
+    @staticmethod
+    def _charge_shallow(state: _State) -> None:
+        """Re-measure the folder's own containers and charge the difference.
+
+        O(fields) rather than a walk of what they point at — but still a
+        ``getsizeof`` per field, so it runs once per read CHUNK (here, and at
+        the end of ``_ingest``) rather than once per admitted line. A 4000-line
+        catch-up paid this 4000 times to observe a handful of list growths.
+        """
+        new_shallow_bytes = _folder_shallow_size(state.folder)
+        state.retained_bytes += new_shallow_bytes - state.folder_shallow_bytes
+        state.folder_shallow_bytes = new_shallow_bytes
+
+    def _count(self, field_name: str, amount: int = 1) -> None:
+        with self._lock:
+            setattr(self._metrics, field_name, getattr(self._metrics, field_name) + amount)
 
     def _refresh_totals(self, state: _State) -> None:
         self._retained_bytes += state.retained_bytes - state.accounted_retained_bytes
@@ -292,6 +396,22 @@ class TranscriptCache:
         (a file shrank/rotated/vanished) and the caller must rebuild."""
         return all(self._advance(state, path) for path in paths)
 
+    def _ingest_chunk(
+        self, state: _State, path: Path, cursor: _Cursor, stat: os.stat_result
+    ) -> bool:
+        """One file's appended bytes, with the folder's capacity charged ONCE.
+
+        The per-chunk charge is what makes a catch-up read O(appended bytes)
+        rather than O(lines * folder fields): the accounting is only used to
+        decide eviction, and eviction is decided per read, so measuring it per
+        line bought nothing a per-chunk measurement does not.
+        """
+        before = cursor.offset
+        ok = self._ingest(state, path, cursor, stat)
+        self._charge_shallow(state)
+        self._count("parsed_bytes", max(0, cursor.offset - before))
+        return ok
+
     def _advance(self, state: _State, path: Path) -> bool:
         key = str(path)
         cursor = state.cursors.get(key)
@@ -318,7 +438,7 @@ class TranscriptCache:
             # (the unchanged case returned above) — the cursor can't describe
             # the new content, so the caller rebuilds from scratch.
             return False
-        return self._ingest(state, path, cursor, stat)
+        return self._ingest_chunk(state, path, cursor, stat)
 
     @staticmethod
     def _stat(path: Path) -> os.stat_result | None:
@@ -376,10 +496,9 @@ class TranscriptCache:
                                 else obj
                             )
                         )
+                        # The folder's own container capacity is charged ONCE per
+                        # chunk by `_ingest_chunk`, never per line.
                         state.retained_bytes += _retained_size(roots)
-                        new_shallow_bytes = _folder_shallow_size(state.folder)
-                        state.retained_bytes += new_shallow_bytes - state.folder_shallow_bytes
-                        state.folder_shallow_bytes = new_shallow_bytes
                 cursor.offset = offset
         except OSError as exc:
             logger.debug("transcript read failed for {}: {}", path, exc)
@@ -396,6 +515,7 @@ class TranscriptCache:
             or (self._max_source_bytes is not None and self._source_bytes > self._max_source_bytes)
         ):
             self._discard(next(iter(self._states)))
+            self._metrics.evictions += 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,6 +550,14 @@ class ResultMemo:
         self._entries: OrderedDict[tuple[Any, ...], _MemoEntry] = OrderedDict()
         self._retained_bytes = 0
         self._lock = threading.Lock()
+        self._inflight: dict[tuple[Any, ...], threading.Lock] = {}
+        self._metrics = CacheMetrics()
+
+    @property
+    def metrics(self) -> CacheMetrics:
+        """A snapshot of this memo's counters. See :class:`CacheMetrics`."""
+        with self._lock:
+            return self._metrics.snapshot()
 
     @staticmethod
     def signature(paths: Sequence[Path]) -> tuple[Any, ...]:
@@ -448,13 +576,54 @@ class ResultMemo:
         paths: Sequence[Path],
         compute: Callable[[], _T],
     ) -> _T:
+        """The memoized value, computing it at most once per concurrent miss.
+
+        ``compute`` runs outside the instance lock — it re-enters the fold cache,
+        and holding this lock across that would invert the lock order. The cost
+        of that freedom is a thundering herd: on a cold key the ~1 Hz poll and a
+        request can both miss and both run a full-history projection, and the
+        second one's result is discarded. So a miss takes a PER-KEY lock and
+        re-checks the entry under it; the loser of the race waits for a value it
+        would otherwise have computed twice.
+        """
         sig = self.signature(paths)
         with self._lock:
             hit = self._entries.get(key)
             if hit is not None and hit.signature == sig:
                 self._entries.move_to_end(key)
+                self._metrics.hits += 1
                 return hit.value  # type: ignore[no-any-return]
-        value = compute()  # outside the lock: compute may take the cache's own lock
+            self._metrics.misses += 1
+            gate = self._inflight.get(key)
+            if gate is None:
+                gate = self._inflight[key] = threading.Lock()
+        with gate:
+            # The winner published while this thread waited; its signature is the
+            # one just measured unless the files moved again, which is an
+            # ordinary miss.
+            with self._lock:
+                hit = self._entries.get(key)
+                if hit is not None and hit.signature == sig:
+                    self._entries.move_to_end(key)
+                    return hit.value  # type: ignore[no-any-return]
+            return self._compute_and_store(key, sig, compute)
+
+    def _compute_and_store(
+        self, key: tuple[Any, ...], sig: tuple[Any, ...], compute: Callable[[], _T]
+    ) -> _T:
+        """Run one miss and retain its value, holding this key's gate."""
+        try:
+            value = compute()  # outside the lock: compute may take the cache's own lock
+        finally:
+            # Dropped on the way out EITHER WAY. A stranded gate is not a
+            # deadlock — the `with` releases it as the exception unwinds, so the
+            # next reader acquires it normally — it is a LEAK: `_inflight` is
+            # keyed by memo key and bounded by nothing, where `_entries` has a
+            # maxsize. A projection raising is ordinary (a transcript vanishing
+            # mid-read), so without the `finally` the map grows for the life of
+            # the process.
+            with self._lock:
+                self._inflight.pop(key, None)
         retained_bytes = _retained_size(value)
         entry = _MemoEntry(sig, value, retained_bytes)
         with self._lock:
@@ -467,6 +636,7 @@ class ResultMemo:
                 while len(self._entries) > self._maxsize or self._retained_bytes > self._max_bytes:
                     _, evicted = self._entries.popitem(last=False)
                     self._retained_bytes -= evicted.retained_bytes
+                    self._metrics.evictions += 1
         return value
 
     def configure(

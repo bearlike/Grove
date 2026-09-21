@@ -62,6 +62,14 @@ class NativeOwner(Protocol):
 
     async def set_model(self, model: str) -> bool: ...
 
+    async def compact(self) -> bool:
+        """Request provider-native context compaction, or refuse when unsupported."""
+        ...
+
+    async def invoke_control(self, name: str) -> bool:
+        """Invoke one provider-native named command, or refuse when unsupported."""
+        ...
+
     async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool: ...
 
     async def wait_closed(self) -> None:
@@ -115,8 +123,13 @@ class AskRecorder:
         Only the keyword arguments given are stated; the host merges them over
         the sidecar's standing facts field by field, so a ``result`` frame's
         cost never blanks an exit code the previous ``item/completed`` set.
+        ``context_state`` is also retained when it explicitly clears a prior
+        context — absence would mean an older producer that must invalidate it.
         """
-        self._drop({k: v for k, v in stated.items() if v is not None}, suffix=self.FACTS_SUFFIX)
+        self._drop(
+            {k: v for k, v in stated.items() if v is not None or k == "context_state"},
+            suffix=self.FACTS_SUFFIX,
+        )
 
     def _drop(self, body: dict[str, Any] | None, *, suffix: str | None = None) -> None:
         if self._session_id is None:

@@ -157,10 +157,10 @@ See [packaging](repo:packaging/CLAUDE.md).
 A workspace appears on the [Activity Dashboard](features-activity.md) with only
 the active/idle signal, no turn or token counts and no session history. Either
 `kind` is unset or `generic`, which launches without introspection, or there is
-no adapter for the `kind` you named. Grove ships adapters for Claude Code, Codex
-CLI, and remote Mewbo.
+no adapter for the `kind` you named. Grove ships adapters for Claude Code, the
+Codex CLI, OpenCode, and remote Mewbo.
 
-Set `kind` to `claude_code`, `codex`, or `mewbo` and confirm with
+Set `kind` to `claude_code`, `codex`, `opencode`, or `mewbo` and confirm with
 `grove config show`. See
 [Agents](configure-agents.md#telling-grove-what-kind-of-agent-it-is).
 `grove sessions list` finds sessions whatever the `kind`.

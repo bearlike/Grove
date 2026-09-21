@@ -170,19 +170,26 @@ describe("roomier vertical spacing preserves compact horizontal controls", () =>
   });
 });
 
-describe("the daemon's version and uptime break the rhythm, deliberately", () => {
-  it("sits a DOUBLE step below the identity control, not one", () => {
-    // The complaint was structural rather than aesthetic: at the uniform gap
-    // the service line read as a fifth footer destination instead of as a
-    // description of what the four above are served by.
-    expect(sidebar).toMatch(/gap-1\.5 empty:hidden", collapsed \? null : "mt-3"/);
+describe("the daemon's version and uptime live in the status footer, not the rail", () => {
+  // They MOVED (#814); they are not duplicated. Two copies of one fact on one
+  // screen is how the two come to disagree, so the rail must not render the
+  // service strip at all and the footer must be the one that does.
+  it("does not mount DaemonStatus in the rail footer", () => {
+    // The IMPORT, not the word: a token census cannot tell a mention in prose
+    // from a real mount, and asserting the bare name survived a mutation that
+    // re-added the component. See `sidebar-footer.test.tsx`.
+    expect(sidebar).not.toMatch(/import\s*{[^}]*DaemonStatus[^}]*}\s*from/);
+    expect(sidebar).not.toMatch(/<DaemonStatus/);
   });
 
-  it("pays nothing for the states where DaemonStatus renders nothing at all", () => {
-    // It returns null when collapsed and when the daemon is unreachable. A
-    // wrapper is a flex item either way, so without `empty:hidden` those two
-    // states would spend the gap and the margin on an absent row.
-    expect(sidebar).toContain("empty:hidden");
+  it("keeps the rail footer's own destinations and account control", () => {
+    // The move is scoped to the service facts — navigation and identity stay.
+    expect(sidebar).toContain("RAIL_ITEMS");
+    expect(sidebar).toContain("AccountMenu");
+  });
+
+  it("mounts the status footer exactly once, in the shell", () => {
+    expect(shell.match(/<StatusFooter/g) ?? []).toHaveLength(1);
   });
 });
 

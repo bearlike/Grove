@@ -15,7 +15,10 @@ export const groveKeys = {
   workspaces: ["grove", "workspaces"] as const,
   workspace: (id: string) => ["grove", "workspaces", id] as const,
   peek: (id: string) => ["grove", "workspaces", id, "peek"] as const,
+  workspaceActivity: (id: string) => ["grove", "workspaces", id, "activity"] as const,
   queue: (id: string) => ["grove", "workspaces", id, "queue"] as const,
+  fleet: (id: string, sessionId: string) =>
+    ["grove", "workspaces", id, "fleet", sessionId] as const,
   todo: (id: string) => ["grove", "workspaces", id, "todo"] as const,
   history: (id: string) => ["grove", "workspaces", id, "history"] as const,
   panels: (id: string) => ["grove", "workspaces", id, "panels"] as const,
@@ -30,6 +33,12 @@ export const groveKeys = {
     ["grove", "workspaces", id, "sessions", "candidates"] as const,
   turns: (id: string, sessionId: string) =>
     ["grove", "workspaces", id, "sessions", sessionId, "turns"] as const,
+  // Keyed by the CALL, not by the transcript: a body is immutable once the call
+  // settles (it is only fetchable because it settled), so one opened disclosure
+  // caches independently of the turn window that named it and survives every
+  // poll that rewrites `turns`.
+  tool: (id: string, sessionId: string, toolUseId: string) =>
+    ["grove", "workspaces", id, "sessions", sessionId, "tools", toolUseId] as const,
 
   catalog: (limit?: number) => ["grove", "sessions", "catalog", limit ?? null] as const,
   gallery: () => ["grove", "gallery"] as const,

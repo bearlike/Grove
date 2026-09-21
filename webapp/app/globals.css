@@ -113,6 +113,7 @@
      stronger independent tokens because their boundaries convey interaction. */
   --color-edge-control: var(--edge-control);
 
+  --color-info: var(--info);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
@@ -357,6 +358,11 @@
      colour — which is exactly what lint:styling forbids in components/grove. */
   --success: oklch(0.47 0.14 155);
   --success-foreground: oklch(0.985 0 0);
+  /* The calm tier BELOW success: a reading that is fine and not yet worth a
+     verdict. The context meter's first band — success at that point would say
+     "good" about a window that is merely empty. Same lightness as success so
+     the ramp changes hue, never weight. */
+  --info: oklch(0.47 0.14 250);
   /* Merged. Solved against `sunken`, the DARKEST rung in this theme and so the
      worst case for a dark mark — 4.24:1 there, 5.71:1 on the card it actually
      renders on. It sits in the same lightness band as its siblings (success
@@ -462,6 +468,7 @@
   --edge-control: oklch(0.40 0.009 286);
   --success: oklch(0.7 0.17 162.48);
   --success-foreground: oklch(0.21 0.006 285.885);
+  --info: oklch(0.7 0.14 250);
   /* Merged, solved from the opposite end: here the mark is LIGHTER than every
      rung, so the worst case is the lightest one (`overlay`) at 5.49:1 — which
      clears AA-normal, unlike its light-mode counterpart. The two values cannot
@@ -876,6 +883,99 @@
   background: none;
 }
 
+/*
+ * THE MARK KEEPS TIME WITHOUT THE CLOCK WHEN A READER ASKS FOR LESS MOTION.
+ *
+ * `working-loader.tsx`'s clock stands down under `prefers-reduced-motion` (see
+ * `wanted()`), the breathe above is scoped to `no-preference`, and the label's
+ * shimmer carries `motion-reduce:animate-none` — so all three layers switched
+ * off together and left a FROZEN 3x3 grid on screen. Measured on the deployed
+ * app 2026-09-17: the matrix read `110001000`, which is the vendored position
+ * math at tick ZERO, with no class mutation across 6s at a healthy 60fps. The
+ * clock had never started; nothing was stuck.
+ *
+ * THAT IS THE BUG THIS RULE FIXES, AND IT IS NOT A LOADER BUG. Standing the
+ * animation down is correct; leaving the leftover ARTIFACT of an animation on
+ * screen is not, because a static matrix is indistinguishable from a broken
+ * one — which is the thing this component exists to rule out. It reproduces
+ * only for readers who set the preference, which is why five previous fixes
+ * (sizing, tick math, the shared-listener teardown, the compositor breathe)
+ * were each correct and none of them could have touched it.
+ *
+ * Reduced motion forbids vestibular-triggering MOVEMENT, not animation, so
+ * this animates `opacity` only — no transform, translate, scale or rotation —
+ * which is the accepted substitute for a spinner. It is compositor-only, so it
+ * also survives a blocked main thread for free.
+ *
+ * THE PER-CELL DELAY *IS* THE PATTERN HERE: with the clock down, nothing else
+ * decides which cells are lit, so the stagger supplies the wave on its own.
+ * Slower and shallower than the `no-preference` breathe, deliberately. The two
+ * media queries are disjoint, so this can never run beside that rule or fight
+ * the clock. An animated value beats a normal declaration whatever layer it
+ * sits in, which is what carries this over the vendored `opacity-15`/
+ * `opacity-90` utilities without `!important`.
+ */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="generation-loader"] > div > span {
+    animation: loader-cell-reduced 2.4s ease-in-out infinite;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(1) {
+    animation-delay: 0ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(2) {
+    animation-delay: 80ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(3) {
+    animation-delay: 160ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(4) {
+    animation-delay: 240ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(5) {
+    animation-delay: 320ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(6) {
+    animation-delay: 400ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(7) {
+    animation-delay: 480ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(8) {
+    animation-delay: 560ms;
+  }
+  [data-slot="generation-loader"] > div > span:nth-child(9) {
+    animation-delay: 640ms;
+  }
+
+  /*
+   * THE LABEL SHIMMERS TOO, BY EXPLICIT REQUEST, AND IT IS THE ONE THING HERE
+   * THAT IS NOT MOVEMENT-FREE. `tw-shimmer` sweeps `background-position`
+   * across a gradient clipped to the glyphs, so unlike the cells above this
+   * restores a travelling highlight rather than a pulse — a deliberate
+   * trade-off, narrowed to the ~45px "Working" label and never granted to any
+   * other shimmer in the app, all of which keep `motion-reduce:animate-none`.
+   * `motion-reduce:animate-none` is a SHORTHAND, so restoring only
+   * `animation-name` is a dead fix: its zero duration and one iteration remain
+   * in force and nothing visibly moves. Restore the utility's whole animation
+   * tuple and its computed duration. `:empty` still excludes `WorkingMark`'s
+   * blank label (see the rule above), so the rail keeps costing nothing.
+   */
+  [data-slot="generation-loader"] .shimmer:not(:empty) {
+    animation: tw-shimmer 1s linear 0s infinite backwards;
+    animation-duration: calc((var(--_duration) + var(--_repeat-delay)) * 1ms);
+  }
+}
+
+@keyframes loader-cell-reduced {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
 /* Vendor Markdown fences use literal pixels; tool and diff code already use
    this ramp step. Normalize fences on every surface, including plan/mailbox bodies. */
 .aui-md-pre {
@@ -971,6 +1071,25 @@
    that says which agent holds control. */
 [data-slot="agent-handoff"].handoff-agent > div > span:first-child {
   color: var(--color-content-primary);
+}
+
+/* The vendored element's arrow and recipient pill hard-code an "in transit"
+   blue for the unsettled branch, and Grove ALWAYS renders `settled={false}`
+   (see agent-message.tsx) — Grove has no delivery-in-progress state to show,
+   so that blue is not a transient decoration, it is the permanent steady
+   state a reader sees on every handoff. §4.1 of the design system requires a
+   state-gated colour to come from the semantic set, never a raw palette hue.
+   `--primary` already carries "this is the currently active one" elsewhere
+   (the rail's position marker, the phase-meter's current node), so this reuses
+   it rather than inventing a second "active" token. Targeted structurally —
+   svg then the second span — matching the vendor's own from/arrow/to layout,
+   so it holds regardless of which Tailwind utility the vendor applies. */
+[data-slot="agent-handoff"].handoff-agent > div > svg {
+  color: var(--color-primary);
+}
+[data-slot="agent-handoff"].handoff-agent > div > span:last-child {
+  background-color: color-mix(in oklch, var(--color-primary) 12%, transparent);
+  color: var(--color-primary);
 }
 
 /* Controls — 3. Anything a pointer acts on that is not a circle. */
@@ -1302,6 +1421,180 @@
   background-color: var(--surface-base);
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+
+/*
+ * The status footer's four sections (#814).
+ *
+ * WHY THESE ARE TOKENS AND NOT `--border` / `--surface-*`. The band sits on
+ * `surface-sunken`, the DARKEST rung, and the design system's own subtle-edge
+ * rule says to solve such an edge on the rung it renders on rather than on the
+ * worst one. Measured there, `--border` composites to 1.37:1 — well under the
+ * 1.62-1.70 band the guide reports for a card edge on `raised` — so the seam
+ * that reads as a quiet hairline on a card reads as UNDRAWN here, which is
+ * exactly why the first cut of this band had no visible sections at all.
+ * `--footer-rule` is solved against the band: measured 1.75:1 dark and 1.59:1
+ * light, both inside the guide's stated look and under the peer-benchmark
+ * ceiling (M3 `outline-variant` 1.70 is a ceiling here, not a target).
+ *
+ * THE WASH IS SPECIFIED AS A LIGHTNESS STEP, NOT A RATIO. Near black a 0.045 L
+ * step is 1.04:1 — a contrast figure says "invisible" for something plainly
+ * visible, because ratio is the wrong instrument at that end of the scale. It
+ * stays under the 0.05 adjacent-rung floor deliberately: this is a WASH that
+ * groups two sections, never a new elevation rung.
+ *
+ * AND IT REVERSES BETWEEN THEMES. Dark lifts (+0.045 L), light recedes
+ * (-0.045 L), because elevation is a relationship between two layers rather
+ * than a fixed colour — the same reversal `shell-panel` above relies on.
+ * Every content tier and every state colour was measured against the dark wash
+ * and clears 4.5:1 (tertiary 7.53:1, success 8.15:1, warning 7.80:1,
+ * destructive 6.85:1), so the wash costs no legibility.
+ */
+:root {
+  --footer-rule: oklch(0.76 0.006 286);
+  --footer-wash: oklch(0.855 0.004 286);
+  --footer-accent: oklch(0.822 0.008 286);
+  --footer-seam: oklch(0.8 0.005 286);
+}
+
+.dark {
+  --footer-rule: oklch(0.34 0.008 286);
+  --footer-wash: oklch(0.145 0.006 286);
+  --footer-accent: oklch(0.178 0.009 286);
+  --footer-seam: oklch(0.28 0.007 286);
+}
+
+/*
+ * THE BAND IS A RENDERED-PIXEL HEIGHT, not a rem utility — the design system's
+ * "header bands use rendered pixels, not density-scaled spacing" rule, and the
+ * same shape `.workspace-header` uses one screen up.
+ *
+ * Measured on the deployed app: `h-6` renders 19.19px here, because the density
+ * root is 80% and `h-6` is 1.5rem. The approved band is 24px, and a chrome
+ * strip is one of the few things whose height is a physical contract rather
+ * than a typographic one — it frames content rather than being read, and a
+ * pointer aimed at it does not shrink when type does. The TYPE inside it stays
+ * on the rem ramp, so the density lever and browser zoom still reach the text.
+ *
+ * A coarse pointer gets 44px for the same reason every other band does: a
+ * finger needs the target even though the desktop design does not change.
+ */
+.status-footer {
+  min-height: 24px;
+}
+
+@media (pointer: coarse) {
+  .status-footer {
+    min-height: 44px;
+  }
+}
+
+@utility footer-rule {
+  border-color: var(--footer-rule);
+}
+
+/* The MIDDLE two sections are washed, so the outer two read as a pair. Washing
+ * all four would give four areas and no relationship between them. */
+@utility footer-wash {
+  background-color: var(--footer-wash);
+}
+
+/* The band's two ENDS — project and version. A THIRD ground rather than a
+ * second wash: the washed sections group a pair of neighbours in the middle,
+ * while this pairs two sections that never touch, so it has to be
+ * distinguishable from the wash rather than merely from the band. One step
+ * further out (±0.078 L against the band's own) and still under §8's 0.05
+ * adjacent-RUNG floor in the direction that matters — this groups areas of one
+ * band and does not promote either end to a new elevation. It reverses between
+ * themes for the reason the wash already does: elevation is a relationship. */
+@utility footer-accent {
+  background-color: var(--footer-accent);
+}
+
+/*
+ * THE SEAM INSIDE A SECTION — a SECOND, QUIETER TIER, and the two-tier split is
+ * the whole point rather than a second colour.
+ *
+ * The band's sections were divided and their CONTENTS were not, so a workspace
+ * section ran project, sub-path, branch, worktree, agent and context together as
+ * one undivided run of glyphs and words, and two subscription accounts sat side
+ * by side with nothing between them — a reader had to know the vocabulary to
+ * find where one account's percentage stopped and the next one's plan began.
+ * Drawing those with `--footer-rule` would make every value look like a section,
+ * which is the same failure pointed the other way: seven equal divisions carry no
+ * grouping at all.
+ *
+ * So the ratios are deliberately ordered rather than merely different. Measured
+ * on `surface-sunken`, the rung this band renders on: `--footer-rule` is
+ * **1.59:1 light / 1.75:1 dark** and this seam is **1.39:1 light / 1.41:1 dark**
+ * — quieter than the section rule, above §4's 1.09:1 "reads as undrawn" floor,
+ * and under the Primer `borderColor-default` 1.45:1 benchmark this tier answers
+ * to. Nesting reads as nesting because the inner line is genuinely fainter.
+ *
+ * It is a HEIGHT as well as a weight: the seam is inset from the band's edges
+ * (the rule runs the full 24px, this one 12px), so the two are distinguishable
+ * on a monochrome display and by anyone who cannot resolve a 0.16 L step.
+ */
+/*
+ * A QUOTA READING THAT WANTS ATTENTION — amber and above, and nothing else.
+ *
+ * Opacity only, and slow (3s): the value must stay legible at every frame of
+ * its own animation, which rules out moving it, changing its colour, or
+ * dipping far enough to make a number hard to read mid-glance. The floor is
+ * 0.55 rather than 0 for exactly that reason. It is the same instrument the
+ * generation loader already uses, at half its rate, because this one lives in
+ * permanent chrome rather than appearing for the length of a request.
+ *
+ * Applied to the PERCENTAGE alone, never its account row: the band's job is to
+ * stay still, and a shimmering row in the corner of the eye is the thing that
+ * makes a status bar something people hide.
+ *
+ * Under `prefers-reduced-motion` nothing animates and the tone still carries
+ * the whole reading — which is the test for whether an animation was ever
+ * allowed to be the carrier.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .quota-urgent {
+    animation: quota-pulse 3s ease-in-out infinite;
+  }
+}
+
+@keyframes quota-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@utility footer-seam {
+  border-color: var(--footer-seam);
+}
+
+/*
+ * THE SEAM'S HEIGHT IS A RENDERED PIXEL, for the reason the band's own is.
+ *
+ * It was `h-3` and measured 9.59px on the deployed page — 0.75rem against this
+ * app's 80% density root, the identical trap `.status-footer` above documents
+ * for `h-6`. That is not merely off-spec: the seam's whole job is to read as
+ * HALF the band, and a rem height means the band stays 24px (a physical
+ * contract) while its divider shrinks with the density lever, so the ratio the
+ * hierarchy rests on drifts with a setting that should not touch it.
+ *
+ * Both values track the band's own two modes, so the seam is half of whichever
+ * band it is drawn in. The TYPE beside it stays on the rem ramp — the density
+ * lever, a reader's font size and zoom all still reach every value in the band.
+ */
+.footer-seam {
+  height: 12px;
+}
+
+@media (pointer: coarse) {
+  .footer-seam {
+    height: 22px;
+  }
 }
 
 /*

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 
@@ -65,6 +67,34 @@ it("keeps every sender pill above the contrast floor, whichever kind it is", () 
     const html = renderToStaticMarkup(<AgentMessage message={message({ handoff })} />);
     expect(html).toContain("handoff-agent");
   }
+});
+
+/**
+ * The colour census EXEMPTS this element, so this is what guards the override.
+ *
+ * `elements-agent-handoff` bakes an "in transit" blue into its unsettled arrow
+ * and recipient pill as literal JSX, and Grove always renders `settled={false}`
+ * — so that blue is the permanent steady state, not a transient decoration.
+ * `globals.css` repaints it under `.handoff-agent`, but the e2e census skips
+ * this subtree (a class census reads emitted source, never what a later rule
+ * paints over it), which leaves the override with nothing asserting it.
+ *
+ * Both halves are pinned here because either one alone is vacuous: that the
+ * vendored blue is still emitted (the day upstream drops it, the CSS becomes
+ * dead weight aimed at nothing) and that our rule still selects the elements
+ * carrying it (the day the vendor reshuffles its layout, the selectors miss and
+ * the blue silently returns). The RENDERED result stays a browser measurement.
+ */
+it("keeps the scoped override aimed at the vendored transit colour", () => {
+  const html = renderToStaticMarkup(<AgentMessage message={message({ handoff: true })} />);
+  const css = readFileSync(
+    new URL("../../app/globals.css", import.meta.url),
+    "utf8",
+  );
+
+  expect(html).toMatch(/(?:text|bg)-blue-/);
+  expect(css).toContain('[data-slot="agent-handoff"].handoff-agent > div > svg');
+  expect(css).toContain('[data-slot="agent-handoff"].handoff-agent > div > span:last-child');
 });
 
 /**

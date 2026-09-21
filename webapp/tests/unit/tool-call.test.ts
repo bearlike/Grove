@@ -19,6 +19,7 @@ const BASH: ToolCallView = {
   input: { command: "rg -n 'todo' src\ncd src && ls", description: "Search" },
   result: "src/a.ts:12: todo\n",
   duration_ms: 1450,
+  body: "inline",
 };
 
 function turn(entries: SessionTurnView["entries"]): SessionTurnView[] {

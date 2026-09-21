@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -26,10 +27,11 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tmux import HostAttach
-from grove.core.workspace import WorkspaceState
+from grove.core.workspace import WorkspacePeek, WorkspaceState, WorkspaceStatus
 from grove.tui.app import GroveApp
 from grove.tui.screens.help import HelpScreen
 from grove.tui.screens.list import WorkspaceListScreen
+from grove.tui.widgets.list import WorkspaceList
 from grove.tui.widgets.status import StatusBar
 from tests.conftest import FakeTmux
 
@@ -53,8 +55,11 @@ class _BlockingManager(WorkspaceManager):
         super().__init__(repo_root=repo_root, cfg=cfg, store=store)
         self.entered = threading.Event()
         self.release = threading.Event()
+        self.deleted = threading.Event()
+        self.allow_kill_return = threading.Event()
         self.released_cleanly = False
         self.dispatched: list[tuple[str, str]] = []
+        self.hold_after_kill = False
         self._armed = False
 
     def arm(self) -> None:
@@ -75,6 +80,9 @@ class _BlockingManager(WorkspaceManager):
     def kill(self, workspace_id: str, *, delete_branch: bool | None = None) -> None:
         self._block("kill", workspace_id)
         super().kill(workspace_id, delete_branch=delete_branch)
+        self.deleted.set()
+        if self.hold_after_kill:
+            self.allow_kill_return.wait(timeout=_BLOCK_TIMEOUT_S)
 
 
 def _blocking_manager(tmp_repo: Path, tmp_path: Path) -> _BlockingManager:
@@ -110,6 +118,15 @@ async def _await_dispatched(manager: _BlockingManager, count: int) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError(f"only {len(manager.dispatched)} verbs dispatched, wanted {count}")
+
+
+async def _await_deleted(manager: _BlockingManager) -> None:
+    """Yield until a blocked kill has deleted its workspace record."""
+    for _ in range(200):
+        if manager.deleted.is_set():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("kill never deleted its workspace record")
 
 
 @pytest.mark.asyncio
@@ -313,6 +330,70 @@ async def test_quitting_mid_verb_warns_once_before_it_exits(
         assert exits == [True]
 
         manager.release.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_quitting_mid_kill_survives_the_pane_tick_after_the_record_is_deleted(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The selected row can vanish before its worker posts completion.
+
+    The pane timer is independent of the lifecycle completion message. A kill
+    removes the record before it returns, so the timer must treat the cached
+    selection as stale rather than letting ``peek_pane`` crash the app.
+    """
+    del fake_tmux
+    manager = _blocking_manager(tmp_repo, tmp_path)
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="doomed"))
+    manager.arm()
+    manager.hold_after_kill = True
+    monkeypatch.setattr(GroveApp, "exit", lambda *_a, **_k: None)
+
+    app = GroveApp(manager)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("k")
+        await pilot.pause()
+        await pilot.press("y")
+        await _await_entered(manager)
+
+        # The first quit warns but retains the TUI while the verb completes.
+        await pilot.press("q")
+        await pilot.pause()
+        assert app.screen.query_one(StatusBar).flash_message == (
+            "kill still running — press q again to quit and wait for it"
+        )
+
+        # Force the exact stale-selection state the periodic timer sees: the
+        # row has gone, but the fast pane tick has not yet received the refresh
+        # that clears a selected workspace's cached peek.
+        screen = app.screen
+        assert isinstance(screen, WorkspaceListScreen)
+
+        manager.release.set()
+        await _await_deleted(manager)
+
+        # The cached peek's payload is immaterial; `_tick_pane` only needs a
+        # live state for the selected id to invoke the manager's public pane
+        # seam. Keep it after kill so the test controls the CI race directly.
+        stale = replace(state, status=WorkspaceStatus.ACTIVE)
+        screen.query_one(WorkspaceList).populate([stale])
+        screen._cached_peek = WorkspacePeek(
+            state=stale,
+            base_ahead=0,
+            base_behind=0,
+            diff_added=0,
+            diff_removed=0,
+            dirty_files=0,
+            recent_commits=(),
+            agent_snapshot=None,
+            snapshot_taken_at=None,
+        )
+        screen._tick_pane()
+
+        manager.allow_kill_return.set()
         await app.workers.wait_for_complete()
         await pilot.pause()
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from grove.core.agents import AgentActivityState
 from grove.core.contracts.phase import PhaseView
@@ -180,6 +180,11 @@ class AgentActivityView(BaseModel):
     # Context-window pressure. Defaults so a pre-existing client deserializes
     # unchanged; ``None`` is "this harness did not say", never a zero.
     context: ContextWindowView | None = None
+    # A stale native worker wrote cumulative context bytes which Grove suppresses
+    # rather than rendering as occupancy. `None` is still "not measured"; this
+    # value tells the client that respawning starts the current-format producer.
+    # Nullable with no schema default so older clients continue to decode it.
+    context_unavailable_reason: Literal["stale_native_worker"] | None = None
     # Owned-stream facts (cost, TTFT, last exit code); ``None`` on a terminal
     # session and on an older daemon, so a client renders nothing rather than 0.
     native: NativeFactsView | None = None
@@ -222,6 +227,7 @@ class AgentActivityView(BaseModel):
             tokens_in=a.tokens_in,
             tokens_out=a.tokens_out,
             context=ContextWindowView.from_context(a.context) if a.context is not None else None,
+            context_unavailable_reason=a.context_unavailable_reason,
             native=NativeFactsView.from_facts(a.native) if a.native is not None else None,
             last_event_at=a.last_event_at,
             needs_attention=a.needs_attention,
@@ -374,17 +380,26 @@ class SubagentActivityView(BaseModel):
 
 
 class SubagentFleetView(BaseModel):
-    """The full sub-agent roster for one workspace — ``GET /workspaces/{id}/fleet``.
+    """The full child-agent roster for one workspace root session.
 
-    ``TodoListView``'s sibling in shape: a fleet is unbounded in count exactly
-    like a checklist, so it stays off the ~1 Hz stream entirely
-    (``WorkspaceActivityView.fleet`` carries only counts, via
-    ``FleetProgressView``) and is fetched on demand instead.
+    ``subagents`` preserves Claude Code's hook-pushed live roster. ``sessions``
+    is the provider-neutral, transcript-derived child projection; a matching
+    child id appears in both sources only once in ``sessions``. The route and
+    stream never embed child turns: a selected child remains drillable through
+    the existing cursor-aware ``/turns`` endpoint.
+
+    ``supported`` distinguishes an adapter with no child-reader capability from
+    a supported root with no children. ``error`` is a best-effort read failure,
+    never silently reported as an empty fleet.
     """
 
     model_config = ConfigDict(frozen=True)
 
     subagents: list[SubagentActivityView] = []
+    sessions: list[SessionActivityView] = []
+    session_id: str | None = None
+    supported: bool = False
+    error: str | None = None
 
 
 class FleetProgressView(BaseModel):
@@ -424,6 +439,15 @@ class WorkspaceActivityView(BaseModel):
     sub-agents it has running. All default to ``None`` so a pre-existing
     client deserializes unchanged (additive wire evolution), and all mean
     "nothing to report" when absent — never a zero value.
+
+    ``branch`` is the LIVE branch, already derived per tick by the engine and
+    dropped here until now — so every client rendered ``state.branch``, the
+    create-time snapshot nothing refreshes, and named the branch a workspace
+    was born on rather than the one it is on. It carries
+    ``WorkspaceActivity.live_branch`` (live, else recorded), so it is never
+    empty and a client needs no fallback of its own. ``state.branch`` stays
+    exactly as it was: that field is the IDENTITY ``resume`` rebuilds the
+    worktree from, and this one is what a reader should see.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -443,11 +467,18 @@ class WorkspaceActivityView(BaseModel):
     todo: TodoProgressView | None = None
     queue: QueueDepthView | None = None
     fleet: FleetProgressView | None = None
+    # `default_factory`, never `default=""`: Pydantic writes a `default` key
+    # into the schema for the latter, and `openapi-typescript`'s
+    # `defaultNonNullable` then generates the property as REQUIRED — so an
+    # additive field would break every existing client literal. Same trap
+    # `CreateWorkspaceRequest.attachments` paid for; see contracts/CLAUDE.md.
+    branch: str = Field(default_factory=str)
 
     @classmethod
     def from_activity(cls, w: WorkspaceActivity) -> WorkspaceActivityView:
         return cls(
             state=WorkspaceStateView.from_state(w.state),
+            branch=w.live_branch,
             sessions=[SessionActivityView.from_session_activity(s) for s in w.sessions],
             base_ahead=w.base_ahead,
             base_behind=w.base_behind,

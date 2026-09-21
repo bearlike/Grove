@@ -46,12 +46,19 @@ def test_headline_names_a_recorded_trigger_and_never_invents_one() -> None:
 
 
 def _boundary(
-    uuid: str, ts: str, *, trigger: str = "manual", cumulative: int | None = 558034
+    uuid: str,
+    ts: str,
+    *,
+    trigger: str = "manual",
+    cumulative: int | None = 558034,
+    duration_ms: int | None = 263_534,
 ) -> dict[str, object]:
     """A real-shaped ``type:"system"`` / ``subtype:"compact_boundary"`` record."""
     metadata: dict[str, object] = {"trigger": trigger, "preTokens": 600000, "postTokens": 41966}
     if cumulative is not None:
         metadata["cumulativeDroppedTokens"] = cumulative
+    if duration_ms is not None:
+        metadata["durationMs"] = duration_ms
     return {
         "type": "system",
         "subtype": "compact_boundary",
@@ -100,6 +107,17 @@ def _assistant(uuid: str, ts: str, text: str) -> dict[str, object]:
             "content": [{"type": "text", "text": text}],
         },
     }
+
+
+def _switched(uuid: str, ts: str, text: str) -> dict[str, object]:
+    """An assistant reply on a DIFFERENT model — a mid-session ``/model`` switch,
+    which is what makes "the model in effect" distinguishable from "the session's
+    model"."""
+    record = _assistant(uuid, ts, text)
+    message = record["message"]
+    assert isinstance(message, dict)
+    message["model"] = "claude-opus-5"
+    return record
 
 
 def _parse(raws: list[dict[str, object]]) -> _TranscriptParser:
@@ -177,6 +195,74 @@ def test_an_unusable_total_yields_no_count_rather_than_a_wrong_one() -> None:
     )
     boundaries = [m.compaction for m in parser.messages() if m.role == "compaction"]
     assert [b.dropped_tokens for b in boundaries if b] == [None, 900_000, None]
+
+
+def test_duration_is_the_harness_own_measurement_not_a_derived_span() -> None:
+    """``durationMs`` is native and PER-EVENT — unlike the token count beside it,
+    it needs no delta. Present on 52 of 52 real boundaries on-host, and routinely
+    into the minutes (263 s on the record this fixture's default is taken from),
+    so it is a real wait rather than a rounding detail.
+
+    The two boundaries carry DIFFERENT durations with identical everything else,
+    which is what makes this fail if the field is dropped or read from the wrong
+    record: a fixture whose durations matched would pass against a constant.
+    """
+    parser = _parse(
+        [
+            _boundary("b1", "2026-08-11T10:00:01Z", duration_ms=263_534),
+            _boundary("b2", "2026-08-11T11:00:01Z", duration_ms=41_207),
+        ]
+    )
+    boundaries = [m.compaction for m in parser.messages() if m.role == "compaction"]
+    assert [b.duration_ms for b in boundaries if b] == [263_534, 41_207]
+
+
+def test_an_unrecorded_or_negative_duration_is_absent_not_zero() -> None:
+    """A harness that timed nothing must not read as an instantaneous compaction,
+    and a negative value is a clock artefact rather than a duration. Both are
+    ``None`` — the same "cannot tell" the token counter answers with."""
+    parser = _parse(
+        [
+            _boundary("b1", "2026-08-11T10:00:01Z", duration_ms=None),
+            _boundary("b2", "2026-08-11T11:00:01Z", duration_ms=-5),
+            _boundary("b3", "2026-08-11T12:00:01Z", duration_ms=0),
+        ]
+    )
+    boundaries = [m.compaction for m in parser.messages() if m.role == "compaction"]
+    # A reported 0 is a real 0, distinct from an absent measurement.
+    assert [b.duration_ms for b in boundaries if b] == [None, None, 0]
+
+
+def test_the_compacting_model_is_the_one_that_was_running() -> None:
+    """NO harness stamps a model on the boundary — 0 of 52 real Claude records
+    carry any model-shaped key — so it is the nearest PRECEDING assistant
+    message's model.
+
+    The fixture switches models mid-session, which is the only shape that can
+    fail if the walk picks the session's first or last model instead of the one
+    in effect: with a single model every candidate implementation agrees.
+    """
+    parser = _parse(
+        [
+            _assistant("a1", "2026-08-11T09:00:00Z", "before the first"),
+            _boundary("b1", "2026-08-11T10:00:01Z"),
+            _switched("a2", "2026-08-11T10:30:00Z", "after a /model switch"),
+            _boundary("b2", "2026-08-11T11:00:01Z"),
+        ]
+    )
+    boundaries = [m.compaction for m in parser.messages() if m.role == "compaction"]
+    assert [b.model for b in boundaries if b] == ["claude-sonnet-4-5", "claude-opus-5"]
+
+
+def test_a_compaction_before_any_reply_names_no_model_rather_than_guessing() -> None:
+    """A session that compacted before its first assistant turn (1 of 48 real
+    boundaries) has no model in effect to report. The session's configured
+    default is NOT substituted: a mid-session switch makes that the wrong answer
+    exactly when it differs from what actually ran."""
+    parser = _parse([_boundary("b1", "2026-08-11T10:00:01Z")])
+    (message,) = [m for m in parser.messages() if m.role == "compaction"]
+    assert message.compaction is not None
+    assert message.compaction.model is None
 
 
 def test_only_the_two_measured_triggers_pass_through() -> None:

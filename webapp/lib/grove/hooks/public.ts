@@ -28,10 +28,14 @@ type PublicStreamOwner = {
   token: string;
 };
 
-const publicKeys = {
+/** Exported for `tool-body.ts`, which serves both namespaces and must not
+ * respell a key table that already exists. */
+export const publicKeys = {
   root: (token: string) => ["grove", "public", token] as const,
   workspace: (token: string) => ["grove", "public", token] as const,
   turns: (token: string) => ["grove", "public", token, "turns"] as const,
+  tool: (token: string, toolUseId: string) =>
+    ["grove", "public", token, "tools", toolUseId] as const,
   diff: (token: string, path: string | undefined) =>
     ["grove", "public", token, "diff", path ?? null] as const,
 };

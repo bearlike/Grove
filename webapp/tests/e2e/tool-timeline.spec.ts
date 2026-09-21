@@ -7,7 +7,7 @@ test.use({ deviceScaleFactor: 2 });
 function tool(name: string, input: Record<string, unknown>, id: string): DigestEntryView {
   return {
     role: "tool", text: `${name} digest`, question: null, file_edit: null, todo: null,
-    tool: { name, input, tool_use_id: id, status: "ok", duration_ms: 1234, result: `Response for ${id}` },
+    tool: { name, input, tool_use_id: id, status: "ok", duration_ms: 1234, result: `Response for ${id}`, body: "inline" },
   };
 }
 
@@ -18,7 +18,7 @@ const fullCommand = "npm test -- --filter=${VERY_LONG_TEMPLATE_VARIABLE} --repor
 function edit(path: string, display: string, oldText: string, newText: string, id: string): DigestEntryView {
   return {
     role: "file_edit", text: `Edit ${display}`, question: null, todo: null,
-    tool: { name: "Edit", input: { file_path: path }, tool_use_id: id, status: "ok", duration_ms: 900, result: "Applied" },
+    tool: { name: "Edit", input: { file_path: path }, tool_use_id: id, status: "ok", duration_ms: 900, result: "Applied", body: "inline" },
     file_edit: { path, display_path: display, old_text: oldText, new_text: newText },
   };
 }

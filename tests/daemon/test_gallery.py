@@ -213,3 +213,83 @@ def test_gallery_preview_is_keyed_by_content_digest(client: TestClient) -> None:
         base64.b64decode(client.get(f"/gallery/{row['id']}/preview").json()["content_base64"])
         == _PNG
     )
+
+
+def _registered_store(repo: Path) -> JsonWorkspaceStore:
+    """A store holding one root-placement record, which is what makes *repo* known.
+
+    ``known_roots()`` is derived from the store (plus declared projects), so a
+    gallery scan against an empty store visits nothing at all.
+    """
+    store = JsonWorkspaceStore()
+    now = datetime.now(tz=UTC)
+    store.save(
+        WorkspaceState(
+            id="w1",
+            title="root work",
+            repo_root=str(repo),
+            branch="main",
+            base_branch="main",
+            worktree_path=str(repo),
+            tmux_session="grove-w1",
+            agent_name="claude",
+            status=WorkspaceStatus.PAUSED,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return store
+
+
+def test_a_tracked_diagram_dedupes_to_the_main_worktree_across_the_family(
+    repo: Path, claude_home: Path, runtimes: list[LiveRuntime], tmp_state_dir: Path
+) -> None:
+    """One row per (repo, path, content), attributed to the MAIN worktree.
+
+    A tracked diagram is checked out into every worktree of its repo, so the
+    census visits N copies of one file and the dedupe keeps whichever it saw
+    first. That has to be the main worktree, because a linked worktree's
+    attribution names a branch nobody asked about — and since the census reads
+    the worktrees CONCURRENTLY, "first" is a property of the result's ORDER
+    rather than of when a subprocess happened to finish.
+
+    The fixture repo has one worktree, so ordering is unobservable there and a
+    reversed census passes every other test in this module. This adds the
+    second worktree that makes it observable.
+    """
+    linked = tmp_state_dir / "linked-worktree"
+    _git(repo, "worktree", "add", "-q", "-b", "feature", str(linked))
+    store = _registered_store(repo)
+    app = build_app(cfg=daemon_test_config(), store=store)
+    with TestClient(app) as client:
+        rows = client.get("/gallery").json()
+
+    tracked = [row for row in rows if row["relative_path"] == "docs/tracked.drawio"]
+    # Both worktrees hold identical bytes, so the content dedupe collapses them.
+    assert len(tracked) == 1, [row["worktree_path"] for row in tracked]
+    assert tracked[0]["worktree_path"] == str(repo)
+    # The linked worktree's own untracked file is NOT checked out there, so the
+    # main worktree keeps that row too — this pins that the dedupe is keyed on
+    # content rather than dropping every non-first worktree wholesale.
+    untracked = [row for row in rows if row["relative_path"] == "untracked.drawio"]
+    assert [row["worktree_path"] for row in untracked] == [str(repo)]
+
+
+def test_a_worktree_that_changed_a_tracked_diagram_keeps_its_own_row(
+    repo: Path, claude_home: Path, runtimes: list[LiveRuntime], tmp_state_dir: Path
+) -> None:
+    """A different digest is a different answer, so it survives the dedupe."""
+    linked = tmp_state_dir / "edited-worktree"
+    _git(repo, "worktree", "add", "-q", "-b", "edited", str(linked))
+    (linked / "docs" / "tracked.drawio").write_text(_XML.replace("One", "Edited"), encoding="utf-8")
+    store = _registered_store(repo)
+    app = build_app(cfg=daemon_test_config(), store=store)
+    with TestClient(app) as client:
+        rows = client.get("/gallery").json()
+
+    tracked = [row for row in rows if row["relative_path"] == "docs/tracked.drawio"]
+    assert len(tracked) == 2, [row["worktree_path"] for row in tracked]
+    assert len({row["digest"] for row in tracked}) == 2
+    # The main worktree's row still comes from the main worktree.
+    assert str(repo) in {row["worktree_path"] for row in tracked}
+    assert str(linked) in {row["worktree_path"] for row in tracked}

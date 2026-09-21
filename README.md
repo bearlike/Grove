@@ -16,6 +16,7 @@
 <p align="center">
   <a href="https://github.com/anthropics/claude-code"><img src="docs/logos/support/claude-code.png" alt="Claude Code" title="Claude Code" width="44" height="44" /></a>&nbsp;
   <a href="https://github.com/openai/codex"><img src="docs/logos/support/codex.png" alt="Codex" title="Codex" width="44" height="44" /></a>&nbsp;
+  <a href="https://opencode.ai"><img src="docs/logos/support/opencode.png" alt="OpenCode" title="OpenCode" width="44" height="44" /></a>&nbsp;
   <a href="https://linear.app"><img src="docs/logos/support/linear.png" alt="Linear" title="Linear" width="44" height="44" /></a>&nbsp;
   <a href="https://github.com"><img src="docs/logos/support/github.png" alt="GitHub" title="GitHub" width="44" height="44" /></a>&nbsp;
   <a href="https://about.gitea.com/"><img src="docs/logos/support/gitea.png" alt="Gitea" title="Gitea" width="44" height="44" /></a>

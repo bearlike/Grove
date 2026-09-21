@@ -192,7 +192,7 @@ const RUNTIME_GLOSSARY: Record<Runtime, GlossaryTerm> = {
  * ship distinct marks (lobehub's `Codex` icon, not `OpenAI`), and a shared
  * brand would force one glyph to stand in for two identities.
  */
-export type AgentBrand = "claude" | "codex" | "openai" | "gemini" | "generic";
+export type AgentBrand = "claude" | "codex" | "opencode" | "openai" | "gemini" | "generic";
 
 /**
  * Matched on the agent's configured NAME, because that is the only vendor
@@ -200,10 +200,18 @@ export type AgentBrand = "claude" | "codex" | "openai" | "gemini" | "generic";
  * workspace whose agent has never started has no session to read it from.
  * First match wins, so order these by specificity — `codex` before `openai`
  * matters because "codex" itself has no other vendor word in it.
+ *
+ * `opencode` must precede `openai` for the SAME reason and it is the sharper
+ * trap: "OpenCode" CONTAINS "open" but the `openai` pattern's `/openai|gpt/i`
+ * does not match it, while a laxer pattern would — and the failure is silent,
+ * since one vendor's mark on another vendor's row still renders. OpenCode is
+ * its own brand rather than folding into `openai` because they are unrelated
+ * vendors that happen to share three letters.
  */
 const AGENT_BRAND_PATTERNS: readonly (readonly [RegExp, AgentBrand])[] = [
   [/claude|anthropic/i, "claude"],
   [/codex/i, "codex"],
+  [/opencode/i, "opencode"],
   [/openai|gpt/i, "openai"],
   [/gemini/i, "gemini"],
 ];

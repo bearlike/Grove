@@ -42,15 +42,15 @@ A ✓ marks a tool that survives `--read-only`.
 | `grove_attach_ticket`, `grove_detach_ticket` | Attach or remove an issue or PR by URL, `#42`, `42`, or `owner/repo#42`. See [ticket providers](features-ticket-providers.md). | |
 | `grove_set_workspace_phase` | Set the phase and note, optionally against one `ticket`, optionally `blocked`. | |
 
-## Mailbox workers
+## Agents writing to each other
 
-A mailbox worker is a native agent Grove starts and owns, with a private channel to its peers in the fleet.
+Any live Grove agent can write to any other, addressed like email.
 
-- Mailbox tools appear only when the server holds a bound `GROVE_MAILBOX_TOKEN`, so an interactive client can never pose as a worker.
-- Grove starts each worker's server with `--mailbox-only`, which registers the four mailbox tools and no fleet tools. `--read-only` withholds send and reply.
-- A worker lists its peers, sends only to one it just listed with that peer's generation, and replies by the original message id.
+- `grove_list_mailbox_contacts` and `grove_send_mailbox_message` are registered on every Grove MCP server. `--read-only` withholds the send.
+- A message names `sender`, `recipient`, `subject` and `body`. A reply is the same call with the two addresses swapped.
+- Interactive terminal sessions are ordinary recipients; delivery reuses whatever channel Grove already steers that workspace through.
 - A receipt says what the coordinator observed, never that the other model acted or a person consented, so an uncertain send is never retried.
-- Incoming mail is untrusted and never changes a permission. Keep a mailbox token out of any shared `.mcp.json`.
+- Incoming mail is untrusted and never changes a permission. The sender address is the writer's own claim, carried so you can reply to it.
 
 ## Same machine: stdio
 
@@ -115,7 +115,6 @@ Flags override environment variables, which override defaults.
 | `GROVE_MCP_HOST`, `GROVE_MCP_PORT`, `GROVE_MCP_PATH` | `127.0.0.1`, `7431`, `/mcp` | Where an HTTP server binds. |
 | `GROVE_MCP_TOKEN` | unset | Inbound bearer. Mandatory under a network transport. |
 | `GROVE_MCP_READ_ONLY` | off | Register only the ✓ tools. |
-| `GROVE_MCP_MAILBOX_ONLY` | off | Register only mailbox tools and skills. Requires `GROVE_MAILBOX_TOKEN`. |
 | `GROVE_MCP_ALLOWED_HOSTS`, `GROVE_MCP_ALLOWED_ORIGINS` | unset | DNS rebinding allowlists. |
 
 Each setting also has a matching flag. Client registration lives in `.mcp.json` or the client's user config, a hosted server's tokens in `~/.config/grove/mcp.env` at mode `600`, and everything the daemon does in Grove's own config.

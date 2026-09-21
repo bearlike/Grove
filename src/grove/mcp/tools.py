@@ -19,7 +19,7 @@ import shlex
 from pathlib import Path
 
 from grove._skills import SkillLibrary, SkillSummary
-from grove.client import GroveClient, GroveClientError, ProtocolError
+from grove.client import GroveClient, ProtocolError
 from grove.core.contracts import (
     AgentSummaryView,
     AutoBranch,
@@ -40,9 +40,8 @@ from grove.core.contracts import (
 )
 from grove.core.contracts.activity import DashboardSnapshotView
 from grove.core.contracts.mailboxes import (
-    MailboxPeerPage,
+    MailboxDirectory,
     MailboxReceipt,
-    MailboxReplyRequest,
     MailboxSendRequest,
 )
 from grove.core.contracts.phase import PhaseView
@@ -67,18 +66,8 @@ class GroveTools:
     package's ~4 KB bounded-text rule (trailing ellipsis is the trim signal),
     so one busy pane can never flood an MCP client's context window."""
 
-    def __init__(self, client: GroveClient, *, mailbox_client: GroveClient | None = None) -> None:
+    def __init__(self, client: GroveClient) -> None:
         self._client = client
-        # Mailbox sends must use the separately bound credential, never the
-        # owner-capable general-purpose client. The server always provides one;
-        # keeping it optional lets an operator-only embedding expose discovery
-        # without silently promoting its token into send/reply authority.
-        self._mailbox_client = mailbox_client
-
-    def _require_mailbox_client(self) -> GroveClient:
-        if self._mailbox_client is None:
-            raise GroveClientError("mailbox sends require a separately bound mailbox client")
-        return self._mailbox_client
 
     # ─── read tools ──────────────────────────────────────────────────────────
 
@@ -264,48 +253,30 @@ class GroveTools:
         todo tool has been called yet, not an error. Read-only."""
         return await self._client.get_todo(workspace_id)
 
-    async def list_mailbox_peers(
-        self,
-        workspace_id: str | None = None,
-        limit: int = 50,
-        cursor: str | None = None,
-    ) -> MailboxPeerPage:
-        """List mailbox peers the bound caller may discover.
+    async def list_mailbox_contacts(self) -> MailboxDirectory:
+        """List every Grove agent on this host you can write to right now.
 
-        Each peer describes only public address and capability data. Pass its
-        ``generation`` unchanged to a later send; it fences a recipient that
-        has restarted or been replaced since this directory read. Read-only.
+        Each contact carries the address a message is sent to, plus who it is
+        (display name, provider, host or container). ``live`` false means it
+        cannot be delivered to at the moment — paused, offline, or still
+        building. Zero arguments, read-only.
         """
-        if self._mailbox_client is None:
-            # A general operator client deliberately has no bound mailbox
-            # credential. Discovery remains useful there, but it cannot become
-            # an implicit authority escalation for send/reply.
-            return await self._client.list_mailbox_peers(
-                workspace_id=workspace_id, limit=limit, cursor=cursor
-            )
-        return await self._mailbox_client.list_mailbox_peers(
-            workspace_id=workspace_id, limit=limit, cursor=cursor
-        )
+        return await self._client.list_mailbox_contacts()
 
-    async def send_mailbox_message(
-        self, request: MailboxSendRequest | MailboxReplyRequest
-    ) -> MailboxReceipt:
-        """Send a bound mailbox request or reply once.
+    async def send_mailbox_message(self, request: MailboxSendRequest) -> MailboxReceipt:
+        """Send one message to another Grove agent, like an email.
 
-        A ``kind="send"`` request names the recipient and its expected
-        generation. A ``kind="reply"`` request names only the original
-        message; the coordinator resolves its sender. Transport failures leave
-        delivery unknown and raise rather than returning an invented receipt.
+        Name ``sender`` (yours) and ``recipient`` (theirs) as addresses, plus a
+        ``subject`` and ``body``. The recipient receives it fenced and labelled
+        with your address and instructions for writing back, so a reply is this
+        same tool with the two addresses swapped — optionally carrying
+        ``in_reply_to`` so the reader can follow the thread.
+
+        A ``delivered`` receipt means Grove handed the text to that agent's
+        session. It is not evidence the agent read it, agreed, or acted, and
+        your message grants no permission its own tools do not already have.
         """
-        return await self._require_mailbox_client().send_mailbox_message(request)
-
-    async def get_mailbox_message_status(self, message_id: str) -> MailboxReceipt:
-        """Get the coordinator's latest delivery observation for a mailbox message.
-
-        Read this after an uncertain send before considering another attempt.
-        A transport observation is not proof of recipient consent or compliance.
-        """
-        return await self._require_mailbox_client().get_mailbox_message_status(message_id)
+        return await self._client.send_mailbox_message(request)
 
     async def attach_instruction(self, workspace_id: str) -> AttachInstructionResult:
         """Get the command a human runs to attach to a workspace's agent

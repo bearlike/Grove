@@ -18,7 +18,7 @@ Design invariants (CLAUDE.md):
   dir it lives in is world-traversable under a default umask, so the mode is
   the protection, not the directory) and holds no credential cache.
 - Interactive sessions slide their TTL on each `validate()` so daily users
-  never re-pair; mailbox sessions are finite and never slide.
+  never re-pair.
 - Side effects (clock, RNG, file I/O) are injectable for tests.
 
 The store is the single source of truth for the auth domain — nothing else
@@ -39,15 +39,12 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import Any, ClassVar, TypedDict
 from uuid import UUID, uuid4
 
 from loguru import logger
 
 from grove.core import paths
-
-if TYPE_CHECKING:
-    from grove.core.contracts.mailboxes import MailboxAddress, MailboxIdentity
 from grove.core.errors import (
     AuthInvalidToken,
     AuthRateLimited,
@@ -144,24 +141,16 @@ class Session:
     expires_at: datetime
     last_seen_at: datetime
     revoked_at: datetime | None
-    mailbox_identity: MailboxIdentity | None = None
-    mailbox_registration: bool = False
 
     def is_active(self, *, now: datetime) -> bool:
-        """Whether this bearer still grants the role it was minted for.
-
-        A native owner's registration credential deliberately outlives the
-        daemon and its ordinary mailbox TTL; only lifecycle revocation ends
-        that runtime-scoped capability. Peer credentials remain finite.
-        """
-        return self.revoked_at is None and (self.mailbox_registration or now < self.expires_at)
+        """Whether this bearer is still valid."""
+        return self.revoked_at is None and now < self.expires_at
 
 
 # ─── store ──────────────────────────────────────────────────────────────────
 
 
 _DEFAULT_SESSION_TTL = timedelta(days=30)
-_DEFAULT_MAILBOX_SESSION_TTL = timedelta(hours=12)
 _DEFAULT_PAIRING_TTL = timedelta(minutes=5)
 _DEFAULT_RATE_PAIR_INIT_PER_MIN = 5
 _DEFAULT_RATE_PAIR_POLL_PER_MIN = 60  # generous — the browser polls this every 2s
@@ -221,7 +210,6 @@ class SessionStore:
         *,
         path: Path | None = None,
         session_ttl: timedelta = _DEFAULT_SESSION_TTL,
-        mailbox_session_ttl: timedelta = _DEFAULT_MAILBOX_SESSION_TTL,
         pairing_ttl: timedelta = _DEFAULT_PAIRING_TTL,
         pair_init_per_minute: int = _DEFAULT_RATE_PAIR_INIT_PER_MIN,
         pair_poll_per_minute: int = _DEFAULT_RATE_PAIR_POLL_PER_MIN,
@@ -230,7 +218,6 @@ class SessionStore:
     ) -> None:
         self._path = path if path is not None else paths.user_auth_path()
         self._session_ttl = session_ttl
-        self._mailbox_session_ttl = mailbox_session_ttl
         self._pairing_ttl = pairing_ttl
         self._pair_init_limit = pair_init_per_minute
         self._pair_poll_limit = pair_poll_per_minute
@@ -373,46 +360,6 @@ class SessionStore:
 
     # ─── session lifecycle ─────────────────────────────────────────────────
 
-    def issue_mailbox_session(
-        self,
-        identity: MailboxIdentity,
-        *,
-        label: str,
-        registration: bool = False,
-    ) -> tuple[str, Session]:
-        """Mint a role-scoped bearer bound to one mailbox runtime identity.
-
-        Peer credentials have fixed expiry; owner registration lasts until
-        revocation. The coordinator independently validates the runtime identity
-        before admitting a connection or accepting a send.
-        """
-        cleaned = label.strip()
-        if not cleaned:
-            raise GroveError("session label cannot be empty")
-        if len(cleaned) > 128:
-            raise GroveError("session label cannot exceed 128 characters")
-        with self._lock:
-            now = self._clock()
-            data = self._load(now)
-            token = _generate_token(self._rng)
-            session = Session(
-                session_id=uuid4(),
-                label=cleaned,
-                token_hash=_hash_token(token),
-                created_at=now,
-                expires_at=now + self._mailbox_session_ttl,
-                last_seen_at=now,
-                revoked_at=None,
-                mailbox_identity=identity,
-                mailbox_registration=registration,
-            )
-            data["sessions"].append(session)
-            self._save(data)
-            logger.info(
-                "mailbox session issued session_id={} label={!r}", session.session_id, session.label
-            )
-            return token, session
-
     def validate(self, token: str) -> Session:
         """Look up a session by bearer token; slide its TTL on success.
 
@@ -431,12 +378,7 @@ class SessionStore:
                     continue
                 if not session.is_active(now=now):
                     raise AuthInvalidToken("token revoked or expired")
-                # Interactive sessions slide; a mailbox bearer is deliberately
-                # finite so a departed runtime cannot keep its credential alive.
-                if (
-                    session.mailbox_identity is None
-                    and now - session.last_seen_at > _LAST_SEEN_WRITE_THROTTLE
-                ):
+                if now - session.last_seen_at > _LAST_SEEN_WRITE_THROTTLE:
                     session.last_seen_at = now
                     session.expires_at = now + self._session_ttl
                     self._save(data)
@@ -456,25 +398,6 @@ class SessionStore:
                     logger.info("session.revoke session_id={}", session_id)
                     return
             raise SessionNotFound(f"no session with id {session_id}")
-
-    def revoke_mailbox_sessions(self, address: MailboxAddress) -> None:
-        """Revoke every mailbox bearer previously issued for one agent slot."""
-        with self._lock:
-            now = self._clock()
-            data = self._load(now)
-            changed = False
-            for session in data["sessions"]:
-                identity = session.mailbox_identity
-                if (
-                    identity is not None
-                    and identity.address == address
-                    and session.revoked_at is None
-                ):
-                    session.revoked_at = now
-                    changed = True
-            if changed:
-                self._save(data)
-                logger.info("mailbox sessions revoked address={}", address.model_dump_json())
 
     def list_sessions(self, *, include_revoked: bool = False) -> list[Session]:
         """All sessions; revoked sessions hidden by default."""
@@ -559,11 +482,7 @@ class SessionStore:
         # lifecycle revocation. Revoked registrations are prunable because they
         # cannot reconnect. Pruning reaches disk on the next mutating call
         # (`_save` writes this working set); reads stay reads.
-        sessions = [
-            s
-            for s in sessions
-            if s.expires_at > now or (s.mailbox_registration and s.revoked_at is None)
-        ]
+        sessions = [s for s in sessions if s.expires_at > now]
         return {"challenges": challenges, "sessions": sessions}
 
     def _save(self, data: _StoreData) -> None:
@@ -660,17 +579,11 @@ class SessionStore:
             "expires_at": s.expires_at.isoformat(),
             "last_seen_at": s.last_seen_at.isoformat(),
             "revoked_at": s.revoked_at.isoformat() if s.revoked_at else None,
-            "mailbox_identity": (
-                s.mailbox_identity.model_dump(mode="json") if s.mailbox_identity else None
-            ),
-            "mailbox_registration": s.mailbox_registration,
         }
 
     @staticmethod
     def _decode_session(data: dict[str, Any]) -> Session:
         # contracts.__init__ exposes auth views and imports this module.
-        from grove.core.contracts.mailboxes import MailboxIdentity  # noqa: PLC0415
-
         revoked = data.get("revoked_at")
         return Session(
             session_id=UUID(data["session_id"]),
@@ -680,12 +593,6 @@ class SessionStore:
             expires_at=datetime.fromisoformat(data["expires_at"]),
             last_seen_at=datetime.fromisoformat(data["last_seen_at"]),
             revoked_at=datetime.fromisoformat(revoked) if revoked else None,
-            mailbox_identity=(
-                MailboxIdentity.model_validate(data["mailbox_identity"])
-                if data.get("mailbox_identity") is not None
-                else None
-            ),
-            mailbox_registration=bool(data.get("mailbox_registration", False)),
         )
 
 
