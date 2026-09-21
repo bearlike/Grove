@@ -1512,7 +1512,7 @@ A shell command is where an agent touches the machine, so it is the tool call mo
 
 ## Turn it on
 
-Telemetry ships in the `telemetry` extra, which `grove[all]` includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.
+Telemetry ships in the `telemetry` extra, which `grove-crew[all]` includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.
 
 ```json
 {
@@ -1740,7 +1740,7 @@ Exporting old sessions writes off this machine, so it needs the `--telemetry` fl
 <li>The shape refuses to guess. Success is claimed only from a recorded exit code of zero, a cancelled call is not distinguishable from a failed one, a background call's result is its launch handle, and a payload over 4000 characters says it is <code>truncated</code>.</li>
 </ul>
 <h2 id="turn-it-on">Turn it on</h2>
-<p>Telemetry ships in the <code>telemetry</code> extra, which <code>grove[all]</code> includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.</p>
+<p>Telemetry ships in the <code>telemetry</code> extra, which <code>grove-crew[all]</code> includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.</p>
 <div class="language-json codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;telemetry&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>

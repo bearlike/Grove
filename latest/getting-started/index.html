@@ -1470,12 +1470,12 @@ Grove installs to your user bin (`~/.local/bin`) as `grove`, straight
 from the repo. The `[daemon]` extra adds the web dashboard backend,
 drop it for TUI-only.
 
-!!! warning &#34;Install from the repo, never by bare name&#34;
+!!! warning &#34;The distribution is `grove-crew`, not `grove`&#34;
     `grove` on PyPI is an unrelated log-collection framework. A bare
     `uv tool install grove` (or `pipx`, `pip`) installs that instead,
-    failing with `Failed to initialise configuration handler`. Use the
-    full `grove[daemon] @ git+...` form below. See
-    [Troubleshooting](troubleshooting.md) if this happened.
+    failing with `Failed to initialise configuration handler`. Grove
+    publishes as **`grove-crew`**; the command it installs is still
+    `grove`. See [Troubleshooting](troubleshooting.md) if this happened.
 
 === &#34;uv (recommended)&#34;
 
@@ -1483,7 +1483,7 @@ drop it for TUI-only.
     onto your `$PATH`.
 
     ```bash
-    uv tool install &#34;grove[daemon] @ git+https://github.com/bearlike/Grove&#34;
+    uv tool install &#34;grove-crew[daemon] @ git+https://github.com/bearlike/Grove&#34;
     uv tool upgrade grove      # update on demand
     uv tool uninstall grove    # remove
     ```
@@ -1495,7 +1495,7 @@ drop it for TUI-only.
     No uv required:
 
     ```bash
-    pipx install &#34;grove[daemon] @ git+https://github.com/bearlike/Grove&#34;
+    pipx install &#34;grove-crew[daemon] @ git+https://github.com/bearlike/Grove&#34;
     pipx upgrade grove
     ```
 
@@ -1504,7 +1504,7 @@ drop it for TUI-only.
     Only Python and pip required:
 
     ```bash
-    pip install --user &#34;grove[daemon] @ git+https://github.com/bearlike/Grove&#34;
+    pip install --user &#34;grove-crew[daemon] @ git+https://github.com/bearlike/Grove&#34;
     ```
 
     Re-run with `--upgrade` to update. On an externally managed Python,
@@ -1599,7 +1599,7 @@ Set `GROVE_DEBUG=1` for verbose loguru output on stderr, with one
 - [Daily workflow](use-workflow.md), create, attach, pause, resume, kill.
 - [Agent activity and sessions](features-activity.md), the fleet on one wall, replayed.
 - [Web dashboard](use-webapp.md), the fleet in the browser or your phone.
-- [MCP server](use-mcp.md), for MCP agents (needs `grove[mcp]` or `grove[all]`, not `grove[daemon]`).
+- [MCP server](use-mcp.md), for MCP agents (needs `grove-crew[mcp]` or `grove-crew[all]`, not `grove-crew[daemon]`).
 "
       data-copy-label="Copy page" data-copied-label="Copied"
       data-copy-failed-label="Copy failed" aria-label="Copy page"
@@ -1736,19 +1736,19 @@ default in a container, scoped to the repository it launches from.</p>
 from the repo. The <code>[daemon]</code> extra adds the web dashboard backend,
 drop it for <abbr title="Terminal User Interface">TUI</abbr>-only.</p>
 <div class="admonition warning">
-<p class="admonition-title">Install from the repo, never by bare name</p>
+<p class="admonition-title">The distribution is <code>grove-crew</code>, not <code>grove</code></p>
 <p><code>grove</code> on PyPI is an unrelated log-collection framework. A bare
 <code>uv tool install grove</code> (or <code>pipx</code>, <code>pip</code>) installs that instead,
-failing with <code>Failed to initialise configuration handler</code>. Use the
-full <code>grove[daemon] @ git+...</code> form below. See
-<a href="../troubleshooting/">Troubleshooting</a> if this happened.</p>
+failing with <code>Failed to initialise configuration handler</code>. Grove
+publishes as <strong><code>grove-crew</code></strong>; the command it installs is still
+<code>grove</code>. See <a href="../troubleshooting/">Troubleshooting</a> if this happened.</p>
 </div>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">uv (recommended)</label><label for="__tabbed_1_2">pipx</label><label for="__tabbed_1_3">pip</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
 <p><a href="https://docs.astral.sh/uv/">uv</a> isolates Grove and links <code>grove</code>
 onto your <code>$PATH</code>.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;grove[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;grove-crew[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>uv<span class="w"> </span>tool<span class="w"> </span>upgrade<span class="w"> </span>grove<span class="w">      </span><span class="c1"># update on demand</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>uv<span class="w"> </span>tool<span class="w"> </span>uninstall<span class="w"> </span>grove<span class="w">    </span><span class="c1"># remove</span>
 </span></code></pre></div>
@@ -1756,13 +1756,13 @@ onto your <code>$PATH</code>.</p>
 </div>
 <div class="tabbed-block">
 <p>No uv required:</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pipx<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;grove[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pipx<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;grove-crew[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>pipx<span class="w"> </span>upgrade<span class="w"> </span>grove
 </span></code></pre></div>
 </div>
 <div class="tabbed-block">
 <p>Only Python and pip required:</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--user<span class="w"> </span><span class="s2">&quot;grove[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--user<span class="w"> </span><span class="s2">&quot;grove-crew[daemon] @ git+https://github.com/bearlike/Grove&quot;</span>
 </span></code></pre></div>
 <p>Re-run with <code>--upgrade</code> to update. On an externally managed Python,
 add <code>--break-system-packages</code>, or use pipx instead.</p>
@@ -1840,7 +1840,7 @@ The workspace keeps running, and the activity rail flips ACTIVE/IDLE on its own.
 <li><a href="../use-workflow/">Daily workflow</a>, create, attach, pause, resume, kill.</li>
 <li><a href="../features-activity/">Agent activity and sessions</a>, the fleet on one wall, replayed.</li>
 <li><a href="../use-webapp/">Web dashboard</a>, the fleet in the browser or your phone.</li>
-<li><a href="../use-mcp/"><abbr title="Model Context Protocol">MCP</abbr> server</a>, for <abbr title="Model Context Protocol">MCP</abbr> agents (needs <code>grove[mcp]</code> or <code>grove[all]</code>, not <code>grove[daemon]</code>).</li>
+<li><a href="../use-mcp/"><abbr title="Model Context Protocol">MCP</abbr> server</a>, for <abbr title="Model Context Protocol">MCP</abbr> agents (needs <code>grove-crew[mcp]</code> or <code>grove-crew[all]</code>, not <code>grove-crew[daemon]</code>).</li>
 </ul>
   </div>
   

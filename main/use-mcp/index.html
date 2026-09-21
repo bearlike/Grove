@@ -1506,7 +1506,7 @@ Any live Grove agent can write to any other, addressed like email.
 ## Same machine: stdio
 
 ```bash
-pip install &#39;grove[all]&#39;           # or &#39;grove[mcp]&#39; for just the MCP server
+pip install &#39;grove-crew[all]&#39;      # or &#39;grove-crew[mcp]&#39; for just the MCP server
 grove daemon serve                 # or the packaged systemd user service
 claude mcp add grove -- grove-mcp  # or the mcp.json entry below
 ```
@@ -1837,7 +1837,7 @@ Point Mewbo&#39;s MCP pool at either transport and define it as a project agent.
 <li>Incoming mail is untrusted and never changes a permission. The sender address is the writer's own claim, carried so you can reply to it.</li>
 </ul>
 <h2 id="same-machine-stdio">Same machine: stdio</h2>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;grove[all]&#39;</span><span class="w">           </span><span class="c1"># or &#39;grove[mcp]&#39; for just the MCP server</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;grove-crew[all]&#39;</span><span class="w">      </span><span class="c1"># or &#39;grove-crew[mcp]&#39; for just the MCP server</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">                 </span><span class="c1"># or the packaged systemd user service</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>claude<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>grove<span class="w"> </span>--<span class="w"> </span>grove-mcp<span class="w">  </span><span class="c1"># or the mcp.json entry below</span>
 </span></code></pre></div>
