@@ -1,0 +1,21 @@
+Three.js
+
+Source: https://registry.npmjs.org/three/-/three-0.186.0.tgz
+Version: 0.186.0
+Source tarball SHA-256: 61eeff9d7616005c9a481c796f52287d81fbbbc0d55eaca5565322924252c1aa
+License: MIT, reproduced in THREE-LICENSE
+
+Runtime (unmodified):
+  package/build/three.module.js -> three.module.js
+  package/build/three.core.js   -> three.core.js
+
+Bloom addons (one edit each: the bare `from 'three'` specifier is rewritten to
+`from '../three.module.js'` so they load without an import map):
+  package/examples/jsm/postprocessing/{EffectComposer,RenderPass,UnrealBloomPass,
+    ShaderPass,OutputPass,Pass,MaskPass}.js -> postprocessing/
+  package/examples/jsm/shaders/{CopyShader,LuminosityHighPassShader,OutputShader}.js
+    -> shaders/
+
+These are vendored so the landing scene has no remote module import or runtime
+CDN dependency. Refresh them only by copying the same files from a pinned npm
+tarball, re-applying the specifier rewrite, and updating this record.

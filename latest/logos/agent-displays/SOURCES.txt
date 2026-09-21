@@ -1,0 +1,17 @@
+Agent face-display glyphs
+
+Source: @lobehub/icons 5.16.0
+https://registry.npmjs.org/@lobehub/icons/-/icons-5.16.0.tgz
+https://github.com/lobehub/lobe-icons
+License: MIT (reproduced in LICENSE).
+
+claude-code.svg: es/Claude/components/Color.js
+codex.svg: es/OpenAI/components/Mono.js (OpenAI mark identifying Codex)
+opencode.svg: es/OpenCode/components/Mono.js
+
+Modifications: extracted the original path and fill rule into standalone SVGs;
+set the fill to white and rasterization size to 256 x 256. Transparent backgrounds
+allow the scene's emissive material to tint only the glyph, not a square tile.
+The finished README support tiles remain unchanged.
+
+These marks identify supported third-party agents, not endorsement of Grove.
