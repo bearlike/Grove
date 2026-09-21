@@ -87,6 +87,7 @@
           "enum": [
             "claude_code",
             "codex",
+            "opencode",
             "generic",
             "mewbo"
           ],
@@ -95,7 +96,7 @@
         },
         "models": {
           "default": [],
-          "description": "Model ids offered in the create form picker. A convenience list, never a validated\nallowlist. Empty falls through to the adapter's live discovery, which is capped at\nten.",
+          "description": "Model ids offered in the create form picker. A convenience list, never a validated\nallowlist. Empty uses the adapter's native discovery or maintained fallback catalog.",
           "items": {
             "type": "string"
           },
@@ -428,6 +429,7 @@
             "enum": [
               "claude_code",
               "codex",
+              "opencode",
               "generic",
               "mewbo"
             ]
@@ -1163,6 +1165,7 @@
             "enum": [
               "claude_code",
               "codex",
+              "opencode",
               "generic",
               "mewbo"
             ]
@@ -1212,6 +1215,7 @@
             "enum": [
               "claude_code",
               "codex",
+              "opencode",
               "generic",
               "mewbo"
             ]
@@ -1322,6 +1326,7 @@
             "enum": [
               "claude_code",
               "codex",
+              "opencode",
               "generic",
               "mewbo"
             ]
@@ -1354,6 +1359,7 @@
             "enum": [
               "claude_code",
               "codex",
+              "opencode",
               "generic",
               "mewbo"
             ]
@@ -1412,6 +1418,7 @@
             "enum": [
               "claude_code",
               "codex",
+              "opencode",
               "generic",
               "mewbo"
             ],

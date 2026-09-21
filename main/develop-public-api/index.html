@@ -1032,6 +1032,135 @@
         data-state="closed"
         onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
 
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2m16 0h2m-7-1v2m-6-2v2"/></g></svg>
+
+        
+        Agents
+        
+
+        
+        <span class="mewbo-sidebar-chevron ml-auto inline-flex transition-[color,rotate] duration-200 group-data-[state=open]/menu-button:rotate-90 group-data-[state=closed]/menu-button:text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </button>
+    <div data-state="open" data-slot="collapsible-content"
+        class="grid grid-rows-[0fr] transition-[grid-template-rows] peer-data-[state=open]/menu-button:grid-rows-[1fr] py-0.5">
+        <ul data-slot="sidebar-menu-sub" data-sidebar="menu-sub"
+            class="overflow-hidden ml-3.5 flex flex-col gap-1 border-l border-sidebar-border pl-2.5">
+
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../configure-agents/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Choosing an Agent
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../agents-claude-code/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Claude Code
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../agents-codex/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Codex
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../agents-opencode/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        OpenCode
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+
+            
+            
+        </ul>
+    </div>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    
+    <button data-slot="collapsible-trigger" data-sidebar="menu-button" data-size="default" data-active="false"
+        class="peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-h-8 text-[0.8rem] font-normal leading-tight"
+        type="button" aria-expanded="true"
+        data-state="closed"
+        onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
+
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 5H3m9 14H3M14 3v4m2 10v4m5-9h-9m9 7h-5m5-14h-7m-6 5v4m0-2H3"/></svg>
 
         
@@ -1058,30 +1187,6 @@
 
         
         Project Setup
-        
-
-        
-
-        
-
-        
-
-        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
-    </a>
-</li>
-            
-            
-            
-            
-<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="../configure-agents/"
-        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
-
-        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2m16 0h2m-7-1v2m-6-2v2"/></g></svg>
-
-        
-        Agents
         
 
         
@@ -1969,8 +2074,7 @@ tracks nothing.</p>
     <div class="doc doc-contents ">
 
         <p>Model ids offered in the create form picker. A convenience list, never a validated
-allowlist. Empty falls through to the adapter's live discovery, which is capped at
-ten.</p>
+allowlist. Empty uses the adapter's native discovery or maintained fallback catalog.</p>
 
     </div>
 
@@ -2506,6 +2610,32 @@ instead of composing it. Deliberately NOT mirrored on
 <p>The source owner supplies an explicit initial witness before binding; a
 <code>None</code> result remains an unreadable boundary, never an absence claim.
 Standalone managers deliberately retain the existing direct probes.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.WorkspaceManager.can_receive" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">can_receive</span><span class="p">(</span><span class="n">state</span><span class="p">:</span> <span class="n">WorkspaceState</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Whether :meth:<code>send_message</code> could deliver to <em>state</em> right now.</p>
+<p>The mailbox's whole admission rule, and it is deliberately the same
+predicate steering already enforces rather than a second opinion about
+liveness — a contact the directory advertises must be one the send can
+actually reach. Takes a reconciled state, so a listing pays no second
+reconciliation per row.</p>
+<p>A native workspace whose owner has died still answers True: the steer
+path revives it (<code>_revive_for_steer</code>), so refusing here would hide a
+peer that one message brings back.</p>
 
 
     </div>
@@ -3233,6 +3363,12 @@ on a workspace that cannot host several is a typed refusal rather than a
 silent empty snapshot — this is the one place best-effort would be
 actively misleading, because "that agent printed nothing" and "there is
 no such agent" are different answers a user acts on differently.</p>
+<p>A workspace that no longer exists is one of those failures, and it is
+the ordinary one on this path: the ~250 ms tick fires against whatever
+the rail last selected, so a <code>kill</code> between two ticks leaves the next
+one asking about a deleted record. Only the lookup is guarded — the
+typed refusal above still raises, for the reason its own paragraph
+gives.</p>
 
 
     </div>
@@ -3417,6 +3553,24 @@ this one re-fetches from the store.</p>
 <p>Answers for a FINISHED provision too, and deliberately so: a user who
 arrives late still wants the log of the build they waited through, and
 a failed one is exactly when its tail is worth reading.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.WorkspaceManager.queue_supported" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">queue_supported</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Whether this workspace's provider can report an empty queue honestly.</p>
 
 
     </div>
@@ -4742,6 +4896,47 @@ under one acquisition below.</p>
 
 </div>
 
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.ActivityService.workspace_row" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">workspace_row</span><span class="p">(</span><span class="n">repo_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WorkspaceActivity</span> <span class="o">|</span> <span class="kc">None</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>One workspace's activity row, without ever scanning the fleet.</p>
+<p>The per-request seam behind <code>GET /workspaces/{id}/activity</code>. It exists
+because a page about ONE workspace was reading its session id off
+<code>snapshot()</code>, and <code>snapshot</code> BOOTSTRAPS when no projection exists
+yet — so the first reader after a daemon start paid for every workspace
+on the host before the page could paint. Measured on the reference host:
+a 40.6 s bootstrap, 22.4 s of it spent on two OFFLINE workspaces whose
+transcripts that page never renders.</p>
+<p>Two paths, and which one runs is the whole design:</p>
+<ul>
+<li><strong>The projection already holds this row</strong> — the ordinary case, because
+  the ~1 Hz poll maintains it. Then this is a dict lookup under the
+  existing lock and costs nothing (measured: the maintained fleet read
+  answers in ~2 ms for exactly this reason). The row is the same object
+  the stream publishes, so a page cannot disagree with its own stream.</li>
+<li><strong>It does not</strong> (no projection yet, or a workspace created since the
+  last tick). Then exactly ONE workspace is computed. This is the path
+  that used to be a fleet bootstrap, and the whole point is that a page
+  about one workspace now waits for one workspace.</li>
+</ul>
+<p>Deliberately neither bootstraps nor publishes: a request must not build
+the shared projection (that is the poll's job, and the cost this exists
+to avoid) and must not advance a sequence the stream's consumers order
+on. <code>None</code> for an unknown workspace, so the route owns the 404.</p>
+
+
+    </div>
+
+</div>
+
 
 
   </div>
@@ -4875,8 +5070,62 @@ directory's parse, not the whole project's. Returns a tuple (the
 <div class="doc doc-object doc-function">
 
 
+<h3 id="grove.core.SessionExplorer.enriched" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">enriched</span><span class="p">(</span><span class="n">listing</span><span class="p">:</span> <span class="n">SessionListing</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SessionListing</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>One row re-read by IDENTITY so its parse products are populated.</p>
+<p><code>session_summary</code> is the adapter seam that may full-parse; it resolves
+one known id through <code>locate_transcripts</code> rather than scanning, so this
+costs one parse per DISPLAYED row. Best-effort by contract: a row that
+cannot be re-read keeps its metadata-only form rather than raising out of
+a listing.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.SessionExplorer.fleet_activity" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">fleet_activity</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="nb">bool</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SessionActivity</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>The selected root's child-session projection for the fleet reader.</p>
+<p>A selected root is the explicit <code>session_id</code> when present, otherwise
+the workspace's own minted session — read directly off the record
+rather than through :meth:<code>primary_for_workspace</code>, which requires a
+materialized transcript and would misreport an honestly-supported
+root as unsupported during the STARTING window before its first
+transcript line lands (the same window the live hook roster already
+renders through). An explicit <code>session_id</code> must belong to this
+workspace's own scan — never a stranger's — so it is checked against
+:meth:<code>for_workspace</code> and refused (unsupported, no children) rather
+than resolved against a foreign workspace's cwd.</p>
+<p>The adapter capability decides whether an empty tuple means "no
+children"; an adapter lacking it is honestly unsupported. This is a
+targeted, on-demand read, never an activity poll.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="grove.core.SessionExplorer.for_workspace" class="doc doc-heading">
-            <code class="codehilite language-python"><span class="n">for_workspace</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SessionListing</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
+            <code class="codehilite language-python"><span class="n">for_workspace</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SessionListing</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
 
 </h3>
 
@@ -4945,7 +5194,7 @@ worktree's own root would find zero workspaces.</p>
 
 
 <h3 id="grove.core.SessionExplorer.list" class="doc doc-heading">
-            <code class="codehilite language-python"><span class="nb">list</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">agent</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">workspace</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">since</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">SessionListing</span><span class="p">]</span></code>
+            <code class="codehilite language-python"><span class="nb">list</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">agent</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">workspace</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">since</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">enrich</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">SessionListing</span><span class="p">]</span></code>
 
 </h3>
 
@@ -4957,6 +5206,10 @@ worktree's own root would find zero workspaces.</p>
 workspace id prefix or a case-insensitive title substring; <code>since</code>
 keeps sessions modified at/after that instant; <code>limit</code> caps the
 result after sorting.</p>
+<p><code>enrich</code> is the OPT-IN full parse, for the one consumer that renders
+parse products (the <code>grove sessions</code> table). It runs AFTER filtering
+and limiting, so the cost is one identity-keyed read per DISPLAYED row
+rather than one per transcript sharing the directory.</p>
 
 
     </div>
@@ -5145,6 +5398,62 @@ sidecar, else the truncated first task prompt). <code>None</code> when
 <div class="doc doc-object doc-function">
 
 
+<h3 id="grove.core.SessionExplorer.tool_call" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">tool_call</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">tool_use_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ToolCall</span> <span class="o">|</span> <span class="kc">None</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>One of a workspace session's tool calls, resolved the way its turns are.</p>
+<p>The listing whose id matches answers first. A <code>session_id</code> that names
+no listing is the fleet-child case the turns route already handles
+(<code>subagent_turns</code>): a sub-agent thread never appears in a workspace's
+own listing, but its records ride its PARENT session's spine, so the
+fallback searches the workspace's top-level sessions for the id. The
+search is by <code>tool_use_id</code>, which is unique across the spine, so the
+widened scan can only find the call the caller named.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.SessionExplorer.tool_call_for" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">tool_call_for</span><span class="p">(</span><span class="n">listing</span><span class="p">:</span> <span class="n">SessionListing</span><span class="p">,</span> <span class="n">tool_use_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ToolCall</span> <span class="o">|</span> <span class="kc">None</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>ONE tool call out of an already-resolved session, by its id.</p>
+<p>The drill-in half of the head+drill-in pairing the windowed <code>/turns</code>
+read introduced: a turn list that withheld settled bodies
+(<code>ToolCallView.body == "available"</code>) is the head, and this serves any
+one of those bodies whole. Built as a PROJECTION over
+:meth:<code>AgentAdapter.read_messages</code> — the same spine every other
+projection here reads, memoized per transcript — so an opened body costs
+a walk rather than a parse once the turn list is warm.</p>
+<p>Deliberately a sibling of :meth:<code>recollect_for</code> rather than a new
+adapter capability: "which call carries this id" is answered identically
+for every provider off the normalized spine, so a per-adapter method
+would be one implementation duplicated per kind. Scoped to the owning
+workspace's config-dir override for the same reason
+:meth:<code>turns_for</code> is.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="grove.core.SessionExplorer.transcripts" class="doc doc-heading">
             <code class="codehilite language-python"><span class="n">transcripts</span><span class="p">(</span><span class="n">listing</span><span class="p">:</span> <span class="n">SessionListing</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Path</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
 
@@ -5240,13 +5549,11 @@ reasoning as :meth:<code>transcripts</code>.</p>
 Grove doesn't manage (a hand-made worktree, or the repo root with no ROOT
 workspace). <code>provenance</code> is <code>grove_launched</code> only when the id matches
 a workspace's minted <code>agent_session_id</code>.</p>
-<p><code>duration</code> is the wall clock and the compute total (see
-:func:<code>~grove.core.session_duration.duration_of</code>), derived here from the
-message spine because this scope is already parsing the transcript.
-<code>None</code> means the spine could not be read at all — never <em>no work</em>, which
-is a <code>DurationView</code> whose own fields are null. It is the same number
-:class:<code>CatalogEntry</code> reads out of the durable cache, from the same
-function, so the two scopes cannot disagree about one session.</p>
+<p><code>duration</code> is the wall clock and compute total (see
+:func:<code>~grove.core.session_duration.duration_of</code>) looked up from the SAME
+durable parse-fact cache the host catalog uses. <code>None</code> means <em>not measured
+yet</em> — never <em>no work</em>, which is a <code>DurationView</code> whose own fields are
+null. Listing requests never full-parse a transcript to fill this column.</p>
 
 
 
@@ -8283,6 +8590,135 @@ response can include them in the JSON payload.</p>
         data-state="closed"
         onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
 
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2m16 0h2m-7-1v2m-6-2v2"/></g></svg>
+
+        
+        Agents
+        
+
+        
+        <span class="mewbo-sidebar-chevron ml-auto inline-flex transition-[color,rotate] duration-200 group-data-[state=open]/menu-button:rotate-90 group-data-[state=closed]/menu-button:text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </button>
+    <div data-state="open" data-slot="collapsible-content"
+        class="grid grid-rows-[0fr] transition-[grid-template-rows] peer-data-[state=open]/menu-button:grid-rows-[1fr] py-0.5">
+        <ul data-slot="sidebar-menu-sub" data-sidebar="menu-sub"
+            class="overflow-hidden ml-3.5 flex flex-col gap-1 border-l border-sidebar-border pl-2.5">
+
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../configure-agents/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Choosing an Agent
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../agents-claude-code/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Claude Code
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../agents-codex/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        Codex
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../agents-opencode/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+
+        
+        OpenCode
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+
+            
+            
+        </ul>
+    </div>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    
+    <button data-slot="collapsible-trigger" data-sidebar="menu-button" data-size="default" data-active="false"
+        class="peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-h-8 text-[0.8rem] font-normal leading-tight"
+        type="button" aria-expanded="true"
+        data-state="closed"
+        onclick="this.setAttribute('data-state', this.getAttribute('data-state') === 'closed' ? 'open' : 'closed')">
+
         <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 5H3m9 14H3M14 3v4m2 10v4m5-9h-9m9 7h-5m5-14h-7m-6 5v4m0-2H3"/></svg>
 
         
@@ -8309,30 +8745,6 @@ response can include them in the JSON payload.</p>
 
         
         Project Setup
-        
-
-        
-
-        
-
-        
-
-        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
-    </a>
-</li>
-            
-            
-            
-            
-<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="../configure-agents/"
-        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
-
-        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2m16 0h2m-7-1v2m-6-2v2"/></g></svg>
-
-        
-        Agents
         
 
         
@@ -8850,6 +9262,13 @@ response can include them in the JSON payload.</p>
                 bind_runtime_liveness
             </a>
             
+            <a href="#grove.core.WorkspaceManager.can_receive"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.can_receive');">
+                can_receive
+            </a>
+            
             <a href="#grove.core.WorkspaceManager.commits"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="3"
@@ -9072,6 +9491,13 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.provision_progress');">
                 provision_progress
+            </a>
+            
+            <a href="#grove.core.WorkspaceManager.queue_supported"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.queue_supported');">
+                queue_supported
             </a>
             
             <a href="#grove.core.WorkspaceManager.read_diagram"
@@ -9412,6 +9838,13 @@ response can include them in the JSON payload.</p>
                 subscribe
             </a>
             
+            <a href="#grove.core.ActivityService.workspace_row"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.ActivityService.workspace_row');">
+                workspace_row
+            </a>
+            
             
             
             <a href="#grove.core.DashboardSnapshot"
@@ -9443,6 +9876,20 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.candidates_for');">
                 candidates_for
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.enriched"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.enriched');">
+                enriched
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.fleet_activity"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.fleet_activity');">
+                fleet_activity
             </a>
             
             <a href="#grove.core.SessionExplorer.for_workspace"
@@ -9513,6 +9960,20 @@ response can include them in the JSON payload.</p>
                 data-active="false" data-depth="3"
                 onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.subagent_turns');">
                 subagent_turns
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.tool_call"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.tool_call');">
+                tool_call
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.tool_call_for"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.tool_call_for');">
+                tool_call_for
             </a>
             
             <a href="#grove.core.SessionExplorer.transcripts"
