@@ -51,7 +51,7 @@ describe("submitLaunch", () => {
       repo_root: "/repos/grove",
       project_cwd: "/repos/grove/webapp",
       agent_name: "claude",
-      title: expect.stringMatching(/^[0-9a-f]{10}$/),
+      title: expect.stringMatching(/^t[0-9a-f]{9}$/),
       initial_prompt: "Create the composer\nwith defaults",
       // Untouched pills still contribute nothing — except branch_plan, which
       // must carry what the pill shows because the request's own default does

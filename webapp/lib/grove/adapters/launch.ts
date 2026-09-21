@@ -38,10 +38,22 @@ export function customModelError(value: string): string | null {
     : "Use ASCII letters, numbers, and - . _ / : [ ] only.";
 }
 
-/** How much of the digest is shown. Ten hex chars is 40 bits — far past any
+/** How much of the digest is shown. Nine hex chars is 36 bits — far past any
  * plausible collision across one host's workspaces, and short enough to sit in
  * a rail row without truncating. */
-const TITLE_DIGEST_LENGTH = 10;
+const TITLE_DIGEST_LENGTH = 9;
+
+/**
+ * A letter ahead of the digest, so the title can NEVER be a bare digit run.
+ *
+ * The title becomes the auto branch's slug, and the numeric ticket providers
+ * claim a leading digit run at the head of a branch as an issue id. About one
+ * brief in 110 digests to all digits, and one such workspace shipped attached
+ * to a phantom issue with a phase claim seeded and recorded for it. The prefix
+ * is the fix at the smallest seam: the branch grammar is right to read
+ * `123-fix` as #123, and a machine handle simply must not look like one.
+ */
+const TITLE_DIGEST_PREFIX = "t";
 
 /**
  * The default workspace name: a digest of the brief, not a slice of it.
@@ -65,7 +77,7 @@ const TITLE_DIGEST_LENGTH = 10;
 export function deriveTitle(prompt: string): string {
   const text = prompt.trim();
   if (!text) return "Untitled task";
-  return Md5.hashStr(text).slice(0, TITLE_DIGEST_LENGTH);
+  return TITLE_DIGEST_PREFIX + Md5.hashStr(text).slice(0, TITLE_DIGEST_LENGTH);
 }
 
 /** Convert the form's branch vocabulary into the engine's discriminated wire shape. */

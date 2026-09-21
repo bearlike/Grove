@@ -45,6 +45,8 @@ EXPECTED_TOOLS = {
     "grove_set_workspace_phase",
     "grove_get_workspace_todo",
     "grove_recollect_session",
+    "grove_list_mailbox_contacts",
+    "grove_send_mailbox_message",
 }
 
 # The read-only scope: tools that only observe. Every OTHER published tool
@@ -66,6 +68,10 @@ NON_MUTATING_TOOLS = {
     "grove_get_workspace_phase",
     "grove_get_workspace_todo",
     "grove_recollect_session",
+    # Listing who is reachable observes; writing to one of them does not, which
+    # is why only the listing appears here. The server's own registration table
+    # carries the same split (`mutates=True` on the send).
+    "grove_list_mailbox_contacts",
 }
 
 

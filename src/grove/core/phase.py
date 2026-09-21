@@ -50,9 +50,10 @@ interprets nothing. Three properties fall out, and each was a bug before:
   ambiguity: "write ``.grove/phase.json`` in your worktree" is exactly the
   sentence an agent sitting in ``<worktree>/sub`` resolves to the wrong file.
 
-The pre-per-agent single file is still READ (never written) so a workspace that
-had already reported keeps working, and ``grove phase`` from a plain worktree
-behaves as it did.
+The pre-per-agent single file is neither written nor read. It was kept as a
+read fallback for a while and that fallback was the directory-identifies-an-
+agent bug in a new coat: under ROOT placement it handed every newcomer the last
+writer's claim. It survives only as a git exclude (:attr:`PhaseFile.LEGACY_RELPATH`).
 
 The files are git-excluded (see ``GitRepo.ensure_excluded``) for a correctness
 reason, not a cosmetic one: ``git worktree remove`` refuses to run while
@@ -340,9 +341,14 @@ class PhaseFile:
     simple case (see the module docstring)."""
 
     LEGACY_RELPATH: Final = ".grove/phase.json"
-    """The pre-per-agent single file. **Read-only back-compat**: a workspace
-    that reported before the per-agent layout landed keeps rendering its last
-    phase, and nothing writes here again."""
+    """The pre-per-agent single file. **Excluded from git, never read.**
+
+    It was a read fallback once, and that fallback was the bug: under ROOT
+    placement the worktree is the shared repo root, so the file belongs to
+    whichever workspace last wrote it and every newcomer inherited a
+    stranger's claim (see :meth:`WorkspaceManager.phase_for`). The name
+    survives only so a checkout still carrying the file keeps ``git status``
+    clean — which ``pause``/``kill`` depend on."""
 
     EXCLUDES: Final = (RELDIR + "/", LEGACY_RELPATH)
     """What ``GitRepo.ensure_excluded`` must cover — both shapes, because a
@@ -411,14 +417,9 @@ class PhaseFile:
         return candidate.name.removesuffix(".json").split(".", 1)[0] or None
 
     @classmethod
-    def path_for(cls, worktree: Path | str, key: str | None) -> Path:
-        """The absolute path of *key*'s phase file under *worktree*.
-
-        ``key=None`` names the legacy single file — the read-only back-compat
-        path, never a write target.
-        """
-        rel = cls.LEGACY_RELPATH if key is None else cls.relpath(key)
-        return Path(worktree) / rel
+    def path_for(cls, worktree: Path | str, key: str) -> Path:
+        """The absolute path of *key*'s phase file under *worktree*."""
+        return Path(worktree) / cls.relpath(key)
 
     @classmethod
     def ensure_dir(cls, worktree: Path | str) -> None:
@@ -437,7 +438,7 @@ class PhaseFile:
             logger.debug(f"phase dir not creatable under {worktree}: {exc}")
 
     @classmethod
-    def read(cls, worktree: Path | str, key: str | None) -> PhaseReport | None:
+    def read(cls, worktree: Path | str, key: str) -> PhaseReport | None:
         """The agent's current phase claim, or ``None`` if it has not made one.
 
         ``None`` deliberately means "no phase reported" and is NOT a member of
@@ -463,7 +464,7 @@ class PhaseFile:
         return cls._report(doc, datetime.fromtimestamp(mtime, tz=UTC))
 
     @classmethod
-    def _document(cls, worktree: Path | str, key: str | None) -> PhaseDocument | None:
+    def _document(cls, worktree: Path | str, key: str) -> PhaseDocument | None:
         """Parse *key*'s document, or ``None`` for any failure. Never raises."""
         path = cls.path_for(worktree, key)
         try:

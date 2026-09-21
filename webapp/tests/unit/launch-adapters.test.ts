@@ -36,8 +36,18 @@ describe("deriveTitle", () => {
 
   it("is a short hex digest, never a slice of the brief", () => {
     const title = deriveTitle("Build the landing page");
-    expect(title).toMatch(/^[0-9a-f]{10}$/);
+    expect(title).toMatch(/^t[0-9a-f]{9}$/);
     expect(title).not.toContain("Build");
+  });
+
+  it("can never be read as a ticket number by the branch grammar", () => {
+    // The incident's own input shape: "brief 69" digests to 9195625517, and a
+    // bare digit run at the head of an auto branch is exactly what the numeric
+    // ticket providers claim as an issue id. One workspace shipped attached to
+    // issue #3153869546 this way, with a scoping claim seeded and recorded.
+    const title = deriveTitle("brief 69");
+    expect(title).toBe("t919562551");
+    expect(title).not.toMatch(/^\d/);
   });
 
   it("is stable for the same brief and different for a different one", () => {
@@ -80,7 +90,7 @@ describe("buildCreateRequest", () => {
       agent_name: "claude",
       // The default name is a digest of the whole brief, so it is asserted
       // by shape: pinning the literal would just re-encode md5 in a test.
-      title: expect.stringMatching(/^[0-9a-f]{10}$/),
+      title: expect.stringMatching(/^t[0-9a-f]{9}$/),
       initial_prompt: "Build the landing page\nwith the new composer",
       // Always present, even untouched — see the next test for why this one
       // field cannot follow the rule the rest of them do.
@@ -155,7 +165,7 @@ describe("buildCreateRequest", () => {
       repo_root: "/repos/grove",
       project_cwd: "/repos/grove/webapp",
       agent_name: "claude",
-      title: expect.stringMatching(/^[0-9a-f]{10}$/),
+      title: expect.stringMatching(/^t[0-9a-f]{9}$/),
       initial_prompt: "Build it",
       model: "sonnet",
       runtime: "container",

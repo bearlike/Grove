@@ -1,0 +1,210 @@
+/* This is intentionally a one-page art direction. The docs theme owns every
+   documentation page; index.md opts into app.html and owns this factory view. */
+body:has(.grove-landing) > #inner-body > header,
+body:has(.grove-landing) > #inner-body > .ms-header-tabs,
+body:has(.grove-landing) #mewbo-fab { display: none; }
+body:has(.grove-landing) { --header-height: 0px; background: #020a18; }
+body:has(.grove-landing) #inner-body { background: #020a18; }
+html:has(.grove-landing) { scrollbar-gutter: auto; overflow: hidden; }
+body:has(.grove-landing) { overflow: hidden; }
+.grove-landing, .grove-landing * { box-sizing: border-box; }
+.ms-app-main:has(.grove-landing) {
+  height: auto;
+  min-height: 100svh;
+  overflow: visible;
+}
+
+.grove-landing {
+  --factory-midnight: #020a18;
+  --factory-deep: #061327;
+  --factory-clay: #d97757;
+  --factory-ink: #f5f7fb;
+  --factory-muted: #a6b1c5;
+  position: relative;
+  height: 100svh;
+  min-height: 600px;
+  isolation: isolate;
+  overflow: hidden;
+  color: var(--factory-ink);
+  background:
+    radial-gradient(circle at 72% 54%, rgba(22, 91, 159, 0.24), transparent 30rem),
+    radial-gradient(circle at 99% 1%, rgba(217, 119, 87, 0.14), transparent 26rem),
+    var(--factory-midnight);
+}
+
+.grove-landing__header {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: calc(100% - 10vw);
+  margin: 0 auto;
+  padding: clamp(1.25rem, 2.7vw, 2.5rem) 0;
+}
+
+.grove-landing {
+  font-family: var(--font-sans, Geist, ui-sans-serif, system-ui, sans-serif);
+}
+
+.grove-landing__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.72rem;
+  color: var(--factory-ink);
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  text-decoration: none;
+}
+.grove-landing__brand img { width: 2rem; height: 2rem; object-fit: contain; }
+.grove-landing__nav { display: flex; align-items: center; gap: 0.3rem; padding: 0.25rem; border: 1px solid #42516a; border-radius: 999px; background: rgba(2, 10, 24, 0.88); backdrop-filter: blur(12px); }
+.grove-landing__nav a {
+  color: #ccd4e3;
+  border-radius: 999px;
+  padding: 0.55rem 0.88rem;
+  font-size: 0.9rem;
+  font-weight: 520;
+  text-decoration: none;
+}
+.grove-landing__nav a:hover { background: rgba(255,255,255,0.1); color: white; }
+.grove-landing :is(a, button):focus-visible {
+  outline: 3px solid #84e8ff;
+  outline-offset: 4px;
+}
+
+.grove-landing__hero {
+  display: flex;
+  align-items: center;
+  position: absolute;
+  inset: 0;
+}
+.grove-landing__copy {
+  position: relative;
+  z-index: 2;
+  width: 36%;
+  max-width: 38rem;
+  /* Tracks the header's inset (10vw total) rather than centring a fixed
+     container: on a 2K monitor the old 1580px cap parked the copy 490px in
+     with an empty band before it, while the visual ran to the page edge. */
+  margin-left: 5vw;
+  padding: 0 0 5rem;
+}
+.grove-landing__copy h1 {
+  /* The <br> is the only break: "Your team's agents." must fit one line at
+     the largest size, so the type scales with the column and never wraps on
+     its own. That keeps the visual's diagonal from ever meeting a fourth line. */
+  max-width: none;
+  margin: 0;
+  color: #fbfcff;
+  font-family: var(--font-display, "IBM Plex Serif", ui-serif, Georgia, serif);
+  font-size: clamp(2.6rem, 3.9vw, 4.9rem);
+  text-wrap: nowrap;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+.grove-landing__copy p {
+  max-width: 32rem;
+  margin: clamp(1.45rem, 2.6svh, 2.6rem) 0 0;
+  color: var(--factory-muted);
+  font-size: clamp(1rem, 1.1vw, 1.2rem);
+  font-weight: 430;
+  letter-spacing: -0.018em;
+  /* A taller viewport gets airier body copy; the copy column has the height
+     to spend, and a dense block under a large serif reads as an afterthought.
+     line-height must stay unitless, so this steps rather than scales. */
+  line-height: 1.6;
+}
+@media (min-width: 901px) and (min-height: 900px) { .grove-landing__copy p { line-height: 1.72; } }
+@media (min-width: 901px) and (min-height: 1200px) { .grove-landing__copy p { line-height: 1.8; } }
+/* The supported-tool marks. Each PNG is a finished 192px tile carrying its
+   own rounded shell, so the row supplies one square box per mark and nothing
+   else; it never redraws a shell the artwork already has. */
+.grove-landing__support {
+  --support-tile: clamp(2.1rem, 2.4vw, 2.75rem);
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.5rem, 0.8vw, 0.8rem);
+  margin: clamp(1.2rem, 2.4svh, 2rem) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.grove-landing__support a {
+  display: block;
+  width: var(--support-tile);
+  height: var(--support-tile);
+  border-radius: 22%;
+  opacity: 0.86;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.grove-landing__support a:hover { opacity: 1; transform: translateY(-2px); }
+.grove-landing__support img { display: block; width: 100%; height: 100%; }
+.grove-landing__actions { display: flex; flex-wrap: wrap; gap: 0.72rem; margin-top: clamp(1.6rem, 3svh, 2.8rem); }
+.grove-landing__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.85rem;
+  padding: 0.72rem 1.08rem;
+  border: 1px solid transparent;
+  border-radius: 0.82rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+.grove-landing__button svg { width: 1.1em; height: 1.1em; flex: none; margin-right: .5em; }
+.grove-landing__button:hover { transform: translateY(-2px); }
+.grove-landing__button--primary { background: var(--factory-clay); color: #1c0c08; box-shadow: 0 9px 30px rgba(217, 119, 87, 0.22); }
+.grove-landing__button--primary:hover { background: #e88966; }
+.grove-landing__button--secondary { border-color: rgba(191, 209, 234, 0.24); background: rgba(10, 26, 48, 0.78); color: #edf2fa; }
+.grove-landing__button--secondary:hover { border-color: rgba(191, 209, 234, 0.6); background: rgba(30, 52, 81, 0.92); }
+.grove-landing__button--secondary span { margin-right: 0.45rem; color: #a9b7cf; font-size: 1.1rem; }
+
+.grove-landing__visual {
+  position: absolute;
+  inset: 0 0 0 38%;
+  min-width: 0;
+  overflow: hidden;
+  /* The diagonal is the art direction; it starts at the copy's right edge so
+     no band of empty background sits between the two halves. */
+  clip-path: polygon(26% 0, 100% 0, 100% 100%, 0 100%);
+}
+.grove-factory-scene { position: absolute; inset: 0; }
+.grove-factory-scene__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+
+/* Mobile allocates one viewport to copy and scene instead of stacking two
+   full-height sections. Content may still grow for enlarged accessibility text. */
+@media (max-width: 900px) {
+  .grove-landing { height: 100svh; min-height: 0; display: flex; flex-direction: column; }
+  .grove-landing__hero { position: static; inset: auto; }
+  .grove-landing__header { width: calc(100% - 2.5rem); padding: 1rem 0 .5rem; flex: none; }
+  .grove-landing__brand { font-size: 1.1rem; }
+  .grove-landing__brand img { width: 1.7rem; height: 1.7rem; }
+  .grove-landing__nav a { padding: .45rem .65rem; font-size: .8rem; }
+  .grove-landing__hero { display: flex; flex-direction: column; align-items: stretch; flex: 1; min-height: 0; }
+  .grove-landing__copy { flex: none; width: auto; max-width: none; margin: 0; padding: clamp(.5rem, 2svh, 1.4rem) 1.25rem .75rem; }
+  .grove-landing__copy h1 { max-width: 15ch; font-size: clamp(2rem, min(8.5vw, 5.5svh), 3.8rem); line-height: 1.02; text-wrap: balance; }
+  .grove-landing__copy p { max-width: 38rem; margin-top: .8rem; font-size: clamp(.85rem, 2svh, 1rem); line-height: 1.45; }
+  .grove-landing__support { --support-tile: 1.9rem; gap: .5rem; margin-top: .85rem; }
+  .grove-landing__actions { margin-top: .9rem; gap: .6rem; }
+  .grove-landing__button { min-height: 2.75rem; padding: .7rem .65rem; font-size: .8rem; }
+  .grove-landing__visual { position: relative; inset: auto; flex: 1; min-height: 0; clip-path: none; mask-image: linear-gradient(to bottom, transparent, #000 10%); }
+}
+@media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+  .grove-landing__hero { flex-direction: row; }
+  .grove-landing__copy { width: 52%; padding-top: .5rem; }
+  .grove-landing__copy h1 { font-size: 2rem; }
+  .grove-landing__copy p { font-size: .8rem; margin-top: .5rem; }
+  .grove-landing__support { display: none; }
+  .grove-landing__actions { margin-top: .6rem; }
+}
+@media (prefers-reduced-motion: reduce) { .grove-landing__button, .grove-landing__support a { transition: none; } .grove-landing__button:hover, .grove-landing__support a:hover { transform: none; } }

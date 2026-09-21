@@ -30,7 +30,15 @@ jobs:
       github.event.action != 'closed' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    # PINNED TO THE `pages` RUNNER on a self-hosted forge. This job PUTs the
+    # built site to `DOCS_HOST`, which is only reachable from a runner whose
+    # job containers carry an `--add-host` for that name, and only one runner
+    # advertises the `pages` label — so it cannot be scheduled elsewhere.
+    #
+    # The label is chosen by expression, NOT hardcoded, because this job also
+    # runs on github.com, where no `pages` runner exists and the job would
+    # queue forever.
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'pages' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -131,7 +139,12 @@ jobs:
       github.server_url != 'https://github.com' &&
       github.event_name == 'pull_request' &&
       github.event.action == 'closed'
-    runs-on: ubuntu-latest
+    # PINNED TO THE `pages` RUNNER, for the reason the deploy job above states:
+    # this job DELETEs a PR preview from `DOCS_HOST`, which only the runner
+    # advertising the `pages` label can reach. The `if` above already gates
+    # this job off github.com, but the label stays an expression so the two
+    # jobs cannot drift apart.
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'pages' }}
     steps:
       - name: Remove PR preview
         run: |

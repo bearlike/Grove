@@ -3582,18 +3582,20 @@ class WorkspaceManager:
            feature exists to serve.
 
         The per-workspace key is what stops two ROOT workspaces (whose worktree
-        IS the shared repo root) from overwriting each other; the legacy single
-        file is read only when the keyed one is absent, so a workspace that
-        reported before that layout landed keeps its badge.
+        IS the shared repo root) from overwriting each other — and it is also
+        why the pre-per-agent single file is NOT read as a fallback. Under ROOT
+        placement that file belongs to whichever workspace last wrote it, so a
+        fallback hands every newcomer a stranger's claim until its own agent
+        reports; measured on the reference host, a 42-day-old ``scoping`` note
+        was inherited by each new root workspace and recorded into the durable
+        history under the newcomer's id. A claim with no per-agent key has no
+        owner, and ``None`` is the honest answer for one.
 
         Best-effort by contract, like ``peek``: a paused workspace whose
         worktree is gone, an unreadable file, or an agent's typo yields ``None``
         rather than breaking a caller's snapshot.
         """
-        worktree = state.worktree_path
-        return PhaseFile.read(worktree, PhaseFile.key_for(state.id)) or PhaseFile.read(
-            worktree, None
-        )
+        return PhaseFile.read(state.worktree_path, PhaseFile.key_for(state.id))
 
     def phase(self, workspace_id: str) -> PhaseReport | None:
         """:meth:`phase_for` by workspace id — the CLI/MCP read seam."""

@@ -277,29 +277,27 @@ def test_a_nested_workspace_is_pointed_at_the_worktree_root(
 # ─── back-compat ────────────────────────────────────────────────────────────
 
 
-def test_the_single_shared_phase_file_is_still_read(manager: WorkspaceManager) -> None:
-    """A workspace that reported before the per-agent layout keeps its badge."""
-    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="legacy"))
-    legacy = PhaseFile.path_for(state.worktree_path, None)
+def test_the_single_shared_phase_file_is_never_read(manager: WorkspaceManager) -> None:
+    """The pre-per-agent file speaks for NOBODY, even when it is the only file.
+
+    Written from the incident's own inputs: under ROOT placement the worktree
+    is the repo root, shared by every root workspace on the repo, and a stale
+    ``.grove/phase.json`` there (measured: a 42-day-old "scoping" claim) was
+    inherited by every new root workspace — then recorded into the durable
+    history under the newcomer's id. A shared file is exactly the cwd-shaped
+    inference the keyed layout replaced, so it is not a fallback either.
+    """
+    state = manager.create(
+        CreateWorkspaceRequest(agent_name="claude", title="legacy", branch_plan=RootBranch())
+    )
+    legacy = Path(state.worktree_path) / PhaseFile.LEGACY_RELPATH
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text('{"phase": "delivering", "note": "from before"}\n', encoding="utf-8")
 
-    report = manager.phase_for(state)
-    assert report is not None
-    assert (report.phase, report.note) == ("delivering", "from before")
-
-
-def test_a_keyed_report_wins_over_the_legacy_file(manager: WorkspaceManager) -> None:
-    """Back-compat is a fallback, never a competitor: once this agent has
-    reported to its own file, the shared one can no longer speak for it."""
-    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="legacy"))
-    legacy = PhaseFile.path_for(state.worktree_path, None)
-    legacy.parent.mkdir(parents=True, exist_ok=True)
-    legacy.write_text('{"phase": "scoping"}\n', encoding="utf-8")
+    assert manager.phase_for(state) is None
     manager.set_phase(state.id, "done")
-
     report = manager.phase_for(state)
-    assert report is not None and report.phase == "done"
+    assert report is not None and (report.phase, report.note) == ("done", None)
 
 
 # ─── the git exclude, against real git ──────────────────────────────────────

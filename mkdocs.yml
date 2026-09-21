@@ -70,7 +70,8 @@ theme:
     # GitHub Pages, and neither is the server root. `.` relativizes per page.
     - label: Home
       icon: lucide:house
-      url: .
+      url: home/
+      match: [home]
     - label: User Guide
       icon: lucide:book-open
       url: getting-started/
@@ -90,6 +91,12 @@ theme:
     Configure: lucide:sliders-horizontal
     "Project Setup": lucide:folder-cog
     Agents: lucide:bot
+    # The three agent pages take their vendors' own marks; the chooser above
+    # them is vendor-neutral, so it gets a plain selection glyph.
+    "Choosing an Agent": lucide:list-checks
+    "Claude Code": simple-icons:claude
+    Codex: simple-icons:openai
+    OpenCode: simple-icons:opencode
     "Init Scripts": lucide:play
     "Ticket Providers": lucide:ticket
     "Configuration Reference": lucide:file-json
@@ -161,6 +168,13 @@ markdown_extensions:
   - shadcn.extensions.iconify
   - shadcn.extensions.hover_card
 
+# `index.md` IS the animated landing page: it is the site root, so a visitor
+# arriving at the published URL meets it first. It carries its own chrome and
+# is not a sidebar entry -- the sidebar's Home is `home.md`, the documentation
+# entry page the landing page's buttons lead to.
+not_in_nav: |
+  index.md
+
 exclude_docs: |
   superpowers/
   _glossary.md
@@ -199,7 +213,7 @@ extra_css:
   - stylesheets/grove.css?v=5
 
 nav:
-  - Home: index.md
+  - Home: home.md
   - User Guide:
       - Get Started: getting-started.md
       - Use:
